@@ -1,0 +1,55 @@
+:root {
+  font-family: var(--dsw-font-family);
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-width: 320px;
+  margin: 0;
+}
+
+body {
+  --dsh-content-font-size: 14px;
+  --dsh-code-font-size: 11px;
+  --dsh-terminal-font-size: 13px;
+  --dsh-terminal-font-delta: 0px;
+  --dsh-content-font-delta: 0px;
+  --dsh-code-font-delta: 0px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 14px;
+  line-height: 24px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+::selection {
+  background: var(--dsw-alias-bg-document-selection);
+}
