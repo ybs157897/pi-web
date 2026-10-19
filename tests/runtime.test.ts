@@ -10,13 +10,14 @@ import type { ConversationDetail } from '../src/shared/types.ts'
 
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 
-async function fixture(demo = true): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
+async function fixture(demo = true, appState?: unknown): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
   const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-runtime-'))
   const dataDir = join(root, 'data')
   const workspace = join(root, 'workspace')
   const piDir = join(root, 'pi')
   await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(workspace, { recursive: true }), mkdir(piDir, { recursive: true })])
   await writeFile(join(piDir, 'settings.json'), '{}\n')
+  if (appState !== undefined) await writeFile(join(dataDir, 'app-state.json'), JSON.stringify(appState))
   const runtime = await createRuntime({ dataDir, workspace, piDir, demo })
   const cleanup = { root, closers: [() => runtime.close()] }
   fixtures.push(cleanup)
@@ -189,6 +190,26 @@ describe('Pi Durable runtime', () => {
     const next = await waitForCompletedRun(runtime, created.conversation.id)
     expect(next.todos).toBeNull()
     expect(next.messages.length).toBeGreaterThan(completed.messages.length)
+  })
+
+  it('ignores legacy plugin switches and keeps every tool enabled', async () => {
+    // Old app-state files may contain per-plugin/tool switches; product decision
+    // removed that surface, so a disabled entry must not narrow the tool list.
+    const { runtime } = await fixture(true, {
+      version: 1,
+      settings: {
+        theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 11,
+        transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed',
+        codingViews: true, busySendMode: 'followUp', defaultThinkingLevel: 'medium', defaultAccessMode: 'fullAccess',
+      },
+      workspaces: [],
+      plugins: { todo: { enabled: false, tools: { todo_write: false } } },
+      presets: [], automations: [], feedback: {},
+    })
+    const created = await runtime.create({})
+    await runtime.submit(created.conversation.id, { text: '[todo] 旧插件开关', requestId: 'legacy-plugin-run' })
+    const completed = await waitForCompletedRun(runtime, created.conversation.id)
+    expect(completed.todos?.map(item => item.content)).toContain('Draft the migration plan')
   })
 
   it('asks a question, folds the answer back in, and injects the reply only once', async () => {

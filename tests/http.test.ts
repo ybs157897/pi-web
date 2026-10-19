@@ -270,8 +270,6 @@ class FakeRuntime implements Runtime {
   async searchWorkspace(id: string, query: string) { this.calls.push('search:' + query); return this.workspaceFiles(id, '') }
   async workspaceFile(_id: string, path: string): Promise<Protocol.WorkspaceFile> { return { path, kind: 'text', content: 'text', size: 4, modifiedAt: NOW, mimeType: 'text/plain' } }
   async workspaceAsset(_id: string, path: string) { return { mimeType: path.endsWith('.html') ? 'text/html' : 'application/octet-stream', data: new TextEncoder().encode('<script>unsafe()</script>') } }
-  plugins(): Protocol.PluginSummary[] { return [{ id: 'coding', name: 'Coding tools', builtin: true, enabled: true, tools: [{ name: 'read', enabled: true }] }] }
-  async updatePlugin(id: string, input: Protocol.UpdatePluginInput) { this.calls.push('plugin:' + id + ':' + JSON.stringify(input)); return { ...this.plugins()[0]!, ...input, tools: this.plugins()[0]!.tools } }
   presets(): Protocol.AgentPreset[] { return [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: ['coding'], tools: ['read'], accessMode: 'readOnly' }] }
   async createPreset(input: Protocol.CreateAgentPresetInput) { return { ...input, id: input.id ?? 'preset-new' } }
   async updatePreset(id: string, input: Protocol.UpdateAgentPresetInput) { return { ...this.presets()[0]!, ...input, id } }
@@ -677,7 +675,7 @@ describe('management API', () => {
     expect((await app.request('/api/conversations/conv-1/stop', { method: 'POST' })).status).toBe(422)
   })
 
-  it('updates settings, workspace bindings, plugin selection and presets through typed routes', async () => {
+  it('updates settings, workspace bindings and presets through typed routes', async () => {
     const { app, runtime } = createTestApp()
     expect((await (await app.request('/api/capabilities')).json()).accessModes).toContain('workspaceWrite')
     const settings = await app.request('/api/settings', json('PATCH', { locale: 'en', fontSize: 16, defaultModel: null, shortcuts: { search: 'Mod+p' } }))
@@ -697,8 +695,9 @@ describe('management API', () => {
     expect((await workspace.json()).workspace.name).toBe('Project')
     expect((await (await app.request('/api/workspaces/ws-1/files?path=src')).json()).entries[0].path).toBe('src/test.txt')
     expect((await (await app.request('/api/workspaces/ws-1/search?q=test')).json()).entries).toHaveLength(1)
-    expect((await app.request('/api/plugins/coding', json('PATCH', { tools: { read: false } }))).status).toBe(200)
-    expect(runtime.calls.some(call => call.startsWith('plugin:coding:'))).toBe(true)
+    // Plugin management was removed by product decision, so the routes are gone.
+    expect((await app.request('/api/plugins')).status).toBe(404)
+    expect((await app.request('/api/plugins/coding', json('PATCH', { tools: { read: false } }))).status).toBe(404)
     expect((await app.request('/api/presets', json('POST', { name: 'Review', instructions: 'Review', tools: ['read'], extensions: ['coding'], accessMode: 'readOnly' }))).status).toBe(201)
     expect((await app.request('/api/presets/preset-1', { method: 'DELETE' })).status).toBe(200)
   })

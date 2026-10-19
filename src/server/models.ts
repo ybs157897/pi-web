@@ -217,8 +217,9 @@ function customProvider(entry: StoredProvider, key: string | undefined, builtin?
   for (const model of normalized) {
     if (!apis.has(model.api)) apis.set(model.api, apiStreams(model.api))
   }
-  const modelsById = new Map((builtin?.getModels() ?? []).map((model) => [model.id, model]))
-  for (const model of normalized) modelsById.set(model.id, model)
+  // An explicit (project or imported) provider entry owns its model directory.
+  // Merging the builtin catalog in would resurrect models the user deleted.
+  const modelsById = new Map(normalized.map((model) => [model.id, model]))
   return createProvider({
     id: entry.id,
     name: entry.name || entry.id,

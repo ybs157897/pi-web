@@ -8,7 +8,6 @@ import type {
   AppSettings,
   Automation,
   AutomationRun,
-  PluginSummary,
   ThinkingLevel,
   WorkspaceSummary,
 } from '../shared/types.ts'
@@ -45,6 +44,7 @@ const workspaceSchema = z.object({
   createdAt: z.number().finite(),
   updatedAt: z.number().finite(),
 }).strict()
+/** Historical plugin switch state: still parsed for old files, but never read — tools are always on. */
 const pluginStateSchema = z.object({ enabled: z.boolean(), tools: z.record(z.string(), z.boolean()) }).strict()
 const presetSchema = z.object({
   id: z.string().min(1).max(128),
@@ -88,6 +88,7 @@ const appStateSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema,
   workspaces: z.array(workspaceSchema),
+  /** Legacy plugin switches, kept only so pre-existing files still parse. */
   plugins: z.record(z.string(), pluginStateSchema),
   presets: z.array(presetSchema),
   automations: z.array(automationSchema),
@@ -101,6 +102,7 @@ export type PersistedAppState = {
   version: 1
   settings: AppSettings
   workspaces: WorkspaceSummary[]
+  /** Legacy plugin switches: retained for schema compatibility, ignored at runtime. */
   plugins: Record<string, { enabled: boolean; tools: Record<string, boolean> }>
   presets: AgentPreset[]
   automations: Automation[]

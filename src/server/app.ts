@@ -116,7 +116,6 @@ const settingsSchema = z.object({
   defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 const workspaceSchema = z.object({ path: z.string().min(1).max(4096).refine(value => !value.includes('\0')), name: z.string().trim().min(1).max(120).optional() }).strict()
-const pluginSchema = z.object({ enabled: z.boolean().optional(), tools: z.record(z.string().min(1).max(160), z.boolean()).optional() }).strict().refine(value => Object.keys(value).length > 0)
 const presetSchema = z.object({
   id: identifier.optional(), name: z.string().trim().min(1).max(120), description: z.string().max(1000).optional(),
   instructions: z.string().max(32_000), extensions: z.array(z.string().min(1).max(160)).max(100),
@@ -545,8 +544,6 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     }
     return c.body(new Uint8Array(asset.data).buffer)
   })
-  app.get('/api/plugins', c => c.json({ plugins: runtime.plugins() }))
-  app.patch('/api/plugins/:id', async c => c.json({ plugin: await runtime.updatePlugin(pathId(c.req.param('id')), await readJson(c.req.raw, pluginSchema)) }))
   app.get('/api/presets', c => c.json({ presets: runtime.presets() }))
   app.post('/api/presets', async c => c.json({ preset: await runtime.createPreset(await readJson(c.req.raw, presetSchema)) }, 201))
   app.patch('/api/presets/:id', async c => c.json({ preset: await runtime.updatePreset(pathId(c.req.param('id')), await readJson(c.req.raw, presetSchema.omit({ id: true }).partial().refine(value => Object.keys(value).length > 0))) }))

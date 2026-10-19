@@ -85,6 +85,62 @@ describe('model allowlist patterns', () => {
   })
 })
 
+describe('model directory edits', () => {
+  it('persists a deleted model in the project override across a restart and restores it from the shipped catalog', async () => {
+    const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
+    const shipped = await runtime.provider('opencode-go')
+    expect(shipped.source).toBe('builtin')
+    expect(shipped.models.length).toBeGreaterThan(1)
+    const removed = shipped.models[0]!
+    const kept = shipped.models.slice(1)
+
+    await runtime.saveProvider({
+      id: shipped.id, name: shipped.name, baseUrl: shipped.baseUrl, api: shipped.api, models: kept,
+    })
+    const afterSave = await runtime.catalog()
+    expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(false)
+    expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === kept[0]!.id)).toBe(true)
+
+    // A fresh runtime reads providers.json, and the deleted model stays gone.
+    await runtime.close()
+    const reopened = await createRuntime({ dataDir, workspace, piDir })
+    cleanup.closers.push(() => reopened.close())
+    const afterRestart = await reopened.catalog()
+    expect(afterRestart.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(false)
+
+    // Restoring the shipped directory writes every default model back.
+    const customized = await reopened.provider(shipped.id)
+    expect(customized.source).toBe('project')
+    expect(customized.defaults?.some(model => model.id === removed.id)).toBe(true)
+    await reopened.saveProvider({
+      id: customized.id, name: customized.name, baseUrl: customized.baseUrl, api: customized.api, models: customized.defaults!,
+    })
+    const restored = await reopened.catalog()
+    expect(restored.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(true)
+  })
+
+  it('keeps allowlist-hidden models when the visible directory is saved', async () => {
+    const { runtime } = await fixture()
+    await runtime.updateSettings({ modelAllowlist: ['opencode-go/deepseek*'] })
+    const visible = await runtime.provider('opencode-go')
+    const visibleModels = visible.models.map(model => model.id)
+    expect(visibleModels.length).toBeGreaterThan(1)
+    const removed = visibleModels[0]!
+    const kept = visible.models.filter(model => model.id !== removed)
+
+    await runtime.saveProvider({ id: visible.id, name: visible.name, baseUrl: visible.baseUrl, api: visible.api, models: kept })
+
+    // Clearing the allowlist reveals the models the editor could not show;
+    // only the row the operator actually removed is gone.
+    await runtime.updateSettings({ modelAllowlist: [] })
+    const catalog = await runtime.catalog()
+    const ids = catalog.models.filter(model => model.provider === visible.id).map(model => model.modelId)
+    expect(ids).toContain(kept[0]!.id)
+    expect(ids).not.toContain(removed)
+    expect(ids).toContain('glm-5.2')
+  })
+})
+
 describe('model allowlist in the runtime', () => {
   it('filters the catalog and corrects a default that fell outside the allowlist', async () => {
     const { runtime, dataDir } = await fixture({

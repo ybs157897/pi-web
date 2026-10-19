@@ -110,9 +110,6 @@ export interface WorkspaceFile {
 export interface AddWorkspaceInput { path: string; name?: string }
 export interface RenameWorkspaceInput { name: string }
 
-export interface PluginToolSummary { name: string; description?: string; enabled: boolean }
-export interface PluginSummary { id: string; name: string; description?: string; builtin: boolean; enabled: boolean; tools: PluginToolSummary[] }
-export interface UpdatePluginInput { enabled?: boolean; tools?: Record<string, boolean> }
 export interface AgentPreset {
   id: string
   name: string

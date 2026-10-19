@@ -15,7 +15,6 @@ import type {
   DirectoryListing,
   EditQueueInput,
   ModelCatalog,
-  PluginSummary,
   ProviderConfigSummary,
   ProviderInput,
   ProviderTestResult,
@@ -27,7 +26,6 @@ import type {
   UpdateAppSettingsInput,
   UpdateAutomationInput,
   UpdateConversationInput,
-  UpdatePluginInput,
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceSummary,
@@ -84,8 +82,6 @@ export interface Runtime {
   searchWorkspace(id: string, query: string): Promise<WorkspaceFileEntry[]>
   workspaceFile(id: string, path: string): Promise<WorkspaceFile>
   workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }>
-  plugins(): PluginSummary[]
-  updatePlugin(id: string, input: UpdatePluginInput): Promise<PluginSummary>
   presets(): AgentPreset[]
   createPreset(input: CreateAgentPresetInput): Promise<AgentPreset>
   updatePreset(id: string, input: UpdateAgentPresetInput): Promise<AgentPreset>

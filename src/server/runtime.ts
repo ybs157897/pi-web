@@ -42,7 +42,6 @@ import type {
   CreateConversationInput,
   EditQueueInput,
   ModelRef as UiModelRef,
-  PluginSummary,
   ProviderConfigSummary,
   ProviderInput,
   QueueItem,
@@ -55,7 +54,6 @@ import type {
   UpdateAppSettingsInput,
   UpdateAutomationInput,
   UpdateConversationInput,
-  UpdatePluginInput,
   WorkspaceSummary,
 } from '../shared/types.ts'
 import { activeDurationMs, projectConversation, usageTokens } from './projection.ts'
@@ -791,9 +789,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const installed = registry.snapshot().installed()
     const installedByName = new Map(installed.map(extension => [extension.name, extension]))
     const state = appState.snapshot()
-    const extensionNames = preset
-      ? preset.extensions
-      : installed.filter(extension => state.plugins[extension.name]?.enabled ?? true).map(extension => extension.name)
+    // Every installed extension is on: plugin switches are no longer exposed,
+    // so the legacy per-plugin state must not disable anything.
+    const extensionNames = preset ? preset.extensions : installed.map(extension => extension.name)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
       if (!extension) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的插件：${name}`)
@@ -801,11 +799,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     })
     const registeredTools = extensions.flatMap(extension => (extension.tools ?? []).map(tool => ({ extension, tool })))
     const requestedTools = preset ? new Set(preset.tools) : undefined
-    const tools: ToolRegistration[] = registeredTools.flatMap(({ extension, tool }) => {
-      const enabled = requestedTools
-        ? requestedTools.has(tool.name)
-        : state.plugins[extension.name]?.tools[tool.name] ?? true
-      if (!enabled) return []
+    const tools: ToolRegistration[] = registeredTools.flatMap(({ tool }) => {
+      // Tools are always on; only a preset's tool list narrows them further.
+      if (requestedTools && !requestedTools.has(tool.name)) return []
       if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name)) return []
       return [tool]
     })
@@ -1601,39 +1597,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const workspaceFile = (id: string, path: string) => workspaceFiles.read(id, path)
   const workspaceAsset = (id: string, path: string) => workspaceFiles.asset(id, path)
 
-  const plugins = (): PluginSummary[] => {
-    const configured = appState.snapshot().plugins
-    return registry.snapshot().installed().map(extension => ({
-      id: extension.name,
-      name: extension.name,
-      builtin: true,
-      enabled: configured[extension.name]?.enabled ?? true,
-      tools: (extension.tools ?? []).map(tool => ({
-        name: tool.name,
-        description: tool.description,
-        enabled: configured[extension.name]?.tools[tool.name] ?? true,
-      })),
-    }))
-  }
-
-  const updatePlugin = async (id: string, input: UpdatePluginInput): Promise<PluginSummary> => {
-    const extension = registry.snapshot().extension(id)
-    if (!extension) throw new RuntimeError('NOT_FOUND', '插件未安装')
-    const toolNames = new Set((extension.tools ?? []).map(tool => tool.name))
-    for (const name of Object.keys(input.tools ?? {})) {
-      if (!toolNames.has(name)) throw new RuntimeError('INVALID_INPUT', `插件 ${id} 没有工具 ${name}`)
-    }
-    await appState.update(state => {
-      const existing = state.plugins[id] ?? { enabled: true, tools: {} }
-      if (input.enabled !== undefined) existing.enabled = input.enabled
-      for (const [name, enabled] of Object.entries(input.tools ?? {})) existing.tools[name] = enabled
-      state.plugins[id] = existing
-    })
-    const updated = plugins().find(item => item.id === id)
-    if (!updated) throw new RuntimeError('CONFLICT', '无法读取更新后的插件配置')
-    return updated
-  }
-
   const validatePreset = (value: AgentPreset): AgentPreset => {
     if (!/^[A-Za-z0-9._~-]{1,128}$/.test(value.id)) throw new RuntimeError('INVALID_INPUT', 'Preset ID 无效')
     if (!value.name.trim() || value.name.length > 120 || value.instructions.length > 32_000) throw new RuntimeError('INVALID_INPUT', 'Preset 名称或指令长度无效')
@@ -1806,6 +1769,26 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
   }
   const deleteProvider = (id: string) => modelRuntime.deleteProvider(id)
+  /**
+   * The provider editor only renders models the allowlist permits, so a save
+   * carries just the visible rows. Merge the currently hidden models back in:
+   * a removed visible row still deletes that model, while saving a filtered
+   * directory never quietly drops the models the filter hid.
+   */
+  const saveProvider = async (input: ProviderInput): Promise<void> => {
+    let existing: ProviderConfigSummary | undefined
+    try {
+      existing = await modelRuntime.provider(input.id)
+    } catch (error) {
+      if (!(error instanceof RuntimeError) || error.code !== 'NOT_FOUND') throw error
+    }
+    if (!existing) return modelRuntime.saveProvider(input)
+    const sent = new Set(input.models.map(model => model.id))
+    const hidden = existing.models.filter(model => !sent.has(model.id) &&
+      !modelWithinAllowlist(modelAllowlist(), { provider: input.id, modelId: model.id }))
+    if (hidden.length === 0) return modelRuntime.saveProvider(input)
+    await modelRuntime.saveProvider({ ...input, models: [...input.models, ...hidden] })
+  }
   // A probe spends real quota, so it may only target an allowed model: an
   // explicit one is checked, and the picked default travels into the call.
   const testProvider = async (id: string, modelId?: string) => {
@@ -2065,7 +2048,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     retry,
     watch,
     catalog,
-    saveProvider: modelRuntime.saveProvider,
+    saveProvider,
     provider,
     deleteProvider,
     testProvider,
@@ -2085,8 +2068,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     searchWorkspace,
     workspaceFile,
     workspaceAsset,
-    plugins,
-    updatePlugin,
     presets,
     createPreset,
     updatePreset,

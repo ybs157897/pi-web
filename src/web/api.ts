@@ -1,9 +1,9 @@
 import type {
   AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
   CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GoalUpdateRequest,
-  ModelCatalog, PluginSummary, ProviderConfigSummary, ProviderInput, ProviderTestResult,
+  ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
-  UpdateAppSettingsInput, UpdatePluginInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
+  UpdateAppSettingsInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 
 export class ApiFailure extends Error {
@@ -179,12 +179,6 @@ export const api = {
   searchWorkspaceFiles(id: string, queryText: string): Promise<{ entries: WorkspaceFileEntry[] }> {
     const query = new URLSearchParams({ q: queryText })
     return request(`/api/workspaces/${encodeURIComponent(id)}/search?${query.toString()}`)
-  },
-  listPlugins(): Promise<{ plugins: PluginSummary[] }> {
-    return request('/api/plugins')
-  },
-  updatePlugin(id: string, patch: UpdatePluginInput): Promise<{ plugin: PluginSummary }> {
-    return request(`/api/plugins/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
   },
   listPresets(): Promise<{ presets: AgentPreset[] }> {
     return request('/api/presets')

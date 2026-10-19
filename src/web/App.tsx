@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
-  IconCordisPluginOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
+  IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
   IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconListPenOutlineRegular,
   IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
   IconPinFillRegular, IconPinOutlineRegular, IconPlusOutlineRegular, IconSearchOutlineRegular,
@@ -12,7 +12,7 @@ import {
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AccessMode, AgentPreset, AppSettings, ConversationDetail, ConversationSummary, ModelCatalog,
-  ModelOption, PluginSummary, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
+  ModelOption, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
   UpdateAppSettingsInput,
 } from '../shared/types.ts'
 import { ApiFailure, api } from './api.ts'
@@ -33,7 +33,6 @@ import type { InspectorDiff, InspectorFile, InspectorView } from './Inspector.ts
 import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
-import PluginsPage, { PluginsPanel } from './PluginsPage.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 import PresetsPanel from './PresetsPanel.tsx'
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
@@ -41,7 +40,7 @@ import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'plugins' | 'automations' | 'workspace'
+type MainPage = 'chat' | 'automations' | 'workspace'
 type ChatView = 'chat' | 'trajectory'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
@@ -146,15 +145,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [presets, setPresets] = useState<AgentPreset[]>([])
-  const [plugins, setPlugins] = useState<PluginSummary[]>([])
   const [appVersion, setAppVersion] = useState('')
   const [accountName, setAccountName] = useState('')
   const [accessModes, setAccessModes] = useState<AccessMode[]>([])
   const [workspaceLoadError, setWorkspaceLoadError] = useState('')
-  const [pluginLoadError, setPluginLoadError] = useState('')
   const [presetLoadError, setPresetLoadError] = useState('')
   const [workspaceLoading, setWorkspaceLoading] = useState(true)
-  const [pluginsLoading, setPluginsLoading] = useState(true)
   const [presetsLoading, setPresetsLoading] = useState(true)
   const [catalogError, setCatalogError] = useState('')
   const [listError, setListError] = useState('')
@@ -170,7 +166,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [rowMenuId, setRowMenuId] = useState<string | null>(null)
   const [workspaceMenuId, setWorkspaceMenuId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'models' | 'plugins' | 'presets'>('general')
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'models' | 'presets'>('general')
   const [savingProvider, setSavingProvider] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -325,16 +321,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     finally { setPresetsLoading(false) }
   }, [t])
 
-  const refreshPlugins = useCallback(async (): Promise<void> => {
-    setPluginsLoading(true)
-    try {
-      const result = await api.listPlugins()
-      setPlugins(result.plugins)
-      setPluginLoadError('')
-    } catch (cause) { setPluginLoadError(errorText(cause, t('无法读取插件', 'Could not load plugins'))) }
-    finally { setPluginsLoading(false) }
-  }, [t])
-
   const refreshCapabilities = useCallback(async (): Promise<void> => {
     try {
       const result = await api.getCapabilities()
@@ -350,10 +336,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     void refreshCatalog()
     void refreshWorkspaces()
     void refreshPresets()
-    void refreshPlugins()
     void refreshCapabilities()
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
-  }, [refreshCapabilities, refreshCatalog, refreshList, refreshPlugins, refreshPresets, refreshWorkspaces])
+  }, [refreshCapabilities, refreshCatalog, refreshList, refreshPresets, refreshWorkspaces])
 
   useEffect(() => {
     const scope = selectedId ?? '__new__'
@@ -918,18 +903,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     catch (cause) { announce(errorText(cause, t('无法保存默认访问级别', 'Could not save the default access mode'))) }
   }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
 
-  const setPlugin = useCallback(async (pluginId: string, patch: { enabled?: boolean; tools?: Record<string, boolean> }): Promise<void> => {
-    try {
-      const result = await api.updatePlugin(pluginId, patch)
-      setPlugins(current => current.map(item => item.id === pluginId ? result.plugin : item))
-      setPluginLoadError('')
-    } catch (cause) {
-      const message = errorText(cause, t('插件设置失败', 'Plugin update failed'))
-      setPluginLoadError(message)
-      announce(message)
-    }
-  }, [announce, t])
-
   const addWorkspace = useCallback(async (input: { path: string; name?: string }): Promise<WorkspaceSummary> => {
     const result = await api.createWorkspace(input)
     setWorkspaces(current => [result.workspace, ...current.filter(workspace => workspace.id !== result.workspace.id)])
@@ -1330,10 +1303,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           <ShortcutKeys keys={shortcutKeyLabels(resolveShortcuts(settings.shortcuts).newConversation)} className={css.newChatKeys} />
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
-          <button type="button" className={css.navItem} data-active={page === 'plugins' || undefined}
-            aria-label={t('插件', 'Plugins')} aria-current={page === 'plugins' ? 'page' : undefined} onClick={() => { navigate('plugins') }}>
-            <IconCordisPluginOutlineRegular size={16} /><span>{t('插件', 'Plugins')}</span>
-          </button>
           <button type="button" className={css.navItem} data-active={page === 'automations' || undefined}
             aria-label={t('自动化任务', 'Automations')} aria-current={page === 'automations' ? 'page' : undefined} onClick={() => { navigate('automations') }}>
             <IconClockOutlineRegular size={16} /><span>{t('自动化任务', 'Automations')}</span>
@@ -1619,9 +1588,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   </div>}
                 </>}
             </>}
-            {page === 'plugins' && <PluginsPage plugins={plugins} error={pluginLoadError} loading={pluginsLoading}
-              onRefresh={() => { void refreshPlugins() }} onTogglePlugin={(pluginId, enabled) => { void setPlugin(pluginId, { enabled }) }}
-              onToggleTool={(pluginId, toolName, enabled) => { void setPlugin(pluginId, { tools: { [toolName]: enabled } }) }} />}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
               onOpenConversation={id => { void openConversation(id) }} />}
             {page === 'workspace' && (workspaces.find(item => item.id === workspacePageId) === undefined
@@ -1639,9 +1605,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       </section>
       <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes}
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}
-        pluginsPanel={<PluginsPanel embedded plugins={plugins} error={pluginLoadError} loading={pluginsLoading}
-          onRefresh={() => { void refreshPlugins() }} onTogglePlugin={(pluginId, enabled) => { void setPlugin(pluginId, { enabled }) }}
-          onToggleTool={(pluginId, toolName, enabled) => { void setPlugin(pluginId, { tools: { [toolName]: enabled } }) }} />}
         presetsPanel={<PresetsPanel presets={presets} models={catalog?.models ?? []} defaultPresetId={settings.defaultPresetId}
           loading={presetsLoading} error={presetLoadError} onRefresh={() => { void refreshPresets() }}
           onChange={setPresets} onSetDefault={id => { void onSettingsChange({ defaultPresetId: id ?? null }).catch(cause => { announce(errorText(cause, t('无法保存默认预设', 'Could not save the default preset'))) }) }} />}

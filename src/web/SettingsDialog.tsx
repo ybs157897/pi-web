@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   Button, Checkbox, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconCloseOutlineRegular,
-  IconPlusOutlineRegular, IconSettingsOutlineRegular, IconDatabaseOutlineRegular, IconCordisPluginOutlineRegular,
+  IconPlusOutlineRegular, IconSettingsOutlineRegular, IconDatabaseOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular, IconTrashOutlineRegular,
   Input, Menu, Modal, Switch, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -12,12 +12,12 @@ import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
 import css from './SettingsDialog.module.css'
 
-export type SettingsTab = 'general' | 'models' | 'plugins' | 'presets'
+export type SettingsTab = 'general' | 'models' | 'presets'
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
   settings?: AppSettings; onSettingsChange?: (patch: UpdateAppSettingsInput) => Promise<unknown>
-  initialTab?: SettingsTab; pluginsPanel?: ReactNode; presetsPanel?: ReactNode
+  initialTab?: SettingsTab; presetsPanel?: ReactNode
   onRefreshCatalog?: () => Promise<void>; accessModes?: AccessMode[]
   /** Provider of the model in use right now, shown as DSH's 正在使用 badge. */
   activeProvider?: string
@@ -29,7 +29,7 @@ const API_OPTIONS = [
 
 /** DSH's two-column settings shell; every control updates the project configuration. */
 export default function SettingsDialog(props: SettingsDialogProps) {
-  const { open, catalog, saving, onClose, onSave, initialTab = 'general', pluginsPanel, presetsPanel, onRefreshCatalog } = props
+  const { open, catalog, saving, onClose, onSave, initialTab = 'general', presetsPanel, onRefreshCatalog } = props
   const { t, settings: contextSettings } = useUiPreferences()
   const settings = props.settings ?? contextSettings ?? DEFAULT_UI_SETTINGS
   const [tab, setTab] = useState<SettingsTab>(initialTab)
@@ -51,7 +51,6 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   const tabs: Array<{ id: SettingsTab; label: string; icon: ReactNode }> = [
     { id: 'general', label: t('通用设置', 'General'), icon: <IconSettingsOutlineRegular size={16} /> },
     { id: 'models', label: t('模型', 'Models'), icon: <IconDatabaseOutlineRegular size={16} /> },
-    { id: 'plugins', label: t('内置插件', 'Built-in plugins'), icon: <IconCordisPluginOutlineRegular size={16} /> },
     { id: 'presets', label: t('Agent 预设', 'Agent presets'), icon: <IconAgentPresetOutlineRegular size={16} /> },
   ]
   const update = async (patch: UpdateAppSettingsInput) => {
@@ -126,7 +125,6 @@ export default function SettingsDialog(props: SettingsDialogProps) {
             {!newProvider && <Menu open={addMenuOpen} onClose={() => setAddMenuOpen(false)} portal items={[{ id: '__custom', label: t('自定义模型提供商', 'Custom provider') }, ...providers.filter(provider => !configured.some(item => item.id === provider.id)).map(provider => ({ id: provider.id, label: provider.name }))]}
               onSelect={id => { setProviderChoice(providers.find(provider => provider.id === id)); setNewProvider(true); setAddMenuOpen(false) }} anchor={<button className={css.addProvider} type="button" onClick={() => setAddMenuOpen(true)}><IconPlusOutlineRegular size={16} />{t('添加模型提供商', 'Add model provider')}</button>} />}
           </div>}
-          {tab === 'plugins' && (pluginsPanel ?? <p role="status">{t('正在加载插件…', 'Loading plugins…')}</p>)}
           {tab === 'presets' && (presetsPanel ?? <p role="status">{t('正在加载预设…', 'Loading presets…')}</p>)}
         </div>
       </section>
