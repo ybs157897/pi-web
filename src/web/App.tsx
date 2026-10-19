@@ -1,34 +1,42 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, ConnectionIndicator, IconArchiveOutlineRegular, IconChevronRightOutlineRegular,
-  IconClockOutlineRegular, IconCordisPluginOutlineRegular, IconDarkOutlineRegular,
-  IconEllipsisOutlineRegular, IconFollowsystemOutlineRegular, IconFolderCloseRegular,
-  IconFolderOpenOutlineRegular, IconLightOutlineRegular, IconNewChatOutlineRegular,
-  IconPanelLeftOutlineRegular, IconPinFillRegular, IconPinOutlineRegular,
-  IconPlusOutlineRegular, IconSearchOutlineRegular, IconSettingsOutlineRegular,
-  IconSlidersTwoOutlineRegular, IconUnarchiveOutlineRegular, IconWorkspaceTreeOutlineRegular,
-  Input, Menu, Toast, Tooltip, focusWithoutRing,
+  Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
+  IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
+  IconCordisPluginOutlineRegular, IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
+  IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconListPenOutlineRegular,
+  IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
+  IconPinFillRegular, IconPinOutlineRegular, IconPlusOutlineRegular, IconSearchOutlineRegular,
+  IconSettingsOutlineRegular, IconSlidersTwoOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular,
+  IconWorkspaceTreeOutlineRegular, Input, Menu, Modal, ShortcutKeys, Tag, Toast, Tooltip, focusWithoutRing, relativeTime,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   AccessMode, AgentPreset, AppSettings, ConversationDetail, ConversationSummary, ModelCatalog,
-  ModelOption, PluginSummary, ProviderInput, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
+  ModelOption, PluginSummary, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
   UpdateAppSettingsInput,
 } from '../shared/types.ts'
 import { ApiFailure, api } from './api.ts'
 import Composer, { type BusySendMode, type DraftImage } from './Composer.tsx'
+import TodoPanel from './TodoPanel.tsx'
+import SubagentPanel from './SubagentPanel.tsx'
+import TeamPanel from './TeamPanel.tsx'
+import GoalBar from './GoalBar.tsx'
+import QuestionComposer from './QuestionComposer.tsx'
 import SettingsDialog from './SettingsDialog.tsx'
 import Transcript, { type PendingMessage } from './transcript.tsx'
+import { conversationStats } from './render-model.ts'
+import { latestPlan, type PlanDocument } from './plan-preview.ts'
 import TrajectoryView, { transcriptMessageDomId } from './TrajectoryView.tsx'
+import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
-import type { InspectorDiff, InspectorFile } from './Inspector.tsx'
+import type { InspectorDiff, InspectorFile, InspectorView } from './Inspector.tsx'
 import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import PluginsPage, { PluginsPanel } from './PluginsPage.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 import PresetsPanel from './PresetsPanel.tsx'
-import { matchesShortcut, resolveShortcuts } from './keyboard.ts'
+import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
@@ -37,18 +45,63 @@ type MainPage = 'chat' | 'plugins' | 'automations' | 'workspace'
 type ChatView = 'chat' | 'trajectory'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
-interface ScopedImages { scope: string; items: DraftImage[] }
+/** One attachment as the limits see it: an image flag and its byte size. */
+interface AttachmentSize { image: boolean; size: number }
+type AttachmentLimit = 'images' | 'files' | 'empty' | 'imageBytes' | 'fileBytes' | 'total'
 interface PendingSubmission extends PendingMessage { conversationId: string }
 interface ToastMessage { id: number; text: string; success?: boolean }
+/** The last failed submission attempt; a retry of the same content reuses its requestId. */
+interface FailedSubmission { requestId: string; fingerprint: string }
 
 const SELECTED_KEY = 'pi-durable-web:selected-conversation'
 const DRAFT_PREFIX = 'pi-durable-web:draft:'
-const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
+/** Dropped files can arrive without a MIME type, so the extension stands in for it. */
+const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif',
+}
+/** Draft scopes without attachments share this, so the composer prop keeps a stable identity. */
+const NO_IMAGES: readonly DraftImage[] = []
 const MAX_IMAGE_COUNT = 4
 const MAX_FILE_COUNT = 8
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+/**
+ * The first attachment limit the batch breaks, or null when every attachment fits.
+ * Batches still being read are part of the batch, so two additions queued in one tick
+ * cannot pass the same check against the same stale picture.
+ * Exported so the limits stay verifiable without a browser.
+ */
+export function attachmentLimitError(committed: readonly DraftImage[], reading: readonly AttachmentSize[], selected: readonly AttachmentSize[]): AttachmentLimit | null {
+  const all: AttachmentSize[] = [
+    ...committed.map(image => ({ image: isImageType(image.mimeType), size: image.file.size })),
+    ...reading,
+    ...selected,
+  ]
+  const images = all.filter(item => item.image)
+  const files = all.filter(item => !item.image)
+  if (images.length > MAX_IMAGE_COUNT) return 'images'
+  if (files.length > MAX_FILE_COUNT) return 'files'
+  if (all.some(item => item.size === 0)) return 'empty'
+  if (images.some(item => item.size > MAX_IMAGE_BYTES)) return 'imageBytes'
+  if (files.some(item => item.size > MAX_FILE_BYTES)) return 'fileBytes'
+  if (all.reduce((sum, item) => sum + item.size, 0) > MAX_ATTACHMENT_BYTES) return 'total'
+  return null
+}
+
+/** The localized notice for one broken attachment limit. */
+function attachmentLimitText(limit: AttachmentLimit, t: (chinese: string, english: string) => string): string {
+  switch (limit) {
+    case 'images': return t('一条消息最多添加 4 张图片', 'A message can include up to 4 images')
+    case 'files': return t('一条消息最多添加 8 个文件', 'A message can include up to 8 files')
+    case 'empty': return t('不能添加空文件', 'Empty files cannot be attached')
+    case 'imageBytes': return t('每张图片不能超过 4 MiB', 'Each image must be 4 MiB or smaller')
+    case 'fileBytes': return t('单个文件不能超过 8 MiB', 'Each file must be 8 MiB or smaller')
+    case 'total': return t('一条消息的附件总大小不能超过 8 MiB', 'Attachments in one message cannot exceed 8 MiB total')
+  }
+}
 
 /** Load shared UI preferences before rendering the complete application shell. */
 export default function App() {
@@ -94,6 +147,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [presets, setPresets] = useState<AgentPreset[]>([])
   const [plugins, setPlugins] = useState<PluginSummary[]>([])
+  const [appVersion, setAppVersion] = useState('')
+  const [accountName, setAccountName] = useState('')
   const [accessModes, setAccessModes] = useState<AccessMode[]>([])
   const [workspaceLoadError, setWorkspaceLoadError] = useState('')
   const [pluginLoadError, setPluginLoadError] = useState('')
@@ -123,26 +178,38 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [workspacePageId, setWorkspacePageId] = useState<string | null>(null)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
+  const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
+  const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
   const [renameWorkspace, setRenameWorkspace] = useState<WorkspaceSummary | null>(null)
   const [chatView, setChatView] = useState<ChatView>('chat')
   const [inspectorFile, setInspectorFile] = useState<InspectorFile | undefined>()
   const [inspectorDiff, setInspectorDiff] = useState<InspectorDiff | undefined>()
+  const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
+  const [inspectorView, setInspectorView] = useState<InspectorView>('file')
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [inspectorLoading, setInspectorLoading] = useState(false)
   const [inspectorError, setInspectorError] = useState('')
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackSending, setFeedbackSending] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
   const [connection, setConnection] = useState<ConnectionState>(undefined)
   const [reconnectToken, setReconnectToken] = useState(0)
   const [pending, setPending] = useState<PendingSubmission[]>([])
   const [draftState, setDraftState] = useState<ScopedDraft>({ scope: '__new__', text: loadDraft('__new__') })
-  const [imageState, setImageState] = useState<ScopedImages>({ scope: '__new__', items: [] })
+  // Attachments live per scope, so switching conversations keeps what was already added.
+  const [imageStore, setImageStore] = useState<Record<string, DraftImage[]>>({})
   const [newModel, setNewModel] = useState<{ provider: string; modelId: string } | undefined>(undefined)
   const [newThinking, setNewThinking] = useState<ThinkingLevel>(settings.defaultThinkingLevel)
+  /** Plan mode requested before a conversation exists; applied when the session is created. */
+  const [newPlan, setNewPlan] = useState(false)
   const [newWorkspaceId, setNewWorkspaceId] = useState<string | undefined>(settings.defaultWorkspaceId)
   const [newPresetId, setNewPresetId] = useState<string | null | undefined>(settings.defaultPresetId)
   const [newAccessMode, setNewAccessMode] = useState<AccessMode>(settings.defaultAccessMode)
-  const [sendMode, setSendMode] = useState<BusySendMode>('followUp')
+  const [sendMode, setSendMode] = useState<BusySendMode>(settings.busySendMode)
   const [sending, setSending] = useState(false)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
@@ -152,13 +219,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const workspaceSearchRef = useRef<HTMLInputElement | null>(null)
   const messagesViewport = useRef<HTMLDivElement | null>(null)
   const inspectorRequestId = useRef(0)
+  /** DSH's `markOpened` (`PlanCard.tsx:72-80`): the one conversation whose plan already opened by itself. */
+  const planAutoOpenedFor = useRef<string | null>(null)
   const wasAtBottom = useRef(true)
   const submitLock = useRef(false)
   const detailRef = useRef<ConversationDetail | null>(null)
   const initialListLoad = useRef(true)
   const blankIntent = useRef(false)
+  const pendingWorkspaceId = useRef<string | null>(null)
   const selectedIdRef = useRef<string | null>(selectedId)
   selectedIdRef.current = selectedId
+  /** Mirrors the attachment store synchronously, so two batches queued in one tick both see the first. */
+  const imageStoreRef = useRef<Record<string, DraftImage[]>>({})
+  /** Set once the live event stream drops; the recovery hint must not follow an ordinary re-attach. */
+  const connectionLost = useRef(false)
+  /** The last submission attempt, so retrying identical content reuses the same requestId. */
+  const lastFailedSubmit = useRef<FailedSubmission | null>(null)
   const settingsRef = useRef(settings)
   settingsRef.current = settings
   const translateRef = useRef(t)
@@ -166,7 +242,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const toastSequence = useRef(0)
   const activeScope = selectedId === null ? '__new__' : selectedId
   const draft = draftState.scope === activeScope ? draftState.text : ''
-  const images = imageState.scope === activeScope ? imageState.items : []
+  const images = imageStore[activeScope] ?? NO_IMAGES
   const selectedSummary = conversations.find(item => item.id === selectedId)
   const conversationReady = detail?.conversation.id === selectedId
   const activeConversation = conversationReady ? detail : null
@@ -191,8 +267,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   const updateConversation = useCallback((value: ConversationDetail | ConversationSummary): void => {
     const summary = 'conversation' in value ? value.conversation : value
-    setConversations(existing => [summary, ...existing.filter(item => item.id !== summary.id)]
-      .sort(compareConversations))
+    // A subagent session is reached through its parent's catalog, so it never enters the sidebar list.
+    if (summary.origin !== 'subagent') {
+      setConversations(existing => [summary, ...existing.filter(item => item.id !== summary.id)]
+        .sort(compareConversations))
+    }
     if ('conversation' in value) setDetail(current => current?.conversation.id === summary.id ? value : current)
   }, [])
 
@@ -273,6 +352,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     void refreshPresets()
     void refreshPlugins()
     void refreshCapabilities()
+    api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
   }, [refreshCapabilities, refreshCatalog, refreshList, refreshPlugins, refreshPresets, refreshWorkspaces])
 
   useEffect(() => {
@@ -280,13 +360,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     wasAtBottom.current = true
     detailRef.current = null
     setDraftState({ scope, text: loadDraft(scope) })
-    setImageState({ scope, items: [] })
     setDetail(null)
     setDetailError('')
     setNewModel(undefined)
     const preferences = settingsRef.current
     setNewThinking(preferences.defaultThinkingLevel)
-    setNewWorkspaceId(preferences.defaultWorkspaceId)
+    // A per-workspace "new session" action carries its choice across this reset.
+    setNewWorkspaceId(pendingWorkspaceId.current ?? preferences.defaultWorkspaceId)
+    pendingWorkspaceId.current = null
     setNewPresetId(preferences.defaultPresetId)
     setNewAccessMode(preferences.defaultAccessMode)
     if (selectedId === null) {
@@ -334,7 +415,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   useEffect(() => {
     if (!conversationReady || selectedId === null) return
     let live = true
-    setConnection('connecting')
     const source = api.watch(selectedId, value => {
       if (!live || value.conversation.id !== selectedId) return
       const viewport = messagesViewport.current
@@ -346,7 +426,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       if (follow && viewport !== null) requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight })
     }, state => {
       if (!live) return
-      setConnection(state === 'error' ? 'disconnected' : state === 'open' ? 'recovered' : 'connecting')
+      // `open` also fires on an ordinary attach (conversation switch, reconnect token bump), so only a stream
+      // that actually dropped may report itself as recovered — otherwise every send flashes 连接已恢复.
+      if (state === 'error') {
+        connectionLost.current = true
+        setConnection('disconnected')
+        return
+      }
+      if (state === 'open') {
+        setConnection(connectionLost.current ? 'recovered' : undefined)
+        connectionLost.current = false
+        return
+      }
+      setConnection(connectionLost.current ? 'connecting' : undefined)
     })
     return () => {
       live = false
@@ -362,17 +454,24 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [connection])
 
   useEffect(() => {
-    const activeUrls = new Set(images.map(image => image.preview))
-    for (const item of pending) for (const image of item.images) activeUrls.add(image.preview)
-    // Draft previews removed from the composer are released immediately; accepted previews stay alive until SSE echoes them.
-    const keep = activeUrls
+    const keep = new Set<string>()
+    for (const items of Object.values(imageStore)) for (const image of items) keep.add(image.preview)
+    for (const item of pending) for (const image of item.images) keep.add(image.preview)
+    // Draft previews removed from the composer are released immediately — including attachments that were
+    // still being read, which now live in the store like every other item — accepted previews stay alive until
+    // SSE echoes them, and previews parked on another scope stay alive until it is opened again.
     for (const url of objectUrls.current) {
       if (!keep.has(url)) {
         URL.revokeObjectURL(url)
         objectUrls.current.delete(url)
       }
     }
-  }, [images, pending])
+  }, [imageStore, pending])
+
+  useEffect(() => () => {
+    for (const url of objectUrls.current) URL.revokeObjectURL(url)
+    objectUrls.current.clear()
+  }, [])
 
   useEffect(() => {
     if (!mobile) setSidebarOpen(false)
@@ -462,117 +561,145 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       ...(presetId === undefined ? {} : { presetId }),
       accessMode: newAccessMode ?? preferences.defaultAccessMode,
     })
-    setConversations(existing => [created.conversation, ...existing.filter(item => item.id !== created.conversation.id)]
+    // Plan mode is conversation-scoped, so the hero-time request is applied once the session exists.
+    const detail = newPlan ? await api.setPlan(created.conversation.id, true) : created
+    setNewPlan(false)
+    setConversations(existing => [detail.conversation, ...existing.filter(item => item.id !== detail.conversation.id)]
       .sort(compareConversations))
-    setDetail(created)
-    detailRef.current = created
-    setSelectedId(created.conversation.id)
+    setDetail(detail)
+    detailRef.current = detail
+    setSelectedId(detail.conversation.id)
     setPage('chat')
     setChatView('chat')
     setSidebarOpen(false)
-    return created
-  }, [newAccessMode, newPresetId, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
+    return detail
+  }, [newAccessMode, newPlan, newPresetId, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
 
   const setDraft = useCallback((value: string): void => {
     setDraftState({ scope: activeScope, text: value })
   }, [activeScope])
 
-  const addImages = useCallback((files: FileList | File[]): void => {
-    const selected = Array.from(files)
-    const existing = imageState.scope === activeScope ? imageState.items : []
-    const existingImages = existing.filter(image => IMAGE_MIME_TYPES.has(image.mimeType.toLocaleLowerCase())).length
-    const existingFiles = existing.length - existingImages
-    const selectedImages = selected.filter(file => IMAGE_MIME_TYPES.has(file.type.toLocaleLowerCase()))
-    const selectedFiles = selected.length - selectedImages.length
-    if (existingImages + selectedImages.length > MAX_IMAGE_COUNT) {
-      announce(t('一条消息最多添加 4 张图片', 'A message can include up to 4 images'))
-      return
-    }
-    if (existingFiles + selectedFiles > MAX_FILE_COUNT) {
-      announce(t('一条消息最多添加 8 个文件', 'A message can include up to 8 files'))
-      return
-    }
-    if (selected.some(file => file.size === 0)) {
-      announce(t('不能添加空文件', 'Empty files cannot be attached'))
-      return
-    }
-    if (selectedImages.some(file => file.size > MAX_IMAGE_BYTES)) {
-      announce(t('每张图片不能超过 4 MiB', 'Each image must be 4 MiB or smaller'))
-      return
-    }
-    if (selectedFiles > 0 && selected.some(file => !IMAGE_MIME_TYPES.has(file.type.toLocaleLowerCase()) && file.size > MAX_FILE_BYTES)) {
-      announce(t('单个文件不能超过 8 MiB', 'Each file must be 8 MiB or smaller'))
-      return
-    }
-    const currentBytes = existing.reduce((sum, image) => sum + image.file.size, 0)
-    const selectedBytes = selected.reduce((sum, file) => sum + file.size, 0)
-    if (currentBytes + selectedBytes > MAX_ATTACHMENT_BYTES) {
-      announce(t('一条消息的附件总大小不能超过 8 MiB', 'Attachments in one message cannot exceed 8 MiB total'))
-      return
-    }
-    const pendingImages = selected.map(file => {
-      const preview = URL.createObjectURL(file)
-      objectUrls.current.add(preview)
-      return { id: crypto.randomUUID(), file, preview, mimeType: file.type || 'application/octet-stream' }
-    })
-    void Promise.all(pendingImages.map(async image => ({ ...image, data: await fileData(image.file, t) }))).then(newImages => {
-      setImageState(current => ({
-        scope: activeScope,
-        items: [...(current.scope === activeScope ? current.items : []), ...newImages],
-      }))
+  /** Write one scope's attachments and mirror them synchronously, so the next batch validates against them. */
+  const writeImages = useCallback((scope: string, items: DraftImage[]): void => {
+    imageStoreRef.current = { ...imageStoreRef.current, [scope]: items }
+    setImageStore(imageStoreRef.current)
+  }, [])
+
+  /** Patch one attachment in place; a read that finishes after the item was removed is a no-op. */
+  const patchImage = useCallback((scope: string, id: string, patch: (image: DraftImage) => DraftImage): void => {
+    const current = imageStoreRef.current[scope]
+    if (current === undefined || !current.some(image => image.id === id)) return
+    writeImages(scope, current.map(image => image.id === id ? patch(image) : image))
+  }, [writeImages])
+
+  /** Read one accepted attachment and land the result on the entry that is already in the list. */
+  const readAttachment = useCallback((scope: string, item: { id: string; file: File }): void => {
+    void fileData(item.file, t).then(data => {
+      patchImage(scope, item.id, image => ({ ...image, data, status: 'ready' }))
     }).catch(cause => {
-      for (const image of pendingImages) {
-        URL.revokeObjectURL(image.preview)
-        objectUrls.current.delete(image.preview)
-      }
-      announce(errorText(cause, t('无法读取附件', 'Could not read attachment')))
+      patchImage(scope, item.id, image => ({
+        ...image, status: 'error',
+        error: errorText(cause, t('无法读取附件', 'Could not read attachment')),
+      }))
     })
-  }, [activeScope, announce, imageState, t])
+  }, [patchImage, t])
+
+  const addImages = useCallback((files: FileList | File[]): void => {
+    const scope = activeScope
+    const selected = Array.from(files).map(file => {
+      const type = imageFileType(file)
+      return { file, image: type !== '', mimeType: type === '' ? file.type || 'application/octet-stream' : type }
+    })
+    // Limits read the live store, which already holds earlier batches that are still being read, so a second
+    // batch queued before the first one finished cannot pass the same check twice.
+    const committed = imageStoreRef.current[scope] ?? []
+    const limit = attachmentLimitError(committed, [], selected.map(item => ({ image: item.image, size: item.file.size })))
+    if (limit !== null) {
+      announce(attachmentLimitText(limit, t))
+      return
+    }
+    // The batch joins the list before it is read: the composer shows it immediately, and a read that fails
+    // only marks its own entry instead of dropping the whole batch.
+    const batch: DraftImage[] = selected.map(item => ({
+      id: crypto.randomUUID(), file: item.file, preview: URL.createObjectURL(item.file),
+      mimeType: item.mimeType, data: '', status: 'reading',
+    }))
+    for (const item of batch) objectUrls.current.add(item.preview)
+    writeImages(scope, [...committed, ...batch])
+    for (const item of batch) readAttachment(scope, item)
+  }, [activeScope, announce, readAttachment, t, writeImages])
+
+  /** Re-read one failed attachment, wherever the scope that owns it has moved on to. */
+  const retryImage = useCallback((id: string): void => {
+    for (const [scope, items] of Object.entries(imageStoreRef.current)) {
+      const item = items.find(image => image.id === id)
+      if (item === undefined) continue
+      patchImage(scope, id, image => ({ ...image, status: 'reading', error: undefined }))
+      readAttachment(scope, item)
+      return
+    }
+  }, [patchImage, readAttachment])
 
   const removeImage = useCallback((id: string): void => {
-    setImageState(current => {
-      const item = current.items.find(image => image.id === id)
-      if (item !== undefined) {
-        URL.revokeObjectURL(item.preview)
-        objectUrls.current.delete(item.preview)
-      }
-      return { scope: activeScope, items: current.items.filter(image => image.id !== id) }
-    })
-  }, [activeScope])
+    const scope = activeScope
+    const current = imageStoreRef.current[scope] ?? []
+    const removed = current.find(image => image.id === id)
+    if (removed !== undefined) {
+      URL.revokeObjectURL(removed.preview)
+      objectUrls.current.delete(removed.preview)
+    }
+    writeImages(scope, current.filter(image => image.id !== id))
+  }, [activeScope, writeImages])
 
   const send = useCallback(async (requestedMode?: BusySendMode): Promise<void> => {
     const text = draftState.scope === activeScope ? draftState.text : ''
-    const attachments = imageState.scope === activeScope ? imageState.items : []
+    const attachments = imageStoreRef.current[activeScope] ?? []
     if ((text.trim() === '' && attachments.length === 0) || submitLock.current) return
+    if (attachments.some(image => image.status === 'reading')) {
+      announce(t('附件正在读取中，请稍候再发送', 'Attachments are still being read. Try again in a moment'))
+      return
+    }
+    if (attachments.some(image => image.status === 'error')) {
+      announce(t('有附件读取失败，请重试或移除后再发送', 'An attachment failed to read. Retry or remove it before sending'))
+      return
+    }
+    const ready = attachments.filter(image => image.status === 'ready')
     submitLock.current = true
     setSending(true)
     let targetId = selectedId
     let target = detail?.conversation.id === selectedId ? detail : null
-    const requestId = crypto.randomUUID()
-    let pendingId = `pending:${requestId}`
+    // The requestId is only known once the target exists (see below); the optimistic entry carries it from then on.
+    const pendingId = `pending:${crypto.randomUUID()}`
     const firstPending: PendingSubmission = {
       id: pendingId,
-      requestId,
+      requestId: '',
       conversationId: targetId ?? '__creating__',
       text,
-      images: attachments.map(image => ({ name: image.file.name, preview: image.preview, mimeType: image.mimeType })),
+      images: ready.map(image => ({ name: image.file.name, preview: image.preview, mimeType: image.mimeType })),
       status: 'sending',
     }
     setPending(existing => [...existing, firstPending])
     setDraftState({ scope: activeScope, text: '' })
-    setImageState({ scope: activeScope, items: [] })
+    writeImages(activeScope, [])
     try {
       if (targetId === null) {
         const title = text.trim().split(/\r?\n/u)[0]?.slice(0, 44) || t('文件对话', 'File conversation')
         target = await createConversation(title)
         targetId = target.conversation.id
         setDraftState({ scope: targetId, text: '' })
-        setImageState({ scope: targetId, items: [] })
+        writeImages(targetId, [])
         setPending(existing => existing.map(item => item.id === pendingId ? { ...item, conversationId: targetId as string } : item))
       }
       if (targetId === null) throw new Error(t('未能创建会话', 'Could not create conversation'))
-      const imageAttachments = attachments.filter(item => IMAGE_MIME_TYPES.has(item.mimeType.toLocaleLowerCase()))
-      const fileAttachments = attachments.filter(item => !IMAGE_MIME_TYPES.has(item.mimeType.toLocaleLowerCase()))
+      // Retrying the exact same failed submission reuses its requestId, so a message the server already
+      // accepted is not sent twice when only the response was lost. Any change in content earns a fresh id.
+      const fingerprint = submissionFingerprint(targetId, text, ready)
+      const remembered = lastFailedSubmit.current
+      const requestId = remembered !== null && remembered.fingerprint === fingerprint ? remembered.requestId : crypto.randomUUID()
+      lastFailedSubmit.current = { requestId, fingerprint }
+      setPending(existing => existing.map(item => item.id === pendingId ? { ...item, requestId } : item))
+      const imageAttachments = ready.filter(item => isImageType(item.mimeType))
+      const fileAttachments = ready.filter(item => !isImageType(item.mimeType))
       const result = await api.submit(targetId, {
         text,
         requestId,
@@ -580,9 +707,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         ...(imageAttachments.length === 0 ? {} : { images: imageAttachments.map(image => ({ data: image.data, mimeType: image.mimeType })) }),
         ...(fileAttachments.length === 0 ? {} : { files: fileAttachments.map(file => ({ name: file.file.name, mimeType: file.mimeType, data: file.data })) }),
       })
-      pendingId = `pending:${requestId}`
+      lastFailedSubmit.current = null
       const accepted: PendingSubmission = {
         ...firstPending,
+        requestId,
         conversationId: targetId,
         submissionId: result.submissionId,
         status: 'accepted',
@@ -600,23 +728,21 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) {
       setPending(existing => existing.filter(item => item.id !== pendingId))
       if (targetId !== null) {
-        setDraftState(current => ({ scope: targetId as string, text: current.scope === targetId && current.text !== ''
+        const scope = targetId
+        setDraftState(current => ({ scope, text: current.scope === scope && current.text !== ''
           ? `${text}\n${current.text}` : text }))
-        setImageState(current => ({ scope: targetId as string, items: [
-          ...attachments,
-          ...(current.scope === targetId ? current.items : []),
-        ] }))
+        writeImages(scope, [...attachments, ...(imageStoreRef.current[scope] ?? [])])
       } else {
         setDraftState(current => ({ scope: activeScope, text: current.scope === activeScope && current.text !== ''
           ? `${text}\n${current.text}` : text }))
-        setImageState(current => ({ scope: activeScope, items: [...attachments, ...(current.scope === activeScope ? current.items : [])] }))
+        writeImages(activeScope, [...attachments, ...(imageStoreRef.current[activeScope] ?? [])])
       }
       announce(errorText(cause, t('消息发送失败，输入内容已保留', 'Message failed to send. Your draft has been restored')))
     } finally {
       submitLock.current = false
       setSending(false)
     }
-  }, [activeScope, announce, createConversation, detail, draftState, imageState, selectedId, sendMode, t])
+  }, [activeScope, announce, createConversation, detail, draftState, selectedId, sendMode, t, writeImages])
 
   const stop = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
@@ -625,6 +751,47 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       announce(t('已停止运行。排队消息已保留，发送下一条消息即可继续处理', 'Stopped. Queued messages are preserved; send another message to continue them'), true)
     } catch (cause) { announce(errorText(cause, t('停止失败', 'Could not stop'))) }
   }, [announce, selectedId, t])
+
+  const updateGoal = useCallback(async (action: 'pause' | 'resume' | 'edit' | 'clear', payload?: { objective?: string }): Promise<void> => {
+    if (selectedId === null) return
+    try {
+      const next = await api.updateGoal(selectedId, { action, ...(payload?.objective === undefined ? {} : { objective: payload.objective }) })
+      setDetail(next)
+      announce(t('目标已更新', 'Goal updated'), true)
+    } catch (cause) { announce(errorText(cause, t('无法更新目标', 'Could not update the goal'))) }
+  }, [announce, selectedId, t])
+
+  const compact = useCallback(async (): Promise<void> => {
+    if (selectedId === null) return
+    try {
+      await api.compact(selectedId)
+      announce(t('已开始压缩上下文', 'Compaction started'), true)
+    } catch (cause) { announce(errorText(cause, t('无法压缩上下文', 'Could not compact the context'))) }
+  }, [announce, selectedId, t])
+
+  const setPlan = useCallback(async (active: boolean): Promise<void> => {
+    if (selectedId === null || !conversationReady) {
+      setNewPlan(active)
+      announce(active
+        ? t('新会话将以计划模式开始：先出计划，批准后再执行', 'The new conversation will start in plan mode')
+        : t('已取消计划模式', 'Plan mode cancelled'), true)
+      return
+    }
+    try {
+      const value = await api.setPlan(selectedId, active)
+      detailRef.current = value
+      setDetail(value)
+      updateConversation(value)
+      announce(active
+        ? t('已进入计划模式：先出计划，批准后再执行', 'Plan mode on: plan first, execute after approval')
+        : t('已退出计划模式', 'Plan mode off'), true)
+    } catch (cause) { announce(errorText(cause, t('无法切换计划模式', 'Could not switch plan mode'))) }
+  }, [announce, conversationReady, selectedId, t, updateConversation])
+
+  /** Hand focus back to the composer, which is what dismissing the plan review does. */
+  const focusComposer = useCallback((): void => {
+    document.querySelector<HTMLTextAreaElement>('[data-composer-input]')?.focus()
+  }, [])
 
   const removeQueue = useCallback(async (submissionId: string): Promise<void> => {
     if (selectedId === null) return
@@ -803,8 +970,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     inspectorRequestId.current += 1
     const requestId = inspectorRequestId.current
     setInspectorOpen(true)
+    setInspectorView('file')
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
+    setInspectorPlan(undefined)
     setInspectorError('')
     setInspectorLoading(true)
     try {
@@ -820,8 +989,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } finally { if (requestId === inspectorRequestId.current) setInspectorLoading(false) }
   }, [announce, currentWorkspaceId, t])
 
-  const searchWorkspaceFiles = useCallback(async (needle: string): Promise<WorkspaceFileEntry[]> => {
-    const workspaceId = currentWorkspaceId
+  const searchWorkspaceFiles = useCallback(async (needle: string): Promise<WorkspaceFileEntry[]> => {    const workspaceId = currentWorkspaceId
     if (workspaceId === undefined) return []
     const result = await api.searchWorkspaceFiles(workspaceId, needle)
     return result.entries
@@ -840,6 +1008,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法保存反馈', 'Could not save feedback'))) }
   }, [announce, selectedId, t])
 
+  /** CP-5: free-form product feedback from the account menu, sent to the standalone feedback endpoint. */
+  const sendUserFeedback = useCallback(async (): Promise<void> => {
+    const text = feedbackText.trim()
+    if (text === '' || text.length > 2000 || feedbackSending) return
+    setFeedbackSending(true)
+    setFeedbackError('')
+    try {
+      await api.sendFeedback({ text })
+      setFeedbackOpen(false)
+      setFeedbackText('')
+      announce(t('已收到反馈，谢谢', 'Thanks for your feedback'), true)
+    } catch (cause) {
+      setFeedbackError(errorText(cause, t('反馈发送失败', 'Could not send feedback')))
+    } finally { setFeedbackSending(false) }
+  }, [announce, feedbackSending, feedbackText, t])
+
   const retryEntry = useCallback(async (entryId: string): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -856,19 +1040,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { throw new ApiFailure(errorText(cause, t('无法更新排队消息', 'Could not update queued message')), cause instanceof ApiFailure ? cause.code : undefined) }
   }, [announce, selectedId, t])
 
-  const copyConversation = useCallback(async (item: ConversationSummary): Promise<void> => {
+  const copySessionId = useCallback(async (item: ConversationSummary): Promise<void> => {
     try {
-      const conversation = detailRef.current?.conversation.id === item.id ? detailRef.current : await api.getConversation(item.id)
-      const content = conversation.messages.map(message => {
-        const label = message.role === 'user' ? 'User' : message.role === 'assistant' ? 'Assistant' : message.role === 'tool' ? `Tool: ${message.toolName ?? ''}` : 'System'
-        const body = message.blocks.map(block => block.type === 'text' || block.type === 'thinking' ? block.text
-          : block.type === 'toolCall' ? `\n\`\`\`json\n${JSON.stringify(block.arguments, null, 2)}\n\`\`\``
-            : block.type === 'file' ? `[${block.name}](${block.path})` : `[${t('图片', 'Image')}]`).join('')
-        return `## ${label}\n\n${body}`
-      }).join('\n\n')
-      await navigator.clipboard.writeText(`# ${item.title}\n\n${content}`)
-      announce(t('对话内容已复制', 'Conversation copied'), true)
-    } catch (cause) { announce(errorText(cause, t('无法复制对话内容', 'Could not copy the conversation'))) }
+      await navigator.clipboard.writeText(item.id)
+      announce(t('Session ID 已复制', 'Session ID copied'), true)
+    } catch (cause) { announce(errorText(cause, t('无法复制 Session ID', 'Could not copy the Session ID'))) }
   }, [announce, t])
 
   const forkConversation = useCallback(async (item: ConversationSummary): Promise<void> => {
@@ -891,6 +1067,56 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork this conversation'))) }
   }, [announce, t])
 
+  /** DSH's session-log export: one JSON object per line, taken from the durable conversation. */
+  const downloadSessionLog = useCallback(async (item?: ConversationSummary): Promise<void> => {
+    const id = item?.id ?? selectedId
+    if (id === null) return
+    try {
+      const detail = detailRef.current?.conversation.id === id ? detailRef.current : await api.getConversation(id)
+      const header = { kind: 'session', ...detail.conversation, exportedAt: new Date().toISOString() }
+      const body = [header, ...detail.messages].map(entry => JSON.stringify(entry)).join('\n')
+      const blob = new Blob([`${body}\n`], { type: 'application/x-ndjson' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${detail.conversation.title.replace(/[\\/:*?"<>|]+/gu, '-').trim() || 'session'}.jsonl`
+      // The anchor has to be in the document for the browser to start the download.
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => { URL.revokeObjectURL(url) }, 30_000)
+      announce(t('Session 日志已下载', 'Session log downloaded'), true)
+    } catch (cause) { announce(errorText(cause, t('无法下载 Session 日志', 'Could not download the session log'))) }
+  }, [announce, selectedId, t])
+
+  const addWorkspaceFromPicker = useCallback(async (): Promise<void> => {
+    try {
+      const picked = await api.pickWorkspaceDirectory()
+      if (picked === null) return
+      const name = picked.replace(/\/+$/u, '').split('/').pop() ?? picked
+      const added = await addWorkspace({ path: picked, name })
+      await refreshWorkspaces()
+      announce(t(`已添加工作区 ${added.name}`, `Added workspace ${added.name}`), true)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : ''
+      // No native panel on this host (Windows today): DSH gives such hosts the
+      // in-app browser, so open that instead of a typed path.
+      if (message.includes('原生目录选择器')) { setDirectoryBrowserOpen(true); return }
+      announce(errorText(cause, t('无法添加工作区', 'Could not add the workspace')))
+    }
+  }, [addWorkspace, announce, refreshWorkspaces, t])
+
+  const confirmDeleteWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
+    setDeleteWorkspace(undefined)
+    try {
+      await api.deleteWorkspace(workspace.id)
+      announce(t(`已删除工作区 ${workspace.name}`, `Deleted workspace ${workspace.name}`), true)
+      // The server rebound this workspace's sessions and its default; reload both views.
+      await refreshWorkspaces()
+      await refreshList()
+    } catch (cause) { announce(errorText(cause, t('无法删除工作区', 'Could not delete the workspace'))) }
+  }, [announce, refreshList, refreshWorkspaces, t])
+
   const filteredConversations = useMemo(() => conversations
     .filter(item => item.archived === showArchived)
     .filter(item => `${item.title}\n${item.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
@@ -908,7 +1134,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  const showInspector = inspectorOpen || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorLoading || inspectorError !== ''
+  const showInspector = inspectorOpen || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
+  /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
+  const conversationPlan = useMemo(() => activeDetail === null
+    ? undefined
+    : latestPlan(activeDetail.interactions, activeDetail.messages), [activeDetail])
 
   const startRename = (item: ConversationSummary): void => {
     setEditingId(item.id)
@@ -934,11 +1164,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewAccessMode(settings.defaultAccessMode)
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
+    setInspectorPlan(undefined)
     setInspectorOpen(false)
     inspectorRequestId.current += 1
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
   }, [mobile, settings.defaultAccessMode, settings.defaultPresetId, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
+
+  /** DSH's workspace row action: start a session that already belongs to that workspace. */
+  const startNewConversationIn = useCallback((workspaceId: string): void => {
+    if (selectedId === null) { setNewWorkspaceId(workspaceId); return }
+    pendingWorkspaceId.current = workspaceId
+    startNewConversation()
+  }, [selectedId, startNewConversation])
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent): void => {
@@ -963,18 +1201,35 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         event.preventDefault()
         if (mobile) setSidebarOpen(value => !value)
         else setSidebarCollapsed(value => !value)
+      } else if (matchesShortcut(event, shortcuts.rename) || matchesShortcut(event, shortcuts.fork) || matchesShortcut(event, shortcuts.archive)) {
+        // DSH binds these to the session row the reader is on; pi-web applies them to the open one.
+        const current = conversationsRef.current.find(item => item.id === selectedIdRef.current)
+        if (current === undefined) return
+        event.preventDefault()
+        if (matchesShortcut(event, shortcuts.rename)) startRename(current)
+        else if (matchesShortcut(event, shortcuts.fork)) void forkConversation(current)
+        else void patchConversation(current.id, { archived: !current.archived })
       }
     }
     document.addEventListener('keydown', onShortcut, true)
     return () => { document.removeEventListener('keydown', onShortcut, true) }
-  }, [mobile, settings.shortcuts, startNewConversation])
+  }, [mobile, settings.shortcuts, startNewConversation, startRename, forkConversation, patchConversation])
+
+  const conversationsRef = useRef(conversations)
+  conversationsRef.current = conversations
+
+  const shortcutFor = (source: AppSettings, command: ShortcutCommand): { keys: readonly string[] } => {
+    const chord = resolveShortcuts(source.shortcuts)[command]
+    return { keys: shortcutKeyLabels(chord) }
+  }
 
   const sessionMenuEntries = (item: ConversationSummary): MenuEntry[] => [
-    { id: 'rename', label: t('重命名', 'Rename') },
-    { id: 'copy', label: t('复制对话内容', 'Copy conversation') },
-    { id: 'fork', label: t('从最后一条消息分叉', 'Fork from latest message') },
-    { id: 'pin', label: item.pinned ? t('取消置顶', 'Unpin') : t('置顶', 'Pin'), icon: item.pinned ? <IconPinOutlineRegular size={14} /> : <IconPinFillRegular size={14} /> },
-    { id: 'archive', label: item.archived ? t('移出归档', 'Unarchive') : t('归档', 'Archive'), icon: item.archived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
+    { id: 'pin', label: item.pinned ? t('取消置顶', 'Unpin session') : t('置顶会话', 'Pin session'), icon: item.pinned ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} /> },
+    { id: 'rename', shortcut: shortcutFor(settings, 'rename'), label: t('重命名', 'Rename'), icon: <IconEditOutlineRegular size={14} /> },
+    { id: 'fork', shortcut: shortcutFor(settings, 'fork'), label: t('分叉会话', 'Fork conversation'), icon: <IconBranchOutlineRegular size={14} /> },
+    { id: 'copyId', label: t('复制 Session ID', 'Copy Session ID'), icon: <IconCopyOutlineRegular size={14} /> },
+    { id: 'log', label: t('导出日志', 'Export log'), icon: <IconDownloadOutlineRegular size={14} /> },
+    { id: 'archive', shortcut: shortcutFor(settings, 'archive'), label: item.archived ? t('取消归档', 'Unarchive session') : t('归档会话', 'Archive session'), icon: item.archived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
   ]
 
   const renderSession = (item: ConversationSummary) => <SessionRow key={item.id} item={item} selected={item.id === selectedId}
@@ -985,23 +1240,30 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     actions={sessionMenuEntries(item)} onAction={action => {
       setRowMenuId(null)
       if (action === 'rename') startRename(item)
-      else if (action === 'copy') void copyConversation(item)
+      else if (action === 'copyId') void copySessionId(item)
+      else if (action === 'log') void downloadSessionLog(item)
       else if (action === 'fork') void forkConversation(item)
       else if (action === 'pin') void patchConversation(item.id, { pinned: !item.pinned })
       else if (action === 'archive') void patchConversation(item.id, { archived: !item.archived })
     }} />
 
-  const workspaceActions = (workspace: WorkspaceSummary): MenuEntry[] => [
-    { id: 'select', label: t('设为当前工作区', 'Use this workspace') },
-    { id: 'browse', label: t('浏览文件', 'Browse files') },
-    { id: 'rename', label: t('重命名', 'Rename') },
-  ]
+  const workspaceActions = (workspace: WorkspaceSummary): MenuEntry[] => {
+    const entries: MenuEntry[] = [
+      { id: 'select', label: t('设为当前工作区', 'Use this workspace'), icon: <IconCheckOutlineRegular size={14} /> },
+      { id: 'browse', label: t('浏览文件', 'Browse files'), icon: <IconFolderOpenOutlineRegular size={14} /> },
+      { id: 'rename', label: t('重命名', 'Rename'), icon: <IconEditOutlineRegular size={14} /> },
+    ]
+    // DSH only offers removal while another workspace can take the rebound sessions.
+    if (workspaces.length > 1) entries.push({ id: 'delete', label: t('删除工作区', 'Delete workspace'), icon: <IconTrashOutlineRegular size={14} /> })
+    return entries
+  }
 
   const closeInspector = (): void => {
     inspectorRequestId.current += 1
     setInspectorOpen(false)
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
+    setInspectorPlan(undefined)
     setInspectorError('')
     setInspectorLoading(false)
   }
@@ -1009,6 +1271,34 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (showInspector) closeInspector()
     else setInspectorOpen(true)
   }
+  /**
+   * DSH's `openPlan` (`ui-plan/src/client/PlanCard.tsx:48-57`): focus the exact submitted plan in
+   * the right sidebar. `auto` is the one automatic open per conversation (`PlanCard.tsx:72-80`).
+   */
+  const openPlan = useCallback((plan: PlanDocument, auto = false): void => {
+    if (auto) {
+      if (selectedId === null || planAutoOpenedFor.current === selectedId) return
+      planAutoOpenedFor.current = selectedId
+    }
+    inspectorRequestId.current += 1
+    setInspectorPlan(plan)
+    setInspectorView('plan')
+    setInspectorOpen(true)
+    setInspectorError('')
+    setInspectorLoading(false)
+  }, [selectedId])
+
+  // DSH opens each pending review once, automatically, and stops after the reader closes it
+  // (`PlanCard.tsx:63-80` + `review-store.ts:12-22`). Pi keys the memory to the conversation,
+  // so switching sessions resets it; a plan that is no longer pending never auto-opens.
+  useEffect(() => {
+    planAutoOpenedFor.current = null
+  }, [selectedId])
+  useEffect(() => {
+    if (selectedId === null || conversationPlan === undefined || conversationPlan.pending !== true) return
+    if (planAutoOpenedFor.current === selectedId) return
+    openPlan(conversationPlan, true)
+  }, [conversationPlan, openPlan, selectedId])
 
   return (
     <main className={`${css.shell} ${sidebarCollapsed && !mobile ? css.shellCollapsed : ''}`}>
@@ -1024,7 +1314,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         <div className={css.sidebarHeader}>
           <div className={css.brand}>
             <span className={css.brandMark} aria-hidden>π</span>
-            <span className={css.brandName}><strong>Pi Durable</strong><small>{t('本机工作区', 'LOCAL WORKSPACE')}</small></span>
+            <span className={css.brandName}><strong>Pi Durable</strong><small>{appVersion !== '' ? `v${appVersion}` : t('本机工作区', 'LOCAL WORKSPACE')}</small></span>
           </div>
           <Tooltip label={t('新建会话', 'New conversation')} side="bottom" portal>
             <Button variant="ghost" size="sm" aria-label={t('新建会话', 'New conversation')}
@@ -1035,8 +1325,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               icon={<IconPanelLeftOutlineRegular size={15} />} onClick={() => { setSidebarCollapsed(value => !value) }} />
           </Tooltip>}
         </div>
-        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={15} />} onClick={startNewConversation}>
+        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startNewConversation}>
           {t('新会话', 'New conversation')}
+          <ShortcutKeys keys={shortcutKeyLabels(resolveShortcuts(settings.shortcuts).newConversation)} className={css.newChatKeys} />
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
           <button type="button" className={css.navItem} data-active={page === 'plugins' || undefined}
@@ -1068,16 +1359,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 else if (id === 'archived') setShowArchived(value => !value)
               }}
               selectedId={workspaceSort} items={[
-                { id: 'recent', label: t('按最近活动排序', 'Sort by recent activity') },
-                { id: 'name', label: t('按名称排序', 'Sort by name') },
+                { id: 'recent', label: t('按最近活动排序', 'Sort by recent activity'), icon: <IconClockOutlineRegular size={14} /> },
+                { id: 'name', label: t('按名称排序', 'Sort by name'), icon: <IconFlatListOutlineRegular size={14} /> },
                 { id: 'archived', label: showArchived ? t('显示最近会话', 'Show active conversations') : t('显示已归档会话', 'Show archived conversations'), icon: showArchived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
-              ]} portal compact anchor={<Tooltip label={t('视图选项', 'View options')} side="top" portal>
+              ]} portal anchor={<Tooltip label={t('视图选项', 'View options')} side="top" portal>
                 <Button variant="ghost" size="sm" aria-label={t('视图选项', 'View options')} icon={<IconSlidersTwoOutlineRegular size={15} />}
                   onClick={() => { setThemeMenuOpen(value => !value) }} />
               </Tooltip>} />
             <Tooltip label={t('添加工作区', 'Add workspace')} side="top" portal>
               <Button variant="ghost" size="sm" aria-label={t('添加工作区', 'Add workspace')} icon={<IconPlusOutlineRegular size={15} />}
-                onClick={() => { setWorkspaceDialogOpen(true) }} />
+                onClick={() => { void addWorkspaceFromPicker() }} />
             </Tooltip>
           </div>
         </div>
@@ -1103,54 +1394,67 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   {isExpanded ? <IconFolderOpenOutlineRegular size={16} /> : <IconFolderCloseRegular size={16} />}
                   <span className={css.workspaceName}>{workspace.name}</span>
                 </button>
-                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal compact
+                <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
+                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal
                   onSelect={id => {
                     setWorkspaceMenuId(null)
                     if (id === 'select') void selectWorkspace(workspace.id)
                     else if (id === 'browse') navigate('workspace', workspace.id)
                     else if (id === 'rename') setRenameWorkspace(workspace)
-                  }} anchor={<Tooltip label={t('工作区操作', 'Workspace actions')} side="top" portal>
-                    <button type="button" className={css.rowMenuButton} aria-label={t(`工作区操作：${workspace.name}`, `Workspace actions: ${workspace.name}`)}
-                      onClick={() => { setWorkspaceMenuId(value => value === workspace.id ? null : workspace.id) }}><IconEllipsisOutlineRegular size={15} /></button>
-                  </Tooltip>} />
+                    else if (id === 'delete') setDeleteWorkspace(workspace)
+                  }} anchor={<button type="button" className={css.rowIconButton}
+                    aria-label={t(`工作区“${workspace.name}”的操作`, `Actions for ${workspace.name}`)}
+                    onClick={() => { setWorkspaceMenuId(value => value === workspace.id ? null : workspace.id) }}><IconEllipsisOutlineRegular size={16} /></button>} />
+                <Tooltip label={t('新会话', 'New session')} side="bottom" align="end" delayMs={500} portal>
+                  <button type="button" className={css.rowIconButton}
+                    aria-label={t(`在“${workspace.name}”中新建会话`, `New session in ${workspace.name}`)}
+                    onClick={() => { startNewConversationIn(workspace.id) }}><IconNewChatOutlineRegular size={16} /></button>
+                </Tooltip>
+                </span>
               </div>
-              {isExpanded && <div className={css.workspaceSessions}>
+              {isExpanded && <HoverCardGroup className={css.workspaceSessions}>
                 {sessions.map(renderSession)}
                 {sessions.length === 0 && <span className={css.emptySessions}>{query.trim() !== '' ? t('没有匹配的会话', 'No matching conversations') : t('暂无会话', 'No conversations')}</span>}
-              </div>}
+              </HoverCardGroup>}
             </div>
           })}
           {ungrouped.length > 0 && <div className={css.workspaceGroup}>
             <div className={css.workspaceLabel}><IconWorkspaceTreeOutlineRegular size={15} /><span>{t('未分组', 'Ungrouped')}</span></div>
-            <div className={css.workspaceSessions}>{ungrouped.map(renderSession)}</div>
+            <HoverCardGroup className={css.workspaceSessions}>{ungrouped.map(renderSession)}</HoverCardGroup>
           </div>}
           {!workspaceLoading && filteredConversations.length === 0 && query.trim() !== '' && <p className={css.listEmpty}>{t('没有匹配的会话', 'No matching conversations')}</p>}
           {!listLoading && listError !== '' && <div className={css.listNotice} role="alert"><span>{listError}</span>
             <button type="button" onClick={() => { setListLoading(true); void refreshList() }}>{t('重试', 'Retry')}</button></div>}
         </div>
         <div className={css.sidebarFoot}>
-          <Menu open={moreMenuOpen} onClose={() => { setMoreMenuOpen(false) }} onSelect={id => {
-            setMoreMenuOpen(false)
-            if (id === 'settings') { setSettingsInitialTab('general'); setSettingsOpen(true) }
-            else if (id === 'models') { setSettingsInitialTab('models'); setSettingsOpen(true) }
-            else if (id === 'theme-system' || id === 'theme-light' || id === 'theme-dark') {
-              const theme = id.slice('theme-'.length) as AppSettings['theme']
-              void onSettingsChange({ theme }).catch(cause => { announce(errorText(cause, t('无法更改外观', 'Could not change appearance'))) })
-            } else if (id === 'plugins') navigate('plugins')
-            else if (id === 'automations') navigate('automations')
-          }} items={[
-            { id: 'settings', label: t('设置', 'Settings'), icon: <IconSettingsOutlineRegular size={15} /> },
-            { id: 'models', label: t('模型配置', 'Model settings') },
-            { id: 'plugins', label: t('插件', 'Plugins'), icon: <IconCordisPluginOutlineRegular size={15} /> },
-            { id: 'automations', label: t('自动化任务', 'Automations'), icon: <IconClockOutlineRegular size={15} /> },
-            { id: 'theme-system', label: t('跟随系统外观', 'Follow system appearance'), icon: <IconFollowsystemOutlineRegular size={15} /> },
-            { id: 'theme-light', label: t('浅色外观', 'Light appearance'), icon: <IconLightOutlineRegular size={15} /> },
-            { id: 'theme-dark', label: t('深色外观', 'Dark appearance'), icon: <IconDarkOutlineRegular size={15} /> },
-          ]} portal compact anchor={<Tooltip label={t('更多', 'More')} side="top" portal>
-            <button type="button" className={css.moreButton} aria-label={t('更多', 'More')} aria-expanded={moreMenuOpen} onClick={() => { setMoreMenuOpen(value => !value) }}>
-              <IconEllipsisOutlineRegular size={16} /><span>{t('更多', 'More')}</span>
-            </button>
-          </Tooltip>} />
+          {/* DSH's footer is the account row; the settings entry lives inside its menu. */}
+          <div className={css.accountMenuAnchor}>
+          <Menu open={accountMenuOpen} onClose={() => { setAccountMenuOpen(false) }} side="top" portal
+            onSelect={id => {
+              setAccountMenuOpen(false)
+              if (id === 'settings') { setSettingsInitialTab('general'); setSettingsOpen(true) }
+              else if (id === 'feedback') { setFeedbackError(''); setFeedbackOpen(true) }
+            }}
+            items={[
+              {
+                id: 'settings',
+                icon: <IconSettingsOutlineRegular size={15} />,
+                label: <span className={css.accountMenuRow}><span>{t('设置', 'Settings')}</span>
+                  <ShortcutKeys keys={shortcutKeyLabels(resolveShortcuts(settings.shortcuts).settings)} /></span>,
+              },
+              {
+                id: 'feedback',
+                icon: <IconListPenOutlineRegular size={15} />,
+                label: t('意见反馈', 'Send feedback'),
+              },
+            ]}
+            anchor={<button type="button" className={css.accountRow} aria-label={t('账号菜单', 'Account menu')}
+              aria-haspopup="menu" aria-expanded={accountMenuOpen}
+              onClick={() => { setAccountMenuOpen(value => !value) }}>
+              <span className={css.accountAvatar} aria-hidden="true">{accountInitial(accountName)}</span>
+              <span className={css.accountLabel}>{accountName === '' ? t('本机工作区', 'Local workspace') : accountName}</span>
+            </button>} />
+          </div>
         </div>
       </aside>
 
@@ -1171,10 +1475,23 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         icon={<IconPanelLeftOutlineRegular size={16} />} onClick={() => { setSidebarOpen(true) }} />
                     </Tooltip>}
                     <div className={css.conversationHeading}>
-                      <span className={css.conversationTitle}>{activeDetail?.conversation.title ?? selectedSummary?.title ?? t('新对话', 'New conversation')}</span>
+                      {activeDetail?.conversation.parentId !== undefined
+                        ? <SubagentBreadcrumb conversation={activeDetail.conversation}
+                          parentTitle={conversations.find(item => item.id === activeDetail.conversation.parentId)?.title}
+                          onOpen={id => { selectConversation(id) }} t={t} />
+                        : <span className={css.conversationTitle}>{activeDetail?.conversation.title ?? selectedSummary?.title ?? t('新对话', 'New conversation')}</span>}
                       <span className={css.cwd}>{currentWorkspace?.name ?? activeDetail?.conversation.cwd ?? selectedSummary?.cwd ?? ''}
                         {busy && <span className={css.running}>{t('运行中', 'Running')}</span>}</span>
                     </div>
+                    {/* DSH puts the descendant count and the team action between the title and the header actions. */}
+                    {activeDetail !== null && <SubagentPanel conversationId={activeDetail.conversation.id}
+                      subagents={activeDetail.subagents}
+                      onOpen={childId => { selectConversation(childId) }}
+                      onNotice={message => { announce(message) }} />}
+                    {activeDetail !== null && <TeamPanel conversationId={activeDetail.conversation.id}
+                      team={activeDetail.team}
+                      onOpen={memberId => { selectConversation(memberId) }}
+                      onNotice={message => { announce(message) }} />}
                   </div>
                   <div className={css.topbarActions}>
                     <ConnectionIndicator state={connection} disconnectedLabel={t('连接中断 · 重新连接', 'Connection lost · reconnect')}
@@ -1183,19 +1500,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       onReconnect={() => { setConnection('connecting'); setReconnectToken(value => value + 1) }} />
                     <Menu open={moreMenuOpen} onClose={() => { setMoreMenuOpen(false) }} onSelect={id => {
                       setMoreMenuOpen(false)
-                      if (id === 'settings') { setSettingsInitialTab('general'); setSettingsOpen(true) }
-                      if (id === 'models') { setSettingsInitialTab('models'); setSettingsOpen(true) }
-                      if (id === 'theme-system' || id === 'theme-light' || id === 'theme-dark') {
-                        void onSettingsChange({ theme: id.slice('theme-'.length) as AppSettings['theme'] }).catch(cause => { announce(errorText(cause, t('无法更改外观', 'Could not change appearance'))) })
-                      }
+                      if (id === 'download') void downloadSessionLog()
                     }} items={[
-                      { id: 'settings', label: t('设置', 'Settings'), icon: <IconSettingsOutlineRegular size={15} /> },
-                      { id: 'models', label: t('模型配置', 'Model settings') },
-                      { id: 'theme-system', label: t('跟随系统外观', 'Follow system appearance'), icon: <IconFollowsystemOutlineRegular size={15} /> },
-                      { id: 'theme-light', label: t('浅色外观', 'Light appearance'), icon: <IconLightOutlineRegular size={15} /> },
-                      { id: 'theme-dark', label: t('深色外观', 'Dark appearance'), icon: <IconDarkOutlineRegular size={15} /> },
-                    ]} portal compact anchor={<Tooltip label={t('更多对话操作', 'More conversation options')} side="bottom" portal>
-                      <Button variant="ghost" size="sm" aria-label={t('更多对话操作', 'More conversation options')}
+                      { id: 'download', label: t('下载 Session 日志', 'Download session log'), icon: <IconDownloadOutlineRegular size={14} /> },
+                    ]} portal anchor={<Tooltip label={t('更多操作', 'More actions')} side="bottom" portal>
+                      <Button variant="ghost" size="sm" aria-label={t('更多操作', 'More actions')}
                         icon={<IconEllipsisOutlineRegular size={16} />} onClick={() => { setMoreMenuOpen(value => !value) }} />
                     </Tooltip>} />
                     <Tooltip label={t('模型设置', 'Model settings')} side="bottom" portal>
@@ -1231,10 +1540,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     busy={false} disabled={detailLoading} queue={[]} sendMode={sendMode} sending={sending}
                     workspace={currentWorkspace} workspaces={workspaces} presets={presets} presetId={selectedPresetId} accessMode={accessMode}
                     accessModes={accessModes} files={[]}
-                    onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onSend={mode => { void send(mode) }}
+                    plan={newPlan} onPlan={active => { void setPlan(active) }}
+                    onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onRetryImage={retryImage} onSend={mode => { void send(mode) }}
                     onStop={() => { void stop() }} onRemoveQueue={id => { void removeQueue(id) }}
                     onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
-                    onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { setWorkspaceDialogOpen(true) }}
+                    onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
                     onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
                     onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }} onNewConversation={startNewConversation}
                     onSearchFiles={searchWorkspaceFiles} onPreviewFile={path => { void openWorkspaceFile(path) }} />
@@ -1258,7 +1568,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       wasAtBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 88
                     }}>
                       {chatView === 'chat'
-                        ? <Transcript messages={activeDetail.messages} pending={selectedPending}
+                        ? <Transcript messages={activeDetail.messages} pending={selectedPending} interactions={activeDetail.interactions}
                           onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                           onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
                           onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {
@@ -1266,9 +1576,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                           }) }}
                           resolveFileImage={path => currentWorkspaceId === undefined ? undefined
                             : `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/asset?${new URLSearchParams({ path }).toString()}`}
-                          onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorError(''); setInspectorLoading(false) }}
-                          onOpenTool={() => { setChatView('trajectory') }}
-                          displayMode={settings.processDisplay} autoCollapseCompleted={settings.collapseProcess === 'afterResponse'} />
+                          onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
+                          onOpenSubagent={childId => { selectConversation(childId) }}
+                          onOpenPlan={plan => { openPlan(plan) }}
+                          onOpenTool={() => { setChatView('trajectory') }} />
                         : <TrajectoryView messages={activeDetail.messages}
                           onJumpToMessage={messageId => {
                             setChatView('chat')
@@ -1280,19 +1591,30 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     </div>
                     {catalogError !== '' && <div className={css.catalogNotice} role="status"><span>{catalogError}</span>
                       <button type="button" onClick={() => { void refreshCatalog() }}>{t('重试', 'Retry')}</button></div>}
+                    <GoalBar goal={activeDetail.goal} onSetState={(action, payload) => { void updateGoal(action, payload) }} />
+                    <TodoPanel todos={activeDetail.todos} />
+                    <QuestionComposer conversationId={activeDetail.conversation.id} interactions={activeDetail.interactions}
+                      onDismiss={focusComposer}
+                      onOpenPlan={plan => { openPlan(plan) }}
+                      onAnswered={value => {
+                        detailRef.current = value
+                        setDetail(value)
+                        setDetailError('')
+                        updateConversation(value)
+                      }} />
                     <Composer value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                       busy={busy} disabled={detailLoading || !conversationReady && detailError === ''} queue={activeDetail.queue}
                       sendMode={sendMode} sending={sending} workspace={currentWorkspace} workspaces={workspaces} presets={presets}
                       presetId={selectedPresetId} accessMode={accessMode} accessModes={accessModes}
-                      files={[]} usage={activeDetail.usage}
-                      runCount={new Set(activeDetail.messages.map(message => message.runId).filter((runId): runId is string => runId !== undefined)).size}
-                      stepCount={activeDetail.messages.filter(message => message.role === 'assistant' || message.role === 'tool').length}
-                      onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onSend={mode => { void send(mode) }}
+                      plan={activeDetail === null ? newPlan : activeDetail.plan?.active === true} onPlan={active => { void setPlan(active) }}
+                      files={[]} stats={conversationStats(activeDetail.messages)}
+                      onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onRetryImage={retryImage} onSend={mode => { void send(mode) }}
                       onStop={() => { void stop() }} onRemoveQueue={id => { void removeQueue(id) }}
                       onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
-                      onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { setWorkspaceDialogOpen(true) }}
+                      onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
                       onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
                       onUpdateQueue={updateQueue} onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
+                      onCompact={() => { void compact() }}
                       onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onPreviewFile={path => { void openWorkspaceFile(path) }} />
                   </div>}
                 </>}
@@ -1308,7 +1630,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 onOpenFile={path => { void openWorkspaceFile(path, workspacePageId ?? undefined) }} />)}
           </div>
           {showInspector && <aside className={css.inspectorPane} aria-label={t('文件检查器', 'File inspector')}>
-            <Inspector file={inspectorFile} diff={inspectorDiff} loading={inspectorLoading} error={inspectorError}
+            <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
+              view={inspectorView} onView={setInspectorView}
+              loading={inspectorLoading} error={inspectorError}
               onClose={closeInspector} />
           </aside>}
         </div>
@@ -1321,14 +1645,39 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         presetsPanel={<PresetsPanel presets={presets} models={catalog?.models ?? []} defaultPresetId={settings.defaultPresetId}
           loading={presetsLoading} error={presetLoadError} onRefresh={() => { void refreshPresets() }}
           onChange={setPresets} onSetDefault={id => { void onSettingsChange({ defaultPresetId: id ?? null }).catch(cause => { announce(errorText(cause, t('无法保存默认预设', 'Could not save the default preset'))) }) }} />}
-        onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} />
+        onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider} />
       <WorkspaceDialog open={workspaceDialogOpen} workspaces={workspaces} currentWorkspaceId={currentWorkspaceId}
         busy={false} onClose={() => { setWorkspaceDialogOpen(false) }} onSelect={id => {
           void selectWorkspace(id)
           setWorkspaceDialogOpen(false)
         }} onCreate={addWorkspace} />
+      <DirectoryBrowser open={directoryBrowserOpen} onClose={() => { setDirectoryBrowserOpen(false) }}
+        onPick={path => {
+          setDirectoryBrowserOpen(false)
+          const name = path.replace(/\/+$/u, '').split('/').pop() ?? path
+          void addWorkspace({ path, name }).then(async added => {
+            await refreshWorkspaces()
+            announce(t(`已添加工作区 ${added.name}`, `Added workspace ${added.name}`), true)
+          }).catch(cause => { announce(errorText(cause, t('无法添加工作区', 'Could not add the workspace'))) })
+        }} />
       <WorkspaceRenameDialog workspace={renameWorkspace} onClose={() => { setRenameWorkspace(null) }}
         onSave={(workspace, name) => { setRenameWorkspace(null); void saveWorkspaceName(workspace, name) }} />
+      <Modal open={deleteWorkspace !== undefined} onClose={() => { setDeleteWorkspace(undefined) }}
+        title={t('删除工作区', 'Delete workspace')} closeLabel={t('关闭', 'Close')}
+        description={t('只从列表移除；目录与文件保持不变，该工作区的会话会转到其它工作区。', 'Removed from the list only. Files stay on disk and this workspace\'s conversations move to another workspace.')}
+        className={css.childModal}
+        footer={<><Button variant="ghost" onClick={() => { setDeleteWorkspace(undefined) }}>{t('取消', 'Cancel')}</Button>
+          <Button variant="primary" onClick={() => { if (deleteWorkspace !== undefined) void confirmDeleteWorkspace(deleteWorkspace) }}>{t('删除', 'Delete')}</Button></>} />
+      <Modal open={feedbackOpen} onClose={() => { setFeedbackOpen(false) }} title={t('意见反馈', 'Send feedback')}
+        closeLabel={t('关闭', 'Close')} className={css.childModal}
+        footer={<><Button variant="ghost" onClick={() => { setFeedbackOpen(false) }}>{t('取消', 'Cancel')}</Button>
+          <Button variant="primary" disabled={feedbackText.trim() === '' || feedbackText.trim().length > 2000 || feedbackSending}
+            onClick={() => { void sendUserFeedback() }}>{t('提交', 'Submit')}</Button></>}>
+        <textarea className={css.feedbackInput} rows={6} value={feedbackText} data-modal-autofocus
+          aria-label={t('意见反馈内容', 'Feedback text')} placeholder={t('写下你的建议或遇到的问题', 'Tell us what you think or what went wrong')}
+          onChange={event => { setFeedbackText(event.currentTarget.value) }} />
+        {feedbackError !== '' && <p className={css.feedbackError} role="alert">{feedbackError}</p>}
+      </Modal>
       {settingsError !== '' && <div className={css.settingsNotice} role="status">{settingsError}</div>}
       {toast !== null && <Toast key={toast.id} text={toast.text} tone={toast.success ? 'success' : undefined}
         onDone={() => { setToast(current => current?.id === toast.id ? null : current) }} />}
@@ -1354,36 +1703,104 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
 }) {
   const { t, settings } = useUiPreferences()
   return (
-    <div className={css.sessionRow} data-selected={selected || undefined} data-pinned={item.pinned || undefined}>
-      {editing
-        ? <div className={css.renameForm}>
-          <input aria-label={t('会话标题', 'Conversation title')} value={editTitle} onChange={event => { onEditTitle(event.currentTarget.value) }}
-            autoFocus onKeyDown={event => {
-              if (event.key === 'Enter') { event.preventDefault(); onSaveTitle() }
-              if (event.key === 'Escape') onCancelTitle()
-            }} />
-          <button type="button" aria-label={t('保存标题', 'Save title')} onClick={onSaveTitle}>{t('保存', 'Save')}</button>
+    // DSH's hover card: the dark menu material beside the row with its title, relative time and state.
+    <HoverCard grouped openDelayMs={500} disabled={editing || menuOpen}
+      content={<div className={css.sessionHoverCard}>
+        <span className={css.sessionHoverTitle}>{item.title || t('新对话', 'New conversation')}</span>
+        <span className={css.sessionHoverTime}>{hoverTime(item.updatedAt, settings.locale)}</span>
+        <span className={css.sessionHoverState}>
+          <span className={css.sessionHoverDot} aria-hidden="true" />
+          {item.busy ? t('运行中', 'Running') : t('空闲', 'Idle')}
+        </span>
+      </div>}
+      anchor={
+        <div className={css.sessionRow} data-selected={selected || undefined} data-pinned={item.pinned || undefined}
+          data-menu-open={menuOpen || undefined}>
+          {editing
+            ? <div className={css.renameForm}>
+              <input aria-label={t('会话标题', 'Conversation title')} value={editTitle} onChange={event => { onEditTitle(event.currentTarget.value) }}
+                autoFocus onKeyDown={event => {
+                  if (event.key === 'Enter') { event.preventDefault(); onSaveTitle() }
+                  if (event.key === 'Escape') onCancelTitle()
+                }} />
+              <button type="button" aria-label={t('保存标题', 'Save title')} onClick={onSaveTitle}>{t('保存', 'Save')}</button>
+            </div>
+            : <>
+              <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
+                <span className={css.sessionSlot}>{item.busy && <span className={css.sessionBusy} aria-label={t('正在运行', 'Running')} />}</span>
+                <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
+              </button>
+              <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
+              {/* The pin state stays on the row itself; every other action lives in the trailing menu. */}
+              {item.pinned && <span className={css.sessionPin} role="img" aria-label={t('已置顶', 'Pinned')} title={t('已置顶', 'Pinned')}><IconPinFillRegular size={14} /></span>}
+              {/* DSH swaps the trailing time cell for the row's action strip while the row is hovered. */}
+              <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
+                <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
+                  onSelect={id => { onAction(id) }}
+                  anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
+                    aria-haspopup="menu" aria-expanded={menuOpen}
+                    onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
+              </span>
+            </>}
         </div>
-        : <>
-          <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
-            {item.pinned && <IconPinFillRegular className={css.sessionPin} size={11} />}
-            <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
-            {item.busy && <span className={css.sessionBusy} aria-label={t('正在运行', 'Running')} />}
-          </button>
-          <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal compact
-            onSelect={id => { onAction(id) }}
-            anchor={<Tooltip label={t('更多会话操作', 'Conversation actions')} side="top" portal>
-              <button type="button" className={css.rowMenuButton} aria-label={t(`会话操作：${item.title}`, `Conversation actions: ${item.title}`)}
-                onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>
-            </Tooltip>} />
-          <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
-        </>}
-    </div>
+      } />
   )
 }
 
-function SessionSkeleton() {
-  const { t } = useUiPreferences()
+/**
+ * DSH's breadcrumb lineage for a subagent session (`SubagentHeaderLineage.tsx:785-822`):
+ * the parent title navigates back, and the current child title is a sibling switcher whose
+ * menu highlights the session on screen with DSH's 「当前会话」 tag (`:238,340`). The switcher's
+ * accessible name is DSH's `switcher.aria` (`locales.ts:40`).
+ */
+function SubagentBreadcrumb({ conversation, parentTitle, onOpen, t }: {
+  conversation: ConversationSummary
+  /** The parent's title when the sidebar list already knows it. */
+  parentTitle?: string
+  onOpen: (id: string) => void
+  t: (chinese: string, english: string) => string
+}) {
+  const parentId = conversation.parentId
+  const [resolvedParent, setResolvedParent] = useState<string | undefined>(parentTitle)
+  const [siblings, setSiblings] = useState<SubagentSummary[]>([])
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (parentId === undefined) return
+    let active = true
+    setOpen(false)
+    // A subagent of a subagent is not in the sidebar list, so the parent title falls back to the route.
+    if (parentTitle === undefined) {
+      api.getConversation(parentId).then(value => { if (active) setResolvedParent(value.conversation.title) }).catch(() => undefined)
+    } else {
+      setResolvedParent(parentTitle)
+    }
+    api.listChildren(parentId).then(value => { if (active) setSiblings(value) }).catch(() => undefined)
+    return () => { active = false }
+  }, [parentId, parentTitle])
+  if (parentId === undefined) return null
+  const parentLabel = resolvedParent ?? parentId
+  const currentTitle = conversation.title || t('子会话', 'Subagent session')
+  const items: MenuEntry[] = siblings.map(sibling => ({
+    id: sibling.id,
+    label: <span className={css.crumbItem}>
+      <span className={css.crumbItemTitle}>{sibling.title || sibling.label}</span>
+      {sibling.id === conversation.id && <Tag tone="info" className={css.crumbTag}>{t('当前会话', 'Current chat')}</Tag>}
+    </span>,
+  }))
+  return (
+    <nav className={css.crumbs} aria-label={t('会话层级', 'Session hierarchy')}>
+      <button type="button" className={css.crumb} title={parentLabel} onClick={() => { onOpen(parentId) }}>{parentLabel}</button>
+      <span className={css.crumbSep} aria-hidden="true">/</span>
+      <Menu open={open} onClose={() => { setOpen(false) }} items={items} portal
+        onSelect={id => { setOpen(false); if (id !== conversation.id) onOpen(id) }}
+        anchor={<button type="button" className={`${css.crumb} ${css.crumbCurrent}`} aria-haspopup="menu" aria-expanded={open}
+          aria-label={t(`切换子智能体：${currentTitle}`, `Switch subagent: ${currentTitle}`)}
+          onClick={() => { setOpen(value => !value) }}>{currentTitle}</button>} />
+    </nav>
+  )
+}
+
+function SessionSkeleton() {  const { t } = useUiPreferences()
   return <div className={css.skeleton} aria-label={t('正在加载会话', 'Loading conversations')}>
     <span /><span /><span />
   </div>
@@ -1398,17 +1815,49 @@ function compareConversations(a: ConversationSummary, b: ConversationSummary): n
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
 }
 
+/** Initial-letter avatar for the local account row, standing in for DSH's account image. */
+function accountInitial(name: string): string {
+  const first = [...name.trim()][0]
+  return first === undefined ? 'π' : first.toLocaleUpperCase()
+}
+
+/** Session row trailing label in DSH's relative buckets, so two surfaces naming the same row agree. */
 function formatUpdated(value: number, locale: 'zh' | 'en'): string {
-  const date = new Date(value)
-  const now = new Date()
-  const sameDay = date.toDateString() === now.toDateString()
-  return sameDay ? new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' }).format(date)
-    : new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric' }).format(date)
+  const { unit, n } = relativeTime(value, Date.now())
+  switch (unit) {
+    case 'now': return locale === 'zh' ? '刚刚' : 'just now'
+    case 'minutes': return locale === 'zh' ? `${n} 分钟` : `${n}m`
+    case 'hours': return locale === 'zh' ? `${n} 小时` : `${n}h`
+    case 'days': return locale === 'zh' ? `${n} 天` : `${n}d`
+    case 'months': return locale === 'zh' ? `${n} 个月` : `${n}mo`
+    case 'years': return locale === 'zh' ? `${n} 年` : `${n}y`
+  }
+}
+
+/** DSH's hover-card time line: the same buckets as the row, read as "23天前" instead of a cell label. */
+function hoverTime(value: number, locale: 'zh' | 'en'): string {
+  const { unit, n } = relativeTime(value, Date.now())
+  switch (unit) {
+    case 'now': return locale === 'zh' ? '刚刚' : 'just now'
+    case 'minutes': return locale === 'zh' ? `${n} 分钟前` : `${n}m ago`
+    case 'hours': return locale === 'zh' ? `${n} 小时前` : `${n}h ago`
+    case 'days': return locale === 'zh' ? `${n} 天前` : `${n}d ago`
+    case 'months': return locale === 'zh' ? `${n} 个月前` : `${n}mo ago`
+    case 'years': return locale === 'zh' ? `${n} 年前` : `${n}y ago`
+  }
 }
 
 function isAcknowledged(detail: ConversationDetail, pendingItem: PendingSubmission): boolean {
   return detail.messages.some(message => message.requestId === pendingItem.requestId)
     || pendingItem.submissionId !== undefined && detail.queue.some(item => item.id === pendingItem.submissionId)
+}
+
+/**
+ * Identity of one submission attempt: the target conversation, the exact text, and the attachment ids.
+ * A retry that matches it is the same logical submission and keeps the requestId the server deduplicates on.
+ */
+function submissionFingerprint(conversationId: string, text: string, images: readonly DraftImage[]): string {
+  return `${conversationId}\u0000${text}\u0000${images.map(image => image.id).join('\u0000')}`
 }
 
 function errorText(cause: unknown, fallback: string): string {
@@ -1437,6 +1886,18 @@ function removeStorage(key: string): void {
 function setElementInert(element: HTMLElement, inert: boolean): void {
   if (inert) element.setAttribute('inert', '')
   else element.removeAttribute('inert')
+}
+
+function isImageType(mimeType: string): boolean {
+  return IMAGE_MIME_TYPES.has(mimeType.toLocaleLowerCase())
+}
+
+/** The attachment's image MIME type, read from the file name when the browser reports none. */
+function imageFileType(file: File): string {
+  const declared = file.type.toLocaleLowerCase()
+  if (declared !== '') return isImageType(declared) ? declared : ''
+  const extension = file.name.toLocaleLowerCase().split('.').pop() ?? ''
+  return IMAGE_EXTENSIONS[extension] ?? ''
 }
 
 function fileData(file: File, t: (chinese: string, english: string) => string): Promise<string> {

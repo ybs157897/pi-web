@@ -29,7 +29,8 @@ export interface ProviderModelInput {
 export interface ProviderInput {
   id: string
   name: string
-  baseUrl: string
+  /** Empty means "provider default": models keep their own resolved endpoint. */
+  baseUrl?: string
   apiKey?: string
   models: ProviderModelInput[]
   api?: string
@@ -42,6 +43,8 @@ export interface ProviderConfigSummary extends ProviderSummary {
   headers?: Record<string, string>
   compat?: Record<string, unknown>
   credentialConfigured: boolean
+  /** Catalog this provider ships with, offered as "restore default models". */
+  defaults?: ProviderModelInput[]
 }
 export interface ProviderTestResult {
   providerId: string
@@ -52,17 +55,34 @@ export interface ProviderTestResult {
 }
 export interface ModelCatalog { models: ModelOption[]; providers: ProviderSummary[]; defaultModel?: ModelRef; thinkingLevels: ThinkingLevel[] }
 
+/** Work-details presentation modes, mirroring DSH's four-step choice. */
+export const TRANSCRIPT_VIEW_MODES = ['compact', 'standard', 'detailed', 'verbose'] as const
+export type TranscriptViewMode = typeof TRANSCRIPT_VIEW_MODES[number]
+/** When a completed turn returns to its historical presentation. */
+export const COLLAPSE_TIMINGS = ['completion', 'next-input'] as const
+export type CollapseTiming = typeof COLLAPSE_TIMINGS[number]
+/** Detail level for composer statistics and completed-turn usage. */
+export const PERFORMANCE_USAGE_MODES = ['compact', 'detailed'] as const
+export type PerformanceUsageMode = typeof PERFORMANCE_USAGE_MODES[number]
+
 export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
   locale: 'zh' | 'en'
   fontSize: number
   codeFontSize: number
   terminalFontSize: number
-  processDisplay: 'detailed' | 'compact'
-  collapseProcess: 'afterResponse' | 'always' | 'never'
+  transcriptView: TranscriptViewMode
+  collapseTiming: CollapseTiming
+  performanceUsage: PerformanceUsageMode
   codingViews: boolean
   busySendMode: 'followUp' | 'steer'
   defaultModel?: ModelRef
+  /**
+   * Models this project may use: `provider/modelId` entries, or `provider/prefix*`
+   * prefix patterns. Empty means no filtering. Only affects this project's model
+   * directory and selection; the Pi configuration is never rewritten.
+   */
+  modelAllowlist: string[]
   defaultThinkingLevel: ThinkingLevel
   defaultAccessMode: AccessMode
   defaultPresetId?: string
@@ -136,6 +156,14 @@ export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partia
 }
 export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'intervalMs'> & { intervalMs?: number | null }
 
+export interface DirectoryEntry { name: string; path: string; hidden: boolean }
+export interface DirectoryListing {
+  path: string
+  home: string
+  crumbs: Array<{ name: string; path: string }>
+  entries: DirectoryEntry[]
+  truncated: boolean
+}
 export interface ConversationSummary {
   id: string
   title: string
@@ -150,6 +178,10 @@ export interface ConversationSummary {
   workspaceId?: string
   presetId?: string
   accessMode?: AccessMode
+  /** DSH's session origin: `subagent` marks a conversation another conversation's task created. */
+  origin?: 'subagent'
+  /** The parent conversation of a subagent session; the owner edge the control routes check. */
+  parentId?: string
   runId?: string
   runStartedAt?: number
   durationMs?: number
@@ -211,8 +243,133 @@ export interface ConversationDetail {
   conversation: ConversationSummary
   messages: ChatMessage[]
   queue: QueueItem[]
+  /** Latest `todo_write` snapshot; null means the list was cleared without a new write. */
+  todos?: TodoItem[] | null
+  /** Question calls paired with their late answers, oldest first. */
+  interactions?: InteractionRequest[]
+  /** Current goal snapshot; null when the conversation has none. */
+  goal?: GoalView | null
+  /** Plan mode state; a conversation without the document projects as `{ active: false }`. */
+  plan?: PlanView
+  /** Direct subagent conversations, oldest first; absent when this conversation delegated nothing. */
+  subagents?: SubagentSummary[]
+  /** The agent team this conversation leads (or belongs to); absent until it has a teammate or task. */
+  team?: TeamView
   error?: string
   usage?: { input: number; output: number; totalCost: number }
+}
+/** One direct child conversation: DSH's `subagentCatalog` row plus the child's latest answer. */
+export type SubagentSummary = {
+  id: string
+  /** Delegation label recorded when the child was created; falls back to its title. */
+  label: string
+  title: string
+  /** `running` while the child has a live run, `inactive` otherwise — DSH's `list_agents` vocabulary. */
+  status: 'running' | 'inactive'
+  /** Collapsed latest assistant text; empty when the child has not answered yet. */
+  answer: string
+  /**
+   * The child's cumulative spend, summed over its `pi.usage` buckets. DSH sums the same four
+   * disjoint provider buckets (`SubagentHeaderLineage.tsx:67-75`); Pi's `totalTokens` already
+   * equals input + output + cacheRead + cacheWrite, so summing it is the same caliber.
+   */
+  tokens?: number
+  /**
+   * Total active time: the sum of the child's finished run durations plus the elapsed part of a
+   * live run. Idle gaps between runs are not counted (DSH's `settledMs` + `active` interval).
+   */
+  durationMs?: number
+  /**
+   * Server time at which `tokens` / `durationMs` were sampled. While the child runs, the panel
+   * advances `durationMs` by `now - metricsAt` on each one-second tick, mirroring DSH's
+   * `settledMs + (now - active.since)` (`SubagentHeaderLineage.tsx:77-90`).
+   */
+  metricsAt?: number
+  createdAt: number
+  updatedAt: number
+}
+export type ChildMessageInput = { text: string; requestId: string }
+/** DSH's durable teammate lifecycle; `active` rows carry the live turn status. */
+export type TeamMemberPhase = 'provisioning' | 'active' | 'failed'
+export type TeamMemberStatus = 'running' | 'inactive' | 'provisioning' | 'failed'
+/** One roster row: the synthetic `lead` row plus every durable teammate. */
+export type TeamMemberView = {
+  name: string
+  role: 'lead' | 'teammate'
+  phase: TeamMemberPhase
+  status: TeamMemberStatus
+  /** The member's conversation, which the panel opens. */
+  conversationId?: string
+  label?: string
+  /** `provider/modelId` of the model the member's child conversation runs. */
+  model?: string
+  error?: string
+}
+export type TeamTaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted'
+/** DSH's `TeamTaskView`, plus the durable timestamps the panel orders by. */
+export type TeamTaskView = {
+  id: string
+  revision: number
+  subject: string
+  description: string
+  status: TeamTaskStatus
+  ownerName?: string
+  blockedBy: string[]
+  writeScopes: string[]
+  /** Pending and every blocker completed: the task the model may claim. */
+  ready: boolean
+  /** Pending but at least one blocker is unfinished. */
+  blocked: boolean
+  /** Advisory overlaps with other in-progress tasks, never a lock (DSH: `writeScopeWarnings`). */
+  writeScopeWarnings: string[]
+  createdAt: number
+  updatedAt: number
+}
+export type TeamView = { members: TeamMemberView[]; tasks: TeamTaskView[] }
+/** Plan mode as the browser sees it; the switch is a write, so the projected value is read-only. */
+export type PlanView = { active: boolean }
+export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete'
+export type GoalView = {
+  id: string
+  revision: number
+  objective: string
+  phase: GoalPhase
+  maxGoalRounds: number
+  roundsStarted: number
+  blockedReason?: string
+  createdAt: number
+  updatedAt: number
+}
+export type GoalUpdateRequest = {
+  action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear'
+  objective?: string
+  maxGoalRounds?: number
+  blockedReason?: string
+}
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+/** Type aliases, not interfaces: they must satisfy Pi's `JsonValue` index-signature constraint. */
+export type TodoItem = { content: string; status: TodoStatus }
+export type InteractionKind = 'question' | 'plan-review' | 'approval'
+export type InteractionStatus = 'pending' | 'continued' | 'answered' | 'expired' | 'cancelled'
+export type AskUserQuestionOption = { label: string; description?: string }
+export type AskUserQuestionItem = { id: string; header?: string; question: string; options?: AskUserQuestionOption[]; multiSelect?: boolean }
+export type AskUserQuestionAnswerItem = { id: string; selected: string[]; custom?: string }
+export type InteractionRequest = {
+  /** The tool call id that asked; also the answer route's idempotency key. */
+  id: string
+  kind: InteractionKind
+  status: InteractionStatus
+  questions?: AskUserQuestionItem[]
+  /** Plan markdown or approval body for the non-question kinds. */
+  detail?: string
+  approveLabel?: string
+  /** Plan reviews only: true approved the plan, false asked for changes. */
+  approved?: boolean
+  /** Plan reviews only: what the user wants changed, echoed to the model. */
+  feedback?: string
+  answer?: { answers: AskUserQuestionAnswerItem[] }
+  createdAt: number
+  answeredAt?: number
 }
 export interface SubmitInput {
   text: string

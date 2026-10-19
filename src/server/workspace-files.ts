@@ -6,7 +6,7 @@ import type { WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary } from '../sha
 import { RuntimeError } from './runtime-errors.ts'
 
 export interface AttachmentInput { name: string; mimeType: string; data: string }
-export interface AttachmentReference { name: string; mimeType: string; size: number; path: string }
+export type AttachmentReference = { name: string; mimeType: string; size: number; path: string }
 
 const MAX_FILE_PREVIEW_BYTES = 8 * 1024 * 1024
 const MAX_FILE_TEXT_BYTES = 2 * 1024 * 1024
@@ -131,10 +131,10 @@ export class WorkspaceFiles {
         const item = await lstat(target)
         if (item.isDirectory()) {
           pending.push(target)
-          if (entry.name.toLocaleLowerCase().includes(needle)) {
+          if (relativePath.toLocaleLowerCase().includes(needle)) {
             results.push({ name: entry.name, path: relativePath, type: 'directory', modifiedAt: item.mtimeMs })
           }
-        } else if (item.isFile() && entry.name.toLocaleLowerCase().includes(needle)) {
+        } else if (item.isFile() && relativePath.toLocaleLowerCase().includes(needle)) {
           results.push({ name: entry.name, path: relativePath, type: 'file', size: item.size, modifiedAt: item.mtimeMs, mimeType: mimeType(target) })
         }
       }

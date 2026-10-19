@@ -36,8 +36,8 @@
   width: fit-content;
   max-width: min(calc(var(--dsh-chat-content-width, 742px) * .702), 82%);
   min-width: 44px;
-  padding: 9px 15px;
-  border-radius: 17px;
+  padding: 10px 16px;
+  border-radius: 20px;
   background: var(--dsw-specific-bubble);
   color: var(--dsw-alias-label-primary);
   font-size: var(--dsh-content-font-size, 14px);
@@ -47,6 +47,109 @@
 
 .userText {
   white-space: pre-wrap;
+}
+
+/* Late answer to earlier questions: DSH's reply bubble, sized like a user bubble. */
+.replyBubble {
+  position: relative;
+  width: fit-content;
+  max-width: min(calc(var(--dsh-chat-content-width, 742px) * .72), 84%);
+  min-width: 44px;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: var(--dsw-specific-bubble);
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--dsh-content-font-size, 14px);
+  line-height: calc(22px + var(--dsh-content-font-delta, 0px));
+  overflow-wrap: anywhere;
+}
+
+.replyToggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.replyToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: 2px;
+}
+
+.replyLabelRow {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.replyCaret {
+  display: inline-flex;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.replyLabel {
+  display: block;
+  color: var(--dsw-alias-label-secondary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+.replySummary {
+  display: block;
+  margin-top: 3px;
+  color: var(--dsw-alias-label-primary);
+  font-size: var(--dsh-content-font-size, 14px);
+}
+
+.replyText {
+  margin-top: 8px;
+  white-space: pre-wrap;
+}
+
+.replyDetails {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--dsw-alias-label-secondary) 24%, transparent);
+}
+
+.replyDetails > div + div {
+  margin-top: 12px;
+}
+
+.replyQuestion {
+  display: grid;
+  gap: 3px;
+}
+
+.replyHeader,
+.replyDetail,
+.replyOptions {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
+.replyQuestionText {
+  color: var(--dsw-alias-label-primary);
+}
+
+.replyOptions {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.replyAnswer {
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.replyAnswerLabel {
+  margin-right: 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
 }
 
 .userMeta,
@@ -111,16 +214,32 @@
 
 .messageTime,
 .usage {
-  color: var(--dsw-alias-label-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.usage {
   display: inline-flex;
+  height: 24px;
   align-items: center;
   gap: 5px;
-  margin-left: 1px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.usage:hover {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.usageRow {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  font-variant-numeric: tabular-nums;
 }
 
 .runNotice {
@@ -260,9 +379,26 @@
   display: none;
 }
 
-.reasoning {
+/* Ungrouped modes render the rows flat: no header, no group-level height cap. */
+.processFlatBody {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 6px;
   color: var(--dsw-alias-label-tertiary);
+}
+
+.reasoning {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* DSH keeps a collapsed Think row exactly one row tall so streaming never reflows the column. */
+.reasoning:not([data-expanded]) {
+  contain: size layout;
+  height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 
 .processOutput {
@@ -274,19 +410,49 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.reasoningSeparator {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 1px;
+  background: var(--dsw-alias-label-caption);
+}
+
 .reasoningSummary {
-  display: block;
-  max-width: min(520px, 58vw);
-  margin-inline-start: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   color: inherit;
-  text-overflow: ellipsis;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
   white-space: nowrap;
 }
 
+.reasoningSummaryText {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The streaming tail fades under the row's right edge instead of a hard ellipsis. */
+.reasoningSummary[data-streaming] {
+  mask-image: linear-gradient(to right, black calc(100% - 48px), transparent);
+}
+
+.reasoningSummary[data-streaming] .reasoningSummaryText {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* DSH hides the preview entirely when the mode turns settled previews off. */
+.reasoning:not([data-preview]) .reasoningSeparator,
+.reasoning:not([data-preview]) .reasoningSummary {
+  display: none;
+}
+
 .reasoningBody {
-  padding: 7px 0 5px 22px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
+  padding: 4px 0 4px calc(22px + var(--dsh-content-font-delta, 0px));
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -306,10 +472,10 @@
 .images img,
 .imageButton img {
   display: block;
-  max-width: min(300px, 100%);
-  max-height: 320px;
+  max-width: min(240px, 100%);
+  max-height: 240px;
   object-fit: contain;
-  border-radius: 10px;
+  border-radius: var(--dsw-radius-lg, 16px);
 }
 
 .imageButton {

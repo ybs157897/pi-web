@@ -2,6 +2,13 @@
 .pageHead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; width: 100%; max-width: 960px; margin: 0 auto; padding-top: 28px; }
 .pageHead h1 { margin: 0; font-size: 20px; font-weight: 500; line-height: 28px; }
 .pageHead p { max-width: 560px; margin: 4px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.filters { display: flex; width: 100%; max-width: 960px; flex-direction: column; gap: 16px; margin: 0 auto; }
+.statusTabs { display: flex; align-items: center; gap: 2px; }
+.statusTabs button { height: 28px; padding: 0 10px; border: 0; border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font: inherit; font-size: 13px; line-height: 20px; }
+.statusTabs button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.statusTabs button[data-selected] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.statusTabs button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+.search { width: 100%; }
 .notice { width: 100%; max-width: 960px; box-sizing: border-box; margin: 0 auto; padding: 8px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .failure { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: 100%; max-width: 960px; margin: 0 auto; color: var(--dsw-alias-state-error-primary); font-size: 13px; }
 .list { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 960px; margin: 0 auto; }
@@ -20,6 +27,8 @@
 .empty > svg { color: var(--dsw-alias-label-secondary); }
 .empty p { margin: 12px 0 3px; color: var(--dsw-alias-label-primary); font-size: 15px; line-height: 22px; }
 .empty span { font-size: 12px; line-height: 18px; }
+.emptyAction { margin-top: 24px; }
+.noMatch { width: 100%; max-width: 960px; box-sizing: border-box; margin: 0 auto; padding: 52px 20px; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 20px; text-align: center; }
 .skeleton { display: flex; width: 100%; max-width: 960px; flex-direction: column; gap: 8px; margin: 0 auto; }
 .skeleton i { height: 104px; border-radius: var(--dsw-radius-xl); background: var(--dsw-alias-bg-skeleton); animation: pulse 1.4s ease-in-out infinite alternate; }
 .skeleton i:nth-child(2) { width: 90%; }.skeleton i:nth-child(3) { width: 82%; }

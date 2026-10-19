@@ -1,11 +1,21 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir, userInfo } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ConversationDetail, ConversationSummary, CreateConversationInput, ModelCatalog, ProviderInput, SubmitInput, UpdateConversationInput } from '../src/shared/types.ts'
+import type { AskUserQuestionAnswerItem, AskUserQuestionItem, ConversationDetail, ConversationSummary, CreateConversationInput, ModelCatalog, ProviderInput, SubmitInput, UpdateConversationInput } from '../src/shared/types.ts'
 import type { Runtime } from '../src/server/contracts.ts'
+import type { GoalUpdateRequest } from '../src/shared/types.ts'
 import type * as Protocol from '../src/shared/types.ts'
 import { createApp } from '../src/server/app.ts'
+import { AppStateStore } from '../src/server/app-state.ts'
 import { RuntimeError } from '../src/server/runtime-errors.ts'
+import { validateAnswers } from '../src/server/interactions.ts'
 
 const NOW = 1_800_000_000_000
+const QUESTION_SET: AskUserQuestionItem[] = [
+  { id: 'scope', question: 'Which scope?', options: [{ label: 'Small' }, { label: 'Large' }] },
+  { id: 'notes', question: 'Anything else?' },
+]
 
 function makeDetail(id = 'conv-1', title = 'Test conversation'): ConversationDetail {
   return {
@@ -32,6 +42,7 @@ class FakeRuntime implements Runtime {
   cleanupCount = 0
   closeCount = 0
   lastProvider: ProviderInput | undefined
+  lastFeedback: { text: string; userAgent?: string } | undefined
 
   async list(): Promise<ConversationSummary[]> {
     this.calls.push('list')
@@ -65,8 +76,126 @@ class FakeRuntime implements Runtime {
     return { submissionId: 'submission-1' }
   }
 
+  readonly questionSets = new Map<string, AskUserQuestionItem[]>([['call-1', QUESTION_SET]])
+  readonly answeredCalls = new Set<string>()
+  /** Plan reviews the fake answers: both carry the same approve label the runtime uses. */
+  readonly planReviewCalls = new Set(['call-plan-1', 'call-plan-2'])
+
+  async answerInteraction(id: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail> {
+    this.calls.push(`answer:${id}:${callId}`)
+    const detail = this.details.get(id)
+    if (!detail) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    if (this.planReviewCalls.has(callId)) {
+      if (this.answeredCalls.has(callId)) return structuredClone(detail)
+      this.answeredCalls.add(callId)
+      const approved = answers.some(answer => answer.selected.includes('同意执行'))
+      detail.interactions = [{
+        id: callId, kind: 'plan-review', status: 'answered', detail: '# 演示计划', approveLabel: '同意执行',
+        approved, createdAt: NOW, answeredAt: NOW + 1,
+      }]
+      detail.plan = { active: !approved }
+      this.details.set(id, detail)
+      return structuredClone(detail)
+    }
+    const questions = this.questionSets.get(callId)
+    if (!questions) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    if (this.answeredCalls.has(callId)) return structuredClone(detail)
+    const invalid = validateAnswers(questions, answers)
+    if (invalid) throw new RuntimeError('INVALID_INPUT', invalid)
+    this.answeredCalls.add(callId)
+    detail.interactions = [{ id: callId, kind: 'question', status: 'answered', questions, answer: { answers }, createdAt: NOW, answeredAt: NOW + 1 }]
+    this.details.set(id, detail)
+    return structuredClone(detail)
+  }
+
+  async cancelInteraction(id: string, callId: string): Promise<ConversationDetail> {
+    this.calls.push(`cancel:${id}:${callId}`)
+    const detail = this.details.get(id)
+    if (!detail) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    const questions = this.questionSets.get(callId)
+    if (!questions) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    if (this.answeredCalls.has(callId)) throw new RuntimeError('CONFLICT', '该问题已回答，无法放弃整组问题')
+    detail.interactions = [{ id: callId, kind: 'question', status: 'cancelled', questions, createdAt: NOW }]
+    this.details.set(id, detail)
+    return structuredClone(detail)
+  }
+
   async stop(id: string): Promise<void> {
     this.calls.push(`stop:${id}`)
+  }
+
+  async compact(id: string): Promise<void> {
+    this.calls.push(`compact:${id}`)
+  }
+
+  async goal(id: string, input: GoalUpdateRequest): Promise<ConversationDetail> {
+    this.calls.push(`goal:${id}:${input.action}`)
+    return this.details.get(id) ?? makeDetail(id)
+  }
+
+  async setPlan(id: string, active: boolean): Promise<ConversationDetail> {
+    this.calls.push(`plan:${id}:${active}`)
+    const detail = this.details.get(id)
+    if (!detail) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    detail.plan = { active }
+    this.details.set(id, detail)
+    return structuredClone(detail)
+  }
+
+  /** One parent with one finished child; the routes only move these summaries around. */
+  readonly childRows = new Map<string, Protocol.SubagentSummary[]>([['conv-1', [{
+    id: 'child-1', label: '核对清单', title: '核对清单', status: 'inactive', answer: '子会话已完成核对。',
+    createdAt: NOW, updatedAt: NOW,
+  }]]])
+
+  async children(id: string): Promise<Protocol.SubagentSummary[]> {
+    this.calls.push(`children:${id}`)
+    if (!this.details.has(id)) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    return structuredClone(this.childRows.get(id) ?? [])
+  }
+
+  /** One Lead row plus one teammate and one blocked task; the route stays read-only. */
+  teamRows: Protocol.TeamView = {
+    members: [
+      { name: 'lead', role: 'lead', phase: 'active', status: 'inactive', conversationId: 'conv-1', label: 'Lead', model: 'demo/model' },
+      { name: 'researcher', role: 'teammate', phase: 'active', status: 'inactive', conversationId: 'child-1', label: '资料调研', model: 'demo/model' },
+    ],
+    tasks: [
+      {
+        id: 'task-1', revision: 1, subject: '调研团队面板', description: '核对面板字段。', status: 'pending',
+        blockedBy: [], writeScopes: ['src/web'], ready: true, blocked: false, writeScopeWarnings: [],
+        createdAt: NOW, updatedAt: NOW,
+      },
+      {
+        id: 'task-2', revision: 1, subject: '实现 TeamPanel', description: '按 DSH 面板实现。', status: 'pending',
+        blockedBy: ['task-1'], writeScopes: [], ready: false, blocked: true, writeScopeWarnings: [],
+        createdAt: NOW, updatedAt: NOW,
+      },
+    ],
+  }
+
+  async team(id: string): Promise<Protocol.TeamView> {
+    this.calls.push(`team:${id}`)
+    if (!this.details.has(id)) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    return structuredClone(this.teamRows)
+  }
+
+  async childMessage(id: string, childId: string, input: Protocol.ChildMessageInput): Promise<Protocol.SubagentSummary[]> {
+    this.calls.push(`childMessage:${id}:${childId}:${input.requestId}`)
+    const rows = this.childRows.get(id) ?? []
+    if (!this.details.has(id) || !rows.some(row => row.id === childId)) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    const updated = rows.map(row => row.id === childId ? { ...row, status: 'running' as const, updatedAt: NOW + 1 } : row)
+    this.childRows.set(id, updated)
+    return structuredClone(updated)
+  }
+
+  async childStop(id: string, childId: string): Promise<Protocol.SubagentSummary[]> {
+    this.calls.push(`childStop:${id}:${childId}`)
+    const rows = this.childRows.get(id) ?? []
+    if (!this.details.has(id) || !rows.some(row => row.id === childId)) throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+    const stopped = rows.map(row => row.id === childId ? { ...row, status: 'inactive' as const, updatedAt: NOW + 2 } : row)
+    this.childRows.set(id, stopped)
+    return structuredClone(stopped)
   }
 
   async removeQueued(id: string, submissionId: string): Promise<void> {
@@ -115,8 +244,8 @@ class FakeRuntime implements Runtime {
 
   settingsValue: Protocol.AppSettings = {
     theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
-    processDisplay: 'detailed', collapseProcess: 'afterResponse', codingViews: true, busySendMode: 'followUp',
-    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite',
+    transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp',
+    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [],
   }
   settings() { return this.settingsValue }
   capabilities(): { accessModes: Protocol.AccessMode[] } { return { accessModes: ['readOnly', 'workspaceWrite', 'fullAccess'] } }
@@ -132,6 +261,10 @@ class FakeRuntime implements Runtime {
   }
   workspaces(): Protocol.WorkspaceSummary[] { return [{ id: 'ws-1', name: 'Workspace', path: '/tmp/pi-web-test', createdAt: NOW, updatedAt: NOW }] }
   async addWorkspace(input: Protocol.AddWorkspaceInput): Promise<Protocol.WorkspaceSummary> { return { ...this.workspaces()[0]!, name: input.name ?? 'Added', path: input.path } }
+  async deleteWorkspace(id: string) { this.calls.push(`delete-workspace:${id}`) }
+  async pickDirectory(): Promise<string | null> { return '/tmp/picked-workspace' }
+  async listDirectories(path?: string): Promise<Protocol.DirectoryListing> { return { path: path ?? '/tmp', home: '/tmp', crumbs: [], entries: [], truncated: false } }
+  async createDirectory(): Promise<void> { return undefined }
   async renameWorkspace(id: string, input: Protocol.RenameWorkspaceInput) { this.calls.push('workspace:' + id); return { ...this.workspaces()[0]!, name: input.name } }
   async workspaceFiles(_id: string, path: string): Promise<Protocol.WorkspaceFileEntry[]> { return [{ name: 'test.txt', path: path ? path + '/test.txt' : 'test.txt', type: 'file', size: 4 }] }
   async searchWorkspace(id: string, query: string) { this.calls.push('search:' + query); return this.workspaceFiles(id, '') }
@@ -146,8 +279,11 @@ class FakeRuntime implements Runtime {
   async provider(id: string): Promise<Protocol.ProviderConfigSummary> { return { id, name: 'Test', source: 'project', configured: true, custom: true, credentialConfigured: true, api: 'openai-completions', models: [{ id: 'model-1', name: 'Model' }], baseUrl: 'https://example.test/v1' } }
   async deleteProvider(id: string) { this.calls.push('delete-provider:' + id) }
   async testProvider(id: string, modelId = 'model-1'): Promise<Protocol.ProviderTestResult> { return { providerId: id, modelId, status: 'connected', checkedAt: NOW } }
+  async discoverProvider(id: string): Promise<{ models: Array<{ id: string; name: string }> }> { this.calls.push(`discover:${id}`); return { models: [{ id: 'model-1', name: 'Model 1' }] } }
   async editQueued(id: string, submissionId: string, input: Protocol.EditQueueInput) { this.calls.push(`edit-queue:${id}:${submissionId}:${input.whenBusy}`); return { submissionId: 'new-submission' } }
   async feedback(id: string, entryId: string, rating: 'up' | 'down' | null) { this.calls.push(`feedback:${id}:${entryId}:${rating}`) }
+  async sendFeedback(input: { text: string; userAgent?: string }) { this.calls.push('send-feedback'); this.lastFeedback = input }
+  async openConfigFile() { this.calls.push('open-config') }
   async retry(id: string, entryId: string, requestId: string) { this.calls.push(`retry:${id}:${entryId}:${requestId}`); return { conversationId: 'retried-conv', submissionId: 'retried-submission' } }
   automations(): Protocol.Automation[] { return [{ id: 'auto-1', name: 'Scheduled task', prompt: 'Check', enabled: false, createdAt: NOW, updatedAt: NOW }] }
   async createAutomation(input: Protocol.CreateAutomationInput): Promise<Protocol.Automation> { return { ...input, id: 'auto-new', enabled: input.enabled ?? false, createdAt: NOW, updatedAt: NOW } }
@@ -177,7 +313,7 @@ describe('HTTP API', () => {
     const { app, runtime } = createTestApp()
 
     const health = await app.request('/api/health')
-    expect(await health.json()).toEqual({ ok: true, demo: true })
+    expect(await health.json()).toEqual({ ok: true, demo: true, version: '0.1.0', user: userInfo().username })
 
     const list = await app.request('/api/conversations')
     expect((await list.json()).conversations).toHaveLength(1)
@@ -209,6 +345,7 @@ describe('HTTP API', () => {
     expect(await submitted.json()).toEqual({ submissionId: 'submission-1' })
 
     expect(await (await app.request('/api/conversations/conv-1/stop', { method: 'POST' })).json()).toEqual({ ok: true })
+    expect((await app.request('/api/conversations/conv-1/compact', { method: 'POST' })).status).toBe(202)
     expect(await (await app.request('/api/conversations/conv-1/queue/sub-1', { method: 'DELETE' })).json()).toEqual({ ok: true })
 
     const forked = await app.request('/api/conversations/conv-1/fork', {
@@ -237,6 +374,171 @@ describe('HTTP API', () => {
     expect(await saved.json()).toEqual({ ok: true })
     expect(savedText).not.toContain('private-api-key-value')
     expect(runtime.lastProvider?.apiKey).toBe('private-api-key-value')
+  })
+
+  it('answers a pending question, rejects concrete validation failures, and stays idempotent', async () => {
+    const { app } = createTestApp()
+    const answer = (callId: string, answers: unknown) => app.request(`/api/conversations/conv-1/interactions/${callId}/answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers }),
+    })
+
+    const unknown = await answer('call-404', [{ id: 'scope', selected: ['Small'] }, { id: 'notes', selected: [] }])
+    expect(unknown.status).toBe(404)
+
+    const missing = await answer('call-1', [{ id: 'scope', selected: ['Small'] }])
+    expect(missing.status).toBe(400)
+    expect((await missing.json()).error).toContain('Missing an answer for question "notes"')
+
+    const notOffered = await answer('call-1', [{ id: 'scope', selected: ['Huge'] }, { id: 'notes', selected: [] }])
+    expect(notOffered.status).toBe(400)
+    expect((await notOffered.json()).error).toContain('was not offered')
+
+    const strict = await answer('call-1', [{ id: 'scope', selected: ['Small'], why: 'extra' }, { id: 'notes', selected: [] }])
+    expect(strict.status).toBe(400)
+
+    const wrongType = await answer('call-1', [{ id: 'scope', selected: 'Small' }, { id: 'notes', selected: [] }])
+    expect(wrongType.status).toBe(400)
+
+    const ok = await answer('call-1', [{ id: 'scope', selected: ['Small'] }, { id: 'notes', selected: [], custom: 'keep it simple' }])
+    expect(ok.status).toBe(200)
+    const detail = await ok.json() as ConversationDetail
+    expect(detail.interactions?.[0]).toMatchObject({
+      id: 'call-1',
+      kind: 'question',
+      status: 'answered',
+      answer: { answers: [{ id: 'scope', selected: ['Small'] }, { id: 'notes', selected: [], custom: 'keep it simple' }] },
+    })
+
+    const repeat = await answer('call-1', [{ id: 'scope', selected: ['Small'] }, { id: 'notes', selected: [] }])
+    expect(repeat.status).toBe(200)
+    expect((await repeat.json() as ConversationDetail).interactions?.[0]?.status).toBe('answered')
+  })
+
+  it('dismisses a pending question set, conflicts once it is answered, and 404s an unknown call', async () => {
+    const { app, runtime } = createTestApp()
+    const cancel = (callId: string) => app.request(`/api/conversations/conv-1/interactions/${callId}/cancel`, { method: 'POST' })
+
+    expect((await cancel('call-404')).status).toBe(404)
+    const ok = await cancel('call-1')
+    expect(ok.status).toBe(200)
+    expect(runtime.calls).toContain('cancel:conv-1:call-1')
+    expect((await ok.json() as ConversationDetail).interactions?.[0]).toMatchObject({ id: 'call-1', kind: 'question', status: 'cancelled' })
+    // Dismissing again is idempotent: the response is the same settled detail.
+    const repeat = await cancel('call-1')
+    expect(repeat.status).toBe(200)
+    expect((await repeat.json() as ConversationDetail).interactions?.[0]?.status).toBe('cancelled')
+
+    // An answered call is a conflict: its answers are already on their way.
+    const answered = await app.request('/api/conversations/conv-1/interactions/call-1/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: [{ id: 'scope', selected: ['Small'] }, { id: 'notes', selected: [] }] }),
+    })
+    expect(answered.status).toBe(200)
+    const conflict = await cancel('call-1')
+    expect(conflict.status).toBe(409)
+    expect((await conflict.json() as { code?: string }).code).toBe('CONFLICT')
+  })
+
+  it('switches plan mode, validates the body, and answers a plan review', async () => {
+    const { app, runtime } = createTestApp()
+    const post = (path: string, body: unknown) => app.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    const on = await post('/api/conversations/conv-1/plan', { active: true })
+    expect(on.status).toBe(200)
+    expect((await on.json() as ConversationDetail).plan).toEqual({ active: true })
+    expect(runtime.calls).toContain('plan:conv-1:true')
+
+    const off = await post('/api/conversations/conv-1/plan', { active: false })
+    expect((await off.json() as ConversationDetail).plan).toEqual({ active: false })
+    expect(runtime.calls).toContain('plan:conv-1:false')
+
+    expect((await post('/api/conversations/conv-1/plan', { active: 'yes' })).status).toBe(400)
+    expect((await post('/api/conversations/conv-1/plan', {})).status).toBe(400)
+    expect((await post('/api/conversations/conv-1/plan', { active: true, extra: 1 })).status).toBe(400)
+    const missing = await post('/api/conversations/conv-404/plan', { active: true })
+    expect(missing.status).toBe(404)
+
+    const approved = await post('/api/conversations/conv-1/interactions/call-plan-1/answer', {
+      answers: [{ id: 'plan-review', selected: ['同意执行'] }],
+    })
+    expect(approved.status).toBe(200)
+    const detail = await approved.json() as ConversationDetail
+    expect(detail.plan).toEqual({ active: false })
+    expect(detail.interactions?.[0]).toMatchObject({ id: 'call-plan-1', kind: 'plan-review', status: 'answered', approved: true })
+    const repeat = await post('/api/conversations/conv-1/interactions/call-plan-1/answer', {
+      answers: [{ id: 'plan-review', selected: ['同意执行'] }],
+    })
+    expect((await repeat.json() as ConversationDetail).interactions?.[0]?.status).toBe('answered')
+
+    const changes = await post('/api/conversations/conv-1/interactions/call-plan-2/answer', {
+      answers: [{ id: 'plan-review', selected: ['要求修改'], custom: '补上回滚说明' }],
+    })
+    expect(changes.status).toBe(200)
+    const revised = await changes.json() as ConversationDetail
+    expect(revised.plan).toEqual({ active: true })
+    expect(revised.interactions?.[0]).toMatchObject({ id: 'call-plan-2', kind: 'plan-review', approved: false })
+  })
+
+  it('lists subagents, delivers a follow-up and stops one, with the same rejections as the runtime', async () => {
+    const { app, runtime } = createTestApp()
+    const post = (path: string, body?: unknown) => app.request(path, {
+      method: 'POST',
+      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    })
+
+    const list = await app.request('/api/conversations/conv-1/children')
+    expect(list.status).toBe(200)
+    const rows = (await list.json() as { subagents: Protocol.SubagentSummary[] }).subagents
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'child-1', label: '核对清单', status: 'inactive' })
+    expect(runtime.calls).toContain('children:conv-1')
+
+    const unknownParent = await app.request('/api/conversations/conv-404/children')
+    expect(unknownParent.status).toBe(404)
+
+    const sent = await post('/api/conversations/conv-1/children/child-1/messages', { text: '再补充一条', requestId: 'child-msg-1' })
+    expect(sent.status).toBe(202)
+    expect((await sent.json() as { subagents: Protocol.SubagentSummary[] }).subagents[0]?.status).toBe('running')
+    expect(runtime.calls).toContain('childMessage:conv-1:child-1:child-msg-1')
+
+    expect((await post('/api/conversations/conv-1/children/child-1/messages', { text: '', requestId: 'x' })).status).toBe(400)
+    expect((await post('/api/conversations/conv-1/children/child-1/messages', { text: '你好' })).status).toBe(400)
+    expect((await post('/api/conversations/conv-1/children/child-1/messages', { text: '你好', requestId: 'x', extra: 1 })).status).toBe(400)
+    expect((await post('/api/conversations/conv-1/children/child-404/messages', { text: '你好', requestId: 'x' })).status).toBe(404)
+
+    const stopped = await post('/api/conversations/conv-1/children/child-1/stop')
+    expect(stopped.status).toBe(200)
+    expect((await stopped.json() as { subagents: Protocol.SubagentSummary[] }).subagents[0]?.status).toBe('inactive')
+    expect((await post('/api/conversations/conv-1/children/child-404/stop')).status).toBe(404)
+    expect((await post('/api/conversations/conv-1/children/child%201/stop')).status).toBe(400)
+    expect((await post('/api/conversations/conv%2F1/children/child-1/stop')).status).toBe(400)
+  })
+
+  it('reads the conversation team read-only, with the same id validation as the runtime', async () => {
+    const { app, runtime } = createTestApp()
+
+    const response = await app.request('/api/conversations/conv-1/team')
+    expect(response.status).toBe(200)
+    const team = (await response.json() as { team: Protocol.TeamView }).team
+    expect(team.members.map(member => member.name)).toEqual(['lead', 'researcher'])
+    expect(team.members[1]?.status).toBe('inactive')
+    expect(team.tasks.map(task => task.id)).toEqual(['task-1', 'task-2'])
+    expect(team.tasks[1]?.blocked).toBe(true)
+    expect(team.tasks[1]?.ready).toBe(false)
+    expect(runtime.calls).toContain('team:conv-1')
+
+    // There is no write route: the DSH panel is read-only as well.
+    expect((await app.request('/api/conversations/conv-1/team', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status).toBe(404)
+    expect((await app.request('/api/conversations/conv-404/team')).status).toBe(404)
+    expect((await app.request('/api/conversations/conv%2F1/team')).status).toBe(400)
+    expect((await app.request('/api/conversations/conv%201/team')).status).toBe(400)
   })
 
   it('validates JSON, object fields, ids, image MIME and image sizes', async () => {
@@ -383,6 +685,13 @@ describe('management API', () => {
     expect((await settings.json()).locale).toBe('en')
     expect((await app.request('/api/settings', json('PATCH', { fontSize: 100 }))).status).toBe(400)
     expect((await app.request('/api/settings', json('PATCH', { shortcuts: { arbitraryAction: 'x' } }))).status).toBe(400)
+    // The allowlist is an array of pattern strings; a string, a non-string entry or an over-long entry is refused.
+    expect((await app.request('/api/settings', json('PATCH', { modelAllowlist: 'opencode-go/deepseek*' }))).status).toBe(400)
+    expect((await app.request('/api/settings', json('PATCH', { modelAllowlist: [42] }))).status).toBe(400)
+    expect((await app.request('/api/settings', json('PATCH', { modelAllowlist: ['x'.repeat(201)] }))).status).toBe(400)
+    const allowlist = await app.request('/api/settings', json('PATCH', { modelAllowlist: ['opencode-go/deepseek*'] }))
+    expect(allowlist.status).toBe(200)
+    expect((await allowlist.json()).modelAllowlist).toEqual(['opencode-go/deepseek*'])
     const workspace = await app.request('/api/workspaces', json('POST', { path: '/tmp/pi-web-test', name: 'Project' }))
     expect(workspace.status).toBe(201)
     expect((await workspace.json()).workspace.name).toBe('Project')
@@ -407,6 +716,39 @@ describe('management API', () => {
     expect((await app.request('/api/automations/auto-1', { method: 'DELETE' })).status).toBe(200)
   })
 
+  it('opens the application configuration file and reports a missing file as NOT_FOUND', async () => {
+    const { app, runtime } = createTestApp()
+    const opened = await app.request('/api/settings/open-config', { method: 'POST' })
+    expect(opened.status).toBe(200)
+    expect(await opened.json()).toEqual({ ok: true })
+    expect(runtime.calls).toContain('open-config')
+
+    vi.spyOn(runtime, 'openConfigFile').mockRejectedValueOnce(new RuntimeError('NOT_FOUND', '应用配置文件不存在'))
+    const missing = await app.request('/api/settings/open-config', { method: 'POST' })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toMatchObject({ code: 'NOT_FOUND', error: '应用配置文件不存在' })
+  })
+
+  it('stores operator feedback with the client user agent and rejects invalid bodies', async () => {
+    const { app, runtime } = createTestApp()
+    const stored = await app.request('/api/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'PiWebTest/1.0' },
+      body: JSON.stringify({ text: '  希望支持导出会话  ' }),
+    })
+    expect(stored.status).toBe(200)
+    expect(await stored.json()).toEqual({ ok: true })
+    expect(runtime.lastFeedback).toEqual({ text: '希望支持导出会话', userAgent: 'PiWebTest/1.0' })
+
+    expect((await app.request('/api/feedback', json('POST', { text: 'anonymous' }))).status).toBe(200)
+    expect(runtime.lastFeedback).toEqual({ text: 'anonymous' })
+
+    for (const body of [{ text: '' }, { text: '   ' }, { text: 'x'.repeat(2_001) }, { text: 'ok', extra: true }, {}]) {
+      expect((await app.request('/api/feedback', json('POST', body))).status).toBe(400)
+    }
+    expect((await app.request('/api/feedback', { method: 'POST', body: JSON.stringify({ text: 'ok' }) })).status).toBe(415)
+  })
+
   it('accepts ordinary file attachments, preserves model metadata and protects active file resources', async () => {
     const { app, runtime } = createTestApp()
     const attachment = await app.request('/api/conversations/conv-1/messages', json('POST', { text: '', requestId: 'file-1', files: [{ name: 'note.txt', mimeType: 'text/plain', data: 'aGVsbG8=' }] }))
@@ -425,6 +767,53 @@ describe('management API', () => {
     expect(html.headers.get('x-content-type-options')).toBe('nosniff')
     const binary = await app.request('/api/workspaces/ws-1/asset?path=output.bin')
     expect(binary.headers.get('content-disposition')).toContain('attachment')
+  })
+})
+
+describe('application state file', () => {
+  const legacyWorkspace = { id: 'ws-legacy', name: 'Legacy', path: '/tmp/pi-web-legacy', createdAt: NOW, updatedAt: NOW }
+  const legacyState = {
+    version: 1,
+    settings: {
+      theme: 'light', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 11,
+      transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed',
+      codingViews: true, busySendMode: 'followUp', defaultThinkingLevel: 'medium', defaultAccessMode: 'fullAccess',
+    },
+    workspaces: [legacyWorkspace],
+    plugins: {}, presets: [], automations: [], feedback: {},
+  }
+
+  it('reads a legacy state file whose feedback record predates the entries array', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
+    await writeFile(join(root, 'app-state.json'), JSON.stringify(legacyState))
+    try {
+      const store = await AppStateStore.open({ dataDir: root, defaultWorkspace: legacyWorkspace })
+      expect(store.path).toBe(join(root, 'app-state.json'))
+      expect(store.snapshot().feedback).toEqual([])
+      await store.recordFeedback({ text: 'first', createdAt: NOW })
+      expect(JSON.parse(await readFile(store.path, 'utf8')).feedback).toEqual([{ text: 'first', createdAt: NOW }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('drops the oldest feedback entries past the cap and rewrites a missing configuration file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
+    await writeFile(join(root, 'app-state.json'), JSON.stringify(legacyState))
+    try {
+      const store = await AppStateStore.open({ dataDir: root, defaultWorkspace: legacyWorkspace })
+      for (let index = 0; index < 205; index += 1) await store.recordFeedback({ text: `entry-${index}`, createdAt: NOW + index })
+      const stored = store.snapshot().feedback
+      expect(stored).toHaveLength(200)
+      expect(stored[0]?.text).toBe('entry-5')
+      expect(stored.at(-1)?.text).toBe('entry-204')
+
+      await rm(store.path)
+      expect(await store.ensureFile()).toBe(true)
+      expect(JSON.parse(await readFile(store.path, 'utf8')).feedback).toHaveLength(200)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

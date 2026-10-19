@@ -1,8 +1,16 @@
 import { useMemo, useState } from 'react'
-import { Button, IconRefreshOutlineRegular, Input, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconCordisPluginOutlineRegular, IconRefreshOutlineRegular, Input, StateDot, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PluginSummary } from '../shared/types.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './PluginsPage.module.css'
+
+/** Chinese wording for the built-in Pi tools; every other tool keeps its original description. */
+const TOOL_DESCRIPTIONS_ZH: Record<string, string> = {
+  read: '读取文件内容。支持文本文件和图片（jpg、png、gif、webp），图片以附件形式返回。文本内容截断到 2000 行或 50KB（先到者为准），大文件可用 offset/limit 继续读取。',
+  write: '写入文件内容：文件不存在时创建，已存在时覆盖，并自动创建父级目录。',
+  edit: '用精确文本替换的方式编辑单个文件。每处 edits[].oldText 必须唯一匹配原文中一段互不重叠的内容；同一段或相邻行的改动请合并为一次 edit。',
+  bash: '在当前工作目录执行 bash 命令，返回合并后的 stdout 和 stderr。输出截断到最近 2000 行或 50KB（先到者为准），可选传入超时时间（秒）。',
+}
 
 export interface PluginsPanelProps {
   plugins: readonly PluginSummary[]
@@ -18,6 +26,10 @@ export interface PluginsPanelProps {
 export function PluginsPanel({ plugins, loading = false, error = '', onRefresh, onTogglePlugin, onToggleTool, embedded = false }: PluginsPanelProps) {
   const { t } = useUiPreferences()
   const [query, setQuery] = useState('')
+  const describeTool = (name: string, description: string | undefined): string => {
+    const localized = TOOL_DESCRIPTIONS_ZH[name]
+    return localized === undefined ? description ?? '' : t(localized, description ?? '')
+  }
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
     return needle === '' ? [...plugins] : plugins.filter(plugin => `${plugin.name}\n${plugin.id}\n${plugin.description ?? ''}\n${plugin.tools.map(tool => `${tool.name} ${tool.description ?? ''}`).join('\n')}`.toLocaleLowerCase().includes(needle))
@@ -43,7 +55,7 @@ export function PluginsPanel({ plugins, loading = false, error = '', onRefresh, 
     {!loading && error === '' && visible.length === 0 && <p className={css.empty}>{query.trim() === '' ? t('没有可配置的插件', 'No configurable plugins') : t('没有匹配的插件', 'No plugins match your search')}</p>}
     <ul className={css.list}>{visible.map(plugin => <li key={plugin.id} className={css.card}>
       <div className={css.cardHead}>
-        <div className={css.pluginGlyph} aria-hidden>{plugin.name.slice(0, 1).toLocaleUpperCase()}</div>
+        <div className={css.pluginGlyph} aria-hidden><IconCordisPluginOutlineRegular size={22} /></div>
         <div className={css.pluginInfo}>
           <div className={css.titleRow}><strong>{plugin.name}</strong><span className={css.kind}>{plugin.builtin ? t('内置', 'Built in') : t('自定义', 'Custom')}</span></div>
           <code>{plugin.id}</code>
@@ -57,11 +69,14 @@ export function PluginsPanel({ plugins, loading = false, error = '', onRefresh, 
           {plugin.enabled ? t('已启用', 'Enabled') : t('已停用', 'Disabled')}</span></div>
       {plugin.tools.length === 0
         ? <p className={css.noTools}>{t('这个插件没有单独的工具开关', 'This plugin has no individual tool switches')}</p>
-        : <ul className={css.toolList}>{plugin.tools.map(tool => <li key={tool.name} className={css.tool}>
-          <div className={css.toolInfo}><strong>{tool.name}</strong>{tool.description && <small>{tool.description}</small>}</div>
-          <Switch checked={tool.enabled} disabled={!plugin.enabled} label={t(`启用工具 ${tool.name}`, `Enable tool ${tool.name}`)}
-            onChange={enabled => { onToggleTool(plugin.id, tool.name, enabled) }} />
-        </li>)}</ul>}
+        : <ul className={css.toolList}>{plugin.tools.map(tool => {
+          const description = describeTool(tool.name, tool.description)
+          return <li key={tool.name} className={css.tool}>
+            <div className={css.toolInfo}><strong>{tool.name}</strong>{description !== '' && <small>{description}</small>}</div>
+            <Switch checked={tool.enabled} disabled={!plugin.enabled} label={t(`启用工具 ${tool.name}`, `Enable tool ${tool.name}`)}
+              onChange={enabled => { onToggleTool(plugin.id, tool.name, enabled) }} />
+          </li>
+        })}</ul>}
     </li>)}</ul>
   </div>
 }

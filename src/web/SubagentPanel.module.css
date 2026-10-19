@@ -1,0 +1,222 @@
+.root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* DSH session-header catalog trigger: 28px tall, tertiary label, 12px text. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 2px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger:hover,
+.trigger:focus-visible {
+  color: var(--dsw-alias-label-primary);
+}
+
+.trigger svg {
+  flex: none;
+  transition: transform 120ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.count {
+  flex: none;
+}
+
+/* DSH's catalog card: 336px, 4px pad, elevated menu material behind a pseudo-element. */
+.menu {
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 336px;
+  max-width: min(400px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 140px));
+  padding: 4px;
+  overflow: auto;
+  border-radius: var(--dsw-radius-lg);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.menu::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--dsw-specific-menu, var(--dsw-menu-surface-fill));
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 7px 6px 9px;
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 17px;
+  cursor: pointer;
+  outline: none;
+}
+
+.row:hover,
+.row:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.activitySlot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 17px;
+}
+
+.content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.label,
+.summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary {
+  display: flex;
+  gap: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.status {
+  flex: none;
+}
+
+.answer {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* DSH's two-line right-aligned metric column (`SubagentHeaderLineage.module.css:242-264`). */
+.metrics {
+  display: grid;
+  flex: none;
+  grid-template-rows: 17px 15px;
+  align-self: flex-start;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.metricToken {
+  grid-row: 1;
+  line-height: 17px;
+}
+
+.metricDuration {
+  grid-row: 2;
+}
+
+.actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  align-self: center;
+}
+
+.action {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 15px;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled),
+.action:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.action:disabled {
+  color: var(--dsw-alias-label-caption);
+  cursor: default;
+}
+
+/* The row whose follow-up input is open keeps the hover fill while the footer input has focus. */
+.row[data-follow-up] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.followUp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 5px 2px;
+  margin-top: 2px;
+  border-top: .5px solid var(--dsw-alias-border-l2);
+}
+
+.followUpInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 7px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  outline: none;
+}
+
+.followUpInput:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.followUpInput::placeholder {
+  color: var(--dsw-alias-label-caption);
+}

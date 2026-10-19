@@ -1,5 +1,6 @@
 export const DEFAULT_SHORTCUTS = {
   newConversation: 'Alt+Mod+n', search: 'Mod+k', settings: 'Alt+Mod+,', toggleSidebar: 'Mod+b',
+  rename: 'Alt+Mod+g', fork: 'Shift+Mod+f', archive: 'Alt+Mod+a',
   send: 'Enter', newline: 'Shift+Enter', alternateSend: 'Mod+Enter',
 } as const
 
@@ -13,6 +14,23 @@ export function resolveShortcuts(overrides?: Partial<Shortcuts>): Shortcuts {
     if (value !== undefined) resolved[name] = value
   }
   return resolved
+}
+
+/** Keycap labels for one chord, resolved against the current platform. */
+export function shortcutKeyLabels(chord: string): string[] {
+  const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+  const keys: string[] = []
+  for (const part of chord.split('+')) {
+    const name = part.toLowerCase()
+    if (name === 'mod') keys.push(mac ? '⌘' : 'Ctrl')
+    else if (name === 'alt' || name === 'option') keys.push(mac ? '⌥' : 'Alt')
+    else if (name === 'meta' || name === 'cmd' || name === 'command') keys.push(mac ? '⌘' : 'Win')
+    else if (name === 'ctrl' || name === 'control') keys.push(mac ? '⌃' : 'Ctrl')
+    else if (name === 'shift') keys.push('⇧')
+    else if (name.length === 1) keys.push(name.toUpperCase())
+    else keys.push(part)
+  }
+  return keys
 }
 
 /** Resolves Mod to the platform's primary command modifier. */

@@ -40,6 +40,7 @@ export interface RuntimeModels {
   provider(id: string): Promise<ProviderConfigSummary>
   deleteProvider(id: string): Promise<void>
   testProvider(id: string, modelId?: string): Promise<ProviderTestResult>
+  discover(id: string): Promise<{ models: Array<{ id: string; name: string }> }>
   catalog(): Promise<ModelCatalog>
 }
 
@@ -314,9 +315,16 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 function storedProviderFromInput(input: ProviderInput, previous?: StoredProvider): StoredProvider {
   if (!PROVIDER_ID.test(input.id)) throw new Error('Provider ID 无效')
   if (typeof input.name !== 'string' || input.name.trim().length === 0 || input.name.length > 128) throw new Error('Provider 名称无效')
-  let url: URL
-  try { url = new URL(input.baseUrl) } catch { throw new Error('Provider Base URL 无效') }
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Provider Base URL 仅支持 HTTP 或 HTTPS')
+  const declared = input.baseUrl?.trim() ?? ''
+  if (declared !== '') {
+    let url: URL
+    try { url = new URL(declared) } catch { throw new Error('Provider Base URL 无效') }
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Provider Base URL 仅支持 HTTP 或 HTTPS')
+  } else if (previous?.baseUrl === undefined || previous.baseUrl === '') {
+    // Empty means "provider default": the saved models must then carry their own endpoint.
+    const hasModelEndpoint = input.models.some(model => typeof model.baseUrl === 'string' && model.baseUrl !== '')
+    if (!hasModelEndpoint) throw new Error('请填写接口地址，或为每个模型提供接口地址')
+  }
   if (!Array.isArray(input.models) || input.models.length === 0 || input.models.length > 500) throw new Error('Provider 模型列表无效')
   const api = input.api ?? DEFAULT_API
   if (!API_NAME.test(api)) throw new Error('模型 API 类型无效')
@@ -340,7 +348,7 @@ function storedProviderFromInput(input: ProviderInput, previous?: StoredProvider
   return {
     id: input.id,
     name: input.name.trim(),
-    baseUrl: input.baseUrl,
+    baseUrl: input.baseUrl?.trim() ?? previous?.baseUrl ?? '',
     api,
     ...(input.headers ?? previous?.headers ? { headers: input.headers ?? previous?.headers } : {}),
     ...(input.compat ?? previous?.compat ? { compat: input.compat ?? previous?.compat } : {}),
@@ -450,6 +458,10 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       catch { throw new Error(`无法读取 ${provider.name} 的认证状态`) }
       const headers = safeHeaders(provider.headers as Record<string, string> | undefined)
       const compat = models[0]?.compat
+      // A project override can be reset to the catalog the provider shipped with.
+      // Only a shipped provider knows its out-of-the-box catalog; a project override reset to it.
+      const shipped = source === 'project' ? builtinProviders.get(id) : undefined
+      const defaults = shipped?.getModels().map(publicModel)
       return {
         id: provider.id,
         name: provider.name,
@@ -462,6 +474,7 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
         models: models.map(publicModel),
         ...(headers ? { headers } : {}),
         ...(compat ? { compat: { ...compat } } : {}),
+        ...(defaults && defaults.length > 0 ? { defaults } : {}),
       }
     },
     async deleteProvider(id) {
@@ -502,7 +515,7 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       try {
         const result = await modelCollection.completeSimple(model, {
           messages: [{ role: 'user', content: 'Reply with OK.', timestamp: checkedAt }],
-        }, { timeoutMs: 20_000, maxRetries: 0, maxTokens: 16 })
+        }, { timeoutMs: 20_000, maxRetries: 0, maxTokens: 16, sessionId: `probe-${crypto.randomUUID()}` })
         const failure = result.stopReason === 'error' ? result.errorMessage ?? 'Provider returned an error' : undefined
         return {
           providerId: id,
@@ -520,6 +533,33 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
           message: providerErrorText(error instanceof Error ? error.message : 'Provider request failed'),
         }
       }
+    },
+    /** Ask the provider endpoint which model IDs it serves, so the directory can be filled in one step. */
+    async discover(id) {
+      const provider = modelCollection.getProvider(id)
+      if (!provider) throw new RuntimeError('NOT_FOUND', 'Provider 不存在')
+      const baseUrl = provider.baseUrl || provider.getModels()[0]?.baseUrl || ''
+      if (baseUrl === '') throw new RuntimeError('INVALID_INPUT', '该提供商没有可访问的接口地址')
+      const credential = await credentials.read(id)
+      const apiKey = credential?.type === 'api_key' ? credential.key : undefined
+      const endpoint = `${baseUrl.replace(/\/+$/u, '')}/models`
+      let response: Response
+      try {
+        response = await fetch(endpoint, {
+          headers: apiKey === undefined ? {} : { authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(15_000),
+        })
+      } catch (error) {
+        throw new RuntimeError('PROVIDER_ERROR', `无法访问 ${endpoint}：${error instanceof Error ? error.message : '请求失败'}`)
+      }
+      if (!response.ok) throw new RuntimeError('PROVIDER_ERROR', `${endpoint} 返回 HTTP ${response.status}`)
+      const payload: unknown = await response.json().catch(() => undefined)
+      const listed = isObject(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : []
+      const models = listed.flatMap(model => {
+        if (!isObject(model) || typeof model.id !== 'string' || model.id === '') return []
+        return [{ id: model.id, name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id }]
+      })
+      return { models }
     },
     async catalog() {
       const providerList = modelCollection.getProviders()

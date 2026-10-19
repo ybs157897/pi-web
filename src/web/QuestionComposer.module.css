@@ -1,0 +1,369 @@
+.card {
+  box-sizing: border-box;
+  width: min(100%, var(--dsh-composer-card-max-width, 774px));
+  margin: 0 16px -6px;
+  padding: 8px 12px 12px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-bottom: 0;
+  border-radius: var(--dsw-radius-lg) var(--dsw-radius-lg) 0 0;
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-2));
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.eyebrow {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.status {
+  flex: none;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-label-primary-bluish);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.chip {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  padding: 0 7px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.counter {
+  flex: none;
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.collapseButton {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* DSH's `nav.cancel` — 「放弃整组问题」: ends the whole request instead of collapsing it. */
+.cancelButton {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cancelButton:hover:not(:disabled),
+.cancelButton:focus-visible:not(:disabled),
+.collapseButton:hover,
+.collapseButton:focus-visible {
+  color: var(--dsw-alias-label-primary);
+}
+
+.cancelButton:disabled {
+  color: var(--dsw-alias-label-caption);
+  cursor: default;
+}
+
+/* DSH's plan-review actions link (`ui-plan/src/client/PlanPreview.module.css:32-34`). */
+.reviewLink {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reviewLink:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.reviewLink:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 3px;
+}
+
+.question {
+  margin: 6px 0 10px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2));
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:hover { border-color: var(--dsw-alias-border-l2); }
+
+.option[data-selected] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-state-business-tertiary);
+}
+
+.optionMark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1.5px solid var(--dsw-alias-border-l3);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-primary-inverted, #fff);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.option[role='checkbox'] .optionMark { border-radius: var(--dsw-radius-sm); }
+
+.option[data-selected] .optionMark {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.optionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.optionLabel {
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.optionDescription {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.recommended {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-label-primary-bluish);
+  font-size: 11px;
+  line-height: 18px;
+  vertical-align: 1px;
+}
+
+.custom {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  max-height: 120px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  outline: none;
+  resize: none;
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2));
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.custom::placeholder { color: var(--dsw-alias-label-caption); }
+
+.custom:focus { border-color: var(--dsw-alias-state-business-primary); }
+
+.error {
+  margin-top: 8px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.footerSpacer { flex: 1; }
+
+.secondary,
+.submit {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.secondary {
+  background: var(--dsw-specific-selector, var(--dsw-alias-bg-layer-2));
+  color: var(--dsw-alias-label-primary);
+}
+
+.secondary:hover { background: var(--dsw-alias-interactive-bg-hover); }
+
+.secondary:disabled { opacity: .4; cursor: default; }
+
+.submit {
+  background: var(--dsw-alias-button-info-fill);
+  color: #fff;
+}
+
+.submit:disabled { opacity: .6; cursor: default; }
+
+.collapsedBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.collapsedBar:hover { color: var(--dsw-alias-label-primary); }
+
+.collapsedText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.expand { flex: none; color: var(--dsw-alias-link); font-size: 12px; }
+
+.summaryList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+.summaryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.summaryQuestion {
+  flex: 1;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.summaryAnswer {
+  flex: none;
+  max-width: 55%;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.summaryAnswer[data-skipped] {
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+}
+
+.planFeedback {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--dsw-alias-state-business-primary);
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-state-business-tertiary);
+  color: var(--dsw-alias-label-primary-bluish);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.planBody {
+  box-sizing: border-box;
+  max-height: 260px;
+  margin: 6px 0 2px;
+  padding-right: 4px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.planBody h1 { margin: 2px 0 6px; font-size: 15px; line-height: 22px; }
+
+.planBody h2 { margin: 10px 0 4px; font-size: 13px; line-height: 20px; }
+
+.planBody p, .planBody li { font-size: 13px; line-height: 20px; }
+
+@media (max-width: 760px) {
+  .card { margin-inline: 8px; }
+}

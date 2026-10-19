@@ -22,6 +22,33 @@ export interface ResponsePart {
   readonly blocks: readonly ContentBlock[]
 }
 
+/** DSH's tool categories, ranked and joined into one process-group title. */
+export type ToolActivity = 'read' | 'readImage' | 'search' | 'write' | 'edit' | 'commands' | 'code'
+  | 'webSearch' | 'webFetch' | 'subagents' | 'plan' | 'questions' | 'tools'
+
+/** DSH's tool-name to category map; the row's own title stays separate. */
+export function toolActivity(name: string): ToolActivity {
+  const id = name.toLocaleLowerCase()
+  if (id === 'read') return 'read'
+  if (id === 'read_image') return 'readImage'
+  if (id === 'grep' || id === 'glob' || id.endsWith('_inspect')) return 'search'
+  if (id === 'write') return 'write'
+  if (id === 'edit' || id === 'apply_patch') return 'edit'
+  if (['bash', 'pwsh', 'exec_command', 'write_stdin'].includes(id) || id.startsWith('terminal_')) return 'commands'
+  if (id === 'run_code') return 'code'
+  if (id === 'web_search') return 'webSearch'
+  if (id === 'web_fetch') return 'webFetch'
+  if (id === 'subagent' || id.startsWith('subagent_')) return 'subagents'
+  if (['todo_write', 'create_goal', 'update_goal', 'get_goal', 'exit_plan_mode'].includes(id)) return 'plan'
+  if (id === 'ask_user_question' || id === 'request_user_input') return 'questions'
+  return 'tools'
+}
+
+export interface ActivityCount {
+  readonly kind: ToolActivity
+  readonly count: number
+}
+
 export interface RenderRun {
   readonly key: string
   readonly runId?: string
@@ -30,6 +57,8 @@ export interface RenderRun {
   readonly process: readonly ProcessPart[]
   readonly responses: readonly ResponsePart[]
   readonly artifacts: readonly FileArtifact[]
+  /** Tool categories ranked by distinct call count, ties broken by first appearance (DSH's rule). */
+  readonly activityCounts: readonly ActivityCount[]
   readonly status: 'running' | 'completed' | 'error' | 'cancelled'
   readonly durationMs?: number
   readonly usage?: MessageUsage
@@ -251,10 +280,27 @@ function createRenderRun(run: MutableRun): RenderRun {
     process,
     responses,
     artifacts,
+    activityCounts: rankActivities(roots),
     status,
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage === undefined ? {} : { usage }),
   }
+}
+
+/** Rank this run's tool categories the way DSH titles a settled process group. */
+function rankActivities(roots: readonly MutableToolItem[]): ActivityCount[] {
+  const counts = new Map<ToolActivity, number>()
+  const visit = (item: MutableToolItem): void => {
+    const name = item.call?.name ?? item.result?.toolName
+    if (name !== undefined) {
+      const kind = toolActivity(name)
+      counts.set(kind, (counts.get(kind) ?? 0) + 1)
+    }
+    for (const child of item.children) visit(child)
+  }
+  for (const root of roots) visit(root)
+  // Map preserves first-appearance order, and a stable sort keeps it for tied counts.
+  return [...counts].map(([kind, count]) => ({ kind, count })).sort((left, right) => right.count - left.count)
 }
 
 function freezeToolItem(item: MutableToolItem, ancestors: Set<string>): ToolItem {
@@ -357,5 +403,50 @@ export function formatUnknownDetails(value: unknown): string {
 export function messageOutput(message: ChatMessage | undefined): string {
   if (message === undefined) return ''
   return message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+}
+
+export interface ConversationStats {
+  readonly runCount: number
+  readonly stepCount: number
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly totalTokens: number
+  readonly contextTokens: number
+}
+
+/** Fold the durable message log into the numbers shown by the composer status pills. */
+export function conversationStats(messages: readonly ChatMessage[]): ConversationStats {
+  const { runs } = buildRenderModel(messages)
+  let stepCount = 0
+  let input = 0
+  let output = 0
+  let cacheRead = 0
+  let cacheWrite = 0
+  let totalTokens = 0
+  let contextTokens = 0
+  for (const message of messages) {
+    if (message.role === 'assistant' || message.role === 'tool') stepCount += 1
+    const usage = message.usage
+    if (usage === undefined) continue
+    input += usage.input
+    output += usage.output
+    cacheRead += usage.cacheRead
+    cacheWrite += usage.cacheWrite
+    totalTokens += usage.totalTokens
+    // The most recent turn prices the window the next request will carry.
+    contextTokens = usage.input + usage.cacheRead + usage.cacheWrite + usage.output
+  }
+  return {
+    runCount: runs.filter(run => run.users.length > 0).length,
+    stepCount,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    contextTokens,
+  }
 }
 

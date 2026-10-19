@@ -1,10 +1,15 @@
 import { Hono } from 'hono'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { basename, relative } from 'node:path'
+import { userInfo } from 'node:os'
 import { z } from 'zod'
+import packageJson from '../../package.json' with { type: 'json' }
 import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
 import { RuntimeError } from './runtime-errors.ts'
+
+const packageVersion: string = packageJson.version
 
 const JSON_BODY_LIMIT = 16 * 1024 * 1024
 const IMAGE_LIMIT = 4 * 1024 * 1024
@@ -60,6 +65,17 @@ const submitObject = z.object({
 function withinAttachmentBudget(input: { images?: Array<{ data: string }>; files?: Array<{ data: string }> }): boolean {
   return [...input.images ?? [], ...input.files ?? []].reduce((sum, item) => sum + Buffer.byteLength(item.data, 'base64'), 0) <= TOTAL_IMAGE_LIMIT
 }
+const goalSchema = z.object({
+  action: z.enum(['create', 'edit', 'pause', 'resume', 'complete', 'clear']),
+  objective: z.string().trim().min(1).max(2000).optional(),
+  maxGoalRounds: z.number().int().min(1).max(50).optional(),
+  blockedReason: z.string().trim().min(1).max(500).optional(),
+}).strict().refine(value => value.action !== 'create' || value.objective !== undefined, { message: 'create needs an objective' })
+const planSchema = z.object({ active: z.boolean() }).strict()
+const childMessageSchema = z.object({
+  text: z.string().min(1).max(20_000), requestId: z.string().min(1).max(160),
+}).strict()
+
 const submitSchema = submitObject.refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
 const editQueueSchema = submitObject.extend({ whenBusy: z.enum(['steer', 'followUp']) }).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
 const jsonObject = z.record(z.string(), z.unknown())
@@ -67,10 +83,15 @@ const headersSchema = z.record(z.string().min(1).max(160).regex(/^[A-Za-z0-9!#$%
 const providerSchema = z.object({
   id: z.string().min(1).max(100).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
   name: z.string().trim().min(1).max(120),
-  baseUrl: z.string().url().max(2048).refine(value => {
-    const url = new URL(value)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
-  }),
+  baseUrl: z.string().max(2048).refine(value => {
+    if (value === '') return true
+    try {
+      const url = new URL(value)
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
+    } catch {
+      return false
+    }
+  }).optional(),
   apiKey: z.string().max(4096).optional(), api: z.string().min(1).max(100).optional(),
   headers: headersSchema.optional(), compat: jsonObject.optional(),
   models: z.array(z.object({
@@ -87,8 +108,10 @@ const shortcutsSchema = z.object(Object.fromEntries(['newConversation', 'search'
 const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional(), locale: z.enum(['zh', 'en']).optional(),
   fontSize: z.number().int().min(12).max(20).optional(), codeFontSize: z.number().int().min(10).max(16).optional(), terminalFontSize: z.number().int().min(10).max(20).optional(),
-  processDisplay: z.enum(['detailed', 'compact']).optional(), collapseProcess: z.enum(['afterResponse', 'always', 'never']).optional(),
+  transcriptView: z.enum(TRANSCRIPT_VIEW_MODES).optional(), collapseTiming: z.enum(COLLAPSE_TIMINGS).optional(),
+  performanceUsage: z.enum(PERFORMANCE_USAGE_MODES).optional(),
   codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), defaultModel: modelRef.nullable().optional(),
+  modelAllowlist: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
   defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
@@ -105,6 +128,13 @@ const automationSchema = z.object({
   model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
 }).strict()
 const automationPatchSchema = automationSchema.partial().extend({ intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional() }).refine(value => Object.keys(value).length > 0)
+const interactionAnswerSchema = z.object({
+  answers: z.array(z.object({
+    id: z.string().min(1).max(160),
+    selected: z.array(z.string().min(1).max(200)).max(64),
+    custom: z.string().max(4_000).optional(),
+  }).strict()).min(1).max(8),
+}).strict()
 
 class ApiFault extends Error {
   constructor(readonly status: 400 | 403 | 413 | 415, readonly code: string, message: string) {
@@ -114,7 +144,7 @@ class ApiFault extends Error {
 }
 
 type RuntimeFailure = { code?: unknown; message?: unknown }
-type PublicFailure = { status: 400 | 403 | 404 | 409 | 413 | 415 | 422 | 500; code: string; message: string }
+type PublicFailure = { status: 400 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 502; code: string; message: string }
 
 function isLocalAuthority(authority: string): { normalized: string; hostname: string } | undefined {
   const value = authority.trim().toLowerCase()
@@ -136,7 +166,7 @@ function publicFailure(error: unknown): PublicFailure {
   }
 
   if (error instanceof RuntimeError) {
-    const statuses = { NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422 } as const
+    const statuses = { NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422, PROVIDER_ERROR: 502 } as const
     const message = error.message.replace(/[\r\n\t]+/g, ' ').replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]').replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]').trim().slice(0, 240)
     return { status: statuses[error.code], code: error.code, message: message || 'The operation could not be completed' }
   }
@@ -218,8 +248,7 @@ function sseFrame(data: ConversationDetail): Uint8Array {
 }
 
 /** Creates the local JSON API and owns active SSE subscriptions. */
-export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoot?: string } = {}) {
-  const app = new Hono()
+export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoot?: string } = {}) {  const app = new Hono()
   const shutdown = new AbortController()
   const activeStreams = new Set<Promise<void>>()
   let shuttingDown = false
@@ -251,7 +280,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     await next()
   })
 
-  app.get('/api/health', c => c.json({ ok: true, demo: options.demo === true }))
+  app.get('/api/health', c => c.json({ ok: true, demo: options.demo === true, version: packageVersion, user: userInfo().username }))
   app.get('/api/conversations', async c => c.json({ conversations: await runtime.list() }))
   app.post('/api/conversations', async c => {
     const input = await readJson(c.req.raw, createSchema) as CreateConversationInput
@@ -402,6 +431,58 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     await runtime.stop(id.data)
     return c.json({ ok: true })
   })
+  app.post('/api/conversations/:id/interactions/:callId/answer', async c => {
+    const id = pathId(c.req.param('id'))
+    const callId = pathId(c.req.param('callId'))
+    const input = await readJson(c.req.raw, interactionAnswerSchema)
+    return c.json(await runtime.answerInteraction(id, callId, input.answers))
+  })
+  app.post('/api/conversations/:id/interactions/:callId/cancel', async c => {
+    const id = pathId(c.req.param('id'))
+    const callId = pathId(c.req.param('callId'))
+    return c.json(await runtime.cancelInteraction(id, callId))
+  })
+  app.post('/api/conversations/:id/goal', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    const input = await readJson(c.req.raw, goalSchema)
+    return c.json(await runtime.goal(id.data, input))
+  })
+  app.post('/api/conversations/:id/plan', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    const input = await readJson(c.req.raw, planSchema)
+    return c.json(await runtime.setPlan(id.data, input.active))
+  })
+  app.get('/api/conversations/:id/team', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    return c.json({ team: await runtime.team(id.data) })
+  })
+  app.get('/api/conversations/:id/children', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    return c.json({ subagents: await runtime.children(id.data) })
+  })
+  app.post('/api/conversations/:id/children/:childId/messages', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    const childId = identifier.safeParse(c.req.param('childId'))
+    if (!id.success || !childId.success) return c.json({ error: 'Conversation or subagent id is invalid', code: 'invalid_id' }, 400)
+    const input = await readJson(c.req.raw, childMessageSchema)
+    return c.json({ subagents: await runtime.childMessage(id.data, childId.data, input) }, 202)
+  })
+  app.post('/api/conversations/:id/children/:childId/stop', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    const childId = identifier.safeParse(c.req.param('childId'))
+    if (!id.success || !childId.success) return c.json({ error: 'Conversation or subagent id is invalid', code: 'invalid_id' }, 400)
+    return c.json({ subagents: await runtime.childStop(id.data, childId.data) })
+  })
+  app.post('/api/conversations/:id/compact', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    await runtime.compact(id.data)
+    return c.json({ ok: true }, 202)
+  })
   app.delete('/api/conversations/:id/queue/:submissionId', async c => {
     const id = identifier.safeParse(c.req.param('id'))
     const submissionId = identifier.safeParse(c.req.param('submissionId'))
@@ -425,9 +506,21 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.get('/api/capabilities', c => c.json(runtime.capabilities()))
   app.get('/api/settings', c => c.json(runtime.settings()))
   app.patch('/api/settings', async c => c.json(await runtime.updateSettings(await readJson(c.req.raw, settingsSchema))))
+  app.post('/api/settings/open-config', async c => {
+    await runtime.openConfigFile()
+    return c.json({ ok: true })
+  })
   app.get('/api/workspaces', c => c.json({ workspaces: runtime.workspaces() }))
   app.post('/api/workspaces', async c => c.json({ workspace: await runtime.addWorkspace(await readJson(c.req.raw, workspaceSchema)) }, 201))
   app.patch('/api/workspaces/:id', async c => c.json({ workspace: await runtime.renameWorkspace(pathId(c.req.param('id')), await readJson(c.req.raw, z.object({ name: z.string().trim().min(1).max(120) }).strict())) }))
+  app.delete('/api/workspaces/:id', async c => { await runtime.deleteWorkspace(pathId(c.req.param('id'))); return c.json({ ok: true }) })
+  app.post('/api/workspaces/pick', async c => c.json({ path: await runtime.pickDirectory(c.req.raw.signal) }))
+  app.get('/api/directories', async c => c.json(await runtime.listDirectories(c.req.query('path'))))
+  app.post('/api/directories', async c => {
+    const input = await readJson(c.req.raw, z.object({ path: z.string().min(1).max(4096), name: z.string().trim().min(1).max(255) }).strict())
+    await runtime.createDirectory(input.path, input.name)
+    return c.json({ ok: true }, 201)
+  })
   app.get('/api/workspaces/:id/files', async c => {
     const path = filePath(c.req.query('path'))
     return c.json({ path, entries: await runtime.workspaceFiles(pathId(c.req.param('id')), path) })
@@ -465,10 +558,17 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     if (modelId && modelId.length > 256) throw new ApiFault(400, 'invalid_model', 'Model id is invalid')
     return c.json(await runtime.testProvider(pathId(c.req.param('id')), modelId))
   })
+  app.post('/api/providers/:id/discover', async c => c.json(await runtime.discoverProvider(pathId(c.req.param('id')))))
   app.patch('/api/conversations/:id/queue/:submissionId', async c => c.json(await runtime.editQueued(pathId(c.req.param('id')), pathId(c.req.param('submissionId')), await readJson(c.req.raw, editQueueSchema)), 202))
   app.post('/api/conversations/:id/feedback', async c => {
     const input = await readJson(c.req.raw, z.object({ entryId: identifier, rating: z.enum(['up', 'down']).nullable() }).strict())
     await runtime.feedback(pathId(c.req.param('id')), input.entryId, input.rating)
+    return c.json({ ok: true })
+  })
+  app.post('/api/feedback', async c => {
+    const input = await readJson(c.req.raw, z.object({ text: z.string().trim().min(1).max(2_000) }).strict())
+    const userAgent = c.req.header('user-agent')
+    await runtime.sendFeedback({ text: input.text, ...(userAgent ? { userAgent } : {}) })
     return c.json({ ok: true })
   })
   app.post('/api/conversations/:id/retry', async c => {

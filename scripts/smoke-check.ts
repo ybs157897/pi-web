@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import assert from 'node:assert/strict'
@@ -46,7 +46,7 @@ async function json<T>(base: string, path: string, method = 'GET', body?: unknow
 try {
   let base = await launch()
   const health = await json<{ ok: boolean; demo: boolean }>(base, '/api/health')
-  assert.deepEqual(health, { ok: true, demo: true })
+  assert.deepEqual(health, { ok: true, demo: true, version: '0.1.0', user: userInfo().username })
   const catalog = await json<ModelCatalog>(base, '/api/models')
   assert.ok(catalog.defaultModel)
   const created = await json<ConversationDetail>(base, '/api/conversations', 'POST', { title: '恢复验收', model: catalog.defaultModel })

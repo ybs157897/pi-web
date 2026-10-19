@@ -1,0 +1,314 @@
+.root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* DSH session-header Team action: 28px tall, tertiary label, 12px text (TeamAction.module.css:5-17). */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trigger:hover,
+.trigger:focus-visible {
+  color: var(--dsw-alias-label-primary);
+}
+
+.trigger svg {
+  flex: none;
+  transition: transform 120ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.triggerLabel {
+  flex: none;
+}
+
+/* The header's second sacrifice past the narrow container width: the trigger keeps
+   only its icon, and TeamPanel switches from hover-open to click-only
+   (DSH TeamAction.module.css:19-25). */
+@container (max-width: 480px) {
+  .triggerLabel {
+    display: none;
+  }
+}
+
+.count {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* DSH's team panel: menu material behind a pseudo-element, 12px radius, prominent elevation. */
+.panel {
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(336px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  padding: 8px 2px 0;
+  overflow: hidden;
+  border-radius: var(--dsw-radius-lg);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.panel::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--dsw-specific-menu, var(--dsw-menu-surface-fill));
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 9px 16px 14px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px 4px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.body section:first-of-type h3 {
+  margin-top: 8px;
+}
+
+.sectionCount {
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.roster {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.member {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l2);
+  box-shadow: var(--dsw-elevation-stroke);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.member:disabled {
+  cursor: default;
+}
+
+.memberCurrent {
+  --dsw-elevation-stroke-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 40%, transparent);
+  box-shadow: var(--dsw-elevation-stroke), inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 40%, transparent);
+}
+
+.member:not(:disabled):hover,
+.member:not(:disabled):focus-visible {
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l3);
+  box-shadow: var(--dsw-elevation-panel);
+}
+
+/* Seat height 1lh tracks the name's first line, so the dot centers on it. */
+.memberDot {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 1lh;
+}
+
+.inactiveIcon {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.memberText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.memberName {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.memberNameText,
+.memberStatus {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.currentTag {
+  display: inline-block;
+  flex: 0 999 auto;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+}
+
+.memberStatus,
+.meta {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* The model tag joins the status line only on hover (DSH TeamAction.module.css:197-206);
+   the status line already clips, so the extra text never widens the card. */
+.memberModel {
+  display: none;
+}
+
+.member:hover .memberModel,
+.member:focus-visible .memberModel {
+  display: inline;
+}
+
+.diagnostic,
+.error,
+.warning {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.empty {
+  margin: 16px 0 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.task {
+  padding: 11px 13px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.taskTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.taskTitle strong {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.taskState {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.task p {
+  margin: 5px 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+
+.clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  float: right;
+  margin-left: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.expand:hover,
+.expand:focus-visible {
+  color: var(--dsw-alias-label-primary);
+}
+
+.expandOpen {
+  transform: rotate(180deg);
+}
+
+.meta {
+  line-height: 20px;
+}
+
+.meta > span {
+  margin-right: 10px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px;
+  font-size: 12px;
+}

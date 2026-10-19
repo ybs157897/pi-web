@@ -1,0 +1,30 @@
+.root {display:inline-flex;min-width:0;}
+
+/* Trigger: the composer's .select look, owned here now that the seat is one component. */
+.trigger {display:inline-flex;align-items:center;gap:4px;height:28px;max-width:360px;min-width:0;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;font-weight:500;cursor:pointer;white-space:nowrap;}
+.trigger:disabled {opacity:.5;cursor:default;}
+@media(hover:hover){.trigger:hover:not(:disabled) {background:var(--dsw-alias-interactive-bg-hover);}}
+.triggerModel {max-width:220px;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.triggerLevel {color:var(--dsw-alias-label-tertiary);font-weight:400;}
+
+/* Card: DSH's card material and geometry — fixed positioning is the owner's job,
+   because MenuSurface only paints the surface. */
+.card {position:fixed;z-index:1100;display:flex;flex-direction:column;width:max-content;min-width:min(240px,calc(100vw - 32px));max-width:min(420px,calc(100vw - 32px));max-height:min(360px,calc(100vh - 96px));overflow:hidden;padding:4px;border:0;--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);font-size:13px;}
+.groups {display:flex;flex-direction:column;min-height:0;overflow-y:auto;scrollbar-width:thin;}
+.group {display:flex;flex-direction:column;}
+.groupTitle {position:sticky;top:0;z-index:1;padding:6px 8px 4px;background:var(--dsw-menu-surface-fill,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;}
+
+.cell {display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer;}
+.cellLabel {flex:none;}
+.cellValue {min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);}
+
+.option {display:flex;align-items:center;gap:12px;width:100%;padding:7px 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer;}
+.option:disabled {opacity:.5;cursor:default;}
+.selected {color:var(--dsw-alias-label-primary);}
+.optionCopy {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.check {display:inline-flex;width:14px;flex:none;align-items:center;justify-content:center;margin-left:auto;color:var(--dsw-alias-label-secondary);}
+
+@media(hover:hover){.cell:hover,.option:hover:not(:disabled),.command:hover {background:var(--dsw-alias-interactive-bg-hover);}}
+.cell:focus-visible,.option:focus-visible,.command:focus-visible {outline:2px solid var(--dsw-alias-link);outline-offset:-2px;}
+
+.command {display:flex;align-items:center;gap:8px;width:100%;margin-top:2px;padding:7px 8px;border:0;border-top:.5px solid var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;text-align:left;cursor:pointer;}

@@ -173,7 +173,7 @@ function splitNames(value: string): string[] {
 }
 
 function accessLabel(mode: AccessMode, locale: 'zh' | 'en'): string {
-  if (mode === 'readOnly') return locale === 'zh' ? '只读' : 'Read only'
+  if (mode === 'readOnly') return locale === 'zh' ? '仅可查看' : 'Read only'
   if (mode === 'workspaceWrite') return locale === 'zh' ? '工作区内修改' : 'Workspace write'
-  return locale === 'zh' ? '完全访问' : 'Full access'
+  return locale === 'zh' ? '完全权限' : 'Full access'
 }

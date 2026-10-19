@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import { execFile } from 'node:child_process'
 import { mkdir, realpath } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
@@ -6,12 +8,14 @@ import type { Draft, JsonValue } from '@earendil-works/chord'
 import {
   defineDoc,
   Harness,
+  UsageDoc,
   type ConversationId,
   type ConversationRecord,
   type EntryId,
   type ModelRef,
   type SubmissionId,
   type TaskId,
+  type Tx,
 } from '@earendil-works/pi-durable'
 import type { ConversationView, Cursor } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
@@ -21,13 +25,16 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import type { AgentChange, UserInput } from '@earendil-works/pi-durable'
 import type { UserMessage } from '@earendil-works/pi-ai'
 import type { Runtime, RuntimeOptions } from './contracts.ts'
+import type { GoalUpdateRequest } from '../shared/types.ts'
 import type {
   AccessMode,
   AddWorkspaceInput,
   AgentPreset,
   AppSettings,
+  AskUserQuestionAnswerItem,
   Automation,
   ChatMessage,
+  ChildMessageInput,
   ConversationDetail,
   ConversationSummary,
   CreateAgentPresetInput,
@@ -36,10 +43,13 @@ import type {
   EditQueueInput,
   ModelRef as UiModelRef,
   PluginSummary,
+  ProviderConfigSummary,
   ProviderInput,
   QueueItem,
   RenameWorkspaceInput,
   SubmitInput,
+  SubagentSummary,
+  TeamView,
   ThinkingLevel,
   UpdateAgentPresetInput,
   UpdateAppSettingsInput,
@@ -48,10 +58,29 @@ import type {
   UpdatePluginInput,
   WorkspaceSummary,
 } from '../shared/types.ts'
-import { projectConversation } from './projection.ts'
+import { activeDurationMs, projectConversation, usageTokens } from './projection.ts'
 import { createModelRuntime } from './models.ts'
 import { createDemoModelRuntime } from './demo-model.ts'
+import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from './model-allowlist.ts'
 import { RuntimeError } from './runtime-errors.ts'
+import { fallbackSessionTitle, frameTitleMessages, normalizeSessionTitle, titleSystemPrompt, TITLE_POLICY } from './session-title.ts'
+import { TodoTools, Todos } from './todo-tools.ts'
+import { GoalExtension, Goals, applyGoalCreate, applyGoalUpdate } from './goal-tools.ts'
+import { InteractionTools, Interactions } from './interaction-tools.ts'
+import { PlanExtension, Plans, decidePlanReview, interactionTable, planReviewOf, type StoredPlanReview } from './plan-tools.ts'
+import { SUBAGENT_TOOL, Subagents, createSubagentTools } from './subagent-tools.ts'
+import {
+  TEAM_TOOL_NAMES,
+  Team,
+  TeamLink,
+  createTeamTools,
+  projectTeam,
+  reconcileProvisioning,
+  type MemberSessionState,
+  type TeamConversationInfo,
+} from './team-tools.ts'
+import { validateAnswers } from './interactions.ts'
+import { createDirectory as createHostDirectory, listDirectories as listHostDirectories, pickNativeDirectory } from './directory-picker.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
@@ -106,6 +135,8 @@ const META = defineDoc<ConversationMetadata>({
 const CTX: Context = BACKGROUND_CONTEXT
 const DEFAULT_TITLE = 'New conversation'
 const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+/** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
+const READ_ONLY_TOOLS = new Set(['read', 'todo_write', 'ask_user_question', 'exit_plan_mode', SUBAGENT_TOOL, ...TEAM_TOOL_NAMES])
 
 function parseNumericId(value: string, label: string): number {
   const id = Number(value)
@@ -183,6 +214,43 @@ function safeFailure(value: unknown): string {
     .replace(/\b(?:sk|rk|pk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]')
     .replace(/[\r\n\t]+/g, ' ')
     .slice(0, 500)
+}
+
+const OPEN_CONFIG_TIMEOUT_MS = 15_000
+/** Children listed per parent, mirroring DSH's catalog page, and the row-level answer summary bound. */
+const SUBAGENT_LIMIT = 50
+const SUBAGENT_ANSWER_CHARS = 200
+const SUBAGENT_MESSAGE_CHARS = 20_000
+
+/**
+ * Open one local file on the operator's desktop, following the same platform
+ * split directory-picker.ts uses for its native surface. The launcher hands
+ * off and exits, so a command that never returns is killed at the timeout
+ * instead of holding the request open.
+ */
+function openLocalFile(path: string): Promise<void> {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : process.platform === 'linux' ? 'xdg-open' : undefined
+  if (command === undefined) throw new RuntimeError('UNSUPPORTED', '当前系统没有可用的文件打开方式')
+  // `start` is a cmd builtin, and its first quoted argument is the window title.
+  const args = command === 'cmd' ? ['/c', 'start', '', path] : [path]
+  return new Promise<void>((resolve, reject) => {
+    execFile(command, args, { timeout: OPEN_CONFIG_TIMEOUT_MS }, (error, _stdout, stderr) => {
+      if (error === null) {
+        resolve()
+        return
+      }
+      const failure = error as NodeJS.ErrnoException & { killed?: boolean }
+      if (failure.code === 'ENOENT') {
+        reject(new RuntimeError('UNSUPPORTED', `当前系统缺少打开文件的命令：${command}`))
+        return
+      }
+      if (failure.killed) {
+        reject(new RuntimeError('PROVIDER_ERROR', '打开配置文件超时，系统命令未退出'))
+        return
+      }
+      reject(new RuntimeError('PROVIDER_ERROR', `无法打开配置文件：${safeFailure(stderr.trim() ? new Error(stderr.trim()) : error)}`))
+    })
+  })
 }
 
 function imageData(value: string): string {
@@ -289,8 +357,140 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
   const workspaceWriteAvailable = await workspaceWriteSupported(defaultWorkspace.path)
   const storage = await openNodeSqliteStorage(resolve(dataDir, 'pi-durable.sqlite'))
+  // Declared before the extensions so their closures can read the harness at call time.
+  let harness: Harness
+  /**
+   * One conversation's live turn status plus its model. `pi.live.run` is the same signal the child
+   * catalog uses (`busy`), so `inactive` here means exactly "no turn is executing".
+   */
+  const conversationInfo = async (value: string): Promise<TeamConversationInfo> => {
+    const id = parseConversationId(value)
+    const conversation = await harness.conversation(id, CTX)
+    if (conversation === undefined) return { status: 'inactive' }
+    const viewWatch = await conversation.watch(CTX)
+    try {
+      const running = liveRunTaskId(viewWatch.value) !== undefined
+      const agent = await conversation.agent(CTX)
+      return {
+        status: running ? 'running' : 'inactive',
+        ...(agent.model === undefined ? {} : { model: `${agent.model.provider}/${agent.model.modelId}` }),
+      }
+    } finally {
+      await viewWatch.stop()
+    }
+  }
+  /**
+   * Durable evidence about one provisioned member session, for the spawn replay path and the
+   * provisioning reconciliation. DSH reads the persisted child Session (`roster.ts:385-397`);
+   * Pi's tool API has no session-log reader, so the same questions are answered from the
+   * conversation table, the child's link document, and its initial submission record.
+   */
+  const memberSession = async (value: string, leadId: ConversationId, name: string): Promise<MemberSessionState> => {
+    const childId = parseConversationId(value)
+    const record = await harness.commit((tx) => tx.conversation(childId), CTX)
+    if (record === undefined) return { exists: false, linked: false, promptRejected: false, running: false }
+    const link = await harness.snapshot(TeamLink, childId, CTX)
+    const submission = await harness.commit(
+      (tx) => tx.submissionByRequest(childId, `team-spawn:${String(leadId)}:${name}`), CTX)
+    const conversation = await harness.conversation(childId, CTX)
+    let running = false
+    if (conversation !== undefined) {
+      const viewWatch = await conversation.watch(CTX)
+      try {
+        running = liveRunTaskId(viewWatch.value) !== undefined
+      } finally {
+        await viewWatch.stop()
+      }
+    }
+    return {
+      exists: true,
+      linked: link?.leadConversationId === String(leadId) && link.name === name,
+      // DSH needs the initial prompt durably accepted (`roster.ts:389-394`). Pi's inbox admission
+      // (`queued`) already survives a crash and the replay resubmits under the same request ID, so
+      // only an explicit rejection (`unanswered`) is terminal.
+      promptRejected: submission?.status === 'unanswered',
+      running,
+    }
+  }
+  /**
+   * DSH reconciles provisioning-only members when the Lead session starts (`roster.ts:175-179`).
+   * Pi's equivalent start point is runtime creation: every Lead document is scanned once here.
+   */
+  const reconcileTeamRosters = async (): Promise<void> => {
+    const records: ConversationRecord[] = []
+    let cursor: Cursor | undefined
+    do {
+      const page = await harness.commit((tx) => tx.scanConversations({ order: 'ascending' }, 250, cursor), CTX)
+      records.push(...page.items)
+      cursor = page.next
+    } while (cursor)
+    for (const record of records) {
+      const doc = await harness.snapshot(Team, record.id, CTX)
+      if (doc === undefined || !doc.members.some(member => member.role === 'teammate' && member.phase === 'provisioning')) continue
+      try {
+        await reconcileProvisioning(
+          { read: (id, ctx) => harness.snapshot(Team, id, ctx), commit: (change, ctx) => harness.commit(change, ctx) },
+          { memberSession },
+          record.id,
+          CTX,
+        )
+      } catch {
+        // One malformed roster must not stop the remaining teams from being reconciled.
+      }
+    }
+  }
+  /**
+   * Observe each teammate's busy transitions for `wait_agent`. DSH's `TeamActivity` is notified by
+   * the runtime's `agent/status` event; Pi exposes no such subscription, so the same edge is read
+   * off the child conversation view (`pi.live.run` entering or leaving).
+   */
+  const watchTeamMembers = async (leadValue: string, onChange: () => void): Promise<() => Promise<void>> => {
+    const leadId = parseConversationId(leadValue)
+    const doc = await harness.snapshot(Team, leadId, CTX)
+    const ids = (doc?.members ?? []).flatMap(member =>
+      member.role === 'teammate' && typeof member.conversationId === 'string' ? [member.conversationId] : [])
+    const stops: Array<() => Promise<unknown>> = []
+    for (const value of ids) {
+      const conversation = await harness.conversation(parseConversationId(value), CTX)
+      if (conversation === undefined) continue
+      const viewWatch = await conversation.watch(CTX)
+      let running = liveRunTaskId(viewWatch.value) !== undefined
+      viewWatch.start(async (view) => {
+        const next = liveRunTaskId(view) !== undefined
+        if (next === running) return
+        running = next
+        onChange()
+      })
+      stops.push(() => viewWatch.stop())
+    }
+    return async () => { await Promise.allSettled(stops.map(stop => stop())) }
+  }
+  // A task-owned child copies the owner's `pi.agent` in the creation hook, so only the runtime's
+  // own metadata needs stamping: the delegation label becomes the child's title, and the child
+  // works in the parent's workspace under the parent's access mode. Both subagents and teammates
+  // create their child this way.
+  const prepareChildConversation = async (tx: Tx, childId: ConversationId, parentId: ConversationId, label: string): Promise<void> => {
+    const metadata = await tx.doc(META, childId)
+    const parent = await tx.doc(META, parentId)
+    metadata.title = label
+    metadata.titleSource = 'user'
+    metadata.workspaceId = parent.workspaceId ?? defaultWorkspace.id
+    metadata.presetId = parent.presetId ?? null
+    metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
+  }
   const registry = createRegistry()
   registry.install(CodingTools)
+  registry.install(TodoTools)
+  registry.install(GoalExtension)
+  registry.install(InteractionTools)
+  registry.install(PlanExtension)
+  registry.install(createSubagentTools({ prepareChild: prepareChildConversation }))
+  registry.install(createTeamTools({
+    prepareChild: prepareChildConversation,
+    conversationInfo,
+    watchMembers: watchTeamMembers,
+    memberSession,
+  }))
   let runtimeClosed = false
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
@@ -320,7 +520,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     timer.unref?.()
     automationTimers.set(automation.id, timer)
   }
-  let harness: Harness
   harness = await Harness.open(storage, {
     models: modelRuntime.models,
     registry,
@@ -394,24 +593,156 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }, CTX)
   }
 
-  const detailFromView = async (id: ConversationId, view: ConversationView, metadata?: Readonly<ConversationMetadata>): Promise<ConversationDetail> => {
+  const detailFromView = async (
+    id: ConversationId,
+    view: ConversationView,
+    metadata?: Readonly<ConversationMetadata>,
+    options: { subagents?: boolean; team?: boolean } = {},
+  ): Promise<ConversationDetail> => {
     const currentMetadata = metadata ?? await ensureMetadata(id)
     const settings = appState.snapshot().settings
     const fallbackWorkspace = workspaceFiles.workspace(currentMetadata.workspaceId ?? settings.defaultWorkspaceId ?? defaultWorkspace.id)
+    const team = options.team === true ? await teamProjection(id) : undefined
     return projectConversation(view, cloneMetadata(currentMetadata), {
       workspace: fallbackWorkspace.path,
       defaultModel: settings.defaultModel ?? modelRuntime.defaultModel,
+      todos: await harness.snapshot(Todos, id, CTX),
+      interactions: await harness.snapshot(Interactions, id, CTX),
+      goal: await harness.snapshot(Goals, id, CTX),
+      plan: await harness.snapshot(Plans, id, CTX),
+      // Only a conversation's own detail carries its children: the sidebar list (`list`) and a
+      // child's own detail skip the walk, so the tree is one level and each load stays bounded.
+      ...(options.subagents === true ? { subagents: await subagentSummaries(id) } : {}),
+      ...(team === undefined ? {} : { team }),
     })
+  }
+
+  /** The Lead (or the Lead of a member conversation) this conversation's team record lives on. */
+  const teamLeadId = async (id: ConversationId): Promise<ConversationId> => {
+    const link = await harness.snapshot(TeamLink, id, CTX)
+    return link?.leadConversationId ? parseConversationId(link.leadConversationId) : id
+  }
+
+  /**
+   * The team as `ConversationDetail.team`. Undefined until the conversation has a teammate or a
+   * task, so a plain conversation pays two document reads and no member-status probe.
+   */
+  const teamProjection = async (id: ConversationId): Promise<TeamView | undefined> => {
+    const leadId = await teamLeadId(id)
+    const doc = await harness.snapshot(Team, leadId, CTX)
+    if (!doc) return undefined
+    const hasTeammate = doc.members.some(member => member.role === 'teammate')
+    const hasTask = doc.tasks.some(task => task.status !== 'deleted')
+    if (!hasTeammate && !hasTask) return undefined
+    return await projectTeam(doc, String(leadId), conversationInfo)
+  }
+
+  /**
+   * DSH's `agentTeam` projection over the Lead document. The Lead row is synthesized even before the
+   * document exists, mirroring `roster.ts:126-157`; teammates carry their child's live turn status.
+   */
+  const team = async (value: string): Promise<TeamView> => {
+    const conversation = await requireConversation(value)
+    const leadId = await teamLeadId(conversation.id)
+    const doc = await harness.snapshot(Team, leadId, CTX)
+    return await projectTeam(doc ?? { members: [], tasks: [] }, String(leadId), conversationInfo)
   }
 
   const currentDetail = async (id: ConversationId): Promise<ConversationDetail> => {
     const conversation = await requireConversation(String(id))
     const viewWatch = await conversation.watch(CTX)
     try {
-      return await detailFromView(id, viewWatch.value)
+      return await detailFromView(id, viewWatch.value, undefined, { subagents: true, team: true })
     } finally {
       await viewWatch.stop()
     }
+  }
+
+  /**
+   * DSH's `subagentCatalog` over Pi's owner edge: the conversations this one created, each with the
+   * label its delegation recorded and the child's latest answer. The catalog is durable in DSH
+   * because children are sessions in the same log; here the owner edge plus the child's own
+   * transcript is what survives, so the row is read instead of folded.
+   */
+  const subagentSummaries = async (parentId: ConversationId): Promise<SubagentSummary[]> => {
+    const page = await harness.commit((tx) => tx.scanConversations({ ownerConversationId: parentId }, SUBAGENT_LIMIT), CTX)
+    const rows = await Promise.all(page.items.map(childSummary))
+    return rows.filter((row): row is SubagentSummary => row !== undefined)
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+  }
+
+  const childSummary = async (record: ConversationRecord): Promise<SubagentSummary | undefined> => {
+    const conversation = await harness.conversation(record.id, CTX)
+    if (!conversation) return undefined
+    const identity = await harness.snapshot(Subagents, record.id, CTX)
+    const usage = await harness.snapshot(UsageDoc, record.id, CTX)
+    const viewWatch = await conversation.watch(CTX)
+    try {
+      const detail = await detailFromView(record.id, viewWatch.value)
+      const tokens = usageTokens(usage)
+      const durationMs = activeDurationMs(detail.messages)
+      const metricsAt = Date.now()
+      return {
+        id: String(record.id),
+        label: identity?.record?.label ?? detail.conversation.title,
+        title: detail.conversation.title,
+        status: detail.conversation.busy ? 'running' : 'inactive',
+        answer: latestAnswer(detail.messages),
+        ...(tokens === undefined ? {} : { tokens }),
+        ...(durationMs === undefined ? {} : { durationMs }),
+        metricsAt,
+        createdAt: detail.conversation.createdAt,
+        updatedAt: detail.conversation.updatedAt,
+      }
+    } finally {
+      await viewWatch.stop()
+    }
+  }
+
+  /** The row's answer summary: the child's last assistant text, collapsed to one bounded line. */
+  const latestAnswer = (messages: readonly ChatMessage[]): string => {
+    for (const message of [...messages].reverse()) {
+      if (message.role !== 'assistant') continue
+      const text = message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join(' ').replace(/\s+/g, ' ').trim()
+      if (text !== '') return text.length > SUBAGENT_ANSWER_CHARS ? `${text.slice(0, SUBAGENT_ANSWER_CHARS - 1)}…` : text
+    }
+    return ''
+  }
+
+  const children = async (value: string): Promise<SubagentSummary[]> => {
+    const parent = await requireConversation(value)
+    return subagentSummaries(parent.id)
+  }
+
+  /**
+   * Resolve one direct child of `parentId`. DSH's control tools authorize by live lineage; Pi exposes
+   * no such check, so ownership is enforced here: any conversation this parent did not create is a
+   * NOT_FOUND rather than a control target (`docs/families.md` A7).
+   */
+  const requireChild = async (parentId: ConversationId, childValue: string): Promise<Awaited<ReturnType<typeof requireConversation>>> => {
+    const childId = parseConversationId(childValue)
+    const record = await harness.commit((tx) => tx.conversation(childId), CTX)
+    if (!record || record.owner?.conversationId !== parentId) throw new RuntimeError('NOT_FOUND', '子会话不存在')
+    return requireConversation(childValue)
+  }
+
+  /** DSH's `send_message` for one direct child: a follow-up the child's next boundary places. */
+  const childMessage = async (value: string, childValue: string, input: ChildMessageInput): Promise<SubagentSummary[]> => {
+    const parent = await requireConversation(value)
+    const child = await requireChild(parent.id, childValue)
+    const text = input.text.trim()
+    if (text === '' || text.length > SUBAGENT_MESSAGE_CHARS) throw new RuntimeError('INVALID_INPUT', '子智能体消息无效')
+    if (!input.requestId.trim() || input.requestId.length > 256) throw new RuntimeError('INVALID_INPUT', 'requestId 无效')
+    await child.submit({ type: 'input', content: text, requestId: input.requestId, whenBusy: 'followUp' }, CTX)
+    return subagentSummaries(parent.id)
+  }
+
+  /** DSH's `interrupt_agent` for one direct child; the child's own descendants stop with it. */
+  const childStop = async (value: string, childValue: string): Promise<SubagentSummary[]> => {
+    const parent = await requireConversation(value)
+    const child = await requireChild(parent.id, childValue)
+    await child.abort(CTX)
+    return subagentSummaries(parent.id)
   }
 
   const selectedWorkspace = (id: string | undefined): WorkspaceSummary => {
@@ -423,6 +754,33 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const preset = appState.snapshot().presets.find(item => item.id === id)
     if (!preset) throw new RuntimeError('NOT_FOUND', 'Agent preset 不存在')
     return preset
+  }
+
+  const modelAllowlist = (): readonly string[] => appState.snapshot().settings.modelAllowlist
+
+  /** An explicit pick outside the project allowlist is refused; `label` names what picked it. */
+  const assertModelAllowed = (model: UiModelRef | undefined, label: string): void => {
+    if (model && !modelWithinAllowlist(modelAllowlist(), model)) {
+      throw new RuntimeError('MODEL_UNAVAILABLE', `${label}不在模型白名单内`)
+    }
+  }
+
+  /** The allowlist's first model in the directory, the replacement a fallen-out default resolves to. */
+  const firstAllowedModel = (): UiModelRef | undefined => {
+    const candidate = modelRuntime.models.getModels().find(model => modelWithinAllowlist(modelAllowlist(), { provider: model.provider, modelId: model.id }))
+    return candidate ? { provider: candidate.provider, modelId: candidate.id } : undefined
+  }
+
+  /**
+   * A run uses the model its conversation is bound to, so a conversation created
+   * before the allowlist changed must not keep calling an out-of-scope model.
+   */
+  const assertConversationModelAllowed = async (conversation: Awaited<ReturnType<typeof requireConversation>>): Promise<void> => {
+    const agent = await conversation.agent(CTX)
+    const model = agent.model ?? appState.snapshot().settings.defaultModel ?? modelRuntime.defaultModel
+    if (!model) return
+    if (!modelRuntime.models.getModel(model.provider, model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '会话模型不在 Pi 模型目录中')
+    assertModelAllowed(model, '会话模型')
   }
 
   const buildAgentChange = (workspaceId: string, accessMode: AccessMode, preset?: AgentPreset, overrides: {
@@ -448,7 +806,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         ? requestedTools.has(tool.name)
         : state.plugins[extension.name]?.tools[tool.name] ?? true
       if (!enabled) return []
-      if (accessMode === 'readOnly' && tool.name !== 'read') return []
+      if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name)) return []
       return [tool]
     })
     if (requestedTools) {
@@ -457,8 +815,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         if (!registeredNames.has(name)) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的工具：${name}`)
       }
     }
-    const model = overrides.model ?? preset?.model ?? state.settings.defaultModel ?? modelRuntime.defaultModel
+    const requestedModel = overrides.model ?? preset?.model
+    let model = requestedModel ?? state.settings.defaultModel ?? modelRuntime.defaultModel
     if (model && !modelRuntime.models.getModel(model.provider, model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
+    if (model && !modelWithinAllowlist(modelAllowlist(), model)) {
+      // An explicit pick is refused; a stored default the allowlist no longer
+      // covers only resolves to an allowed model instead of blocking the run.
+      if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', `${overrides.model ? '所选模型' : 'Preset 模型'}不在模型白名单内`)
+      const fallback = firstAllowedModel()
+      if (!fallback) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型不在模型白名单内')
+      model = fallback
+    }
     const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
     return {
@@ -540,12 +907,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
     if (configurationChanged) {
       const currentAgent = await conversation.agent(CTX)
-      const model = input.model ?? (presetChanged ? preset?.model ?? settings.defaultModel ?? modelRuntime.defaultModel : currentAgent.model)
+      // Only an explicitly picked model is passed on; a preset without its own
+      // model and the inherited model keep today's resolution through the
+      // default chain, where a stale default falls back inside the allowlist.
+      const explicitModel = input.model ?? (presetChanged ? preset?.model : currentAgent.model)
       const thinkingLevel = input.thinkingLevel ?? (presetChanged ? preset?.thinkingLevel ?? settings.defaultThinkingLevel : currentAgent.thinkingLevel)
       if (input.model && !modelRuntime.models.getModel(input.model.provider, input.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '所选模型不在 Pi 模型目录中')
+      assertModelAllowed(input.model, '所选模型')
+      if (presetChanged) assertModelAllowed(preset?.model, 'Preset 模型')
+      if (!presetChanged && !input.model) assertModelAllowed(currentAgent.model, '会话模型')
       if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
       const change = buildAgentChange(workspace.id, accessMode, preset, {
-        ...(model ? { model } : {}),
+        ...(explicitModel ? { model: explicitModel } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       })
       await conversation.configure(change, CTX)
@@ -575,6 +948,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     actualRequestId = input.requestId,
     fingerprint = fingerprintSubmit(input),
   ): Promise<{ submissionId: string }> => {
+    await assertConversationModelAllowed(conversation)
     const existing = await harness.commit(async (tx) => {
       const metadata = await tx.doc(META, conversation.id)
       const receipt = metadata.requestReceipts[actualRequestId]
@@ -600,11 +974,72 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       metadata.requestReceipts[actualRequestId] = { fingerprint, status: 'accepted', submissionId: Number(request.id) }
       if (status.status === 'queued') metadata.queueCreatedAt[String(request.id)] = Date.now()
       if (metadata.titleSource === 'auto' && metadata.title === DEFAULT_TITLE && input.text.trim()) {
-        metadata.title = input.text.trim().slice(0, 60)
+        metadata.title = fallbackSessionTitle(input.text) || DEFAULT_TITLE
       }
       metadata.updatedAt = Date.now()
+      // A placed input starts a new turn, and DSH starts a turn without a task list. Queued inputs
+      // are placed later, so their turn keeps the list this commit leaves behind.
+      if (status.status !== 'queued') {
+        const todos = await tx.doc(Todos, conversation.id)
+        todos.items = null
+        todos.updatedAt = Date.now()
+      }
     }, CTX)
+    if (input.text.trim()) scheduleTitleRevision(conversation.id, input.text)
     return { submissionId: String(request.id) }
+  }
+
+  /**
+   * DSH's title provider cadence over pi-web's own run loop: one revision per
+   * submitted prompt, generated off the session's own route so titles cost the
+   * same account, never delaying the response, and a newer revision supersedes
+   * the older one. A user rename flips the source to `user` and pins the title,
+   * so this writes only while the title is still auto.
+   *
+   * DSH hands its title call a `session-title` purpose that its adapter maps to
+   * thinking-disabled. pi-ai has no such marker, and models declaring
+   * `thinkingLevelMap.off === null` (deepseek) cannot disable thinking, so this
+   * budgets past the reasoning preamble and still accepts only a clean stop with
+   * visible text; anything else keeps the deterministic fallback title.
+   */
+  const titleRevisions = new Map<string, AbortController>()
+  const scheduleTitleRevision = (id: ConversationId, text: string): void => {
+    const key = String(id)
+    titleRevisions.get(key)?.abort()
+    const controller = new AbortController()
+    titleRevisions.set(key, controller)
+    void (async () => {
+      try {
+        const conversation = await harness.conversation(id, CTX)
+        if (conversation === undefined) return
+        const agent = await conversation.agent(CTX)
+        const route = agent.model ?? modelRuntime.defaultModel
+        if (route === undefined) return
+        const model = modelRuntime.models.getModel(route.provider, route.modelId)
+        if (model === undefined) return
+        const framed = frameTitleMessages([{ seq: 0, text }])
+        if (Buffer.byteLength(framed, 'utf8') > TITLE_POLICY.maxInputBytes) return
+        const result = await modelRuntime.models.completeSimple(model, {
+          systemPrompt: titleSystemPrompt(),
+          messages: [{ role: 'user', content: framed, timestamp: Date.now() }],
+        }, {
+          maxTokens: TITLE_POLICY.titleMaxOutputTokens,
+          timeoutMs: TITLE_POLICY.timeoutMs,
+          sessionId: `title-${randomUUID()}`,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted || result.stopReason !== 'stop') return
+        const title = normalizeSessionTitle(result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n'))
+        if (title === '') return
+        await withMetadata(id, draft => {
+          if (draft.titleSource === 'auto') draft.title = title
+        })
+      } catch {
+        // An automatic title failure is a warning: the fallback title stays.
+      } finally {
+        if (titleRevisions.get(key) === controller) titleRevisions.delete(key)
+      }
+    })()
   }
 
   const submit = async (value: string, input: SubmitInput): Promise<{ submissionId: string }> => {
@@ -615,6 +1050,173 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       ? await workspaceFiles.saveAttachments(metadata.workspaceId ?? defaultWorkspace.id, String(conversation.id), input.requestId, input.files)
       : []
     return submitWithReferences(conversation, input, files)
+  }
+
+  /**
+   * Settle one pending plan review. The reply carries the decision so the model knows whether to
+   * execute or revise; approving also turns plan mode off, in the same commit that marks the review
+   * answered, so a later request cannot talk the model back into planning. Asking for changes leaves
+   * plan mode on and hands the feedback over in the reply message.
+   */
+  const answerPlanReview = async (
+    conversation: Awaited<ReturnType<typeof requireConversation>>,
+    callId: string,
+    review: StoredPlanReview,
+    answers: AskUserQuestionAnswerItem[],
+  ): Promise<ConversationDetail> => {
+    const id = conversation.id
+    // A superseded or already answered review is settled: nothing is waiting and plan mode stays as it is.
+    if (review.status !== 'pending') return currentDetail(id)
+    await assertConversationModelAllowed(conversation)
+    const decision = decidePlanReview(review, answers)
+    const settledAnswers = answers.map(answer => ({
+      id: answer.id,
+      selected: [...answer.selected],
+      ...(answer.custom === undefined ? {} : { custom: answer.custom }),
+    }))
+    const reply = {
+      kind: 'answer_to_pending_question',
+      callId,
+      interactionKind: 'plan-review',
+      approveLabel: review.approveLabel,
+      approved: decision.approved,
+      ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
+      answers: settledAnswers,
+      instruction: decision.approved
+        ? 'The user approved the plan and plan mode is now off: execute the approved plan in this turn.'
+        : 'The user asked for changes and plan mode is still on: revise the plan and submit it again with exit_plan_mode.',
+    }
+    await conversation.submit({
+      type: 'input',
+      content: JSON.stringify(reply),
+      requestId: `plan-review-reply:${callId}`,
+      entry: {
+        kind: 'pi-web.plan-review-reply',
+        data: {
+          callId,
+          approved: decision.approved,
+          answers: settledAnswers,
+          ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
+        },
+      },
+      whenBusy: 'steer',
+    }, CTX)
+    await harness.commit(async (tx) => {
+      const table = interactionTable(await tx.doc(Interactions, id))
+      const stored = planReviewOf(table[callId])
+      if (!stored || stored.status !== 'pending') return
+      stored.status = 'answered'
+      stored.approved = decision.approved
+      stored.answers = settledAnswers
+      stored.answeredAt = Date.now()
+      if (decision.feedback !== undefined) stored.feedback = decision.feedback
+      if (!decision.approved) return
+      const plan = await tx.doc(Plans, id)
+      plan.active = false
+      plan.updatedAt = Date.now()
+    }, CTX)
+    return currentDetail(id)
+  }
+
+  /**
+   * Settle one pending interaction. The reply is submitted first, so a rejected submission leaves the
+   * call answerable; the document is marked answered afterwards. The reply entry carries the call id
+   * and `requestId` is derived from it, so a retry after a restart never injects the message twice.
+   */
+  const answerInteraction = async (value: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail> => {
+    const conversation = await requireConversation(value)
+    const id = conversation.id
+    if (typeof callId !== 'string' || callId.trim() === '' || callId.length > 160) {
+      throw new RuntimeError('INVALID_INPUT', '交互请求 ID 无效')
+    }
+    const state = await harness.snapshot(Interactions, id, CTX)
+    const request = state?.[callId]
+    if (!request) throw new RuntimeError('NOT_FOUND', '交互请求不存在')
+    const review = planReviewOf(request)
+    if (review) return answerPlanReview(conversation, callId, review, answers)
+    if (request.status === 'answered') return currentDetail(id)
+    if (request.status === 'cancelled') throw new RuntimeError('CONFLICT', '该问题已放弃整组，无法再回答')
+    const invalid = validateAnswers(request.questions, answers)
+    if (invalid) throw new RuntimeError('INVALID_INPUT', invalid)
+    await assertConversationModelAllowed(conversation)
+    const settledAnswers = answers.map(answer => ({
+      id: answer.id,
+      selected: [...answer.selected],
+      ...(answer.custom === undefined ? {} : { custom: answer.custom }),
+    }))
+    const reply = {
+      kind: 'answer_to_pending_question',
+      callId,
+      questions: request.questions.map(question => ({
+        ...question,
+        ...(question.options ? { options: question.options.map(option => ({ ...option })) } : {}),
+      })),
+      answers: settledAnswers,
+    }
+    await conversation.submit({
+      type: 'input',
+      content: JSON.stringify(reply),
+      requestId: `question-reply:${callId}`,
+      entry: { kind: 'pi-web.user-question-reply', data: { callId, answers: settledAnswers } },
+      whenBusy: 'steer',
+    }, CTX)
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(Interactions, id)
+      const stored = doc[callId]
+      // Only a pending call settles here: an answer that lost the race against a
+      // dismissal must not resurrect the question.
+      if (!stored || stored.status !== 'pending') return
+      stored.status = 'answered'
+      stored.answers = settledAnswers
+      stored.answeredAt = Date.now()
+    }, CTX)
+    return currentDetail(id)
+  }
+
+  /**
+   * Dismiss one pending question set the way DSH's `ASK_CANCELLED` does: nobody answers,
+   * the model is told, and the row can no longer take an answer. The dismissal reply is
+   * steered first with a call-derived `requestId`, so a retry after a restart never tells
+   * the model twice; already-cancelled calls are idempotent, and an answered call is a
+   * conflict because its answers are already on their way.
+   */
+  const cancelInteraction = async (value: string, callId: string): Promise<ConversationDetail> => {
+    const conversation = await requireConversation(value)
+    const id = conversation.id
+    if (typeof callId !== 'string' || callId.trim() === '' || callId.length > 160) {
+      throw new RuntimeError('INVALID_INPUT', '交互请求 ID 无效')
+    }
+    const state = await harness.snapshot(Interactions, id, CTX)
+    const request = state?.[callId]
+    if (!request) throw new RuntimeError('NOT_FOUND', '交互请求不存在')
+    if (planReviewOf(request)) throw new RuntimeError('UNSUPPORTED', '计划待审请在卡片上批准或要求修改')
+    if (request.status === 'answered') throw new RuntimeError('CONFLICT', '该问题已回答，无法放弃整组问题')
+    if (request.status === 'cancelled') return currentDetail(id)
+    await assertConversationModelAllowed(conversation)
+    const dismissal = {
+      kind: 'dismissed_pending_question',
+      callId,
+      questions: request.questions.map(question => ({
+        ...question,
+        ...(question.options ? { options: question.options.map(option => ({ ...option })) } : {}),
+      })),
+      instruction: 'The user dismissed these questions without answering. Do not ask them again; continue with work that does not depend on the answers, or wrap up.',
+    }
+    await conversation.submit({
+      type: 'input',
+      content: JSON.stringify(dismissal),
+      requestId: `question-dismiss:${callId}`,
+      entry: { kind: 'pi-web.user-question-dismissed', data: { callId } },
+      whenBusy: 'steer',
+    }, CTX)
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(Interactions, id)
+      const stored = doc[callId]
+      if (!stored || stored.status !== 'pending') return
+      stored.status = 'cancelled'
+      stored.cancelledAt = Date.now()
+    }, CTX)
+    return currentDetail(id)
   }
 
   const queuedContentFor = async (conversation: Awaited<ReturnType<typeof requireConversation>>, submissionId: SubmissionId): Promise<QueueContent | undefined> => {
@@ -746,6 +1348,60 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (taskId !== undefined) await harness.abortTask(taskId, CTX)
   }
 
+  const goal = async (value: string, input: GoalUpdateRequest): Promise<ConversationDetail> => {
+    const conversation = await requireConversation(value)
+    const id = conversation.id
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(Goals, id)
+      if (input.action === 'create') {
+        const outcome = applyGoalCreate(doc.goal, {
+          id: randomUUID(),
+          objective: input.objective ?? '',
+          ...(input.maxGoalRounds === undefined ? {} : { maxGoalRounds: input.maxGoalRounds }),
+        }, Date.now())
+        if (!outcome.ok) throw new RuntimeError('CONFLICT', outcome.error)
+        doc.goal = outcome.goal
+        return
+      }
+      const current = doc.goal
+      if (current === null) throw new RuntimeError('NOT_FOUND', '当前会话没有目标')
+      const outcome = applyGoalUpdate(current, {
+        goalId: current.id,
+        revision: current.revision,
+        action: input.action,
+        ...(input.objective === undefined ? {} : { objective: input.objective }),
+        ...(input.blockedReason === undefined ? {} : { blockedReason: input.blockedReason }),
+        ...(input.maxGoalRounds === undefined ? {} : { maxGoalRounds: input.maxGoalRounds }),
+      }, { actor: 'human', now: Date.now() })
+      if (!outcome.ok) throw new RuntimeError('CONFLICT', outcome.error)
+      doc.goal = outcome.goal
+    }, CTX)
+    return currentDetail(id)
+  }
+
+  /**
+   * Turn plan mode on or off. The document write is what the `plan-policy` section reads before every
+   * request, so a switch made while a run is going takes effect on the next request (DSH's pending
+   * semantics); an idempotent request only refreshes `updatedAt`.
+   */
+  const setPlan = async (value: string, active: boolean): Promise<ConversationDetail> => {
+    if (typeof active !== 'boolean') throw new RuntimeError('INVALID_INPUT', '计划模式开关无效')
+    const conversation = await requireConversation(value)
+    const id = conversation.id
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(Plans, id)
+      doc.active = active
+      doc.updatedAt = Date.now()
+    }, CTX)
+    return currentDetail(id)
+  }
+
+  const compact = async (value: string): Promise<void> => {
+    const conversation = await requireConversation(value)
+    await assertConversationModelAllowed(conversation)
+    await conversation.compact(undefined, CTX)
+  }
+
   const removeQueued = async (value: string, submissionValue: string): Promise<void> => {
     const conversation = await requireConversation(value)
     const submissionId = parseSubmissionId(submissionValue)
@@ -782,17 +1438,25 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       await viewWatch.stop()
       throw new RuntimeError('CONFLICT', '无法订阅会话元数据')
     }
+    // Custom documents are not part of the conversation view, so a human action that writes only a
+    // document (pause a goal, clear a list) would otherwise stay invisible until the next entry.
+    const docWatches = [
+      await harness.watchDoc(Todos, id, CTX),
+      await harness.watchDoc(Goals, id, CTX),
+      await harness.watchDoc(Interactions, id, CTX),
+      await harness.watchDoc(Plans, id, CTX),
+    ]
     let latestView = viewWatch.value
     let latestMetadata = metadataWatch.value ?? await ensureMetadata(id)
     let stopped = false
     let delivery = Promise.resolve()
     const refresh = () => {
       delivery = delivery.then(async () => {
-        if (!stopped) listener(await detailFromView(id, latestView, latestMetadata))
+        if (!stopped) listener(await detailFromView(id, latestView, latestMetadata, { subagents: true, team: true }))
       })
       return delivery
     }
-    listener(await detailFromView(id, latestView, latestMetadata))
+    listener(await detailFromView(id, latestView, latestMetadata, { subagents: true, team: true }))
     viewWatch.start(async (view) => {
       latestView = view
       await refresh()
@@ -801,11 +1465,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (metadata) latestMetadata = metadata
       await refresh()
     })
+    for (const docWatch of docWatches) {
+      docWatch?.start(async () => { await refresh() })
+    }
     const unsubscribe = async () => {
       if (stopped) return
       stopped = true
       activeWatchStops.delete(unsubscribe)
-      await Promise.all([viewWatch.stop(), metadataWatch.stop()])
+      await Promise.all([viewWatch.stop(), metadataWatch.stop(), ...docWatches.map(docWatch => docWatch?.stop())])
       await delivery
     }
     activeWatchStops.add(unsubscribe)
@@ -822,6 +1489,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (input.defaultModel && !modelRuntime.models.getModel(input.defaultModel.provider, input.defaultModel.modelId)) {
       throw new RuntimeError('MODEL_UNAVAILABLE', '默认模型不在 Pi 模型目录中')
     }
+    let nextAllowlist: string[] | undefined
+    if (input.modelAllowlist !== undefined) {
+      nextAllowlist = normalizeModelAllowlist(input.modelAllowlist)
+      for (const entry of nextAllowlist) {
+        if (!isValidAllowlistEntry(entry)) throw new RuntimeError('INVALID_INPUT', `模型白名单条目无效：${entry}`)
+      }
+    }
+    // A default patched together with the allowlist is judged by the new list.
+    if (input.defaultModel && !modelWithinAllowlist(nextAllowlist ?? appState.snapshot().settings.modelAllowlist, input.defaultModel)) {
+      throw new RuntimeError('MODEL_UNAVAILABLE', '默认模型不在模型白名单内')
+    }
     if (input.defaultWorkspaceId && !appState.snapshot().workspaces.some(item => item.id === input.defaultWorkspaceId)) {
       throw new RuntimeError('NOT_FOUND', '默认工作区不存在')
     }
@@ -835,10 +1513,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (input.fontSize !== undefined) state.settings.fontSize = input.fontSize
       if (input.codeFontSize !== undefined) state.settings.codeFontSize = input.codeFontSize
       if (input.terminalFontSize !== undefined) state.settings.terminalFontSize = input.terminalFontSize
-      if (input.processDisplay !== undefined) state.settings.processDisplay = input.processDisplay
-      if (input.collapseProcess !== undefined) state.settings.collapseProcess = input.collapseProcess
+      if (input.transcriptView !== undefined) state.settings.transcriptView = input.transcriptView
+      if (input.collapseTiming !== undefined) state.settings.collapseTiming = input.collapseTiming
+      if (input.performanceUsage !== undefined) state.settings.performanceUsage = input.performanceUsage
       if (input.codingViews !== undefined) state.settings.codingViews = input.codingViews
       if (input.busySendMode !== undefined) state.settings.busySendMode = input.busySendMode
+      if (nextAllowlist !== undefined) state.settings.modelAllowlist = nextAllowlist
       if (input.defaultThinkingLevel !== undefined) state.settings.defaultThinkingLevel = input.defaultThinkingLevel
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
       if (input.defaultModel === null) delete state.settings.defaultModel
@@ -851,6 +1531,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
       return structuredClone(state.settings)
     })
+  }
+
+  /** Hand the persisted application configuration file to the operator's default program. */
+  const openConfigFile = async (): Promise<void> => {
+    assertOpen()
+    let present: boolean
+    try {
+      present = await appState.ensureFile()
+    } catch (error) {
+      throw new RuntimeError('PROVIDER_ERROR', `无法写入应用配置文件：${safeFailure(error)}`)
+    }
+    if (!present) throw new RuntimeError('NOT_FOUND', '应用配置文件不存在')
+    await openLocalFile(appState.path)
   }
 
   const workspaces = (): WorkspaceSummary[] => appState.snapshot().workspaces
@@ -876,7 +1569,34 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     })
   }
 
+  const pickDirectory = (signal?: AbortSignal): Promise<string | null> => pickNativeDirectory(signal)
+  const listDirectories = (path?: string) => listHostDirectories(path)
+  const createDirectory = (parent: string, name: string) => createHostDirectory(parent, name)
+
   const workspaceFileList = (id: string, path: string, query?: string) => workspaceFiles.list(id, path, query)
+
+  /**
+   * Unregister a workspace, mirroring DSH's row action: its sessions rebind to a
+   * remaining workspace so no conversation keeps a dangling binding, and the
+   * directory on disk is left untouched.
+   */
+  const deleteWorkspace = async (id: string): Promise<void> => {
+    const state = appState.snapshot()
+    if (!state.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
+    const remaining = state.workspaces.filter(workspace => workspace.id !== id)
+    if (remaining.length === 0) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
+    const fallback = remaining.find(workspace => workspace.id === state.settings.defaultWorkspaceId) ?? remaining[0]
+    if (fallback === undefined) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
+    for (const summary of await list()) {
+      if (summary.workspaceId !== id) continue
+      await withMetadata(parseConversationId(summary.id), draft => { draft.workspaceId = fallback.id })
+    }
+    await appState.update(current => {
+      current.workspaces = current.workspaces.filter(workspace => workspace.id !== id)
+      if (current.settings.defaultWorkspaceId === id) current.settings.defaultWorkspaceId = fallback.id
+    })
+  }
+
   const searchWorkspace = (id: string, query: string) => workspaceFiles.list(id, '', query)
   const workspaceFile = (id: string, path: string) => workspaceFiles.read(id, path)
   const workspaceAsset = (id: string, path: string) => workspaceFiles.asset(id, path)
@@ -930,6 +1650,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const knownTools = new Set(extensions.flatMap(extension => (extension.tools ?? []).map(tool => tool.name)))
     for (const name of value.tools) if (!knownTools.has(name)) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的工具：${name}`)
     if (value.model && !modelRuntime.models.getModel(value.model.provider, value.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', 'Preset 模型不在 Pi 模型目录中')
+    assertModelAllowed(value.model, 'Preset 模型')
     if (value.thinkingLevel && !SUPPORTED_THINKING.has(value.thinkingLevel)) throw new RuntimeError('INVALID_INPUT', 'Preset 思考等级无效')
     if (value.accessMode === 'workspaceWrite' && !workspaceWriteAvailable) throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     return structuredClone({ ...value, name: value.name.trim() })
@@ -973,6 +1694,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     await withMetadata(conversation.id, metadata => {
       if (rating === null) delete metadata.feedback[String(entryId)]
       else metadata.feedback[String(entryId)] = rating
+    })
+  }
+
+  /** Append one operator feedback entry, capturing the client's user agent when present. */
+  const sendFeedback = async (input: { text: string; userAgent?: string }): Promise<void> => {
+    assertOpen()
+    const text = input.text.trim()
+    if (!text || text.length > 2_000) throw new RuntimeError('INVALID_INPUT', '反馈内容必须在 1 到 2000 个字符之间')
+    const userAgent = input.userAgent?.trim()
+    await appState.recordFeedback({
+      text,
+      createdAt: Date.now(),
+      ...(userAgent ? { userAgent: userAgent.slice(0, 500) } : {}),
     })
   }
 
@@ -1032,15 +1766,61 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     return { conversationId: String(child.id), submissionId: submitted.submissionId }
   }
 
+  /**
+   * The catalog every model surface reads: filtered to the allowlist, with a
+   * default that fell outside it replaced by the first available allowed model
+   * and written back, so a later start reads the same correction.
+   */
   const catalog = async () => {
     const result = await modelRuntime.catalog()
-    const defaultModel = appState.snapshot().settings.defaultModel ?? result.defaultModel
-    return { ...result, ...(defaultModel ? { defaultModel } : {}) }
+    const settings = appState.snapshot().settings
+    const allowlist = settings.modelAllowlist
+    const models = result.models.filter(model => modelWithinAllowlist(allowlist, model))
+    const visibleProviders = new Set(models.map(model => model.provider))
+    const providers = result.providers.filter(provider => visibleProviders.has(provider.id))
+    let defaultModel: UiModelRef | undefined = settings.defaultModel ?? result.defaultModel
+    if (defaultModel && !modelWithinAllowlist(allowlist, defaultModel)) {
+      const fallback = models.find(model => model.available) ?? models[0]
+      if (fallback) {
+        const corrected: UiModelRef = { provider: fallback.provider, modelId: fallback.modelId }
+        defaultModel = corrected
+        const stored = settings.defaultModel
+        if (stored?.provider !== corrected.provider || stored.modelId !== corrected.modelId) {
+          await appState.update(state => { state.settings.defaultModel = { ...corrected } })
+        }
+      }
+    }
+    return { ...result, models, providers, ...(defaultModel ? { defaultModel } : {}) }
   }
 
-  const provider = (id: string) => modelRuntime.provider(id)
+  /** Provider config is a model surface too: explicit picks and the restore list stay inside the allowlist. */
+  const providerInAllowlist = (id: string, models: ProviderConfigSummary['models']): ProviderConfigSummary['models'] =>
+    models.filter(model => modelWithinAllowlist(modelAllowlist(), { provider: id, modelId: model.id }))
+
+  const provider = async (id: string): Promise<ProviderConfigSummary> => {
+    const result = await modelRuntime.provider(id)
+    return {
+      ...result,
+      models: providerInAllowlist(id, result.models),
+      ...(result.defaults ? { defaults: providerInAllowlist(id, result.defaults) } : {}),
+    }
+  }
   const deleteProvider = (id: string) => modelRuntime.deleteProvider(id)
-  const testProvider = (id: string, modelId?: string) => modelRuntime.testProvider(id, modelId)
+  // A probe spends real quota, so it may only target an allowed model: an
+  // explicit one is checked, and the picked default travels into the call.
+  const testProvider = async (id: string, modelId?: string) => {
+    const allowed = (modelRuntime.models.getProvider(id)?.getModels() ?? [])
+      .filter(model => modelWithinAllowlist(modelAllowlist(), { provider: model.provider, modelId: model.id }))
+      .map(model => ({ provider: model.provider, modelId: model.id }))
+    const selected = modelId !== undefined ? { provider: id, modelId } : allowed[0]
+    if (!selected) throw new RuntimeError('NOT_FOUND', '所选 Provider 或模型不存在')
+    assertModelAllowed(selected, '所选模型')
+    return modelRuntime.testProvider(id, selected.modelId)
+  }
+  const discoverProvider = async (id: string) => {
+    const result = await modelRuntime.discover(id)
+    return { models: result.models.filter(model => modelWithinAllowlist(modelAllowlist(), { provider: id, modelId: model.id })) }
+  }
 
   const automations = (): Automation[] => appState.snapshot().automations
 
@@ -1051,6 +1831,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       throw new RuntimeError('INVALID_INPUT', 'Automation interval 必须在 1 分钟到 1 年之间')
     }
     if (input.model && !modelRuntime.models.getModel(input.model.provider, input.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', 'Automation 模型不在 Pi 模型目录中')
+    assertModelAllowed(input.model, 'Automation 模型')
     if (input.workspaceId) selectedWorkspace(input.workspaceId)
     if (input.presetId) selectedPreset(input.presetId)
   }
@@ -1259,6 +2040,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   await recoverQueueEdits()
   await recoverAutomations()
+  await reconcileTeamRosters()
   harness.resume()
 
   return {
@@ -1267,8 +2049,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     detail: async (value) => currentDetail(parseConversationId(value)),
     update,
     submit,
+    answerInteraction,
+    cancelInteraction,
     editQueued,
     stop,
+    compact,
+    goal,
+    setPlan,
+    team,
+    children,
+    childMessage,
+    childStop,
     removeQueued,
     fork,
     retry,
@@ -1278,12 +2069,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     provider,
     deleteProvider,
     testProvider,
+    discoverProvider,
     settings,
     capabilities,
     updateSettings,
+    openConfigFile,
     workspaces,
     addWorkspace,
     renameWorkspace,
+    deleteWorkspace,
+    pickDirectory,
+    listDirectories,
+    createDirectory,
     workspaceFiles: workspaceFileList,
     searchWorkspace,
     workspaceFile,
@@ -1295,6 +2092,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     updatePreset,
     deletePreset,
     feedback,
+    sendFeedback,
     automations,
     createAutomation,
     updateAutomation,

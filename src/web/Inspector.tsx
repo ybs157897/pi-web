@@ -5,6 +5,7 @@ import {
 import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
+import PlanPreview, { type PlanDocument } from './PlanPreview.tsx'
 import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
 
@@ -21,32 +22,50 @@ export interface InspectorFile {
 
 export type { InspectorDiff } from './transcript.tsx'
 
+/** The inspector's three document kinds; DSH puts the plan in its own sidebar tab (`ui-plan/index.ts:65-69`). */
+export type InspectorView = 'file' | 'diff' | 'plan'
+
 export interface InspectorProps {
   file?: InspectorFile | null
   diff?: InspectorDiff | null
+  /** The latest submitted plan, shown in DSH's plan preview (`PlanPreview.tsx:18-40`). */
+  plan?: PlanDocument | null
+  view?: InspectorView
+  onView?: (view: InspectorView) => void
   loading?: boolean
   error?: string | null
   onClose: () => void
 }
 
-/** Show a workspace file or recorded artifact inside the app's right inspector panel. */
-export default function Inspector({ file = null, diff = null, loading = false, error = null, onClose }: InspectorProps) {
+/** Show a workspace file, recorded artifact, or submitted plan inside the app's right inspector panel. */
+export default function Inspector({ file = null, diff = null, plan = null, view, onView, loading = false, error = null, onClose }: InspectorProps) {
   const { t } = useUiPreferences()
-  const path = diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
+  const planView = view === 'plan'
+  const path = planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
   return (
-    <aside className={css.root} aria-label={t('文件检查器', 'File inspector')}>
+    <aside className={css.root} aria-label={planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
       <header className={css.header}>
         <div className={css.fileIcon} aria-hidden="true"><IconBrowseOutlineRegular size={15} /></div>
         <div className={css.path} title={path}>{path}</div>
-        <button type="button" className={css.close} onClick={onClose} aria-label={t('关闭文件检查器', 'Close file inspector')}>
+        {onView !== undefined && (plan !== null || diff !== null || file !== null) && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
+          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView}
+            onClick={() => { onView(diff !== null ? 'diff' : 'file') }}>{diff !== null ? t('差异', 'Diff') : t('文件', 'File')}</button>}
+          {plan !== null && <button type="button" data-plan-view aria-pressed={planView}
+            onClick={() => { onView('plan') }}>{t('计划', 'Plan')}</button>}
+        </div>}
+        <button type="button" className={css.close} onClick={onClose} aria-label={planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')}>
           <IconCloseOutlineRegular size={15} />
         </button>
       </header>
-      {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}
-      {!loading && error !== null && error !== '' && <div className={css.error} role="alert">{error}</div>}
-      {!loading && (error === null || error === '') && diff !== null && <DiffContents diff={diff} />}
-      {!loading && (error === null || error === '') && diff === null && file !== null && <FileContents key={file.path} file={file} />}
-      {!loading && error === null && diff === null && file === null && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
+      {planView
+        ? <PlanPreview plan={plan} loading={loading} error={error} />
+        : <>
+          {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}
+          {!loading && error !== null && error !== '' && <div className={css.error} role="alert">{error}</div>}
+          {!loading && (error === null || error === '') && diff !== null && <DiffContents diff={diff} />}
+          {!loading && (error === null || error === '') && diff === null && file !== null && <FileContents key={file.path} file={file} />}
+          {!loading && error === null && diff === null && file === null && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
+        </>}
     </aside>
   )
 }

@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
@@ -12,21 +12,26 @@ import type {
   ThinkingLevel,
   WorkspaceSummary,
 } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 
 const modelRef = z.object({ provider: z.string().min(1).max(100), modelId: z.string().min(1).max(256) }).strict()
 const thinking = z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 const accessMode = z.enum(['readOnly', 'workspaceWrite', 'fullAccess'])
+/** Stored entries are normalized on the settings route; the schema fills the default for old files. */
+const modelAllowlist = z.array(z.string().trim().min(1).max(200)).max(100).default([])
 const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']),
   locale: z.enum(['zh', 'en']),
   fontSize: z.number().min(12).max(20),
   codeFontSize: z.number().min(10).max(16),
   terminalFontSize: z.number().min(10).max(20),
-  processDisplay: z.enum(['detailed', 'compact']),
-  collapseProcess: z.enum(['afterResponse', 'always', 'never']),
+  transcriptView: z.enum(TRANSCRIPT_VIEW_MODES),
+  collapseTiming: z.enum(COLLAPSE_TIMINGS),
+  performanceUsage: z.enum(PERFORMANCE_USAGE_MODES),
   codingViews: z.boolean(),
   busySendMode: z.enum(['followUp', 'steer']),
   defaultModel: modelRef.optional(),
+  modelAllowlist,
   defaultThinkingLevel: thinking,
   defaultAccessMode: accessMode,
   defaultPresetId: z.string().min(1).optional(),
@@ -74,7 +79,11 @@ const automationSchema = z.object({
   workspaceId: z.string().optional(),
   presetId: z.string().optional(),
 }).strict()
-const feedbackSchema = z.record(z.string(), z.record(z.string(), z.enum(['up', 'down']).nullable()))
+const feedbackEntrySchema = z.object({
+  text: z.string().min(1).max(2_000),
+  createdAt: z.number().finite(),
+  userAgent: z.string().min(1).max(500).optional(),
+}).strict()
 const appStateSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema,
@@ -82,8 +91,11 @@ const appStateSchema = z.object({
   plugins: z.record(z.string(), pluginStateSchema),
   presets: z.array(presetSchema),
   automations: z.array(automationSchema),
-  feedback: feedbackSchema,
+  feedback: z.array(feedbackEntrySchema).default([]),
 }).strict()
+
+/** One operator feedback entry submitted from the web client. */
+export type FeedbackEntry = { text: string; createdAt: number; userAgent?: string }
 
 export type PersistedAppState = {
   version: 1
@@ -92,13 +104,56 @@ export type PersistedAppState = {
   plugins: Record<string, { enabled: boolean; tools: Record<string, boolean> }>
   presets: AgentPreset[]
   automations: Automation[]
-  feedback: Record<string, Record<string, 'up' | 'down' | null>>
+  feedback: FeedbackEntry[]
 }
 
 const DEFAULT_ACCESS: AccessMode = 'fullAccess'
+/** Operator feedback is a bounded log: appending past the cap drops the oldest entry. */
+const FEEDBACK_LIMIT = 200
 
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+}
+
+/**
+ * Read the retired two-mode display settings as today's work-details settings:
+ * `processDisplay` seeds the transcript view and `collapseProcess` the timing
+ * (every legacy value folded at completion). Legacy keys never survive the read.
+ */
+function migrateLegacySettings(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const state = value as Record<string, unknown>
+  if (typeof state.settings !== 'object' || state.settings === null || Array.isArray(state.settings)) return value
+  const settings = state.settings as Record<string, unknown>
+  const next: Record<string, unknown> = { ...settings }
+  if (next.transcriptView === undefined) next.transcriptView = next.processDisplay === 'compact' ? 'compact' : 'detailed'
+  if (next.collapseTiming === undefined) next.collapseTiming = 'completion'
+  if (next.performanceUsage === undefined) next.performanceUsage = 'detailed'
+  delete next.processDisplay
+  delete next.collapseProcess
+  return { ...state, settings: next }
+}
+
+/**
+ * The retired per-message rating record shares its key with today's operator
+ * feedback entries. Ratings cannot be represented as entries, so a legacy
+ * record is dropped and the key reads as an empty entry list; every stored
+ * state still parses.
+ */
+function migrateFeedback(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const state = value as Record<string, unknown>
+  if (state.feedback === undefined || Array.isArray(state.feedback)) return value
+  return { ...state, feedback: [] }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, workspaceId: string): AppSettings {
@@ -108,10 +163,12 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     fontSize: 14,
     codeFontSize: 11,
     terminalFontSize: 11,
-    processDisplay: 'compact',
-    collapseProcess: 'afterResponse',
+    transcriptView: 'detailed',
+    collapseTiming: 'completion',
+    performanceUsage: 'detailed',
     codingViews: true,
     busySendMode: 'followUp',
+    modelAllowlist: [],
     defaultThinkingLevel: defaultThinkingLevel ?? 'medium',
     defaultAccessMode: DEFAULT_ACCESS,
     defaultWorkspaceId: workspaceId,
@@ -154,7 +211,7 @@ export class AppStateStore {
     let state: PersistedAppState
     try {
       const raw: unknown = JSON.parse(await readFile(path, 'utf8'))
-      const parsed = appStateSchema.safeParse(raw)
+      const parsed = appStateSchema.safeParse(migrateFeedback(migrateLegacySettings(raw)))
       if (!parsed.success) throw new Error('应用数据格式不受支持')
       state = parsed.data
     } catch (error) {
@@ -166,7 +223,7 @@ export class AppStateStore {
         plugins: {},
         presets: [],
         automations: [],
-        feedback: {},
+        feedback: [],
       }
       await writeJsonAtomic(path, state)
     }
@@ -177,6 +234,31 @@ export class AppStateStore {
 
   snapshot(): PersistedAppState {
     return structuredClone(this.#state)
+  }
+
+  /** Absolute path of the configuration file this store persists. */
+  get path(): string {
+    return this.#path
+  }
+
+  /**
+   * Confirm the configuration file is on disk. The application writes it at
+   * startup and after every save, so a missing file means it was removed
+   * behind the app's back: rewrite the current state once, then report
+   * whether the file is present.
+   */
+  async ensureFile(): Promise<boolean> {
+    if (await fileExists(this.#path)) return true
+    await this.update(() => undefined)
+    return await fileExists(this.#path)
+  }
+
+  /** Append one operator feedback entry, keeping only the newest {@link FEEDBACK_LIMIT} entries. */
+  async recordFeedback(entry: FeedbackEntry): Promise<void> {
+    await this.update(state => {
+      state.feedback.push(structuredClone(entry))
+      if (state.feedback.length > FEEDBACK_LIMIT) state.feedback.splice(0, state.feedback.length - FEEDBACK_LIMIT)
+    })
   }
 
   update<T>(change: (draft: PersistedAppState) => T | Promise<T>): Promise<T> {

@@ -37,6 +37,41 @@
   white-space: nowrap;
 }
 
+/* Inspector view switcher beside the document name: the plan is its own view next to file/diff. */
+.viewTabs {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.viewTabs button {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.viewTabs button:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.viewTabs button[aria-pressed="true"] {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+}
+
+.viewTabs button:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
 .close {
   display: inline-flex;
   width: 27px;

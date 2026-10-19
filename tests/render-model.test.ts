@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatMessage } from '../src/shared/types.ts'
-import { buildRenderModel, reasoningDisplay } from '../src/web/render-model.ts'
-import { buildToolRenderModel } from '../src/web/tool-render-model.ts'
+import type { ChatMessage, InteractionRequest } from '../src/shared/types.ts'
+import { buildRenderModel, conversationStats, reasoningDisplay } from '../src/web/render-model.ts'
+import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
+import {
+  askQuestionRowModel, buildToolRenderModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, lateAnswerValues,
+  subagentRowModel,
+} from '../src/web/tool-render-model.ts'
 import type { ToolItem } from '../src/web/render-model.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from '../src/web/inspector-document.ts'
+
+/** Chinese-only translator, mirroring the app's own locale switch. */
+const zh = (chinese: string): string => chinese
 
 function user(id: string, requestId: string): ChatMessage {
   return { id, requestId, role: 'user', blocks: [{ type: 'text', text: `prompt ${id}` }], timestamp: 100 }
@@ -153,11 +160,11 @@ describe('transcript render model', () => {
     }
 
     expect(build('bash', { command: 'pwd' }, { blocks: [{ type: 'text', text: '/workspace' }], details: { exitCode: 0 } }))
-      .toMatchObject({ title: '执行了命令', command: 'pwd', output: '/workspace', exitCode: 0 })
+      .toMatchObject({ title: '运行命令', command: 'pwd', output: '/workspace', exitCode: 0 })
     expect(build('read', { path: 'a.ts' }, { blocks: [{ type: 'text', text: 'const a = 1' }], details: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } }))
-      .toMatchObject({ title: '读取了文件', read: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } })
+      .toMatchObject({ title: '读取', read: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } })
     expect(build('edit', { path: 'a.ts' }, { artifacts: [{ kind: 'edit', path: 'a.ts', before: 'old', after: 'new' }] }))
-      .toMatchObject({ title: '编辑了文件', diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] })
+      .toMatchObject({ title: '编辑', diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] })
     expect(build('grep', { pattern: 'hello' }, { blocks: [{ type: 'text', text: 'a.ts:3:hello world' }] }))
       .toMatchObject({ search: { kind: 'matches', files: [{ path: 'a.ts', matches: [{ lineNumber: 3, line: 'hello world' }] }] } })
     expect(build('web_search', { query: 'pi durable' }, { details: { sources: [{ url: 'https://example.com', title: 'Example' }], answer: 'Found one result.' } }))
@@ -176,5 +183,325 @@ describe('transcript render model', () => {
       .toBe('http://127.0.0.1:4317/api/workspaces/w-1/asset?path=a.pdf')
     expect(safeWorkspaceAssetUrl('https://example.com/a.png', 'http://127.0.0.1:4317/')).toBeUndefined()
     expect(safeWorkspaceAssetUrl('/api/settings', 'http://127.0.0.1:4317/')).toBeUndefined()
+  })
+})
+
+describe('late question answers', () => {
+  const payload = (value: unknown): string => JSON.stringify(value)
+  const reply = {
+    kind: 'answer_to_pending_question',
+    callId: 'call-ask',
+    questions: [
+      { id: 'scope', header: '演示范围', question: '这次问答演示要覆盖哪一层？',
+        options: [{ label: '前端交互 (Recommended)', description: '卡片、选项与只读摘要' }, { label: '后端接口' }] },
+      { id: 'notes', question: '还有什么补充要求？（可跳过）', multiSelect: true },
+    ],
+    answers: [
+      { id: 'scope', selected: ['前端交互 (Recommended)'] },
+      { id: 'notes', selected: ['补充一点', '再补充一点'], custom: '自定义说明' },
+    ],
+  }
+
+  it('reads a reply payload, pairs every question, and summarizes the values', () => {
+    const data = lateAnswerOf(payload(reply))
+    expect(data).not.toBeNull()
+    if (data === null) throw new Error('Expected a late answer')
+    expect(data.callId).toBe('call-ask')
+    expect(data.questions.map(question => question.id)).toEqual(['scope', 'notes'])
+    expect(data.questions[0]).toMatchObject({ header: '演示范围', options: [{ label: '前端交互 (Recommended)', description: '卡片、选项与只读摘要' }, { label: '后端接口' }] })
+    expect(data.questions[1]?.multiSelect).toBe(true)
+    // Values keep DSH's display order: chosen labels first, then a non-blank custom answer.
+    expect(lateAnswerValues(data, 'scope')).toEqual(['前端交互 (Recommended)'])
+    expect(lateAnswerValues(data, 'notes')).toEqual(['补充一点', '再补充一点', '自定义说明'])
+    expect(lateAnswerRows(data).map(row => row.answers)).toEqual([['前端交互 (Recommended)'], ['补充一点', '再补充一点', '自定义说明']])
+    expect(lateAnswerSummary(data, zh)).toBe('前端交互 (Recommended)、补充一点、再补充一点、自定义说明')
+    expect(lateAnswerClipboardText(data, zh)).toBe([
+      '演示范围 — 这次问答演示要覆盖哪一层？',
+      '回答：前端交互 (Recommended)',
+      '',
+      '还有什么补充要求？（可跳过）',
+      '回答：补充一点、再补充一点、自定义说明',
+    ].join('\n'))
+  })
+
+  it('marks a skipped question and a fully skipped batch with 已跳过', () => {
+    const partial = lateAnswerOf(payload({
+      ...reply,
+      answers: [{ id: 'scope', selected: ['后端接口'] }, { id: 'notes', selected: [], custom: '   ' }],
+    }))
+    expect(partial).not.toBeNull()
+    if (partial === null) throw new Error('Expected a late answer')
+    expect(lateAnswerValues(partial, 'notes')).toEqual([])
+    expect(lateAnswerRows(partial).map(row => row.answers)).toEqual([['后端接口'], []])
+    expect(lateAnswerSummary(partial, zh)).toBe('后端接口、已跳过')
+    expect(lateAnswerClipboardText(partial, zh)).toContain('还有什么补充要求？（可跳过）\n已跳过')
+
+    const allSkipped = lateAnswerOf(payload({ ...reply, answers: [{ id: 'scope', selected: [] }, { id: 'notes', selected: [] }] }))
+    if (allSkipped === null) throw new Error('Expected a late answer')
+    expect(lateAnswerSummary(allSkipped, zh)).toBe('已跳过')
+  })
+
+  it('drops malformed question and answer entries without losing the rest', () => {
+    const data = lateAnswerOf(payload({
+      kind: 'answer_to_pending_question',
+      callId: 'call-ask',
+      questions: [{ id: 'a', question: 'A' }, { question: 'missing id' }, 'not a record', { id: 'b', question: 7 }],
+      answers: [{ id: 'a', selected: ['x', 3] }, { selected: ['y'] }, 'nope'],
+    }))
+    if (data === null) throw new Error('Expected a late answer')
+    expect(data.questions.map(question => question.id)).toEqual(['a'])
+    expect(data.answers).toEqual([{ id: 'a', selected: ['x'] }])
+    expect(lateAnswerValues(data, 'a')).toEqual(['x'])
+  })
+
+  it('keeps an option label the question never offered', () => {
+    const data = lateAnswerOf(payload({
+      kind: 'answer_to_pending_question',
+      callId: 'call-ask',
+      questions: [{ id: 'a', question: 'A', options: [{ label: '已知' }] }],
+      answers: [{ id: 'a', selected: ['手写的外部选项'] }],
+    }))
+    if (data === null) throw new Error('Expected a late answer')
+    expect(lateAnswerValues(data, 'a')).toEqual(['手写的外部选项'])
+    expect(lateAnswerSummary(data, zh)).toBe('手写的外部选项')
+  })
+
+  it('reads only its own payload kind and keeps raw text when the payload is unreadable', () => {
+    expect(lateAnswerOf('请继续')).toBeNull()
+    expect(lateAnswerOf(payload({ kind: 'other', callId: 'call-ask' }))).toBeNull()
+    expect(lateAnswerOf('{"kind":"answer_to_pending_question", oops')).toBeNull()
+    const bare = '{ "kind": "answer_to_pending_question", "callId": "call-ask", "questions": "nope", "answers": 4, "note": "正文" }'
+    const data = lateAnswerOf(bare)
+    if (data === null) throw new Error('Expected a late answer')
+    expect(data.questions).toEqual([])
+    expect(data.answers).toEqual([])
+    expect(lateAnswerSummary(data, zh)).toBe('')
+    // Nothing readable to copy from the pairs, so the model-facing text is the fallback.
+    expect(lateAnswerClipboardText(data, zh)).toBe(bare)
+  })
+})
+
+describe('ask_user_question row model', () => {
+  const args = {
+    questions: [
+      { id: 'scope', header: '演示范围', question: '这次问答演示要覆盖哪一层？', options: [{ label: '前端交互 (Recommended)' }, { label: '后端接口' }] },
+      { id: 'notes', question: '还有什么补充要求？（可跳过）' },
+    ],
+  }
+  const reply = lateAnswerOf(JSON.stringify({
+    kind: 'answer_to_pending_question',
+    callId: 'call-ask',
+    questions: args.questions,
+    answers: [{ id: 'scope', selected: ['前端交互 (Recommended)'] }, { id: 'notes', selected: [] }],
+  }))
+
+  it('reports waiting progress and the question list while the call is pending', () => {
+    const model = askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }, zh)
+    expect(model).toMatchObject({ title: '提问', summary: '0 / 2 · 等待回答' })
+    expect(model?.record).toMatchObject({ waiting: true, items: [{ id: 'scope' }, { id: 'notes' }] })
+    expect(model?.record?.items.every(item => item.answers.length === 0)).toBe(true)
+  })
+
+  it('settles the row with the late answer and pairs the skipped question', () => {
+    const model = askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false, reply: reply ?? undefined }, zh)
+    expect(model).toMatchObject({ title: '提问', summary: '1 / 2 · 已回答' })
+    expect(model?.record).toMatchObject({
+      waiting: false,
+      items: [
+        { id: 'scope', answers: ['前端交互 (Recommended)'] },
+        { id: 'notes', answers: [] },
+      ],
+    })
+  })
+
+  it('answers from the result when the call recorded its own batch', () => {
+    const model = askQuestionRowModel({
+      name: 'ask_user_question',
+      args,
+      details: { status: 'answered', questions: args.questions, answers: [{ id: 'scope', selected: ['后端接口'] }, { id: 'notes', selected: [], custom: '补充' }] },
+      failed: false,
+    }, zh)
+    expect(model?.summary).toBe('2 / 2 · 已回答')
+    expect(model?.record?.items.map(item => item.answers)).toEqual([['后端接口'], ['补充']])
+  })
+
+  it('falls back to the answered count when pairing the batch would be ambiguous', () => {
+    const mismatched = askQuestionRowModel({
+      name: 'ask_user_question',
+      args,
+      details: { status: 'pending', questions: args.questions },
+      failed: false,
+      reply: lateAnswerOf(JSON.stringify({
+        kind: 'answer_to_pending_question',
+        callId: 'call-ask',
+        questions: [args.questions[0]],
+        answers: [{ id: 'scope', selected: ['后端接口'] }],
+      })) ?? undefined,
+    }, zh)
+    expect(mismatched).toMatchObject({ summary: '1 / 1 · 已回答', record: null })
+
+    const duplicated = askQuestionRowModel({
+      name: 'ask_user_question',
+      args,
+      details: { status: 'answered', questions: args.questions, answers: [{ id: 'scope', selected: [] }, { id: 'scope', selected: ['后端接口'] }] },
+      failed: false,
+    }, zh)
+    expect(duplicated).toMatchObject({ summary: '1 / 2 · 已回答', record: null })
+  })
+
+  it('keeps the count summary when the call records answers but no readable questions', () => {
+    const model = askQuestionRowModel({
+      name: 'ask_user_question',
+      args: { questions: [{ id: 'scope', question: 7 }] },
+      details: { status: 'answered', answers: [{ id: 'scope', selected: ['后端接口'] }] },
+      failed: false,
+    }, zh)
+    expect(model).toMatchObject({ summary: '1 / 1 · 已回答', record: null })
+  })
+
+  it('reads the questions from the result when the arguments lost them', () => {
+    const model = askQuestionRowModel({ name: 'ask_user_question', args: {}, details: { status: 'pending', questions: args.questions }, failed: false, reply: reply ?? undefined }, zh)
+    expect(model?.record?.items).toHaveLength(2)
+    expect(model?.summary).toBe('1 / 2 · 已回答')
+  })
+
+  it('names the failure and ignores every other tool', () => {
+    expect(askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: true }, zh))
+      .toEqual({ title: '提问', summary: '提问失败', record: null })
+    expect(askQuestionRowModel({ name: 'bash', args, details: undefined, failed: false }, zh)).toBeNull()
+    expect(askQuestionRowModel({ name: 'request_user_input', args, details: { status: 'pending' }, failed: false }, zh))
+      .toMatchObject({ title: '提问', summary: '0 / 2 · 等待回答' })
+  })
+
+  it('reads the projected interaction state: waiting, continued, closed, cancelled', () => {
+    const base = { name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }
+    // The live call still waits for its answer.
+    expect(askQuestionRowModel({ ...base, status: 'pending' }, zh))
+      .toMatchObject({ summary: '0 / 2 · 等待回答', record: { waiting: true } })
+    // Continued: the agent moved on but the row still takes an answer (DSH `ask.pending`).
+    expect(askQuestionRowModel({ ...base, status: 'continued' }, zh)).toMatchObject({
+      summary: '已继续工作，仍可回答',
+      record: { waiting: true, verdict: '等待中的问题仍可在输入框中回答' },
+    })
+    // Closed: the question expired without an answer (DSH `ask.closed`).
+    expect(askQuestionRowModel({ ...base, status: 'expired' }, zh)).toMatchObject({
+      summary: '已结束',
+      record: { waiting: true, verdict: '该问题已结束，结果见下方对话' },
+    })
+    // Cancelled: the user gave up the whole set (DSH `ASK_CANCELLED`).
+    expect(askQuestionRowModel({ ...base, status: 'cancelled' }, zh)).toMatchObject({
+      summary: '已取消',
+      record: { waiting: true, verdict: '本轮已取消，未提交回答' },
+    })
+    // Answered settles regardless of the result text still reading as pending.
+    expect(askQuestionRowModel({ ...base, status: 'answered' }, zh)).toMatchObject({ summary: '已回答', record: null })
+    // Without the projected list the row keeps its result-only reading.
+    expect(askQuestionRowModel(base, zh)).toMatchObject({ summary: '0 / 2 · 等待回答' })
+  })
+})
+
+describe('dismissed question payloads', () => {
+  it('recognizes only its own kind and keeps the model-facing text', () => {
+    const payload = JSON.stringify({ kind: 'dismissed_pending_question', callId: 'call-ask', questions: [], instruction: 'Do not ask again.' })
+    expect(dismissedQuestionOf(payload)).toMatchObject({ callId: 'call-ask', text: payload })
+    expect(dismissedQuestionOf('普通消息')).toBeNull()
+    expect(dismissedQuestionOf(JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-ask' }))).toBeNull()
+    expect(dismissedQuestionOf('{"kind":"dismissed_pending_question", oops')).toBeNull()
+  })
+})
+
+describe('subagent row model', () => {
+  it('renders the started receipt with the label and child conversation', () => {
+    const model = subagentRowModel({
+      name: 'subagent',
+      args: { task: '归纳子智能体一期机制', label: '机制归纳' },
+      details: { conversationId: '345', status: 'completed', label: '机制归纳' },
+      failed: false,
+    }, zh)
+    expect(model).toEqual({
+      title: '子智能体',
+      summary: '已开始子智能体 · 机制归纳 · 345',
+      childId: '345',
+      task: '归纳子智能体一期机制',
+    })
+  })
+
+  it('keeps the child id when the label is missing and ignores every other tool', () => {
+    expect(subagentRowModel({
+      name: 'subagent',
+      args: { task: '复核清单' },
+      details: { conversationId: '77', status: 'running' },
+      failed: false,
+    }, zh)).toMatchObject({ summary: '已开始子智能体 · 77', childId: '77' })
+    expect(subagentRowModel({
+      name: 'subagent', args: {}, details: undefined, failed: true,
+    }, zh)).toMatchObject({ title: '子智能体', summary: '已开始子智能体' })
+    expect(subagentRowModel({ name: 'bash', args: {}, details: undefined, failed: false }, zh)).toBeNull()
+  })
+})
+
+describe('plan preview model', () => {
+  const review = (id: string, detail: string, createdAt: number, status: InteractionRequest['status'] = 'pending'): InteractionRequest =>
+    ({ id, kind: 'plan-review', status, detail, approveLabel: '同意执行', createdAt })
+
+  it('reads the newest plan review, including superseded ones, and its title', () => {
+    const interactions: InteractionRequest[] = [
+      review('call-a', '# 第一版\n\n步骤一', 10, 'continued'),
+      review('call-b', '# 第二版\n\n步骤二', 20),
+      { id: 'call-q', kind: 'question', status: 'pending', questions: [], createdAt: 30 },
+    ]
+    expect(latestPlan(interactions, [])).toEqual({ markdown: '# 第二版\n\n步骤二', title: '第二版', key: 'call-b', pending: true })
+  })
+
+  it('falls back to the last exit_plan_mode call still in the transcript', () => {
+    const messages: ChatMessage[] = [
+      assistant('a-1', [{ type: 'toolCall', id: 'call-old', name: 'exit_plan_mode', arguments: { plan: '# 旧计划' } }]),
+      assistant('a-2', [{ type: 'toolCall', id: 'call-new', name: 'exit_plan_mode', arguments: { plan: '# 新计划\n\n步骤' } }]),
+      assistant('a-3', [{ type: 'text', text: '已提交' }]),
+    ]
+    expect(latestPlan(undefined, messages)).toEqual({ markdown: '# 新计划\n\n步骤', title: '新计划', key: 'call-new', pending: false })
+  })
+
+  it('ignores empty plans, other tools, and missing sources', () => {
+    expect(latestPlan([review('call-empty', '   ', 10)], [])).toBeUndefined()
+    expect(latestPlan([], [assistant('a-1', [{ type: 'toolCall', id: 'call-bash', name: 'bash', arguments: { plan: '# 不是计划' } }])])).toBeUndefined()
+    expect(latestPlan(undefined, [])).toBeUndefined()
+    expect(latestPlan([review('call-no-heading', '没有标题', 1)], [])).toEqual({ markdown: '没有标题', key: 'call-no-heading', pending: true })
+  })
+
+  it('derives the title from the first level-1 heading only', () => {
+    expect(planTitle('前言\n\n# 标题 A\n\n## 小节')).toBe('标题 A')
+    expect(planTitle('## 只有二级标题')).toBeUndefined()
+    expect(planTitle('#   ')).toBeUndefined()
+  })
+})
+
+describe('conversation stats', () => {
+  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+
+  it('sums usage once per turn and prices the window from the latest turn', () => {
+    const messages: ChatMessage[] = [
+      { ...user('user-1', 'request-1'), runId: 'run-1' },
+      assistant('assistant-1', [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: {} }], { runId: 'run-1' }),
+      { id: 'tool-1', role: 'tool', blocks: [{ type: 'text', text: 'ok' }], timestamp: 300, runId: 'run-1',
+        toolCallId: 'call-1', toolName: 'bash' },
+      assistant('assistant-2', [{ type: 'text', text: 'done' }], { runId: 'run-1',
+        usage: { input: 100, output: 40, cacheRead: 600, cacheWrite: 20, totalTokens: 760, cost } }),
+      { ...user('user-2', 'request-2'), runId: 'run-2' },
+      assistant('assistant-3', [{ type: 'text', text: 'again' }], { runId: 'run-2',
+        usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost } }),
+    ]
+
+    expect(conversationStats(messages)).toEqual({
+      runCount: 2,
+      stepCount: 4,
+      input: 110,
+      output: 45,
+      cacheRead: 600,
+      cacheWrite: 20,
+      totalTokens: 775,
+      contextTokens: 15,
+    })
+    expect(conversationStats([])).toMatchObject({ runCount: 0, totalTokens: 0, contextTokens: 0 })
   })
 })

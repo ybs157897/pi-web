@@ -21,9 +21,103 @@
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
+.switches {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.toggle {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toggle > svg {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.toggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.toggle[aria-pressed='true'] {
+  background: var(--dsw-alias-interactive-bg-active);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.toggle[aria-pressed='true']:hover {
+  background: var(--dsw-alias-interactive-bg-hover-accent);
+}
+
+.toggle[aria-pressed='true'] > svg {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.toggle:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+
+/* One bar segment per visible record: the run owns a span, the record colors it. */
+.timeline {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 3px;
+  height: 8px;
+  margin: 9px 0 3px;
+}
+
+.timelineRun {
+  display: flex;
+  min-width: 0;
+  flex-basis: 0;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.segment {
+  min-width: 3px;
+  flex-basis: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.segment[data-kind='user'] { background: var(--dsw-alias-label-caption); }
+.segment[data-kind='assistant'] { background: var(--dsw-alias-state-business-primary); }
+.segment[data-kind='tool'] { background: var(--dsw-alias-state-warn-primary); }
+.segment[data-kind='system'] { background: var(--dsw-alias-border-l3); }
+
+.segment:hover { opacity: .72; }
+
+.segment:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+
 .search {
   display: flex;
   width: min(360px, 70%);
+  min-width: 0;
   height: 30px;
   align-items: center;
   gap: 7px;
@@ -72,6 +166,38 @@
   scroll-margin-block: 24px;
 }
 
+/* A turn opens with its own marker, so the seam between turns is visible while scanning. */
+.item[data-run-start] {
+  margin-top: 4px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.item[data-focused] {
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.runGutter {
+  display: inline-flex;
+  min-width: 52px;
+  flex: none;
+  align-items: center;
+}
+
+.runLabel {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.chip {
+  flex: none;
+}
+
 .row {
   display: flex;
   min-width: 0;
@@ -113,13 +239,10 @@
   cursor: pointer;
 }
 
-.jump:hover .title {
-  color: var(--dsw-alias-link);
-}
-
-.title {
+.tool {
   flex: none;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
 }
 
 .preview {
@@ -285,6 +408,7 @@
   .root { padding-top: 10px; }
   .toolbar { gap: 8px; }
   .search { width: 100%; }
+  .switches { gap: 0; }
+  .runGutter { display: none; }
   .jump { gap: 6px; font-size: 12px; }
-  .title { display: none; }
 }

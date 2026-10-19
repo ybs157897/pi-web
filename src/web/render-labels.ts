@@ -4,6 +4,21 @@ import type {
 
 export type Translate = (chinese: string, english: string) => string
 
+/** Compact token count matching DSH: 950, 22K, 1.2M. */
+export function formatTokens(value: number): string {
+  const scaled = (candidate: number): string => String(candidate >= 100 ? Math.round(candidate) : Math.round(candidate * 10) / 10)
+  if (value < 1_000) return String(value)
+  if (value < 1_000_000) return `${scaled(value / 1_000)}K`
+  return `${scaled(value / 1_000_000)}M`
+}
+
+/** Cache hit share that never rounds a partial hit up to a full one. */
+export function cacheHitPercent(cacheRead: number, billedInput: number): number | undefined {
+  if (billedInput <= 0) return undefined
+  if (cacheRead >= billedInput) return 100
+  return Math.min(99, Math.round(cacheRead / billedInput * 100))
+}
+
 export function markdownLabels(t: Translate): MarkdownLabels {
   return {
     code: {

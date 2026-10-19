@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   Button, IconClockOutlineRegular, IconEditOutlineRegular, IconPlayOutlineRegular,
-  IconPlusOutlineRegular, IconTrashOutlineRegular, Modal, Switch,
+  IconPlusOutlineRegular, IconSearchOutlineRegular, IconTrashOutlineRegular, Input, Modal, Switch,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Automation, CreateAutomationInput, UpdateAutomationInput } from '../shared/types.ts'
 import { api } from './api.ts'
@@ -15,6 +15,16 @@ interface AutomationsPageProps {
   onOpenConversation: (id: string) => void
 }
 
+/** Status tabs. DSH also tracks finished runs; here only the enabled flag exists, so
+ * 「已结束」 maps to a paused automation (`!enabled`) until a real end state lands. */
+type StatusFilter = 'all' | 'enabled' | 'finished'
+
+const STATUS_FILTERS: readonly { value: StatusFilter; zh: string; en: string }[] = [
+  { value: 'all', zh: '全部', en: 'All' },
+  { value: 'enabled', zh: '已开启', en: 'Enabled' },
+  { value: 'finished', zh: '已结束', en: 'Finished' },
+]
+
 /** Manage recurring tasks and open each run in its durable conversation. */
 export default function AutomationsPage({ workspaceId, presetId, onOpenConversation }: AutomationsPageProps) {
   const { t } = useUiPreferences()
@@ -26,6 +36,8 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
   const [editing, setEditing] = useState<Automation | null>(null)
   const [deleting, setDeleting] = useState<Automation | null>(null)
   const [notice, setNotice] = useState('')
+  const [status, setStatus] = useState<StatusFilter>('all')
+  const [query, setQuery] = useState('')
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -107,21 +119,43 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
     } finally { setBusyId(null) }
   }
 
+  // 「已结束」 reads the paused flag, since automations have no separate end state yet.
+  const visible = useMemo(() => {
+    const byStatus = status === 'all' ? items : items.filter(item => status === 'enabled' ? item.enabled : !item.enabled)
+    const needle = query.trim().toLocaleLowerCase()
+    if (needle === '') return byStatus
+    return byStatus.filter(item => `${item.name}\n${item.prompt}`.toLocaleLowerCase().includes(needle))
+  }, [items, query, status])
+
   return <main className={css.page}>
     <header className={css.pageHead}>
       <div><h1>{t('自动化任务', 'Automations')}</h1><p>{t('按计划运行提示词，并在会话中查看每次结果', 'Run prompts on a schedule and review each result in its conversation')}</p></div>
       <Button variant="primary" size="sm" icon={<IconPlusOutlineRegular size={14} />}
         onClick={() => { setEditing(null); setDialogOpen(true) }}>{t('新建任务', 'New automation')}</Button>
     </header>
+    <section className={css.filters} aria-label={t('筛选自动化任务', 'Filter automations')}>
+      <div className={css.statusTabs} role="group" aria-label={t('按状态筛选', 'Filter by status')}>
+        {STATUS_FILTERS.map(option => <button type="button" key={option.value} aria-pressed={status === option.value}
+          data-selected={status === option.value || undefined}
+          onClick={() => { setStatus(option.value) }}>{t(option.zh, option.en)}</button>)}
+      </div>
+      <Input className={css.search} icon={<IconSearchOutlineRegular size={15} />} value={query}
+        onChange={event => { setQuery(event.currentTarget.value) }}
+        placeholder={t('搜索自动化任务', 'Search automations')} aria-label={t('搜索自动化任务', 'Search automations')} />
+    </section>
     {notice !== '' && <p className={css.notice} role="status">{notice}</p>}
     {error !== '' && <div className={css.failure} role="alert"><span>{error}</span><Button variant="outline" size="sm" onClick={() => { setLoading(true); void refresh() }}>{t('重试', 'Retry')}</Button></div>}
     {loading && items.length === 0 && <div className={css.skeleton} aria-label={t('正在读取任务', 'Loading tasks')}><i /><i /><i /></div>}
     {!loading && error === '' && items.length === 0 && <div className={css.empty}>
       <IconClockOutlineRegular size={24} /><p>{t('还没有自动化任务', 'No automations yet')}</p>
       <span>{t('新建任务后，可以立即运行或按固定间隔执行', 'Create a task to run a prompt now or on a repeating interval')}</span>
+      <Button variant="outline" className={css.emptyAction}
+        onClick={() => { setEditing(null); setDialogOpen(true) }}>{t('新建自动化任务', 'Create automation')}</Button>
     </div>}
+    {!loading && error === '' && items.length > 0 && visible.length === 0
+      && <p className={css.noMatch}>{t('没有匹配的自动化任务', 'No automations match')}</p>}
     <section className={css.list} aria-label={t('自动化任务列表', 'Automation list')}>
-      {items.map(automation => <article className={css.card} key={automation.id}>
+      {visible.map(automation => <article className={css.card} key={automation.id}>
         <div className={css.cardHead}>
           <div className={css.cardTitle}><h2>{automation.name}</h2><Schedule automation={automation} /></div>
           <div className={css.actions}>

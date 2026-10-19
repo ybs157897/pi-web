@@ -22,4 +22,4 @@ The runtime imports existing Pi configuration read-only and keeps project-specif
 
 ## Stop semantics
 
-The public stop operation uses Pi's native abort, which also withdraws queued input. The UI names this effect. A stop operation that retains the inbox requires a separately validated runtime implementation.
+The public stop operation uses Pi's native abort for the running turn and preserves queued input. The UI names this effect, and the runtime test asserts the remaining queue survives stop.

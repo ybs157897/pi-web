@@ -1,8 +1,8 @@
 import type {
-  AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, Automation, ConversationDetail, ConversationSummary,
-  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, EditQueueInput, FeedbackInput,
+  AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
+  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GoalUpdateRequest,
   ModelCatalog, PluginSummary, ProviderConfigSummary, ProviderInput, ProviderTestResult,
-  RenameWorkspaceInput, SubmitInput, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
+  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, UpdatePluginInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 
@@ -45,6 +45,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const api = {
+  health(): Promise<{ ok: boolean; demo: boolean; version: string; user: string }> {
+    return request('/api/health')
+  },
+  listDirectories(path?: string): Promise<DirectoryListing> {
+    const query = path === undefined ? '' : `?${new URLSearchParams({ path }).toString()}`
+    return request(`/api/directories${query}`)
+  },
+  createDirectory(path: string, name: string): Promise<{ ok: boolean }> {
+    return request('/api/directories', { method: 'POST', body: JSON.stringify({ path, name }) })
+  },
+  async pickWorkspaceDirectory(): Promise<string | null> {
+    const result = await request<{ path: string | null }>('/api/workspaces/pick', { method: 'POST' })
+    return result.path
+  },
+  deleteWorkspace(id: string): Promise<{ ok: boolean }> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
   async listConversations(): Promise<ConversationSummary[]> {
     const result = await request<{ conversations: ConversationSummary[] }>('/api/conversations')
     return result.conversations
@@ -68,6 +85,54 @@ export const api = {
   stop(id: string): Promise<{ ok: boolean }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/stop`, { method: 'POST' })
   },
+  /** Answer one pending question card; the response carries the projected detail after settlement. */
+  answerInteraction(id: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail> {
+    return request(`/api/conversations/${encodeURIComponent(id)}/interactions/${encodeURIComponent(callId)}/answer`, {
+      method: 'POST', body: JSON.stringify({ answers }),
+    })
+  },
+  /** Dismiss a pending question set; the response carries the detail with the row settled as cancelled. */
+  cancelInteraction(id: string, callId: string): Promise<ConversationDetail> {
+    return request(`/api/conversations/${encodeURIComponent(id)}/interactions/${encodeURIComponent(callId)}/cancel`, {
+      method: 'POST',
+    })
+  },
+  compact(id: string): Promise<{ ok: boolean }> {
+    return request(`/api/conversations/${encodeURIComponent(id)}/compact`, { method: 'POST' })
+  },
+  updateGoal(id: string, input: GoalUpdateRequest): Promise<ConversationDetail> {
+    return request(`/api/conversations/${encodeURIComponent(id)}/goal`, { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** Turn plan mode on or off; the response is the projected conversation after the switch. */
+  setPlan(id: string, active: boolean): Promise<ConversationDetail> {
+    return request(`/api/conversations/${encodeURIComponent(id)}/plan`, { method: 'POST', body: JSON.stringify({ active }) })
+  },
+  /** The agent team of one conversation; the panel re-reads it while a member is running. */
+  async getTeam(id: string): Promise<TeamView> {
+    const result = await request<{ team: TeamView }>(`/api/conversations/${encodeURIComponent(id)}/team`)
+    return result.team
+  },
+  /** Direct subagents of one conversation, oldest first. */
+  async listChildren(id: string): Promise<SubagentSummary[]> {
+    const result = await request<{ subagents: SubagentSummary[] }>(`/api/conversations/${encodeURIComponent(id)}/children`)
+    return result.subagents
+  },
+  /** Send one follow-up message to a subagent; the response is its refreshed child list. */
+  async childMessage(id: string, childId: string, input: ChildMessageInput): Promise<SubagentSummary[]> {
+    const result = await request<{ subagents: SubagentSummary[] }>(
+      `/api/conversations/${encodeURIComponent(id)}/children/${encodeURIComponent(childId)}/messages`,
+      { method: 'POST', body: JSON.stringify(input) },
+    )
+    return result.subagents
+  },
+  /** Stop a running subagent; the response is its refreshed child list. */
+  async childStop(id: string, childId: string): Promise<SubagentSummary[]> {
+    const result = await request<{ subagents: SubagentSummary[] }>(
+      `/api/conversations/${encodeURIComponent(id)}/children/${encodeURIComponent(childId)}/stop`,
+      { method: 'POST' },
+    )
+    return result.subagents
+  },
   removeQueued(id: string, submissionId: string): Promise<{ ok: boolean }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/queue/${encodeURIComponent(submissionId)}`, {
       method: 'DELETE',
@@ -89,6 +154,10 @@ export const api = {
   },
   updateSettings(patch: UpdateAppSettingsInput): Promise<AppSettings> {
     return request('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+  /** Open the local application configuration file with the system's default program. */
+  openConfigFile(): Promise<{ ok: boolean }> {
+    return request('/api/settings/open-config', { method: 'POST' })
   },
   listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
     return request('/api/workspaces')
@@ -152,6 +221,10 @@ export const api = {
   saveFeedback(id: string, input: FeedbackInput): Promise<{ ok: boolean }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify(input) })
   },
+  /** Send operator feedback text; the server appends it to the application state. */
+  sendFeedback(input: { text: string }): Promise<{ ok: boolean }> {
+    return request('/api/feedback', { method: 'POST', body: JSON.stringify(input) })
+  },
   retry(id: string, input: { entryId: string; requestId: string }): Promise<{ conversationId: string; submissionId: string }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/retry`, { method: 'POST', body: JSON.stringify(input) })
   },
@@ -167,6 +240,10 @@ export const api = {
   },
   testProvider(id: string): Promise<ProviderTestResult> {
     return request(`/api/providers/${encodeURIComponent(id)}/test`, { method: 'POST' })
+  },
+  async discoverProvider(id: string): Promise<Array<{ id: string; name: string }>> {
+    const result = await request<{ models: Array<{ id: string; name: string }> }>(`/api/providers/${encodeURIComponent(id)}/discover`, { method: 'POST' })
+    return result.models
   },
   watch(id: string, listener: (detail: ConversationDetail) => void, onState: (state: 'connecting' | 'open' | 'error') => void): EventSource {
     const source = new EventSource(`/api/conversations/${encodeURIComponent(id)}/events`)
