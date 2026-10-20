@@ -664,6 +664,11 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
 
   if (options.staticRoot) {
     const staticRoot = relative(process.cwd(), options.staticRoot) || '.'
+    // Root-level browser assets are not hashed into /assets; serve them directly
+    // so production keeps the favicon and touch icon.
+    for (const file of ['favicon.ico', 'favicon.svg', 'favicon-32x32.png', 'apple-touch-icon.png']) {
+      app.get(`/${file}`, serveStatic({ root: staticRoot, path: file }))
+    }
     app.get('/assets/*', serveStatic({ root: staticRoot }))
     app.get('*', async (c, next) => {
       if (c.req.path === '/api' || c.req.path.startsWith('/api/')) return c.json({ error: 'Not found', code: 'not_found' }, 404)

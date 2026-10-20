@@ -418,6 +418,21 @@ describe('HTTP API', () => {
     await reader.cancel()
   })
 
+  it('serves root favicon assets in production static mode', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-static-'))
+    try {
+      await writeFile(join(root, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+      const app = createApp(new FakeRuntime(), { demo: true, staticRoot: root })
+      liveApps.push(app)
+      const response = await app.request('/favicon.svg')
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('image/svg+xml')
+      expect(await response.text()).toContain('<svg')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('answers a pending question, rejects concrete validation failures, and stays idempotent', async () => {
     const { app } = createTestApp()
     const answer = (callId: string, answers: unknown) => app.request(`/api/conversations/conv-1/interactions/${callId}/answer`, {

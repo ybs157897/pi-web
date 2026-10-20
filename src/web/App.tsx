@@ -259,9 +259,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const selectedSummary = conversations.find(item => item.id === selectedId)
   const conversationReady = detail?.conversation.id === selectedId
   const activeConversation = conversationReady ? detail : null
-  const selectedModel = activeConversation?.conversation.model ?? newModel ?? settings.defaultModel ?? catalog?.defaultModel
-  const selectedModelOption = selectedModel === undefined ? undefined
-    : catalog?.models.find(model => model.provider === selectedModel.provider && model.modelId === selectedModel.modelId)
+  const requestedModel = activeConversation?.conversation.model ?? newModel ?? settings.defaultModel
+  const requestedModelOption = requestedModel === undefined ? undefined
+    : catalog?.models.find(model => model.provider === requestedModel.provider && model.modelId === requestedModel.modelId
+      && (activeConversation !== null || model.available))
+  // A new conversation must never display a stale default: the server catalog
+  // already resolved it against the live directory, so use that when the
+  // stored/default reference is missing or not selectable.
+  const defaultModelOption = catalog?.defaultModel === undefined ? undefined
+    : catalog.models.find(model => model.provider === catalog.defaultModel!.provider && model.modelId === catalog.defaultModel!.modelId)
+  const fallbackModelOption = defaultModelOption?.available === true
+    ? defaultModelOption
+    : catalog?.models.find(model => model.available) ?? defaultModelOption
+  const selectedModelOption = requestedModelOption ?? (activeConversation === null ? fallbackModelOption : undefined)
+  const selectedModel = selectedModelOption === undefined
+    ? requestedModel
+    : { provider: selectedModelOption.provider, modelId: selectedModelOption.modelId }
   const thinkingLevel = clampThinkingLevel(activeConversation?.conversation.thinkingLevel ?? newThinking, selectedModelOption?.thinkingLevels)
   const inferredConversationWorkspace = activeConversation === null ? undefined
     : workspaces.find(workspace => workspace.path === activeConversation.conversation.cwd)?.id

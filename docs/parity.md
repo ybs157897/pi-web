@@ -82,6 +82,8 @@
 - 2026-10-20：全局配置目录批次：默认 `~/.pi-web`，设置页直接写全局 `models.json`/`auth.json`，移除 `providers.json`；旧 `~/.pi/agent` 与项目 `.data` 一次性迁移；工作区技能来源改为 `.pi-web/skills`。详见文末「全局配置目录（2026-10-20）」。
 - 2026-10-20：工作区浏览批次：「浏览文件」改为右侧 Inspector，中间正文保留；工作区菜单改用整行矩形容器锚定，修复省略号隐藏后菜单漂到左上角；目录切换滚动复位。详见文末「工作区浏览与菜单锚点（2026-10-20）」。
 - 2026-10-20：推理档位删除持久化：设置页不再把 null-pinned 档位渲染成行；档位下拉使用完整 7 档，删除后可重新添加。详见文末「推理档位删除持久化（2026-10-20）」。
+- 2026-10-20：新会话默认模型：目录校验 + 可用模型回退，失效的 `deepseek-flash` 不再原样显示；显式选择不存在的模型仍报错。详见文末「新会话默认模型（2026-10-20）」。
+- 2026-10-20：补齐 favicon（SVG/PNG/ICO/Apple touch）并让生产模式正确服务根级图标。详见文末「Favicon（2026-10-20）」。
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
@@ -499,3 +501,37 @@ DSH 客户端在 `settings/document-updated`、`credentials/*-updated`、`llm/ad
 - 点“添加档位”能重新加入 XHigh，证明下拉使用完整档位表。
 - 真实 opencode-go DeepSeek 编辑器显示 Off/Low/High/Max，不再出现 minimal/medium/xhigh 的空行。
 - 证据 `artifacts/reasoning-delete/after-delete.png`、`opencode-levels.png`。
+
+## 新会话默认模型（2026-10-20）
+
+问题：打开新会话时输入框固定显示 `deepseek-flash`（一个内置但未配置凭据的模型），而不是当前配置里可用的模型；用户反馈“这个并不存在”。
+
+DSH 对照：
+
+- Host 的 `session/modelCatalog`（`packages/api/session-controller/src/catalog.ts`）返回 provider groups 和 deployment `default`；客户端把当前选择标记为 `routable`（`packages/client/ui-model-selection/src/client/directory.ts:180-186`）。
+- 选择器只有在 `choices` 里能找到当前 provider/model 时才显示模型名，否则显示 `trigger.fallback`（“选择模型”），不会把原始 model id 当成模型名（`ModelSelect.tsx:420-427`）。
+
+pi-web 修复：
+
+- `runtime.catalog()`：把 `settings.defaultModel` 与 Pi 全局默认一起校验。优先选择目录中存在且 `available` 的候选，其次第一个可用模型，再退到存在但暂不可用的默认；只有“有效默认已不在目录/已不被白名单允许”时才把修正写回 app-state，凭据暂时缺失的有效默认不会被覆盖。
+- `buildAgentChange()`：默认模型在目录中不存在（或没有默认）时回退到 `firstAvailableAllowedModel()`（优先已配置凭据的 provider），显式选择的模型或 Preset 模型仍然报 `MODEL_UNAVAILABLE`。
+- 前端 `selectedModel`：新会话只接受目录中 `available` 的请求默认；失效时使用 catalog 已验证的 `defaultModel`，再退到第一个可用模型。已有会话保留自身选择，不会被静默改标签。
+- 新增 `tests/models.test.ts` 用例：失效默认被替换为目录内模型并用于新建会话；显式请求不存在的模型仍被拒绝。
+
+验收（4317）：
+
+- 临时把 `~/.pi-web/settings.json` 的默认改为 `deepseek/deepseek-flash`（内置目录存在但 `available:false`）。
+- `/api/models` 返回 `defaultModel = opencode-go/deepseek-v4.1-flash`，且该模型 `available:true`。
+- 打开“新会话”，输入框显示 `DeepSeek V4.1 Flash`；模型菜单的选中项位于 `OpenCode Go` 分组，不再是原始 `deepseek-flash`。
+- 恢复原 `settings.json` 后默认回到 `opencode-go/deepseek-v4.1-flash`，app-state 未残留测试默认。
+- 证据 `artifacts/default-model/new-conversation.png`。
+
+## Favicon（2026-10-20）
+
+浏览器标签页此前没有图标，只显示默认文档图标。新增：
+
+- `public/favicon.svg`：深灰圆角方块 + 白色 Georgia 衬线 `π`，与侧栏品牌标记一致；同时生成 `favicon-32x32.png`、`favicon.ico` 和 `apple-touch-icon.png`。
+- `index.html` 声明 ICO / SVG / 32px PNG / Apple touch icon。
+- 生产模式在 SPA fallback 之前显式服务这些根级文件（`src/server/app.ts`）；开发模式由 Vite 的 `public/` 提供。
+- 验证：开发 `GET /favicon.svg` 返回 `200 image/svg+xml`；生产构建 `dist/web` 含四个图标文件，`/favicon.svg`、`/favicon-32x32.png`、`/apple-touch-icon.png`、`/favicon.ico` 均返回 200 且 Content-Type 正确；`tests/http.test.ts` 覆盖静态根图标路由。
+- 门禁：`npm run typecheck`、`npx vitest run`（24 文件 281/281）、`npx vite build`。

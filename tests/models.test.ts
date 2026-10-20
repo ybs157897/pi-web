@@ -247,6 +247,30 @@ describe('provider reasoning levels', () => {
   })
 })
 
+describe('default model resolution', () => {
+  it('replaces a missing default with a selectable catalog model and uses it for a new conversation', async () => {
+    const { runtime } = await fixture({
+      models: WL_MODELS,
+      piSettings: { defaultProvider: 'ghost', defaultModel: 'ghost-model' },
+    })
+    const catalog = await runtime.catalog()
+    expect(catalog.defaultModel).toBeDefined()
+    expect(catalog.defaultModel).not.toEqual({ provider: 'ghost', modelId: 'ghost-model' })
+    expect(catalog.models.some(model => model.provider === catalog.defaultModel!.provider && model.modelId === catalog.defaultModel!.modelId)).toBe(true)
+
+    const created = await runtime.create({ title: 'Fallback default' })
+    const model = created.conversation.model
+    expect(model).toBeDefined()
+    expect(catalog.models.some(candidate => candidate.provider === model!.provider && candidate.modelId === model!.modelId)).toBe(true)
+  })
+
+  it('still refuses an explicitly requested model that does not exist', async () => {
+    const { runtime } = await fixture({ models: WL_MODELS, piSettings: { defaultProvider: 'ghost', defaultModel: 'ghost-model' } })
+    await expect(runtime.create({ model: { provider: 'ghost', modelId: 'ghost-model' } }))
+      .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+  })
+})
+
 describe('model allowlist in the runtime', () => {
   it('filters the catalog and corrects a default that fell outside the allowlist', async () => {
     const { runtime, dataDir } = await fixture({

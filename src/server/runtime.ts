@@ -867,6 +867,23 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
 
   /**
+   * The first allowed model on a provider that actually has credentials. A
+   * stale default must not be replaced by an arbitrary shipped model the user
+   * cannot call; fall back to the directory order only when no route is ready.
+   */
+  const firstAvailableAllowedModel = async (): Promise<UiModelRef | undefined> => {
+    for (const provider of modelRuntime.models.getProviders()) {
+      let configured = false
+      try { configured = await modelRuntime.models.checkAuth(provider.id) !== undefined }
+      catch { /* an unreadable credential just makes the route unavailable here */ }
+      if (!configured) continue
+      const candidate = provider.getModels().find(model => modelWithinAllowlist(modelAllowlist(), { provider: provider.id, modelId: model.id }))
+      if (candidate) return { provider: provider.id, modelId: candidate.id }
+    }
+    return firstAllowedModel()
+  }
+
+  /**
    * A run uses the model its conversation is bound to, so a conversation created
    * before the allowlist changed must not keep calling an out-of-scope model.
    */
@@ -878,10 +895,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     assertModelAllowed(model, '会话模型')
   }
 
-  const buildAgentChange = (workspaceId: string, accessMode: AccessMode, preset?: AgentPreset, overrides: {
+  const buildAgentChange = async (workspaceId: string, accessMode: AccessMode, preset?: AgentPreset, overrides: {
     model?: UiModelRef
     thinkingLevel?: ThinkingLevel
-  } = {}): AgentChange => {
+  } = {}): Promise<AgentChange> => {
     const workspace = workspaceFiles.workspace(workspaceId)
     const installed = registry.snapshot().installed()
     const installedByName = new Map(installed.map(extension => [extension.name, extension]))
@@ -922,12 +939,22 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       : null
     const requestedModel = overrides.model ?? preset?.model
     let model = requestedModel ?? state.settings.defaultModel ?? modelRuntime.defaultModel
-    if (model && !modelRuntime.models.getModel(model.provider, model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
+    if (model && !modelRuntime.models.getModel(model.provider, model.modelId)) {
+      // An explicit pick or preset must fail loudly; a stale stored default
+      // resolves to a model that actually exists instead of blocking a new
+      // conversation.
+      if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
+      model = await firstAvailableAllowedModel()
+      if (!model) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
+    } else if (!model) {
+      model = await firstAvailableAllowedModel()
+      if (!model) throw new RuntimeError('MODEL_UNAVAILABLE', '没有可用的模型')
+    }
     if (model && !modelWithinAllowlist(modelAllowlist(), model)) {
       // An explicit pick is refused; a stored default the allowlist no longer
       // covers only resolves to an allowed model instead of blocking the run.
       if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', `${overrides.model ? '所选模型' : 'Preset 模型'}不在模型白名单内`)
-      const fallback = firstAllowedModel()
+      const fallback = await firstAvailableAllowedModel()
       if (!fallback) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型不在模型白名单内')
       model = fallback
     }
@@ -980,7 +1007,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         const workspace = selectedWorkspace(metadata.workspaceId ?? undefined)
         const accessMode = metadata.accessMode ?? settings.defaultAccessMode
         const agent = await conversation.agent(CTX)
-        const change = buildAgentChange(workspace.id, accessMode, preset, {
+        const change = await buildAgentChange(workspace.id, accessMode, preset, {
           ...(agent.model ? { model: agent.model } : {}),
           ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
         })
@@ -1026,7 +1053,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (accessMode === 'workspaceWrite' && !await workspaceWriteSupported(workspace.path)) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
-    const agent = buildAgentChange(workspace.id, accessMode, preset, {
+    const agent = await buildAgentChange(workspace.id, accessMode, preset, {
       ...(input.model ? { model: input.model } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
@@ -1070,7 +1097,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (presetChanged) assertModelAllowed(preset?.model, 'Preset 模型')
       if (!presetChanged && !input.model) assertModelAllowed(currentAgent.model, '会话模型')
       if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
-      const change = buildAgentChange(workspace.id, accessMode, preset, {
+      const change = await buildAgentChange(workspace.id, accessMode, preset, {
         ...(explicitModel ? { model: explicitModel } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       })
@@ -1907,17 +1934,26 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const models = result.models.filter(model => modelWithinAllowlist(allowlist, model))
     const visibleProviders = new Set(models.map(model => model.provider))
     const providers = result.providers.filter(provider => visibleProviders.has(provider.id))
-    let defaultModel: UiModelRef | undefined = settings.defaultModel ?? result.defaultModel
-    if (defaultModel && !modelWithinAllowlist(allowlist, defaultModel)) {
-      const fallback = models.find(model => model.available) ?? models[0]
-      if (fallback) {
-        const corrected: UiModelRef = { provider: fallback.provider, modelId: fallback.modelId }
-        defaultModel = corrected
-        const stored = settings.defaultModel
-        if (stored?.provider !== corrected.provider || stored.modelId !== corrected.modelId) {
-          await appState.update(state => { state.settings.defaultModel = { ...corrected } })
-        }
-      }
+    const inCatalog = (model: UiModelRef): boolean =>
+      models.some(candidate => candidate.provider === model.provider && candidate.modelId === model.modelId)
+    const selectable = (model: UiModelRef): boolean =>
+      models.some(candidate => candidate.provider === model.provider && candidate.modelId === model.modelId && candidate.available)
+    const stored = settings.defaultModel
+    const effectiveDefault = stored ?? result.defaultModel
+    const requested = [stored, result.defaultModel].filter((model): model is UiModelRef => model !== undefined)
+    const available = models.filter(model => model.available)
+    const selected = requested.find(selectable)
+      ?? available[0]
+      ?? requested.find(inCatalog)
+      ?? models[0]
+    const defaultModel: UiModelRef | undefined = selected === undefined
+      ? undefined
+      : { provider: selected.provider, modelId: selected.modelId }
+    // Persist a default the catalog no longer contains (or the allowlist now
+    // hides); a valid but temporarily unconfigured default is left alone so it
+    // returns when its credential does.
+    if (defaultModel && effectiveDefault !== undefined && !inCatalog(effectiveDefault)) {
+      await appState.update(state => { state.settings.defaultModel = { ...defaultModel } })
     }
     return { ...result, models, providers, ...(defaultModel ? { defaultModel } : {}) }
   }
