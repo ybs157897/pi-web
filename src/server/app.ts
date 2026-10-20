@@ -5,7 +5,7 @@ import { userInfo } from 'node:os'
 import { z } from 'zod'
 import packageJson from '../../package.json' with { type: 'json' }
 import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
-import { COLLAPSE_TIMINGS, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
@@ -72,6 +72,7 @@ const goalSchema = z.object({
   blockedReason: z.string().trim().min(1).max(500).optional(),
 }).strict().refine(value => value.action !== 'create' || value.objective !== undefined, { message: 'create needs an objective' })
 const planSchema = z.object({ active: z.boolean() }).strict()
+const branchNameSchema = z.object({ branchName: z.string().trim().min(1).max(255) }).strict()
 const childMessageSchema = z.object({
   text: z.string().min(1).max(20_000), requestId: z.string().min(1).max(160),
 }).strict()
@@ -113,6 +114,7 @@ const settingsSchema = z.object({
   codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), defaultModel: modelRef.nullable().optional(),
   modelAllowlist: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
+  codemodeMode: z.enum(CODEMODE_MODES).optional(),
   defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 const workspaceSchema = z.object({ path: z.string().min(1).max(4096).refine(value => !value.includes('\0')), name: z.string().trim().min(1).max(120).optional() }).strict()
@@ -504,6 +506,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
 
   app.get('/api/capabilities', c => c.json(runtime.capabilities()))
   app.get('/api/settings', c => c.json(runtime.settings()))
+  app.get('/api/mcp', c => c.json(runtime.mcp()))
   app.patch('/api/settings', async c => c.json(await runtime.updateSettings(await readJson(c.req.raw, settingsSchema))))
   app.post('/api/settings/open-config', async c => {
     await runtime.openConfigFile()
@@ -524,6 +527,17 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const path = filePath(c.req.query('path'))
     return c.json({ path, entries: await runtime.workspaceFiles(pathId(c.req.param('id')), path) })
   })
+  app.get('/api/workspaces/:id/skills', async c => c.json(await runtime.skills(pathId(c.req.param('id')))))
+  app.get('/api/workspaces/:id/skills/read', async c => {
+    const skillId = z.string().min(1).max(160).safeParse(c.req.query('skillId'))
+    if (!skillId.success) throw new ApiFault(400, 'invalid_skill', 'Skill id is required')
+    const resource = c.req.query('resource')
+    return c.json(await runtime.skill(pathId(c.req.param('id')), skillId.data, resource === undefined ? undefined : filePath(resource)))
+  })
+  app.post('/api/workspaces/:id/skills/validate', async c => {
+    const input = await readJson(c.req.raw, z.object({ skillId: z.string().min(1).max(160) }).strict())
+    return c.json(await runtime.validateSkill(pathId(c.req.param('id')), input.skillId))
+  })
   app.get('/api/workspaces/:id/search', async c => {
     const query = c.req.query('q') ?? ''
     if (query.length > 256) throw new ApiFault(400, 'invalid_query', 'Search query is too long')
@@ -543,6 +557,15 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
       c.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(basename(path)).replace(/[!'()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase())}`)
     }
     return c.body(new Uint8Array(asset.data).buffer)
+  })
+  app.get('/api/workspaces/:id/git/branches', async c => c.json(await runtime.gitBranches(pathId(c.req.param('id')))))
+  app.post('/api/workspaces/:id/git/switch', async c => {
+    const input = await readJson(c.req.raw, branchNameSchema)
+    return c.json(await runtime.switchGitBranch(pathId(c.req.param('id')), { branchName: input.branchName }))
+  })
+  app.post('/api/workspaces/:id/git/branches', async c => {
+    const input = await readJson(c.req.raw, branchNameSchema)
+    return c.json(await runtime.createGitBranch(pathId(c.req.param('id')), { branchName: input.branchName }))
   })
   app.get('/api/presets', c => c.json({ presets: runtime.presets() }))
   app.post('/api/presets', async c => c.json({ preset: await runtime.createPreset(await readJson(c.req.raw, presetSchema)) }, 201))

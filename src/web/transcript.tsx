@@ -6,8 +6,11 @@ import {
   Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, ReadBlock, StateDot, TextShimmer, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest } from '../shared/types.ts'
+import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, SubagentSummary } from '../shared/types.ts'
+import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
+import SubagentRunStrip from './SubagentRunStrip.tsx'
+import { groupSubagentRuns } from './subagent-run-model.ts'
 import ToolCard from './ToolCard.tsx'
 import { diffLabels, formatTokens, markdownLabels, readLabels, type Translate } from './render-labels.ts'
 import { buildRenderModel, messageText, transcriptMessageDomId, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
@@ -36,6 +39,10 @@ export interface InspectorDiff {
 
 export interface TranscriptProps {
   messages: readonly ChatMessage[]
+  /** The conversation these messages belong to; the subagent strip re-reads its live children. */
+  conversationId?: string
+  /** The conversation's projected direct subagents: the strip's first paint before its own poll. */
+  subagents?: readonly SubagentSummary[]
   pending?: readonly PendingMessage[]
   /** Projected interactions, so question rows read their call's DSH state. */
   interactions?: readonly InteractionRequest[]
@@ -56,12 +63,13 @@ export interface TranscriptProps {
 
 /** Render Pi Durable conversation messages with DSH process, Markdown, and tool components. */
 export default function Transcript({
-  messages, pending = [], interactions, policy, onFork, onRetry, onFeedback,
+  messages, conversationId, subagents, pending = [], interactions, policy, onFork, onRetry, onFeedback,
   onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
   const presentation = policy ?? presentationPolicyFor(settings.transcriptView, settings.collapseTiming)
   const model = useMemo(() => buildRenderModel(messages), [messages])
+  const liveSubagents = useLiveSubagents(conversationId, subagents)
   // Late answers keyed by their question call: the reply bubble reads them from
   // its own message, and the tool row uses its call's answer to settle.
   const replies = useMemo(() => {
@@ -94,7 +102,7 @@ export default function Transcript({
           <RunTranscript key={run.key} run={run} latest={index === model.runs.length - 1} policy={presentation}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
-            resolveFileImage={resolveFileImage} labels={labels} t={t}
+            resolveFileImage={resolveFileImage} labels={labels} t={t} subagents={liveSubagents}
             showChanges={showChanges} replies={replies} interactions={interactions} />
         ))}
         {model.systemMessages.map(message => <div className={css.systemMessage} key={message.id}>{messageText(message)}</div>)}
@@ -104,8 +112,28 @@ export default function Transcript({
   )
 }
 
+/**
+ * The parent's child rows, used by every subagent strip on screen. DSH pushes catalog frames on
+ * the parent's stream; Pi's owner edge is a plain table row with no subscription, so the strips
+ * re-read their children while any of them runs and keep the projection's first paint otherwise.
+ */
+function useLiveSubagents(conversationId: string | undefined, projected: readonly SubagentSummary[] | undefined): readonly SubagentSummary[] {
+  const [rows, setRows] = useState<readonly SubagentSummary[]>(() => projected ?? [])
+  useEffect(() => { setRows(projected ?? []) }, [projected])
+  const running = rows.some(row => row.status === 'running')
+  useEffect(() => {
+    if (conversationId === undefined || !running) return
+    let active = true
+    const timer = window.setInterval(() => {
+      api.listChildren(conversationId).then(next => { if (active) setRows(next) }).catch(() => undefined)
+    }, 1_500)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [conversationId, running])
+  return rows
+}
+
 function RunTranscript({
-  run, latest, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, showChanges, replies, interactions,
+  run, latest, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
@@ -121,6 +149,7 @@ function RunTranscript({
   resolveFileImage?: TranscriptProps['resolveFileImage']
   labels: ReturnType<typeof markdownLabels>
   t: Translate
+  subagents: readonly SubagentSummary[]
   showChanges: boolean
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
@@ -130,7 +159,7 @@ function RunTranscript({
       {run.users[0] !== undefined && <UserEntryRow key={run.users[0].id} message={run.users[0]}
         onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />}
       {(run.process.length > 0 || run.status === 'error' || run.status === 'cancelled') && (
-        <ProcessGroup run={run} latest={latest} policy={policy} t={t}
+        <ProcessGroup run={run} latest={latest} policy={policy} t={t} subagents={subagents}
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
           onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} replies={replies} interactions={interactions} />
       )}
@@ -348,11 +377,12 @@ function QuestionReplyRow({ message, data, t }: {
   )
 }
 
-function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, replies, interactions }: {
+function ProcessGroup({ run, latest, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
   policy: ChatPresentationPolicy
   t: Translate
+  subagents: readonly SubagentSummary[]
   onOpenFile?: TranscriptProps['onOpenFile']
   onInspectDiff?: TranscriptProps['onInspectDiff']
   onOpenTool?: TranscriptProps['onOpenTool']
@@ -375,9 +405,13 @@ function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpe
   const bodyId = useId()
   const title = processTitle(run, t)
   const preview = live && policy.liveProcessDetail ? processPreview(run.process, t) : ''
-  const body = run.process.map(part => <ProcessPartView key={part.key} part={part} runRunning={live}
-    policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
-    onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />)
+  // Consecutive `subagent` calls fold into one strip; every other row keeps its own card.
+  const parts = useMemo(() => groupSubagentRuns(run.process, t, live, subagents), [run.process, t, live, subagents])
+  const body = parts.map(part => part.kind === 'subagentRun'
+    ? <SubagentRunStrip key={part.key} group={part} summaries={subagents} t={t} onOpen={onOpenSubagent} />
+    : <ProcessPartView key={part.key} part={part} runRunning={live}
+      policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
+      onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />)
   if (!grouped) {
     return (
       <div className={css.processGroup} data-state={run.status} data-latest={latest || undefined} data-flat data-run-id={run.runId}>

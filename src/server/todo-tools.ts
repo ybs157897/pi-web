@@ -1,6 +1,7 @@
 import { defineDoc, defineExtension, defineTool, type Extension } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import type { TodoItem, TodoStatus } from '../shared/types.ts'
+import { Plans } from './plan-tools.ts'
 
 export const MAX_TODO_ITEMS = 100
 
@@ -37,15 +38,20 @@ export const TodoTools: Extension = defineExtension({
     defineTool({
       name: 'todo_write',
       description: [
-        'Replace the task list for this conversation with the given items.',
-        'Pass the complete list every time: items missing from the new list are removed.',
-        'Use one item per task with a short imperative content, and at most one item in_progress at a time.',
-        'Do not use the task list for planning-mode notes; it tracks work you are actually doing now.',
+        'Use this list for multi-step work: add one concrete step per item before starting, including relevant verification; skip trivial single-step work.',
+        'Replace the entire list on every call, so include every current item; anything omitted is removed.',
+        'Update statuses promptly as work changes and mark an item completed as soon as it is done.',
+        'Mark an item in_progress only while actively working on it; use multiple in_progress items only for work actually running in parallel.',
+        'Do not use the list for planning-mode notes; it tracks implementation work in progress.',
       ].join(' '),
       parameters: Type.Object({
         todos: Type.Array(Type.Object({ content: Type.String(), status: TODO_STATUS })),
       }),
       execute: async (args, api, context) => {
+        const plan = await api.snapshot(Plans, api.conversationId, context)
+        if (plan?.active === true) {
+          throw new Error('Todo progress cannot be updated while plan mode is active. Finish planning and wait for approval before tracking implementation work.')
+        }
         const items: TodoItem[] = []
         for (const todo of args.todos) {
           const content = todo.content.trim()
@@ -59,6 +65,10 @@ export const TodoTools: Extension = defineExtension({
           seen.add(item.content)
         }
         await api.commit(async (tx) => {
+          const currentPlan = await tx.doc(Plans, api.conversationId)
+          if (currentPlan.active) {
+            throw new Error('Todo progress cannot be updated while plan mode is active. Finish planning and wait for approval before tracking implementation work.')
+          }
           const doc = await tx.doc(Todos, api.conversationId)
           doc.items = items
           doc.updatedAt = Date.now()

@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { mkdir, realpath } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { Draft, JsonValue } from '@earendil-works/chord'
 import {
   defineDoc,
+  AgentDoc,
   Harness,
   UsageDoc,
   type ConversationId,
@@ -21,6 +23,9 @@ import type { ConversationView, Cursor } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { createRegistry } from '@earendil-works/pi-durable'
 import { type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
+import { CODEMODE_TOOL_NAME, createCodemodeExtension } from '@earendil-works/pi-durable/codemode'
+import { createToolSearchExtension } from '@earendil-works/pi-durable/tool-search'
+import { CodemodeSandbox } from '@earendil-works/pi-codemode'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { AgentChange, UserInput } from '@earendil-works/pi-durable'
 import type { UserMessage } from '@earendil-works/pi-ai'
@@ -40,7 +45,10 @@ import type {
   CreateAgentPresetInput,
   CreateAutomationInput,
   CreateConversationInput,
+  CreateGitBranchInput,
   EditQueueInput,
+  GitBranchMutation,
+  GitBranchSnapshot,
   ModelRef as UiModelRef,
   ProviderConfigSummary,
   ProviderInput,
@@ -48,6 +56,7 @@ import type {
   RenameWorkspaceInput,
   SubmitInput,
   SubagentSummary,
+  SwitchGitBranchInput,
   TeamView,
   ThinkingLevel,
   UpdateAgentPresetInput,
@@ -63,7 +72,7 @@ import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } 
 import { RuntimeError } from './runtime-errors.ts'
 import { fallbackSessionTitle, frameTitleMessages, normalizeSessionTitle, titleSystemPrompt, TITLE_POLICY } from './session-title.ts'
 import { TodoTools, Todos } from './todo-tools.ts'
-import { GoalExtension, Goals, applyGoalCreate, applyGoalUpdate } from './goal-tools.ts'
+import { createGoalExtension, GOAL_TOOL_NAMES, Goals, applyGoalCreate, applyGoalUpdate } from './goal-tools.ts'
 import { InteractionTools, Interactions } from './interaction-tools.ts'
 import { PlanExtension, Plans, decidePlanReview, interactionTable, planReviewOf, type StoredPlanReview } from './plan-tools.ts'
 import { SUBAGENT_TOOL, Subagents, createSubagentTools } from './subagent-tools.ts'
@@ -79,9 +88,14 @@ import {
 } from './team-tools.ts'
 import { validateAnswers } from './interactions.ts'
 import { createDirectory as createHostDirectory, listDirectories as listHostDirectories, pickNativeDirectory } from './directory-picker.ts'
+import { McpManager } from './mcp.ts'
+import { SkillStore } from './skills.ts'
+import { createSkillTools, SKILL_READ_TOOLS } from './skill-tools.ts'
+import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from './work-policy.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
+import { GitBranches } from './git-branches.ts'
 import { createExecutionEnv, workspaceWriteSupported } from './execution-env.ts'
 
 export type ConversationMetadata = {
@@ -133,8 +147,25 @@ const META = defineDoc<ConversationMetadata>({
 const CTX: Context = BACKGROUND_CONTEXT
 const DEFAULT_TITLE = 'New conversation'
 const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+/** The Pi code mode extension's registry name (`createCodemodeExtension`). */
+const CODEMODE_EXTENSION_NAME = 'codemode'
 /** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
-const READ_ONLY_TOOLS = new Set(['read', 'todo_write', 'ask_user_question', 'exit_plan_mode', SUBAGENT_TOOL, ...TEAM_TOOL_NAMES])
+const READ_ONLY_TOOLS = new Set(['read', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
+
+/** Add the host's tool-free policy without changing a conversation's tools or custom instructions. */
+async function ensureRuntimePolicy(tx: Tx, conversationId: ConversationId): Promise<void> {
+  const agent = await tx.doc(AgentDoc, conversationId)
+  const extensions = agent.extensions
+  if (Array.isArray(extensions)) {
+    if (!extensions.includes(WORK_POLICY_EXTENSION_NAME)) extensions.unshift(WORK_POLICY_EXTENSION_NAME)
+  } else if (extensions !== undefined) {
+    agent.extensions = {
+      ...extensions,
+      add: [...new Set([WORK_POLICY_EXTENSION_NAME, ...extensions.add ?? []])],
+      ...(extensions.remove === undefined ? {} : { remove: extensions.remove.filter(name => name !== WORK_POLICY_EXTENSION_NAME) }),
+    }
+  }
+}
 
 function parseNumericId(value: string, label: string): number {
   const id = Number(value)
@@ -353,6 +384,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     await appState.update(state => { state.settings.defaultWorkspaceId = defaultWorkspace.id })
   }
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
+  const gitBranches = new GitBranches(() => appState.snapshot().workspaces)
+  const skillStore = new SkillStore()
   const workspaceWriteAvailable = await workspaceWriteSupported(defaultWorkspace.path)
   const storage = await openNodeSqliteStorage(resolve(dataDir, 'pi-durable.sqlite'))
   // Declared before the extensions so their closures can read the harness at call time.
@@ -476,12 +509,43 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     metadata.presetId = parent.presetId ?? null
     metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
   }
+  /**
+   * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
+   * MCP is a read-only import of the user-level Pi configuration; a missing file, a
+   * bad entry, or a failing server is reported in the MCP view, never a startup failure.
+   */
+  const mcpConfigPath = options.mcpConfigPath ??
+    (options.demo ? join(dataDir, 'mcp.json') : join(options.piDir ?? join(homedir(), '.pi', 'agent'), 'mcp.json'))
+  const mcp = await McpManager.open({ configPath: mcpConfigPath })
+  const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
+  registry.install(createWorkPolicyExtension())
   registry.install(CodingTools)
   registry.install(TodoTools)
-  registry.install(GoalExtension)
+  registry.install(createGoalExtension({
+    canCreate: async (id, context) => {
+      const record = await harness.commit(tx => tx.conversation(id), context)
+      return record !== undefined && record.owner === undefined
+    },
+    canContinue: async (id, context) => {
+      const conversation = await harness.conversation(id, context)
+      if (!conversation) return false
+      const agent = await conversation.agent(context)
+      const direct = new Set(agent.tools.map(tool => tool.name))
+      const callable = new Set(agent.callable.map(tool => tool.name))
+      return ['get_goal', 'update_goal'].every(name => direct.has(name) || direct.has(CODEMODE_TOOL_NAME) && callable.has(name))
+    },
+  }))
   registry.install(InteractionTools)
   registry.install(PlanExtension)
+  registry.install(createSkillTools({
+    store: skillStore,
+    canWrite: async (conversationId, context) => {
+      const metadata = await harness.snapshot(META, conversationId, context)
+      const plan = await harness.snapshot(Plans, conversationId, context)
+      return metadata !== undefined && (metadata.accessMode === 'fullAccess' || metadata.accessMode === 'workspaceWrite') && plan?.active !== true
+    },
+  }))
   registry.install(createSubagentTools({ prepareChild: prepareChildConversation }))
   registry.install(createTeamTools({
     prepareChild: prepareChildConversation,
@@ -489,6 +553,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     watchMembers: watchTeamMembers,
     memberSession,
   }))
+  registry.install(createCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
+  const mcpExtension = mcp.extension()
+  if (mcpExtension !== undefined) registry.install(mcpExtension)
+  // `tool_search` loads deferred MCP tools into the model's next request. Tools behind
+  // either `codemode` or `deferred` exposure are registered deferred (scripts can call
+  // them directly); install the loader whenever such a tool exists.
+  if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
+    registry.install(createToolSearchExtension())
+  }
   let runtimeClosed = false
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
@@ -528,6 +601,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       return createExecutionEnv(selectedWorkspace.path, selectedMode)
     },
     conversationCreated: async (tx, conversation) => {
+      await ensureRuntimePolicy(tx, conversation.id)
       const metadata = await tx.doc(META, conversation.id)
       const now = Date.now()
       metadata.createdAt = now
@@ -789,16 +863,21 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const installed = registry.snapshot().installed()
     const installedByName = new Map(installed.map(extension => [extension.name, extension]))
     const state = appState.snapshot()
-    // Every installed extension is on: plugin switches are no longer exposed,
-    // so the legacy per-plugin state must not disable anything.
-    const extensionNames = preset ? preset.extensions : installed.map(extension => extension.name)
+    const codemodeMode = state.settings.codemodeMode
+    // Every installed extension is on: plugin switches are no longer exposed, so the legacy
+    // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
+    // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+      .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
       if (!extension) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的插件：${name}`)
       return extension
     })
     const registeredTools = extensions.flatMap(extension => (extension.tools ?? []).map(tool => ({ extension, tool })))
-    const requestedTools = preset ? new Set(preset.tools) : undefined
+    const requestedTools = preset
+      ? new Set(preset.tools.filter(name => codemodeMode !== 'off' || name !== CODEMODE_TOOL_NAME))
+      : undefined
     const tools: ToolRegistration[] = registeredTools.flatMap(({ tool }) => {
       // Tools are always on; only a preset's tool list narrows them further.
       if (requestedTools && !requestedTools.has(tool.name)) return []
@@ -811,6 +890,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         if (!registeredNames.has(name)) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的工具：${name}`)
       }
     }
+    // Pi's `codemode.mode: only`: the model sees just the script tool; the enabled tools
+    // stay callable by nested calls, which is what scripts reach. `null` clears a stored
+    // filter when the conversation leaves `only`, so an `undefined` (change nothing) is
+    // not enough here.
+    const modelTools = codemodeMode === 'only' && extensions.some(extension => extension.name === CODEMODE_EXTENSION_NAME)
+      ? tools.filter(tool => tool.name === CODEMODE_TOOL_NAME)
+      : null
     const requestedModel = overrides.model ?? preset?.model
     let model = requestedModel ?? state.settings.defaultModel ?? modelRuntime.defaultModel
     if (model && !modelRuntime.models.getModel(model.provider, model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
@@ -828,9 +914,50 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       cwd: workspace.path,
       extensions,
       tools,
+      modelTools,
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(preset?.instructions ? { instructions: preset.instructions } : {}),
+    }
+  }
+
+  /**
+   * Pi stores the selected extensions and tools in every conversation's `pi.agent`, so a
+   * settings change (`on`/`only`/`off`) or an upgrade that adds code mode would leave
+   * existing conversations on their old presentation. Recompute each idle ownerless
+   * conversation's agent from its metadata, preserving its model and thinking level.
+   * A conversation whose stored configuration no longer resolves keeps its old agent.
+   */
+  const syncCodemodeAgents = async (): Promise<void> => {
+    const records: ConversationRecord[] = []
+    let cursor: Cursor | undefined
+    do {
+      const page = await harness.commit((tx) => tx.scanConversations({ order: 'ascending' }, 250, cursor), CTX)
+      records.push(...page.items.filter(record => record.owner === undefined))
+      cursor = page.next
+    } while (cursor)
+    for (const record of records) {
+      try {
+        const conversation = await harness.conversation(record.id, CTX)
+        if (conversation === undefined) continue
+        const viewWatch = await conversation.watch(CTX)
+        let busy: boolean
+        try { busy = liveRunTaskId(viewWatch.value) !== undefined } finally { await viewWatch.stop() }
+        if (busy) continue
+        const metadata = await ensureMetadata(record.id)
+        const settings = appState.snapshot().settings
+        const preset = selectedPreset(metadata.presetId ?? settings.defaultPresetId)
+        const workspace = selectedWorkspace(metadata.workspaceId ?? undefined)
+        const accessMode = metadata.accessMode ?? settings.defaultAccessMode
+        const agent = await conversation.agent(CTX)
+        const change = buildAgentChange(workspace.id, accessMode, preset, {
+          ...(agent.model ? { model: agent.model } : {}),
+          ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
+        })
+        await conversation.configure(change, CTX)
+      } catch {
+        // Best effort: an explicit edit later reports the actual configuration error.
+      }
     }
   }
 
@@ -1503,7 +1630,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (input.defaultAccessMode === 'workspaceWrite' && !workspaceWriteAvailable) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
-    return appState.update(state => {
+    const previousCodemodeMode = appState.snapshot().settings.codemodeMode
+    const saved = await appState.update(state => {
       if (input.theme !== undefined) state.settings.theme = input.theme
       if (input.locale !== undefined) state.settings.locale = input.locale
       if (input.fontSize !== undefined) state.settings.fontSize = input.fontSize
@@ -1517,6 +1645,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (nextAllowlist !== undefined) state.settings.modelAllowlist = nextAllowlist
       if (input.defaultThinkingLevel !== undefined) state.settings.defaultThinkingLevel = input.defaultThinkingLevel
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
+      if (input.codemodeMode !== undefined) state.settings.codemodeMode = input.codemodeMode
       if (input.defaultModel === null) delete state.settings.defaultModel
       else if (input.defaultModel !== undefined) state.settings.defaultModel = { ...input.defaultModel }
       if (input.defaultPresetId === null) delete state.settings.defaultPresetId
@@ -1527,6 +1656,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
       return structuredClone(state.settings)
     })
+    // Code mode is stored in each conversation's agent, so an explicit switch applies now.
+    if (input.codemodeMode !== undefined && input.codemodeMode !== previousCodemodeMode) await syncCodemodeAgents()
+    return saved
   }
 
   /** Hand the persisted application configuration file to the operator's default program. */
@@ -1596,6 +1728,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const searchWorkspace = (id: string, query: string) => workspaceFiles.list(id, '', query)
   const workspaceFile = (id: string, path: string) => workspaceFiles.read(id, path)
   const workspaceAsset = (id: string, path: string) => workspaceFiles.asset(id, path)
+
+  const gitBranchSnapshot = (id: string): Promise<GitBranchSnapshot> => gitBranches.snapshot(id)
+  const switchGitBranch = (id: string, input: SwitchGitBranchInput): Promise<GitBranchMutation> => gitBranches.switch(id, input)
+  const createGitBranch = (id: string, input: CreateGitBranchInput): Promise<GitBranchMutation> => gitBranches.create(id, input)
 
   const validatePreset = (value: AgentPreset): AgentPreset => {
     if (!/^[A-Za-z0-9._~-]{1,128}$/.test(value.id)) throw new RuntimeError('INVALID_INPUT', 'Preset ID 无效')
@@ -2024,7 +2160,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await recoverQueueEdits()
   await recoverAutomations()
   await reconcileTeamRosters()
+  // Upgrade stored selections, including child conversations, before resuming any model request.
+  // In-flight request checkpoints retain their original prompt; the next preparation sees the policy.
+  let policyCursor: Cursor | undefined
+  do {
+    const page = await harness.commit(tx => tx.scanConversations({ order: 'ascending' }, 250, policyCursor), CTX)
+    for (const record of page.items) await harness.commit(tx => ensureRuntimePolicy(tx, record.id), CTX)
+    policyCursor = page.next
+  } while (policyCursor)
   harness.resume()
+  // Upgrades add code mode to an existing registry, and the stored agent selection is
+  // per conversation: bring idle conversations onto the current presentation before serving.
+  await syncCodemodeAgents()
 
   return {
     list,
@@ -2054,6 +2201,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     testProvider,
     discoverProvider,
     settings,
+    mcp: () => mcp.view(),
     capabilities,
     updateSettings,
     openConfigFile,
@@ -2068,6 +2216,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     searchWorkspace,
     workspaceFile,
     workspaceAsset,
+    gitBranches: gitBranchSnapshot,
+    switchGitBranch,
+    createGitBranch,
+    skills: async (workspaceId) => skillStore.list(workspaceFiles.workspace(workspaceId).path),
+    skill: async (workspaceId, skillId, resource) => skillStore.load(workspaceFiles.workspace(workspaceId).path, skillId, resource),
+    validateSkill: async (workspaceId, skillId) => skillStore.validate(workspaceFiles.workspace(workspaceId).path, skillId),
     presets,
     createPreset,
     updatePreset,
@@ -2088,8 +2242,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           try {
             await Promise.all([...activeWatchStops].map((unsubscribe) => unsubscribe()))
           } finally {
-            await harness.close(CTX)
-            await Promise.allSettled([...automationTasks])
+            try {
+              await harness.close(CTX)
+              await Promise.allSettled([...automationTasks])
+            } finally {
+              await Promise.allSettled([codemodeSandbox.close(), mcp.close()])
+            }
           }
         })()
       }

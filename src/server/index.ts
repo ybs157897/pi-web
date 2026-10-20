@@ -56,6 +56,9 @@ export async function startServer() {
   const dataDir = resolve(process.env.PI_WEB_DATA_DIR ?? '.data')
   const workspace = resolve(process.env.PI_WEB_WORKSPACE ?? 'workspace')
   const demo = process.env.PI_WEB_DEMO === '1'
+  // Optional override for the imported Pi MCP file; the runtime otherwise reads the
+  // user-level `mcp.json` (demo mode keeps its own copy under the data directory).
+  const mcpConfigPath = process.env.PI_WEB_MCP_CONFIG === undefined ? undefined : resolve(process.env.PI_WEB_MCP_CONFIG)
   const production = process.argv.includes('--production') || process.env.NODE_ENV === 'production'
   const distRoot = resolve(projectRoot, 'dist/web')
 
@@ -63,7 +66,7 @@ export async function startServer() {
   await mkdir(workspace, { recursive: true })
   if (production) await access(resolve(distRoot, 'index.html'))
 
-  const runtime = await createRuntime({ dataDir, workspace, demo })
+  const runtime = await createRuntime({ dataDir, workspace, demo, ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }) })
   const app = createApp(runtime, { demo, ...(production ? { staticRoot: distRoot } : {}) })
   let vite: ViteDevServer | undefined
   let server: ServerType | undefined

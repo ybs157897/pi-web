@@ -35,7 +35,7 @@ export function toolActivity(name: string): ToolActivity {
   if (id === 'write') return 'write'
   if (id === 'edit' || id === 'apply_patch') return 'edit'
   if (['bash', 'pwsh', 'exec_command', 'write_stdin'].includes(id) || id.startsWith('terminal_')) return 'commands'
-  if (id === 'run_code') return 'code'
+  if (id === 'run_code' || id === 'codemode') return 'code'
   if (id === 'web_search') return 'webSearch'
   if (id === 'web_fetch') return 'webFetch'
   if (id === 'subagent' || id.startsWith('subagent_')) return 'subagents'

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, InteractionRequest } from '../src/shared/types.ts'
-import { buildRenderModel, conversationStats, reasoningDisplay } from '../src/web/render-model.ts'
+import { buildRenderModel, conversationStats, reasoningDisplay, toolActivity } from '../src/web/render-model.ts'
 import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
 import {
-  askQuestionRowModel, buildToolRenderModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, lateAnswerValues,
-  subagentRowModel,
+  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows,
+  lateAnswerSummary, lateAnswerValues, subagentRowModel, toolLiveDetail, toolRowTitle,
 } from '../src/web/tool-render-model.ts'
 import type { ToolItem } from '../src/web/render-model.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from '../src/web/inspector-document.ts'
@@ -422,8 +422,18 @@ describe('subagent row model', () => {
       title: '子智能体',
       summary: '已开始子智能体 · 机制归纳 · 345',
       childId: '345',
+      label: '机制归纳',
       task: '归纳子智能体一期机制',
     })
+  })
+
+  it('reads the live projection shape, where the payload sits under result', () => {
+    expect(subagentRowModel({
+      name: 'subagent',
+      args: { task: '写春天' },
+      details: { status: 'running', result: { conversationId: 'child-a', status: 'running', label: 'spring' } },
+      failed: false,
+    }, zh)).toMatchObject({ childId: 'child-a', label: 'spring' })
   })
 
   it('keeps the child id when the label is missing and ignores every other tool', () => {
@@ -437,6 +447,123 @@ describe('subagent row model', () => {
       name: 'subagent', args: {}, details: undefined, failed: true,
     }, zh)).toMatchObject({ title: '子智能体', summary: '已开始子智能体' })
     expect(subagentRowModel({ name: 'bash', args: {}, details: undefined, failed: false }, zh)).toBeNull()
+  })
+})
+
+describe('codemode row model', () => {
+  const script = "const files = await tools.glob({ pattern: '*.ts' })\nconsole.log(files.length)"
+
+  it('reads the script, its nested calls, and the output from the call and result', () => {
+    const model = codemodeRowModel({
+      name: 'codemode',
+      args: { code: script },
+      details: {
+        calls: [
+          { id: 1, name: 'glob', args: '{"pattern":"*.ts"}', status: 'ok', durationMs: 12 },
+          { id: 2, name: 'read', args: '{"path":"a.ts"}', status: 'error', durationMs: 3, error: 'File not found' },
+          { id: 3, name: 'write', args: '{"path":"b.ts"}', status: 'running' },
+          { id: 4, name: 'bash', args: '{"command":"ls"}', status: 'cancelled', durationMs: 1000 },
+        ],
+        fullOutputPath: '/tmp/pi/codemode/output.txt',
+      },
+      output: '2 files',
+    }, zh)
+    expect(model).toEqual({
+      title: '代码',
+      summary: "const files = await tools.glob({ pattern: '*.ts' })",
+      script,
+      output: '2 files',
+      calls: [
+        { id: '1', name: 'glob', args: '{"pattern":"*.ts"}', status: 'ok', durationMs: 12 },
+        { id: '2', name: 'read', args: '{"path":"a.ts"}', status: 'error', durationMs: 3, error: 'File not found' },
+        { id: '3', name: 'write', args: '{"path":"b.ts"}', status: 'running' },
+        { id: '4', name: 'bash', args: '{"command":"ls"}', status: 'cancelled', durationMs: 1000 },
+      ],
+      fullOutputPath: '/tmp/pi/codemode/output.txt',
+    })
+  })
+
+  it('falls back to the ordinary tool card without a call list and ignores other tools', () => {
+    // A call-only row has no result details yet: the generic card keeps the raw JSON visible.
+    expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: undefined, output: '' }, zh)).toBeNull()
+    expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: { calls: 'nope' }, output: '' }, zh)).toBeNull()
+    expect(codemodeRowModel({ name: 'bash', args: {}, details: { calls: [] }, output: '' }, zh)).toBeNull()
+  })
+
+  it('reads result-only records and a JSON-string details payload', () => {
+    const model = codemodeRowModel({
+      name: 'codemode',
+      args: {},
+      output: 'Script failed after 1.2s',
+      details: JSON.stringify({ calls: [{ id: 7, name: 'read', args: { path: 'x' }, status: 'ok' }] }),
+    }, zh)
+    expect(model).toMatchObject({ title: '代码', summary: 'Script failed after 1.2s', script: '', output: 'Script failed after 1.2s' })
+    expect(model?.calls).toEqual([{ id: '7', name: 'read', args: '{"path":"x"}', status: 'ok' }])
+    expect(model?.fullOutputPath).toBeUndefined()
+  })
+
+  it('drops call entries without a usable name or status', () => {
+    const model = codemodeRowModel({
+      name: 'codemode',
+      args: { code: 'doSomething()' },
+      details: { calls: [{ id: 1, name: 'ok', status: 'ok' }, 'nope', { name: 'missing-status' }, { id: 2, name: 'bad', status: 'mystery' }] },
+      output: '',
+    }, zh)
+    expect(model?.calls).toEqual([{ id: '1', name: 'ok', args: '', status: 'ok' }])
+  })
+
+  it('carries the code-mode title, script live detail, and failure text into the generic row model', () => {
+    const callItem = (result?: Partial<ChatMessage>): ToolItem => {
+      const message = assistant('call-message:codemode', [{ type: 'toolCall', id: 'call:codemode', name: 'codemode', arguments: { code: script } }])
+      return {
+        key: 'tool:call:codemode',
+        message,
+        call: { type: 'toolCall', id: 'call:codemode', name: 'codemode', arguments: { code: script } },
+        ...(result === undefined ? {} : {
+          result: { id: 'result:codemode', role: 'tool' as const, blocks: [], timestamp: 300, toolCallId: 'call:codemode', toolName: 'codemode', ...result },
+        }),
+        children: [],
+        order: 0,
+      }
+    }
+    // A call-only row has no details yet: the generic card still titles and summarizes the script.
+    expect(buildToolRenderModel(callItem(), zh, false))
+      .toMatchObject({ title: '代码', summary: "const files = await tools.glob({ pattern: '*.ts' })" })
+    expect(buildToolRenderModel(callItem({ blocks: [{ type: 'text', text: 'Script failed' }], isError: true }), zh, false))
+      .toMatchObject({ title: '代码', failed: true, errorText: 'Script failed' })
+  })
+})
+
+describe('MCP tool rows', () => {
+  it('titles an mcp__server__tool row with the server and native tool', () => {
+    const name = 'mcp__github__search_repos'
+    const message = assistant('call-message:mcp', [{ type: 'toolCall', id: 'call:mcp', name, arguments: {} }])
+    const item: ToolItem = {
+      key: 'tool:call:mcp',
+      message,
+      call: { type: 'toolCall', id: 'call:mcp', name, arguments: {} },
+      result: { id: 'result:mcp', role: 'tool', blocks: [{ type: 'text', text: 'found one' }], timestamp: 300, toolCallId: 'call:mcp', toolName: name },
+      children: [],
+      order: 0,
+    }
+    expect(toolRowTitle(name, zh)).toBe('MCP · github · search_repos')
+    // The row title keeps the generic category icon; only the wording names the server and tool.
+    expect(buildToolRenderModel(item, zh, false))
+      .toMatchObject({ title: 'MCP · github · search_repos', summary: 'found one' })
+    expect(toolRowTitle('mcp__my_server__read_file', zh)).toBe('MCP · my_server · read_file')
+    // Other tools keep their DSH titles; a name that is not the MCP shape is not rewritten.
+    expect(toolRowTitle('bash', zh)).toBe('运行命令')
+    expect(toolRowTitle('codemode', zh)).toBe('代码')
+    expect(toolRowTitle('mcp_server', zh)).toBe('工具调用')
+    // Pi's codemode joins DSH's run_code in the "code" activity category.
+    expect(toolActivity('codemode')).toBe('code')
+    expect(toolActivity('run_code')).toBe('code')
+    expect(toolActivity('mcp__github__search_repos')).toBe('tools')
+  })
+
+  it('shows the code-mode script first line as the live detail', () => {
+    expect(toolLiveDetail({ code: 'const a = 1\nconst b = 2' })).toBe('const a = 1')
+    expect(toolLiveDetail({ command: 'pwd' })).toBe('pwd')
   })
 })
 

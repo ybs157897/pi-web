@@ -11,7 +11,7 @@ import type {
   ThinkingLevel,
   WorkspaceSummary,
 } from '../shared/types.ts'
-import { COLLAPSE_TIMINGS, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 
 const modelRef = z.object({ provider: z.string().min(1).max(100), modelId: z.string().min(1).max(256) }).strict()
 const thinking = z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
@@ -33,6 +33,8 @@ const settingsSchema = z.object({
   modelAllowlist,
   defaultThinkingLevel: thinking,
   defaultAccessMode: accessMode,
+  /** Pi code mode; absent files written before this setting read as `on`. */
+  codemodeMode: z.enum(CODEMODE_MODES).default('on'),
   defaultPresetId: z.string().min(1).optional(),
   defaultWorkspaceId: z.string().min(1).optional(),
   shortcuts: z.partialRecord(z.enum(['newConversation', 'search', 'settings', 'toggleSidebar', 'send', 'newline', 'alternateSend']), z.string().min(1).max(80)).optional(),
@@ -173,6 +175,7 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     modelAllowlist: [],
     defaultThinkingLevel: defaultThinkingLevel ?? 'medium',
     defaultAccessMode: DEFAULT_ACCESS,
+    codemodeMode: 'on',
     defaultWorkspaceId: workspaceId,
   }
 }

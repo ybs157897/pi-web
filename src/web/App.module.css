@@ -85,11 +85,6 @@
   line-height: 22px;
 }
 
-.newChatKeys {
-  position: absolute;
-  right: 12px;
-}
-
 .quickNav { display: flex; flex: none; flex-direction: column; gap: 0; margin: 4px 0 8px; }
 .navItem {
   display: flex;

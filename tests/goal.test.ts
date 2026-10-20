@@ -49,7 +49,7 @@ describe('goal created fields', () => {
   it('refuses to replace an unfinished goal and allows one after completion', () => {
     const refused = applyGoalCreate(goal({ phase: 'active' }), { id: 'goal-2', objective: '另一个目标' }, 2_000)
     expect(refused.ok).toBe(false)
-    expect(refused.ok === false && refused.error).toContain('update_goal')
+    expect(refused.ok === false && refused.error).toContain('goal controls')
     const replaced = applyGoalCreate(goal({ phase: 'complete' }), { id: 'goal-2', objective: '另一个目标' }, 2_000)
     expect(replaced.ok && replaced.goal.id).toBe('goal-2')
   })
@@ -108,7 +108,7 @@ describe('goal updates under CAS', () => {
   it('rejects an update without a goal', () => {
     const outcome = applyGoalUpdate(null, { goalId: 'goal-1', revision: 1, action: 'complete' }, { actor: 'human', now: 1 })
     expect(outcome.ok).toBe(false)
-    expect(outcome.ok === false && outcome.error).toContain('create_goal')
+    expect(outcome.ok === false && outcome.error).toContain('ask the user to set one')
   })
 
   it('only lets the model complete or report blocked', () => {

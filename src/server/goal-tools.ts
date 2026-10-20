@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
+import { Plans } from './plan-tools.ts'
 import {
   defineDoc,
   defineExtension,
@@ -7,6 +8,7 @@ import {
   GenerationTask,
   hook,
   section,
+  type ConversationId,
   type Extension,
   type HookApi,
   type Tx,
@@ -38,6 +40,15 @@ export const DEFAULT_MAX_GOAL_ROUNDS = 10
 export const MAX_GOAL_ROUNDS_LIMIT = 50
 const MAX_OBJECTIVE_LENGTH = 2000
 
+export const GOAL_TOOL_NAMES = ['get_goal', 'create_goal', 'update_goal'] as const
+
+export type GoalToolOptions = {
+  canCreate?: (id: ConversationId, context: Context) => Promise<boolean>
+  canContinue?: (id: ConversationId, context: Context) => Promise<boolean>
+}
+
+const PLAN_MODE_ERROR = 'Goal creation is unavailable while plan mode is active.'
+
 /**
  * Conversation-scoped goal snapshot. `projectConversation` reads it into `ConversationDetail.goal`;
  * the `onYield` hook continues the run from it; `update_goal`/`create_goal` mutate it under CAS.
@@ -57,7 +68,7 @@ export type GoalActor = 'human' | 'model'
 /** Actions the goal routes and tools accept; `clear` removes the goal and is human-only. */
 export type GoalAction = 'edit' | 'pause' | 'resume' | 'complete' | 'blocked' | 'clear'
 
-/** The model is allowed exactly these two: pausing/resuming/editing are human requests (DSH's rule). */
+/** This host handles pause/resume/edit through user controls; the model reports completion or blockers. */
 const MODEL_ACTIONS: readonly GoalAction[] = ['complete', 'blocked']
 
 export type GoalUpdateInput = {
@@ -99,14 +110,13 @@ export type GoalCreateOutcome =
   | { ok: false; error: string }
 
 /**
- * Create a goal. Refused while an unfinished goal exists: the model must `update_goal` (or the human
- * must clear it) instead of silently replacing the objective mid-flight.
+ * Create a goal. Refused while an unfinished goal exists so an objective cannot be silently replaced mid-flight.
  */
 export function applyGoalCreate(current: GoalState | null | undefined, input: GoalCreateInput, now: number): GoalCreateOutcome {
   if (current && current.phase !== 'complete') {
     return {
       ok: false,
-      error: `A goal is already ${current.phase}: "${current.objective}". Use update_goal to edit or complete it, or ask the user to clear it first.`,
+      error: `A goal is already ${current.phase}: "${current.objective}". Continue its objective or ask the user to change it in the goal controls first.`,
     }
   }
   const objective = cleanObjective(input.objective)
@@ -140,14 +150,14 @@ export function applyGoalUpdate(
   input: GoalUpdateInput,
   options: { actor: GoalActor; now: number },
 ): GoalUpdateOutcome {
-  if (!current) return { ok: false, error: 'No goal is set in this conversation. Use create_goal first.' }
+  if (!current) return { ok: false, error: 'No goal is set in this conversation; ask the user to set one first.' }
   if (input.goalId !== current.id) {
-    return { ok: false, error: `goal_id does not match the current goal (${current.id}). Call get_goal to re-read it.` }
+    return { ok: false, error: `goal_id does not match the current goal (${current.id}). Refresh the current goal context and retry.` }
   }
   if (input.revision !== current.revision) {
     return {
       ok: false,
-      error: `Stale revision ${input.revision}: the goal is at revision ${current.revision}. Call get_goal and retry with the current revision.`,
+      error: `Stale revision ${input.revision}: the goal is at revision ${current.revision}. Refresh the current goal context and retry with its revision.`,
     }
   }
   if (options.actor === 'model' && !MODEL_ACTIONS.includes(input.action)) {
@@ -221,35 +231,104 @@ export function goalContinuation(docValue: GoalDocValue | undefined, roundsStart
   const round = roundsStartedSoFar + 1
   return {
     continue: [
-      `[goal ${round}/${goal.maxGoalRounds}] 继续推进目标：「${goal.objective}」。`,
-      '完成后立即用 update_goal(action="complete") 报告；受阻则用 update_goal(action="blocked", blocked_reason="…") 说明原因，不要静默停止。',
+      `[goal ${round}/${goal.maxGoalRounds}] Continue the user's objective: "${goal.objective}".`,
+      'After the objective is achieved and its requested verification passes, report completion through the callable goal-tool route. If a concrete blocker makes further progress impossible, report that condition through the supported blocked action.',
     ].join('\n'),
   }
 }
 
-/** The policy section: how the model should treat an existing goal, injected while it is not complete. */
-const goalSection = section('goal-policy', async (input, context) => {
-  const doc = await input.read.snapshot(Goals, input.conversationId, context)
-  const goal = doc?.goal
-  if (!goal || goal.phase === 'complete') return undefined
-  const head = `The user set a goal for this conversation (revision ${goal.revision}): "${goal.objective}".`
-  if (goal.phase === 'active') {
-    return [
-      head,
-      `It is active, and continuation rounds started so far: ${goal.roundsStarted}/${goal.maxGoalRounds}.`,
-      'Work toward this goal in every turn; keep changes scoped to it.',
-      'Pausing, resuming and editing the goal are user requests: never call update_goal with those actions.',
-      'When the goal is achieved, call update_goal with action "complete"; when genuinely stuck, call it with "blocked" and a blocked_reason.',
-      'Report progress honestly; do not mark the goal complete unless the objective is met.',
-    ].join('\n')
+type GoalToolRoute = 'direct' | 'codemode' | undefined
+
+function goalToolRoutes(input: {
+  agent: { tools: readonly { name: string }[]; callable: readonly { name: string }[] }
+}): Record<(typeof GOAL_TOOL_NAMES)[number], GoalToolRoute> {
+  const offered = new Set(input.agent.tools.map(tool => tool.name))
+  const nested = new Set(input.agent.callable.map(tool => tool.name))
+  const codemodeAvailable = offered.has('codemode')
+  return Object.fromEntries(GOAL_TOOL_NAMES.map(name => [
+    name,
+    offered.has(name) ? 'direct' : codemodeAvailable && nested.has(name) ? 'codemode' : undefined,
+  ])) as Record<(typeof GOAL_TOOL_NAMES)[number], GoalToolRoute>
+}
+
+function toolRouteInstruction(name: (typeof GOAL_TOOL_NAMES)[number], route: GoalToolRoute): string | undefined {
+  if (route === 'direct') return `Call \`${name}\` directly.`
+  if (route === 'codemode') return `Through \`codemode\`, call \`await tools.${name}({ ... })\` inside the script.`
+  return undefined
+}
+
+async function allowed(
+  check: GoalToolOptions['canCreate'] | GoalToolOptions['canContinue'] | undefined,
+  id: ConversationId,
+  context: Context,
+): Promise<boolean> {
+  if (check === undefined) return true
+  try {
+    return await check(id, context) === true
+  } catch {
+    return false
   }
-  return [
-    head,
-    `The goal is ${goal.phase}${goal.blockedReason ? ` (${goal.blockedReason})` : ''}; automatic continuation rounds will not start.`,
-    'Finish the current request, but do not start new work toward this goal.',
-    'Only the user can resume or edit it; if the user asks to continue, the goal controls will resume it.',
-  ].join('\n')
-})
+}
+
+/** Render goal guidance for every request, limited to the routes currently exposed to the model. */
+function createGoalSection(options: Required<GoalToolOptions>) {
+  return section('goal-policy', async (input, context) => {
+    const [doc, plan] = await Promise.all([
+      input.read.snapshot(Goals, input.conversationId, context),
+      input.read.snapshot(Plans, input.conversationId, context),
+    ])
+    const routes = goalToolRoutes(input)
+    const planMode = plan?.active === true
+    const createCallable = !planMode
+      && routes.create_goal !== undefined
+      && await allowed(options.canCreate, input.conversationId, context)
+    const updateCallable = !planMode
+      && routes.update_goal !== undefined
+      && await allowed(options.canContinue, input.conversationId, context)
+    const goal = doc?.goal
+    const lines = [
+      'Use a persistent goal only for a direct human request that needs work across multiple turns. Infer that intent without requiring the word "goal"; do not create one for trivial, single-turn, or unrelated work.',
+      ...(planMode ? ['Plan mode is active: do planning work only. Do not create a goal, make implementation progress, or start automatic continuation rounds.'] : []),
+      ...(!goal ? ['No goal is currently set for this conversation.'] : []),
+    ]
+
+    const getInstruction = toolRouteInstruction('get_goal', routes.get_goal)
+    if (getInstruction !== undefined) lines.push(`Read the current goal when the user asks about it. ${getInstruction}`)
+
+    if (!goal || goal.phase === 'complete') {
+      if (createCallable) {
+        lines.push('For a qualifying long-running objective, create a goal with the user’s direct request as its scope.', toolRouteInstruction('create_goal', routes.create_goal)!)
+      } else if (!planMode && routes.create_goal !== undefined) {
+        lines.push('Goal creation is unavailable for this conversation in the current request; do not claim to set a goal.')
+      }
+      if (goal?.phase === 'complete') lines.push(`The previous goal is complete: "${goal.objective}". Treat a new objective as a new goal only when the human asks for long-running work.`)
+      return lines.join('\n')
+    }
+
+    lines.push(`Current goal (revision ${goal.revision}): "${goal.objective}".`)
+    if (goal.phase === 'active') {
+      lines.push(`It is active; ${goal.roundsStarted}/${goal.maxGoalRounds} automatic continuation rounds have started.`)
+      if (planMode) {
+        lines.push('This goal remains active, but do not change its state or advance implementation while plan mode is active.')
+      } else {
+        lines.push('Work toward this goal within the current request and keep changes scoped to it.')
+      }
+      if (updateCallable) {
+        lines.push(
+          'The model may report only action "complete" or "blocked". Report complete only after the objective is achieved and requested verification has passed, with concrete evidence. Report blocked only when a concrete condition makes further progress impossible, and state that condition; difficulty, uncertainty, or remaining work alone is not a blocker.',
+          'Editing, pausing, and resuming are user requests handled by the goal controls; do not call update_goal with those actions.',
+          toolRouteInstruction('update_goal', routes.update_goal)!,
+        )
+      } else if (!planMode) {
+        lines.push('No goal update action is callable in this request; do not claim to change the goal state or start an automatic continuation.')
+      }
+    } else {
+      lines.push(`The goal is ${goal.phase}${goal.blockedReason ? ` (${goal.blockedReason})` : ''}; automatic continuation rounds will not start.`)
+      lines.push('Do not start new work toward this goal until the user uses the goal controls to resume it.')
+    }
+    return lines.join('\n')
+  })
+}
 
 /**
  * The hook runtime actually hands `commit` to hooks (the generation task passes its own runtime),
@@ -266,22 +345,31 @@ type CommittingHookApi = HookApi & {
  * bumped inside the same commit that decides to continue, so two generations can never double-count;
  * a pause/clear that landed since the snapshot wins and stops the continuation.
  */
-export const goalHook = hook(GenerationTask, {
-  onYield: async (_answer, api, context) => {
-    // Cheap committed read first: most final answers end the run and never commit.
-    const snapshot = await api.snapshot(Goals, api.conversationId, context)
-    if (goalContinuation(snapshot, snapshot?.goal?.roundsStarted ?? 0) === undefined) return undefined
-    let continuation: string | undefined
-    await (api as CommittingHookApi).commit(async (tx) => {
-      const doc = await tx.doc(Goals, api.conversationId)
-      const fresh = goalContinuation(doc, doc.goal?.roundsStarted ?? 0)
-      if (fresh === undefined) return
-      doc.goal = applyGoalRound(doc, Date.now()).goal
-      continuation = fresh.continue
-    }, context)
-    return continuation === undefined ? undefined : { continue: continuation }
-  },
-})
+function createGoalHook(canContinue: GoalToolOptions['canContinue']) {
+  return hook(GenerationTask, {
+    onYield: async (_answer, api, context) => {
+      const plan = await api.snapshot(Plans, api.conversationId, context)
+      if (plan?.active === true || !await allowed(canContinue, api.conversationId, context)) return undefined
+      // Cheap committed read first: most final answers end the run and never commit.
+      const snapshot = await api.snapshot(Goals, api.conversationId, context)
+      if (goalContinuation(snapshot, snapshot?.goal?.roundsStarted ?? 0) === undefined) return undefined
+      let continuation: string | undefined
+      await (api as CommittingHookApi).commit(async (tx) => {
+        const planDoc = await tx.doc(Plans, api.conversationId)
+        if (planDoc.active) return
+        const doc = await tx.doc(Goals, api.conversationId)
+        const fresh = goalContinuation(doc, doc.goal?.roundsStarted ?? 0)
+        if (fresh === undefined) return
+        doc.goal = applyGoalRound(doc, Date.now()).goal
+        continuation = fresh.continue
+      }, context)
+      return continuation === undefined ? undefined : { continue: continuation }
+    },
+  })
+}
+
+/** Backwards-compatible default hook; the runtime factory supplies its own authorization gate. */
+export const goalHook = createGoalHook(undefined)
 
 const goalDetails = (goal: GoalState | null) => ({ goal: goal ? { ...goal } : null })
 
@@ -295,8 +383,8 @@ const getGoalTool = defineTool({
   name: 'get_goal',
   description: [
     'Read the goal of this conversation: objective, phase, round budget and revision.',
-    'Call it before update_goal so the revision you pass is current, and when the user asks about the goal.',
-    'When there is no goal, say so and suggest the user set one with "/goal <objective>".',
+    'Use it when the user asks about the current goal or its status.',
+    'When no goal is set, continue according to the current task and available goal policy.',
   ].join(' '),
   parameters: Type.Object({}),
   execute: async (_args, api, context) => {
@@ -304,54 +392,62 @@ const getGoalTool = defineTool({
     const goal = doc?.goal ?? null
     const text = goal
       ? `Goal (${goalSummary(goal)}): "${goal.objective}"`
-      : 'No goal is set in this conversation. The user can set one with "/goal <objective>".'
+      : 'No goal is set for this conversation. Continue according to the current task and available goal policy.'
     return { output: [{ type: 'text' as const, text }], details: goalDetails(goal) }
   },
 })
 
 /** DSH's `create_goal` as a Pi tool: one unfinished goal per conversation, stored in the document. */
-const createGoalTool = defineTool({
-  name: 'create_goal',
-  description: [
-    'Set a goal for this conversation: the objective the user wants carried through several turns.',
-    'Refused while an unfinished goal exists; edit that one with update_goal or ask the user to clear it.',
-    'max_goal_rounds caps the automatic continuation rounds (default 10); the goal stays active until completed or blocked.',
-  ].join(' '),
-  parameters: Type.Object({
-    objective: Type.String(),
-    max_goal_rounds: Type.Optional(Type.Number()),
-  }),
-  execute: async (args, api, context) => {
-    const input: GoalCreateInput = {
-      id: randomUUID(),
-      objective: args.objective,
-      ...(args.max_goal_rounds === undefined ? {} : { maxGoalRounds: args.max_goal_rounds }),
-    }
-    // Rejected before the commit when the arguments themselves are invalid, so no write is attempted.
-    const validated = applyGoalCreate(null, input, Date.now())
-    if (!validated.ok) throw new Error(validated.error)
-    const goal = await api.commit(async (tx) => {
-      const doc = await tx.doc(Goals, api.conversationId)
-      // Re-validated against the committed document so two create calls cannot race past each other.
-      const outcome = applyGoalCreate(doc.goal, input, Date.now())
-      if (!outcome.ok) throw new Error(outcome.error)
-      doc.goal = outcome.goal
-      return outcome.goal
-    }, context)
-    return {
-      output: [{ type: 'text' as const, text: `Goal created (${goalSummary(goal)}): "${goal.objective}"` }],
-      details: goalDetails(goal),
-    }
-  },
-})
+function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
+  return defineTool({
+    name: 'create_goal',
+    description: [
+      'Create a persisted goal that keeps this conversation working across bounded automatic continuation rounds.',
+      'Use it for a direct human request that needs work across multiple turns, even when the user did not say "goal"; do not use it for trivial, single-turn, or unrelated work.',
+      'An unfinished goal cannot be replaced; continue its objective or ask the user to use the goal controls. max_goal_rounds caps automatic continuation rounds (default 10).',
+    ].join(' '),
+    parameters: Type.Object({
+      objective: Type.String(),
+      max_goal_rounds: Type.Optional(Type.Number()),
+    }),
+    execute: async (args, api, context) => {
+      if (!await allowed(canCreate, api.conversationId, context)) {
+        throw new Error('Goal creation is unavailable for this conversation.')
+      }
+      const plan = await api.snapshot(Plans, api.conversationId, context)
+      if (plan?.active === true) throw new Error(PLAN_MODE_ERROR)
+      const input: GoalCreateInput = {
+        id: randomUUID(),
+        objective: args.objective,
+        ...(args.max_goal_rounds === undefined ? {} : { maxGoalRounds: args.max_goal_rounds }),
+      }
+      // Reject invalid arguments before opening a write transaction.
+      const validated = applyGoalCreate(null, input, Date.now())
+      if (!validated.ok) throw new Error(validated.error)
+      const goal = await api.commit(async (tx) => {
+        const currentPlan = await tx.doc(Plans, api.conversationId)
+        if (currentPlan.active) throw new Error(PLAN_MODE_ERROR)
+        const doc = await tx.doc(Goals, api.conversationId)
+        const outcome = applyGoalCreate(doc.goal, input, Date.now())
+        if (!outcome.ok) throw new Error(outcome.error)
+        doc.goal = outcome.goal
+        return outcome.goal
+      }, context)
+      return {
+        output: [{ type: 'text' as const, text: `Goal created (${goalSummary(goal)}): "${goal.objective}"` }],
+        details: goalDetails(goal),
+      }
+    },
+  })
+}
 
 /** DSH's `update_goal` as a Pi tool: CAS on revision, phase changes, model limited to complete/blocked. */
 const updateGoalTool = defineTool({
   name: 'update_goal',
   description: [
-    'Update the conversation goal. Pass the goal_id and the revision from get_goal; a stale revision is rejected.',
+    'Update the conversation goal. Pass the goal_id and revision shown in the current goal context; a stale revision is rejected.',
     'The model may only report action "complete" or "blocked" (blocked needs blocked_reason).',
-    'edit, pause, resume and clear are user requests: never call them yourself, ask the user instead.',
+    'Only complete and blocked are valid model actions; edit, pause, and resume are user requests handled by the goal controls.',
   ].join(' '),
   parameters: Type.Object({
     goal_id: Type.String(),
@@ -383,10 +479,22 @@ const updateGoalTool = defineTool({
   },
 })
 
-/** DSH's goal tools, policy section and continuation hook; register it like `TodoTools` in the runtime. */
-export const GoalExtension: Extension = defineExtension({
-  name: 'goal',
-  tools: [getGoalTool, createGoalTool, updateGoalTool],
-  sections: [goalSection],
-  hooks: [goalHook],
-})
+/** DSH's goal tools, policy section and continuation hook with runtime-owned authorization gates. */
+export function createGoalExtension(options: GoalToolOptions = {}): Extension {
+  const activeOptions: Required<GoalToolOptions> = {
+    canCreate: options.canCreate ?? (async () => true),
+    canContinue: options.canContinue ?? (async () => true),
+  }
+  const createTool = createGoalTool(activeOptions.canCreate)
+  return defineExtension({
+    name: 'goal',
+    tools: [getGoalTool, createTool, updateGoalTool],
+    sections: [createGoalSection(activeOptions)],
+    hooks: [createGoalHook(activeOptions.canContinue)],
+  })
+}
+
+/** Existing standalone default; runtime integrations should use `createGoalExtension`. */
+export const GoalExtension: Extension = createGoalExtension()
+
+export default GoalExtension

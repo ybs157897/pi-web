@@ -20,3 +20,22 @@
 - 定了：停止改为保留排队输入（与 DSH 语义一致），发送下一条消息后继续处理；README、architecture 与 runtime 测试同步更新。
 - 定了：按真实 DSH 0.2.1-rc.2 逐屏视觉核对，先修输入区四项——附件卡、整页拖拽遮罩、`/` 指令面板、`@` 引用面板。核对清单与进度见 `docs/parity.md`。
 - 判据：类型检查与全部测试通过；四项改动在 1440×900 浅色主题下与 DSH 截图对照无明显错位。
+- 定了：开启 Pi Durable 1.3.0 的 code mode 与 MCP。代码模式三态（off/on/only，默认 on，设置可切并应用到空闲会话），`codemode` 工具用 QuickJS 沙箱执行脚本，脚本内调用是嵌套工具调用；工具卡展示脚本、输出与 `details.calls` 子调用。MCP 只读导入用户级 `~/.pi/agent/mcp.json`（demo 为 `<数据目录>/mcp.json`，`PI_WEB_MCP_CONFIG` 可覆盖），支持 stdio/Streamable HTTP、`mcp__<server>__<tool>` 命名、`codemode/deferred/direct/hidden` exposure 与 `tool_search`，设置新增只读 MCP 状态页；OAuth 暂不接入，配置变更需重启。
+- 判据：`npm run typecheck`、全量 vitest（166 项，含 mcp 9 项与 runtime 3 项新用例）、`npx vite build` 通过；demo 实例 HTTP 验收 codemodeMode 切换、`/api/mcp` 形状与 `[codemode]` 脚本真实调用 bash；MCP 连接/隔离由内存 transport 与真实 stdio 夹具覆盖；ego-browser 真实浏览器冒烟（代码工具卡/代码模式三选/MCP tab）0 console error，截图在 `artifacts/ui-codemode-check/`（gitignored）；独立 verifier 45/45 检查 PASS（含凭据不泄漏、readOnly 工具面、busy/preset 不误伤）。真实模型复核脚本 `npm run test:live:codemode` 已就绪，但 opencode-go 供应商返回 401 `api_key_expired`（平台 key 过期，与本轮代码无关），保留错误待 key 恢复后补跑。
+- 定了：子智能体的转录内呈现改为「一行彩色胶囊」（`SubagentRunStrip`）：同一回合连续的 `subagent` 调用折成一组，**代码模式脚本里通过 `tools.subagent` 发起的嵌套调用**也提成同一组（脚本卡隐藏这些嵌套行；截断的 `args` 用字段前缀还原 label）；每个子会话按父会话子列表顺序取固定配色（缺行时按 id 哈希，6 色循环）；尚未匹配到子会话时显示转圈 + 「创建中」/「正在创建子智能体」，运行中显示 `{已结束}/{总数}`，完成后显示 tokens，失败标红并描边；点胶囊复用既有 `selectConversation` 打开子会话的「对话」界面（执行过程在转录里可见），父标题面包屑返回父会话。已完成但 label 对不上的胶囊会按 label 前缀、再按最新子会话顺序兜底匹配，避免出现不可点击的完成态。工具结果与实时投影（`details.result` 嵌套形状）合并出状态与指标，`ConversationDetail.subagents` 在有子会话运行时 1.5s 轮询。
+- 判据：`npm run typecheck`、全量 vitest（178 项，+11：`tests/subagent-run-model.test.ts`，render-model +2）、`npx vite build` 通过；demo 实例（4331）跑 `[subagents]` 三路并行委派，CDP 无头浏览器验收完成态三色胶囊 + tokens、运行态转圈 + `0/3 结束`、点 city 胶囊进入子会话并可经面包屑返回、暗色主题同几何可读，0 页面异常；截图在 `artifacts/subagent-strip-check/`（gitignored）。
+- 定了：Windows 为「有条件支持」。README 新增 Windows 章节（Node/Git for Windows 前提、koffi 可选依赖、cmd/PowerShell 启动写法、与 macOS 的差异、验证差异），architecture 新增 Platforms 小节；完整审计、证据与待实机验证清单见 `docs/windows-support.md`。Windows 上 bash 工具依赖 Git for Windows（未接入 PowerShell 工具），`workspaceWrite` 仅 macOS 可用（capabilities 已降级为 readOnly/fullAccess），Windows 原生目录选择器（koffi + IFileOpenDialog）已接入但未经实机验证。
+- 判据：Windows 10/11 + Node 24 + Git for Windows 下 `npm run dev` 可打开 127.0.0.1:4317，原生选择器与 bash 工具按 README 描述工作；README、architecture 与 `docs/windows-support.md` 对能力边界与前提的说明一致。
+- 未决：Windows 实机验收（koffi/COM 选择器全链路与失败回退、长路径/UNC、WAL 与关控制台恢复、ACL、Git Bash/Git.exe 探测、Git 分支、Skills、默认任务规划/提示词资产、MCP）与 Windows CI；`npm test` 需平台化 POSIX 权限断言、Skills 路径分隔符/符号链接和 Git 测试；`test:live:tools`/`test:live:codemode` 写死 `workspaceWrite`，Windows 上不可用，而 `test:live:skills`/`test:live:workflow` 仍需真实模型、Git Bash 与 Windows 实机记录。
+- 定了：界面按用户要求引入 ZCode 参照（`zai-org/ZCode` 开源仓库，浅克隆核对）：① 输入区上方空态标题按 ZCode 实现——5/9/12/14/18/23 分段的问候语 + 背后 400×320 渐隐 Logo（20–30px 按可用宽度自适应，文案取自 ZCode locales）；Logo 沿用 ZCode 的尺寸、上移位置与渐隐遮罩，但形状改为 Pi 的 π 描边；标题旁不再显示小 π 标记、产品名或「预览版」徽标；② 侧栏移除头部「新建会话」图标按钮与「新会话」按钮上的快捷键徽标；③ 修复侧栏折叠后 `新会话` 按钮文字与快捷键徽标重叠（重影）；④ 空态隐藏「标准模式」预设选择器（无预设时不渲染，有预设仍可选）；⑤ 新增 Git 分支切换：repo 级本地分支列表 + 切换 + 新建并切换，交互参照 ZCode `GitBranchSwitcher`（搜索框 + 当前分支置顶 + 底部「新建分支并切换」），阻塞原因按 ZCode 的结构化 issue code 返回（`packages/services/src/git/repo/gitCliHelpers.ts:64`），不做 stash / force / rebase 等本文档未承诺的工作流。
+- 判据：`npm run typecheck`、全量 vitest、`npx vite build` 通过；demo 实例上真实浏览器核对问候语分段/背景 Logo/侧栏展开与折叠（无重影）/空态无预设选择器；分支切换在临时 git 仓库工作区实测「列出 → 切换 → 新建并切换 → 非法名/未提交覆盖的阻塞提示」。
+
+- 定了：内置技能创建器与目录、加载、保存、校验；设置页可查看技能。
+- 判据：新技能可跨会话和重启使用，只读与工作区边界有效。
+- 未决：真实模型对照仍受 401/缺失凭据阻挡；2026-10-20 的 macOS 基线已通过 typecheck、241 项测试与 build，但 Windows 实机验收尚未开始。
+
+## 2026-10-20
+
+- 定了：自主拆任务、更新进度和汇报规则默认接入，不需手动配置预设。
+- 判据：模型请求含核心规则；Plan、只读、分叉和重启均符合约束。
+- 未决：两侧真实模型对照被过期或缺失凭据阻挡。

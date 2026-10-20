@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { KeyboardEvent, ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 import {
   Button, Checkbox, FileTypeIcon, IconAgentPresetOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular,
   IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconDatabaseOutlineRegular, IconEditOutlineRegular,
@@ -12,8 +12,10 @@ import type { AccessMode, AgentPreset, ModelCatalog, ModelOption, QueueActionInp
 import { useUiPreferences } from './ui-preferences.tsx'
 import { cacheHitPercent, formatTokens } from './render-labels.ts'
 import ModelSelect from './ModelSelect.tsx'
+import GitBranchSwitcher from './GitBranchSwitcher.tsx'
 import type { ConversationStats } from './render-model.ts'
 import { matchesShortcut, resolveShortcuts } from './keyboard.ts'
+import { CHAT_EMPTY_GREETINGS, chatEmptyGreeting, greetingFontSizePx, nextGreetingDelayMs } from './greeting.ts'
 import css from './Composer.module.css'
 
 export interface DraftImage { id: string; file: File; preview: string; data: string; mimeType: string; status: 'reading' | 'ready' | 'error'; error?: string }
@@ -76,6 +78,12 @@ export default function Composer(props: ComposerProps) {
   const [dragActive, setDragActive] = useState(false)
   const [accessConfirm, setAccessConfirm] = useState(false)
   const [accessAck, setAccessAck] = useState(false)
+  const [greetingDate, setGreetingDate] = useState(() => new Date())
+  const [greetingSize, setGreetingSize] = useState(30)
+  const greetingRef = useRef<HTMLParagraphElement>(null)
+  const greetingMeasure = useRef<HTMLSpanElement>(null)
+  const greeting = chatEmptyGreeting(greetingDate)
+  const greetingText = t(CHAT_EMPTY_GREETINGS[greeting].zh, CHAT_EMPTY_GREETINGS[greeting].en)
   const modelChoices = catalog?.models ?? []
   const selectedModel = modelChoices.find(item => item.provider === model?.provider && item.modelId === model.modelId)
   const thinkingChoices = selectedModel?.thinkingLevels?.length ? selectedModel.thinkingLevels : selectedModel?.reasoning ? catalog?.thinkingLevels ?? [] : ['off'] as ThinkingLevel[]
@@ -95,6 +103,33 @@ export default function Composer(props: ComposerProps) {
   const accessIcon = (mode: AccessMode): ReactNode => mode === 'readOnly' ? <PermissionIconReadOnlyRegular size={14} /> : mode === 'workspaceWrite' ? <PermissionIconWorkspaceWriteRegular size={14} /> : <PermissionIconFullAccessRegular size={14} />
 
   useEffect(() => { guard.current = observeComposition(document); return () => { guard.current?.dispose(); guard.current = null } }, [])
+  // ZCode's draft greeting rolls over at fixed hours (ConversationDraftEmptyState.tsx:20-60).
+  useEffect(() => {
+    if (!hero) return
+    const timer = window.setTimeout(() => setGreetingDate(new Date()), nextGreetingDelayMs(greetingDate))
+    return () => window.clearTimeout(timer)
+  }, [greetingDate, hero])
+  // Shrink only when the natural 30px text collides with the composer width (:98-137).
+  useLayoutEffect(() => {
+    if (!hero) return
+    const container = greetingRef.current
+    const measure = greetingMeasure.current
+    if (!container || !measure) return
+    const update = () => {
+      const style = window.getComputedStyle(container)
+      const padding = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)
+      setGreetingSize(greetingFontSizePx(container.getBoundingClientRect().width - padding, measure.getBoundingClientRect().width))
+    }
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(container)
+    observer.observe(measure)
+    return () => observer.disconnect()
+  }, [greeting, hero])
   useEffect(() => {
     let depth = 0
     const hasFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer?.types ?? []).includes('Files')
@@ -267,15 +302,24 @@ export default function Composer(props: ComposerProps) {
 
   return <div className={`${css.composerArea} ${hero ? css.hero : ''}`} data-composer-mode={hero ? 'hero' : 'docked'}>
     {hero && <>
-      <div className={css.heroTitle}><span className={css.heroMark} aria-hidden>π</span><h1>{t('探索未至之境', 'Explore beyond')}</h1><span className={css.preview}>{t('预览版', 'Preview')}</span></div>
+      <div className={css.heroGreeting}>
+        <svg className={css.heroLogo} viewBox="0 0 400 320" width="400" height="320" fill="none" aria-hidden="true" focusable="false">
+          <text x="200" y="330" textAnchor="middle" fontFamily="Georgia, 'Times New Roman', serif" fontSize="680" fontWeight="400" fill="none" stroke="currentColor" strokeWidth="1">π</text>
+        </svg>
+        <p ref={greetingRef} data-draft-greeting="true" className={css.greeting} style={{ '--greeting-font-size': `${greetingSize}px` } as CSSProperties}>
+          <span ref={greetingMeasure} className={css.greetingMeasure} aria-hidden="true">{greetingText}</span>
+          <span>{greetingText}</span>
+        </p>
+      </div>
       <div className={css.heroContext}>
         <Menu open={menu === 'workspace'} onClose={() => setMenu(null)} portal items={[
           ...workspaces.map(item => ({ id: item.id, label: item.name, icon: <IconFolderOpenOutlineRegular size={14} /> })),
           { type: 'separator', id: 'workspace-divider' }, { id: '__add', label: t('添加工作区…', 'Add workspace…'), icon: <IconPlusOutlineRegular size={14} /> },
         ]} selectedId={workspace?.id} onSelect={id => { setMenu(null); if (id === '__add') props.onAddWorkspace?.(); else props.onSelectWorkspace?.(id) }}
           anchor={<button className={css.contextButton} type="button" aria-label={t('选择工作区', 'Choose workspace')} onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}><IconFolderOpenOutlineRegular size={15} /><span>{workspace?.name ?? t('选择工作区', 'Choose workspace')}</span><IconChevronDownOutlineRegular size={11} /></button>} />
-        <Menu open={menu === 'preset'} onClose={() => setMenu(null)} portal items={[{ id: '__none', label: t('标准模式（无预设）', 'Standard mode (no preset)') }, ...presets.map(item => ({ id: item.id, label: item.name }))]} selectedId={presetId ?? '__none'}
-          onSelect={id => { props.onSelectPreset?.(id); setMenu(null) }} anchor={<button className={css.contextButton} type="button" onClick={() => setMenu(menu === 'preset' ? null : 'preset')}><IconAgentPresetOutlineRegular size={14} /><span>{selectedPreset?.name ?? t('标准模式', 'Standard mode')}</span><IconChevronDownOutlineRegular size={11} /></button>} />
+        <GitBranchSwitcher workspaceId={workspace?.id} />
+        {presets.length > 0 && <Menu open={menu === 'preset'} onClose={() => setMenu(null)} portal items={[{ id: '__none', label: t('标准模式（无预设）', 'Standard mode (no preset)') }, ...presets.map(item => ({ id: item.id, label: item.name }))]} selectedId={presetId ?? '__none'}
+          onSelect={id => { props.onSelectPreset?.(id); setMenu(null) }} anchor={<button className={css.contextButton} type="button" onClick={() => setMenu(menu === 'preset' ? null : 'preset')}><IconAgentPresetOutlineRegular size={14} /><span>{selectedPreset?.name ?? t('标准模式', 'Standard mode')}</span><IconChevronDownOutlineRegular size={11} /></button>} />}
       </div>
     </>}
     {queue.length > 0 && <div className={css.queue} aria-label={t('待处理消息', 'Queued messages')}>
@@ -365,6 +409,7 @@ export default function Composer(props: ComposerProps) {
             { id: 'commands', label: t('调用指令', 'Commands') },
           ]} onSelect={id => { setMenu(null); if (id === 'upload') fileInput.current?.click(); else { const symbol = id === 'reference' ? '@' : '/'; const next = `${value}${value ? ' ' : ''}${symbol}`; updateValue(next, next.length); requestAnimationFrame(() => textarea.current?.focus()) } }}
             anchor={<button type="button" className={css.add} aria-label={t('添加文件或调用指令', 'Add files or commands')} disabled={disabled} onClick={() => setMenu(menu === 'add' ? null : 'add')}><IconPlusOutlineRegular size={16} /></button>} />
+          {!hero && <GitBranchSwitcher workspaceId={workspace?.id} compact />}
           {plan && <Tooltip label={t('计划模式已开启，点击退出', 'Plan mode is on; click to leave')} portal>
             <button type="button" className={css.planChip} data-plan-chip aria-pressed={true}
               aria-label={t('退出计划模式', 'Leave plan mode')} onClick={() => onPlan?.(false)}>

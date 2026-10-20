@@ -1,4 +1,5 @@
 import type { GoalUpdateRequest } from '../shared/types.ts'
+import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type {
   AddWorkspaceInput,
   AccessMode,
@@ -12,8 +13,12 @@ import type {
   CreateAgentPresetInput,
   CreateAutomationInput,
   CreateConversationInput,
+  CreateGitBranchInput,
   DirectoryListing,
   EditQueueInput,
+  GitBranchMutation,
+  GitBranchSnapshot,
+  McpView,
   ModelCatalog,
   ProviderConfigSummary,
   ProviderInput,
@@ -21,6 +26,7 @@ import type {
   RenameWorkspaceInput,
   SubmitInput,
   SubagentSummary,
+  SwitchGitBranchInput,
   TeamView,
   UpdateAgentPresetInput,
   UpdateAppSettingsInput,
@@ -66,6 +72,8 @@ export interface Runtime {
   testProvider(id: string, modelId?: string): Promise<ProviderTestResult>
   discoverProvider(id: string): Promise<{ models: Array<{ id: string; name: string }> }>
   settings(): AppSettings
+  /** The imported user-level Pi MCP configuration and each server's connection state. */
+  mcp(): McpView
   capabilities(): { accessModes: AccessMode[] }
   updateSettings(input: UpdateAppSettingsInput): Promise<AppSettings>
   /** Open the persisted application configuration file with the host's default program. */
@@ -82,6 +90,15 @@ export interface Runtime {
   searchWorkspace(id: string, query: string): Promise<WorkspaceFileEntry[]>
   workspaceFile(id: string, path: string): Promise<WorkspaceFile>
   workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }>
+  /** Local Git branches of one workspace, plus where HEAD currently points. */
+  gitBranches(id: string): Promise<GitBranchSnapshot>
+  /** Switch HEAD to an existing local branch; blocked switches come back as structured issues. */
+  switchGitBranch(id: string, input: SwitchGitBranchInput): Promise<GitBranchMutation>
+  /** Create a branch at HEAD and switch to it. */
+  createGitBranch(id: string, input: CreateGitBranchInput): Promise<GitBranchMutation>
+  skills(workspaceId: string): Promise<SkillCatalog>
+  skill(workspaceId: string, skillId: string, resource?: string): Promise<SkillContent>
+  validateSkill(workspaceId: string, skillId: string): Promise<SkillValidation>
   presets(): AgentPreset[]
   createPreset(input: CreateAgentPresetInput): Promise<AgentPreset>
   updatePreset(id: string, input: UpdateAgentPresetInput): Promise<AgentPreset>
@@ -97,4 +114,4 @@ export interface Runtime {
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
   close(): Promise<void>
 }
-export interface RuntimeOptions { dataDir: string; workspace: string; piDir?: string; demo?: boolean }
+export interface RuntimeOptions { dataDir: string; workspace: string; piDir?: string; demo?: boolean; /** Override the imported Pi MCP file (tests and `PI_WEB_MCP_CONFIG`). */ mcpConfigPath?: string }

@@ -10,7 +10,7 @@ import type { ConversationDetail } from '../src/shared/types.ts'
 
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 
-async function fixture(demo = true, appState?: unknown): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
+async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
   const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-runtime-'))
   const dataDir = join(root, 'data')
   const workspace = join(root, 'workspace')
@@ -18,6 +18,8 @@ async function fixture(demo = true, appState?: unknown): Promise<{ root: string;
   await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(workspace, { recursive: true }), mkdir(piDir, { recursive: true })])
   await writeFile(join(piDir, 'settings.json'), '{}\n')
   if (appState !== undefined) await writeFile(join(dataDir, 'app-state.json'), JSON.stringify(appState))
+  // Demo runtimes read their own MCP file under the data directory, so tests never touch ~/.pi.
+  if (mcpConfig !== undefined) await writeFile(join(dataDir, 'mcp.json'), JSON.stringify(mcpConfig))
   const runtime = await createRuntime({ dataDir, workspace, piDir, demo })
   const cleanup = { root, closers: [() => runtime.close()] }
   fixtures.push(cleanup)
@@ -665,5 +667,73 @@ describe('Pi Durable runtime', () => {
     } finally {
       gate.release()
     }
+  })
+
+  it('runs model-written code mode scripts against the conversation tools', async () => {
+    const { runtime } = await fixture()
+    const created = await runtime.create({ title: 'Code mode' })
+    await runtime.submit(created.conversation.id, { text: '[codemode] 演示', requestId: randomUUID() })
+    const completed = await waitForCompletedRun(runtime, created.conversation.id)
+    const codemode = completed.messages.find(message => message.role === 'tool' && message.toolName === 'codemode')
+    expect(codemode?.isError).toBeFalsy()
+    // The script's output is what the model sees, and its nested bash call is in the details.
+    expect(textOf(codemode)).toContain('codemode-ok')
+    expect(JSON.stringify(codemode?.details)).toContain('bash')
+    expect(completed.messages.some(message => message.role === 'assistant' && textOf(message).includes('codemode-ok'))).toBe(true)
+  })
+
+  it('switches code mode between the native and script-only presentations for existing conversations', async () => {
+    const { runtime } = await fixture()
+    const created = await runtime.create({ title: 'Code mode switch' })
+
+    // Default `on`: a direct bash call is offered to the model and runs.
+    await runtime.submit(created.conversation.id, { text: '[direct-tool] 第一次', requestId: randomUUID() })
+    const on = await waitForCompletedRun(runtime, created.conversation.id)
+    expect(on.messages.find(message => message.role === 'tool' && message.toolName === 'bash')?.isError).toBeFalsy()
+
+    // `only`: the model sees just codemode, so the same direct call is refused.
+    await runtime.updateSettings({ codemodeMode: 'only' })
+    await runtime.submit(created.conversation.id, { text: '[direct-tool] 第二次', requestId: randomUUID() })
+    const only = await waitForCompletedRun(runtime, created.conversation.id)
+    const refused = [...only.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'bash')
+    expect(refused?.isError).toBe(true)
+    expect(runtime.settings().codemodeMode).toBe('only')
+
+    // `off` then back `on`: the stored script-only filter is cleared, so codemode works again.
+    await runtime.updateSettings({ codemodeMode: 'off' })
+    await runtime.submit(created.conversation.id, { text: '[codemode] 关闭后再试', requestId: randomUUID() })
+    const off = await waitForCompletedRun(runtime, created.conversation.id)
+    const absent = [...off.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'codemode')
+    expect(absent?.isError).toBe(true)
+
+    await runtime.updateSettings({ codemodeMode: 'on' })
+    await runtime.submit(created.conversation.id, { text: '[codemode] 重新开启', requestId: randomUUID() })
+    const back = await waitForCompletedRun(runtime, created.conversation.id)
+    const restored = [...back.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'codemode')
+    expect(restored?.isError).toBeFalsy()
+    expect(textOf(restored)).toContain('codemode-ok')
+
+    // `on` restores the native tools too: a stale script-only filter would refuse them.
+    await runtime.submit(created.conversation.id, { text: '[direct-tool] 重新开启后', requestId: randomUUID() })
+    const directBack = await waitForCompletedRun(runtime, created.conversation.id)
+    expect([...directBack.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'bash')?.isError).toBeFalsy()
+  })
+
+  it('imports the Pi MCP file read-only and keeps serving when a server cannot start', async () => {
+    const empty = await fixture()
+    expect(empty.runtime.mcp().configExists).toBe(false)
+    expect(empty.runtime.mcp().servers).toEqual([])
+    expect(empty.runtime.mcp().configPath).toBe(join(empty.dataDir, 'mcp.json'))
+
+    const broken = await fixture(true, undefined, {
+      mcpServers: { broken: { command: 'definitely-not-a-pi-web-command' } },
+    })
+    const view = broken.runtime.mcp()
+    expect(view.configExists).toBe(true)
+    expect(view.servers).toHaveLength(1)
+    expect(view.servers[0]?.status).toBe('error')
+    expect(view.servers[0]?.error).toBeTruthy()
+    // A failing MCP server never keeps the runtime from creating conversations.
+    expect((await broken.runtime.create({ title: 'Still up' })).conversation.id).toBeTruthy()
   })
 })

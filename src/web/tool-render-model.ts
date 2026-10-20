@@ -14,6 +14,18 @@ export const DISMISSAL_REPLY_KIND = 'dismissed_pending_question'
 /** Tools whose rows present the read-only question record instead of a generic tool summary. */
 const QUESTION_TOOL_NAMES = new Set(['ask_user_question', 'request_user_input'])
 
+/** Pi's code-mode tool: one call runs a model-written script against the conversation's tools. */
+export const CODEMODE_TOOL_NAME = 'codemode'
+
+/** Pi's code-mode tool calls are named `mcp__<server>__<tool>`; DSH titles them the same way. */
+const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/iu
+
+/** DSH's MCP row title for an `mcp__server__tool` name; undefined for every other tool. */
+function mcpRowTitle(name: string): string | undefined {
+  const match = MCP_TOOL_NAME.exec(name)
+  return match === null ? undefined : `MCP · ${match[1]} · ${match[2]}`
+}
+
 export interface ToolRenderModel {
   readonly name: string
   readonly title: string
@@ -101,7 +113,11 @@ export function processTitleFromCounts(counts: readonly ActivityCount[], t: Tran
 
 /** Row title in DSH's `tool.title` vocabulary, which differs from the group categories. */
 export function toolRowTitle(name: string, t: Translate): string {
+  // MCP names are rendered as `MCP · server · tool`; the category icon stays the generic one.
+  const mcp = mcpRowTitle(name)
+  if (mcp !== undefined) return mcp
   const id = name.toLocaleLowerCase()
+  if (id === CODEMODE_TOOL_NAME) return t('代码', 'Code')
   if (id === 'grep') return t('搜索文件内容', 'Search file contents')
   if (id === 'glob') return t('查找文件', 'Find files')
   switch (toolActivity(id)) {
@@ -118,7 +134,7 @@ export function toolRowTitle(name: string, t: Translate): string {
 /** DSH's live detail priority for the group title, first field with text wins. */
 const LIVE_DETAIL_KEYS = [
   'title', 'description', 'objective', 'task', 'task_name', 'name', 'question', 'questions', 'prompt', 'message',
-  'command', 'cmd', 'queries', 'query', 'pattern', 'url', 'uri', 'file_path', 'path', 'target', 'action', 'status',
+  'command', 'cmd', 'code', 'queries', 'query', 'pattern', 'url', 'uri', 'file_path', 'path', 'target', 'action', 'status',
 ] as const
 
 /** One-line live detail for a running group title, whitespace-normalized. */
@@ -126,7 +142,9 @@ export function toolLiveDetail(args: Readonly<Record<string, unknown>>): string 
   for (const key of LIVE_DETAIL_KEYS) {
     const value = args[key]
     const text = typeof value === 'string' ? value : Array.isArray(value) && value.every(item => typeof item === 'string') ? value.join(', ') : ''
-    const normalized = text.replace(/\s+/gu, ' ').trim()
+    // A code-mode script is a program, not a one-line argument: its first line is the live detail.
+    const single = key === 'code' ? firstLine(text) || text : text
+    const normalized = single.replace(/\s+/gu, ' ').trim()
     if (normalized !== '') return normalized.length > 160 ? `${normalized.slice(0, 159).trimEnd()}…` : normalized
   }
   return ''
@@ -193,7 +211,7 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     : undefined
   return {
     name,
-    title: toolRowTitle(normalizedName, t),
+    title: toolRowTitle(name, t),
     summary,
     output,
     ...(command === undefined ? {} : { command }),
@@ -402,6 +420,11 @@ function summaryFor(
   t: (chinese: string, english: string) => string,
 ): string {
   if (command !== undefined) return firstLine(description ?? command)
+  // A code-mode call's whole argument is the script; its first line is the live detail.
+  if (normalizedName === CODEMODE_TOOL_NAME) {
+    const script = typeof args.code === 'string' ? firstLine(args.code) : ''
+    if (script !== '') return script
+  }
   if (path !== undefined) return path
   const query = stringField(args, ['query', 'pattern', 'searchQuery'])
     ?? (record === undefined ? undefined : stringField(record, ['query', 'pattern']))
@@ -792,6 +815,8 @@ export interface SubagentRowModel {
   readonly summary: string
   /** The child conversation the row can open; absent when the tool never recorded one. */
   readonly childId?: string
+  /** The delegation label the child recorded; the strip names its chip with it. */
+  readonly label?: string
   /** The delegated task text, shown in place of the raw JSON arguments. */
   readonly task?: string
 }
@@ -810,12 +835,121 @@ export function subagentRowModel(input: {
   readonly failed: boolean
 }, t: Translate): SubagentRowModel | null {
   if (input.name.toLocaleLowerCase() !== 'subagent') return null
-  const details = asRecord(input.details)
+  // A live tool message nests the extension's payload under `result` (`projection.ts:liveToolMessages`);
+  // a settled result carries it directly.
+  const record = asRecord(input.details)
+  const details = asRecord(record?.result) ?? record
   const childId = typeof details?.conversationId === 'string' && details.conversationId !== '' ? details.conversationId : undefined
   const label = typeof details?.label === 'string' && details.label.trim() !== '' ? details.label.trim() : undefined
   const task = typeof input.args.task === 'string' && input.args.task.trim() !== '' ? input.args.task : undefined
   const title = t('子智能体', 'Subagent')
   const summary = [t('已开始子智能体', 'Started subagent'), label, childId].filter(part => part !== undefined).join(t(' · ', ' · '))
-  return { title, summary, ...(childId === undefined ? {} : { childId }), ...(task === undefined ? {} : { task }) }
+  return {
+    title,
+    summary,
+    ...(childId === undefined ? {} : { childId }),
+    ...(label === undefined ? {} : { label }),
+    ...(task === undefined ? {} : { task }),
+  }
+}
+
+/* ---------- Code mode: the `codemode` row and the tool calls its script made ---------- */
+
+/** One tool call a script made, matching Pi's `CodemodeNestedCall` result details. */
+export type CodemodeCallStatus = 'running' | 'ok' | 'error' | 'cancelled'
+
+export interface CodemodeCallView {
+  /** The VM's call number, as a stable list key. */
+  readonly id: string
+  readonly name: string
+  /** Compact JSON of the call arguments, kept as the row's hover text. */
+  readonly args: string
+  readonly status: CodemodeCallStatus
+  readonly durationMs?: number
+  /** The failure text, shown under the call row. */
+  readonly error?: string
+}
+
+/** Everything the `codemode` row shows: the script, its nested calls, and the result text. */
+export interface CodemodeRowModel {
+  /** Row title in DSH's wording. */
+  readonly title: string
+  /** Collapsed live detail: the script's first line, falling back to the result's first line. */
+  readonly summary: string
+  /** The script the call ran; empty for a result recorded without its call. */
+  readonly script: string
+  /** The tool result text (the script's console output and returned value). */
+  readonly output: string
+  /** The tool calls the script made, in the order it made them. */
+  readonly calls: readonly CodemodeCallView[]
+  /** Complete output file, when the result text was cut to its token budget. */
+  readonly fullOutputPath?: string
+}
+
+const CODEMODE_CALL_STATUSES = new Set<string>(['running', 'ok', 'error', 'cancelled'])
+
+/**
+ * Build the `codemode` row from the call's script argument and the result's details.
+ * A result without `details.calls` (a still-running call, or an older record) is not
+ * specialized: the row falls back to the ordinary tool card.
+ * @returns The row model, or null when this is not a code-mode call or has no call list.
+ */
+export function codemodeRowModel(input: {
+  readonly name: string
+  readonly args: Readonly<Record<string, unknown>>
+  readonly details: unknown
+  readonly output: string
+}, t: Translate): CodemodeRowModel | null {
+  if (input.name.toLocaleLowerCase() !== CODEMODE_TOOL_NAME) return null
+  // The durable details can arrive as a record or as a JSON string.
+  const details = detailsRecordFor(input.details, '')
+  if (details === undefined || !Array.isArray(details.calls)) return null
+  const script = typeof input.args.code === 'string' ? input.args.code : ''
+  const fullOutputPath = typeof details.fullOutputPath === 'string' && details.fullOutputPath.trim() !== ''
+    ? details.fullOutputPath
+    : undefined
+  return {
+    title: t('代码', 'Code'),
+    summary: firstLine(script) || firstLine(input.output),
+    script,
+    output: input.output,
+    calls: parseCodemodeCalls(details.calls),
+    ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
+  }
+}
+
+/** The nested call list, dropping the entries a strict reader cannot show. */
+function parseCodemodeCalls(value: readonly unknown[]): CodemodeCallView[] {
+  const calls: CodemodeCallView[] = []
+  for (const entry of value) {
+    const call = asRecord(entry)
+    if (call === undefined || typeof call.name !== 'string' || call.name === '') continue
+    if (typeof call.status !== 'string' || !CODEMODE_CALL_STATUSES.has(call.status)) continue
+    const id = typeof call.id === 'string' ? call.id
+      : typeof call.id === 'number' && Number.isFinite(call.id) ? String(call.id)
+        : String(calls.length)
+    const durationMs = finiteNumber(call.durationMs)
+    calls.push({
+      id,
+      name: call.name,
+      args: codemodeCallArgs(call.args),
+      status: call.status as CodemodeCallStatus,
+      ...(durationMs === undefined ? {} : { durationMs }),
+      ...(typeof call.error === 'string' && call.error !== '' ? { error: call.error } : {}),
+    })
+  }
+  return calls
+}
+
+/** Compact argument text; arrays and records are serialized, unreadable values read as empty. */
+function codemodeCallArgs(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  try {
+    return JSON.stringify(value) ?? ''
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error
+    return ''
+  }
 }
 

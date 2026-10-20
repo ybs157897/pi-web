@@ -1,10 +1,11 @@
 import type {
   AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
-  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GoalUpdateRequest,
-  ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
+  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GoalUpdateRequest,
+  McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
+import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 
 export class ApiFailure extends Error {
   readonly code: string | undefined
@@ -152,6 +153,10 @@ export const api = {
   getSettings(): Promise<AppSettings> {
     return request('/api/settings')
   },
+  /** The imported Pi MCP catalog: configuration path, servers, their tools and connection states. */
+  getMcp(): Promise<McpView> {
+    return request('/api/mcp')
+  },
   updateSettings(patch: UpdateAppSettingsInput): Promise<AppSettings> {
     return request('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) })
   },
@@ -161,6 +166,19 @@ export const api = {
   },
   listWorkspaces(): Promise<{ workspaces: WorkspaceSummary[] }> {
     return request('/api/workspaces')
+  },
+  getSkills(workspaceId: string): Promise<SkillCatalog> {
+    return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/skills`)
+  },
+  getSkill(workspaceId: string, skillId: string, resource?: string): Promise<SkillContent> {
+    const query = new URLSearchParams({ skillId })
+    if (resource !== undefined) query.set('resource', resource)
+    return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/skills/read?${query.toString()}`)
+  },
+  validateSkill(workspaceId: string, skillId: string): Promise<SkillValidation> {
+    return request(`/api/workspaces/${encodeURIComponent(workspaceId)}/skills/validate`, {
+      method: 'POST', body: JSON.stringify({ skillId }),
+    })
   },
   createWorkspace(input: AddWorkspaceInput): Promise<{ workspace: WorkspaceSummary }> {
     return request('/api/workspaces', { method: 'POST', body: JSON.stringify(input) })
@@ -179,6 +197,15 @@ export const api = {
   searchWorkspaceFiles(id: string, queryText: string): Promise<{ entries: WorkspaceFileEntry[] }> {
     const query = new URLSearchParams({ q: queryText })
     return request(`/api/workspaces/${encodeURIComponent(id)}/search?${query.toString()}`)
+  },
+  getGitBranches(id: string): Promise<GitBranchSnapshot> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/branches`)
+  },
+  switchGitBranch(id: string, branchName: string): Promise<GitBranchMutation> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/switch`, { method: 'POST', body: JSON.stringify({ branchName }) })
+  },
+  createGitBranch(id: string, branchName: string): Promise<GitBranchMutation> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/branches`, { method: 'POST', body: JSON.stringify({ branchName }) })
   },
   listPresets(): Promise<{ presets: AgentPreset[] }> {
     return request('/api/presets')

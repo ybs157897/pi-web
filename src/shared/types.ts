@@ -64,6 +64,13 @@ export type CollapseTiming = typeof COLLAPSE_TIMINGS[number]
 /** Detail level for composer statistics and completed-turn usage. */
 export const PERFORMANCE_USAGE_MODES = ['compact', 'detailed'] as const
 export type PerformanceUsageMode = typeof PERFORMANCE_USAGE_MODES[number]
+/**
+ * Pi's code-mode presentation: `off` installs nothing, `on` offers `codemode` beside the
+ * native tools, `only` offers the model just `codemode` and reaches every other tool from a
+ * script. Mirrors the coding agent's `codemode.mode` / MCP exposure.
+ */
+export const CODEMODE_MODES = ['off', 'on', 'only'] as const
+export type CodemodeMode = typeof CODEMODE_MODES[number]
 
 export interface AppSettings {
   theme: 'system' | 'light' | 'dark'
@@ -85,6 +92,8 @@ export interface AppSettings {
   modelAllowlist: string[]
   defaultThinkingLevel: ThinkingLevel
   defaultAccessMode: AccessMode
+  /** Pi code mode for agents built from these settings; `only` hides the native tools from the model. */
+  codemodeMode: CodemodeMode
   defaultPresetId?: string
   defaultWorkspaceId?: string
   shortcuts?: Partial<Record<'newConversation' | 'search' | 'settings' | 'toggleSidebar' | 'send' | 'newline' | 'alternateSend', string>>
@@ -94,6 +103,36 @@ export type UpdateAppSettingsInput = Omit<Partial<AppSettings>, 'defaultModel' |
   defaultPresetId?: string | null
   defaultWorkspaceId?: string | null
   shortcuts?: AppSettings['shortcuts'] | null
+}
+
+/** How one MCP server's tools reach the model, matching Pi's `exposure` vocabulary. */
+export const MCP_EXPOSURES = ['codemode', 'deferred', 'direct', 'hidden'] as const
+export type McpExposure = typeof MCP_EXPOSURES[number]
+export interface McpToolView { name: string; title?: string; description?: string; exposure: McpExposure }
+/**
+ * One server in the user-level `mcp.json` this runtime imported (read-only). The browser never
+ * receives credentials: `headers`/`env` stay on the server and only a boolean connection state
+ * plus the tool catalog cross the protocol.
+ */
+export interface McpServerView {
+  name: string
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  description?: string
+  exposure: McpExposure
+  status: 'connected' | 'error' | 'disabled'
+  tools: McpToolView[]
+  error?: string
+}
+/** The Pi MCP configuration as the browser sees it. */
+export interface McpView {
+  /** Absolute path of the user-level Pi MCP file the runtime imported. */
+  configPath: string
+  /** False when the file does not exist; the catalog is then empty. */
+  configExists: boolean
+  servers: McpServerView[]
+  /** File-level problem (invalid JSON or entries): the runtime stays up and the catalog is empty. */
+  error?: string
 }
 
 export interface WorkspaceSummary { id: string; name: string; path: string; createdAt: number; updatedAt: number }
@@ -109,6 +148,55 @@ export interface WorkspaceFile {
 }
 export interface AddWorkspaceInput { path: string; name?: string }
 export interface RenameWorkspaceInput { name: string }
+
+/** `branch` when HEAD points at a local branch, `detached` for a bare commit (ZCode `GitHeadRefType`). */
+export type GitHeadRefType = 'branch' | 'detached'
+export interface GitLocalBranch {
+  name: string
+  isCurrent: boolean
+  upstreamName: string | null
+  commitHash: string | null
+  commitTimestampMs: number | null
+}
+/** One repository snapshot: the local branches plus where HEAD currently points. */
+export interface GitBranchSnapshot {
+  isGitAvailable: boolean
+  isRepository: boolean
+  repoRoot: string | null
+  headRefType: GitHeadRefType
+  currentBranchName: string | null
+  branches: GitLocalBranch[]
+}
+/** ZCode's branch-blocking vocabulary (`packages/shared/src/git.ts`), minus the codes pi cannot reach. */
+export type GitBranchIssueCode =
+  | 'invalid-branch-name'
+  | 'branch-already-exists'
+  | 'target-branch-not-found'
+  | 'tracked-changes-would-be-overwritten'
+  | 'untracked-changes-would-be-overwritten'
+  | 'conflicts-present'
+  | 'operation-in-progress'
+  | 'branch-in-other-worktree'
+  | 'not-a-repository'
+  | 'unknown'
+export interface GitBranchIssue {
+  code: GitBranchIssueCode
+  message: string
+  /** Workspace-relative files Git named as blocking the switch. */
+  paths?: string[]
+  detail?: string | null
+}
+export interface GitBranchMutation {
+  ok: boolean
+  action: 'switch' | 'create-and-switch'
+  branchName: string | null
+  didChange: boolean
+  created: boolean
+  snapshot: GitBranchSnapshot
+  issues: GitBranchIssue[]
+}
+export interface SwitchGitBranchInput { branchName: string }
+export interface CreateGitBranchInput { branchName: string }
 
 export interface AgentPreset {
   id: string

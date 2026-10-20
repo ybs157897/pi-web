@@ -12,6 +12,7 @@ import type { ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestRe
 import type { RuntimeModels } from './models.ts'
 import { RuntimeError } from './runtime-errors.ts'
 import { SUBAGENT_TOOL } from './subagent-tools.ts'
+import { skillsDemoResponse } from './demo-skills.ts'
 
 interface ResponseGate {
   started: Promise<void>
@@ -23,6 +24,13 @@ interface ResponseGate {
 let nextGate: ResponseGate | undefined
 const DEMO_MODEL: ModelRef = { provider: 'pi-web-demo', modelId: 'demo-model' }
 const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+const requestObservers = new Set<(request: Parameters<FauxResponseFactory>[0]) => void>()
+
+/** Observe requests reaching the explicit demo provider, for runtime wiring acceptance. */
+export function observeDemoRequests(observer: (request: Parameters<FauxResponseFactory>[0]) => void): () => void {
+  requestObservers.add(observer)
+  return () => { requestObservers.delete(observer) }
+}
 
 /** Pause the next demo model response until released or the Pi request is aborted. */
 export function holdNextDemoResponse(): { started: Promise<void>; release(): void } {
@@ -192,6 +200,12 @@ function toolResultText(message: { content: string | readonly { type: string; te
 /** The fixed delegation the `[subagent]` script submits, and the answer its child writes back. */
 const DEMO_SUBAGENT_CHILD_MARKER = '[subagent-child]'
 const DEMO_SUBAGENT_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 归纳子智能体一期机制：子会话如何创建、答案如何取回、面板如何挂上去。`
+/** The parallel delegations the `[subagents]` script submits, so the one-line strip can be checked. */
+const DEMO_PARALLEL_SUBAGENT_TASKS = [
+  { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于春天的小作文，500 字左右。`, label: 'spring' },
+  { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于城市清晨的小作文，500 字左右。`, label: 'city' },
+  { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于一本书的小作文，500 字左右。`, label: 'book' },
+]
 const DEMO_SUBAGENT_ANSWER = [
   '子智能体一期机制小结：',
   '',
@@ -200,7 +214,11 @@ const DEMO_SUBAGENT_ANSWER = [
   '3. UI 通过 `GET /api/conversations/:id/children` 读取子会话摘要，在会话头的计数触发器里展开、打开或停止。',
 ].join('\n')
 
-const scriptedResponse: FauxResponseFactory = async (context, options) => {  await waitAtGate(options?.signal)
+const scriptedResponse: FauxResponseFactory = async (context, options) => {
+  for (const observer of requestObservers) observer(context)
+  await waitAtGate(options?.signal)
+  const skillResponse = skillsDemoResponse(context)
+  if (skillResponse) return skillResponse
   let lastUserIndex = -1
   for (let index = context.messages.length - 1; index >= 0; index--) {
     if (context.messages[index].role === 'user') {
@@ -210,6 +228,7 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {  awa
   }
   const currentResults = context.messages.slice(lastUserIndex + 1).filter((message) => message.role === 'toolResult')
   const userText = latestUserText(context).trim()
+  if (userText.includes('[prompt-probe]')) return fauxAssistantMessage(fauxText('PROMPT_PROBE_OK'))
   const planReply = parsePlanReviewReply(userText)
   const answerReply = planReply === undefined ? parseAnswerReply(userText) : undefined
   if (planReply?.approved) {
@@ -298,6 +317,35 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {  awa
           fauxText('# Render fixture\n\nA paragraph with **bold**, *italic*, `inline code`, and a [citation](https://example.test/source).\n\n## List\n\n- First item\n- Second item\n\n| Surface | Result |\n| --- | --- |\n| Markdown | rendered |\n| Table | aligned |\n\n```ts\nconst rendered = true\n```\n\n$$\nx^2 + y^2 = z^2\n$$\n\nThe image output appears in the successful `read` tool result above.'),
         ])
     }
+  }
+  if (userText.includes('[codemode]')) {
+    const codemodeResults = currentResults.filter((message) => message.toolName === 'codemode')
+    if (codemodeResults.length === 0) {
+      return fauxAssistantMessage(fauxToolCall('codemode', {
+        code: 'const result = await tools.bash({ command: "printf codemode-ok" })\nreturn result.output',
+      }, { id: `demo-codemode-${String(context.messages.length)}` }), { stopReason: 'toolUse' })
+    }
+    const latest = codemodeResults[codemodeResults.length - 1]
+    const output = Array.isArray(latest.content)
+      ? latest.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
+      : ''
+    return fauxAssistantMessage([
+      fauxThinking('脚本已在 QuickJS 沙箱里调用 bash 并取回输出。'),
+      fauxText(`codemode 演示完成。脚本输出：\n\n${output.includes('codemode-ok') ? 'codemode-ok' : output}`),
+    ])
+  }
+  if (userText.includes('[direct-tool]')) {
+    // With `codemode.mode: only` Pi offers the model just `codemode`, so a direct bash
+    // call is refused; with `on` it is a normal tool call. The runtime test uses both.
+    const bashResults = currentResults.filter((message) => message.toolName === 'bash')
+    if (bashResults.length === 0) {
+      return fauxAssistantMessage(fauxToolCall('bash', { command: 'printf direct-ok' },
+        { id: `demo-direct-${String(context.messages.length)}` }), { stopReason: 'toolUse' })
+    }
+    return fauxAssistantMessage([
+      fauxThinking('直接工具调用已被处理，本轮结束。'),
+      fauxText('直接工具调用演示完成。'),
+    ])
   }
   const completedTools = new Set(currentResults.map((message) => message.toolName))
   const runToken = String(context.messages.length)
@@ -586,6 +634,27 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {  awa
     return fauxAssistantMessage([
       fauxThinking('子会话收到委派任务，先给出结论。'),
       fauxText(DEMO_SUBAGENT_ANSWER),
+    ])
+  }
+  if (userText.includes('[subagents]')) {
+    if (currentResults.length < DEMO_PARALLEL_SUBAGENT_TASKS.length) {
+      return fauxAssistantMessage([
+        fauxThinking('开三个子智能体并行写作，用一行色块观察它们的运行状态。'),
+        ...DEMO_PARALLEL_SUBAGENT_TASKS.map((entry, index) => fauxToolCall(SUBAGENT_TOOL, {
+          task: entry.task,
+          label: entry.label,
+        }, { id: `demo-subagents-${runToken}-${index}` })),
+      ], { stopReason: 'toolUse' })
+    }
+    return fauxAssistantMessage([
+      fauxThinking('三个子智能体都已交稿。'),
+      fauxText([
+        '三个子智能体已并行完成：',
+        '',
+        '- 本轮的三次 `subagent` 调用在输入流里收成一行，每个子智能体一个颜色',
+        '- 运行中显示转圈与已用时，完成后显示 tokens，失败会标红',
+        '- 点任意一个色块可以打开它的完整子会话，再用会话头的面包屑回到父会话',
+      ].join('\n')),
     ])
   }
   if (userText.includes('[subagent]')) {

@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
-  Button, Checkbox, IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconCloseOutlineRegular,
+  Button, Checkbox, IconAgentPresetOutlineRegular, IconApiOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconCloseOutlineRegular,
+  IconSkillOutlineRegular,
   IconPlusOutlineRegular, IconSettingsOutlineRegular, IconDatabaseOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular, IconTrashOutlineRegular,
-  Input, Menu, Modal, Switch, Toast, Tooltip,
+  Input, Menu, Modal, StateDot, Switch, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccessMode, AppSettings, CollapseTiming, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderModelInput, ProviderSummary, PerformanceUsageMode, TranscriptViewMode, UpdateAppSettingsInput } from '../shared/types.ts'
+import type { AccessMode, AppSettings, CodemodeMode, CollapseTiming, McpServerView, McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderModelInput, ProviderSummary, PerformanceUsageMode, TranscriptViewMode, UpdateAppSettingsInput } from '../shared/types.ts'
 import { api } from './api.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
+import SkillsPanel from './SkillsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
-export type SettingsTab = 'general' | 'models' | 'presets'
+export type SettingsTab = 'general' | 'models' | 'presets' | 'mcp' | 'skills'
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
@@ -21,6 +23,8 @@ export interface SettingsDialogProps {
   onRefreshCatalog?: () => Promise<void>; accessModes?: AccessMode[]
   /** Provider of the model in use right now, shown as DSH's 正在使用 badge. */
   activeProvider?: string
+  /** Current project workspace, used to preselect the Skills catalog. */
+  workspaceId?: string
 }
 const API_OPTIONS = [
   { id: 'openai-completions', label: 'OpenAI Chat Completions' }, { id: 'openai-responses', label: 'OpenAI Responses' },
@@ -44,6 +48,10 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   const [newProvider, setNewProvider] = useState(false)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [providerChoice, setProviderChoice] = useState<ProviderSummary | undefined>()
+  // The MCP tab owns its read-only snapshot: it is fetched when the tab opens, not with settings.
+  const [mcp, setMcp] = useState<McpView | null>(null)
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpError, setMcpError] = useState('')
   useEffect(() => { if (open) { setTab(initialTab); setError(''); setNewProvider(false) } }, [open, initialTab])
   const providers = catalog?.providers ?? []
   const configured = providers.filter(provider => provider.configured || provider.custom)
@@ -52,6 +60,8 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     { id: 'general', label: t('通用设置', 'General'), icon: <IconSettingsOutlineRegular size={16} /> },
     { id: 'models', label: t('模型', 'Models'), icon: <IconDatabaseOutlineRegular size={16} /> },
     { id: 'presets', label: t('Agent 预设', 'Agent presets'), icon: <IconAgentPresetOutlineRegular size={16} /> },
+    { id: 'mcp', label: 'MCP', icon: <IconApiOutlineRegular size={16} /> },
+    { id: 'skills', label: t('技能', 'Skills'), icon: <IconSkillOutlineRegular size={16} aria-hidden="true" /> },
   ]
   const update = async (patch: UpdateAppSettingsInput) => {
     if (!props.onSettingsChange || pending) return
@@ -70,6 +80,16 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     }
     finally { setOpeningConfig(false) }
   }
+  /** Read the imported Pi MCP catalog; the MCP tab is a read-only view and never rewrites it. */
+  const loadMcp = async () => {
+    if (mcpLoading) return
+    setMcpLoading(true); setMcpError('')
+    try { setMcp(await api.getMcp()) }
+    catch (cause) { setMcpError(cause instanceof Error ? cause.message : t('无法读取 MCP 配置', 'Could not read the MCP configuration')) }
+    finally { setMcpLoading(false) }
+  }
+  // Opening the tab is the only trigger: the dialog does not read the file until it is shown.
+  useEffect(() => { if (open && tab === 'mcp') void loadMcp() }, [open, tab])
   const accessName = (value: AccessMode) => value === 'readOnly' ? t('仅可查看', 'Read only') : value === 'workspaceWrite' ? t('工作区内修改', 'Workspace write') : t('完全权限', 'Full access')
   const themes = [
     { value: 'light' as const, label: t('浅色', 'Light'), icon: <IconLightOutlineRegular size={16} /> },
@@ -95,6 +115,13 @@ export default function SettingsDialog(props: SettingsDialogProps) {
           {tab === 'general' && <div className={css.general}>
             <SettingRow title={t('权限', 'Permissions')} description={t('选择新会话的默认权限模式', 'Choose the default access mode for new conversations')}>
               <Choice label={t('默认权限', 'Default access')} value={settings.defaultAccessMode} disabled={pending} options={(props.accessModes ?? ['readOnly', 'workspaceWrite', 'fullAccess'] as AccessMode[]).map(value => ({ value, label: accessName(value) }))} onChange={value => void update({ defaultAccessMode: value as AccessMode })} />
+            </SettingRow>
+            <SettingRow title={t('代码模式', 'Code mode')} description={t('关闭时不提供代码工具；开启时与原生工具并存；仅脚本时模型只能通过脚本调用工具', 'Off offers no code tool; On offers it beside the native tools; Script only reaches every other tool from a script')}>
+              <Choice label={t('代码模式', 'Code mode')} value={settings.codemodeMode} disabled={pending} options={[
+                { value: 'off', label: t('关闭', 'Off') },
+                { value: 'on', label: t('开启', 'On') },
+                { value: 'only', label: t('仅脚本', 'Script only') },
+              ]} onChange={value => void update({ codemodeMode: value as CodemodeMode })} />
             </SettingRow>
             <SettingRow title={t('语言', 'Language')}><Choice label={t('语言', 'Language')} value={settings.locale} disabled={pending} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => void update({ locale: value as AppSettings['locale'] })} /></SettingRow>
             <SettingRow stacked title={t('外观', 'Appearance')}><div className={css.themeCards}>{themes.map(option => <button key={option.value} className={css.themeCard} type="button" aria-pressed={settings.theme === option.value} disabled={pending} onClick={() => void update({ theme: option.value })}>{option.icon}<span>{option.label}</span></button>)}</div></SettingRow>
@@ -126,6 +153,27 @@ export default function SettingsDialog(props: SettingsDialogProps) {
               onSelect={id => { setProviderChoice(providers.find(provider => provider.id === id)); setNewProvider(true); setAddMenuOpen(false) }} anchor={<button className={css.addProvider} type="button" onClick={() => setAddMenuOpen(true)}><IconPlusOutlineRegular size={16} />{t('添加模型提供商', 'Add model provider')}</button>} />}
           </div>}
           {tab === 'presets' && (presetsPanel ?? <p role="status">{t('正在加载预设…', 'Loading presets…')}</p>)}
+          {tab === 'mcp' && <div className={css.mcp}>
+            <div className={css.mcpHead}>
+              <h3>{t('MCP 服务器', 'MCP servers')}</h3>
+              <Button size="sm" variant="outline" disabled={mcpLoading} onClick={() => void loadMcp()}>{mcpLoading ? t('刷新中…', 'Refreshing…') : t('刷新', 'Refresh')}</Button>
+            </div>
+            <p className={css.description}>{t('来自 Pi 用户级 mcp.json 的只读清单；修改配置后重启服务生效。', 'A read-only view of Pi’s user-level mcp.json. Restart the service after editing it.')}</p>
+            {mcpError !== '' && <p className={css.error} role="alert">{mcpError}</p>}
+            {mcpLoading && mcp === null && <p className={css.description} role="status">{t('正在读取 MCP 配置…', 'Loading the MCP configuration…')}</p>}
+            {mcp !== null && <>
+              <div className={css.mcpConfig}>
+                <span className={css.fieldLabel}>{t('配置文件', 'Configuration file')}</span>
+                <code className={css.mcpPath}>{mcp.configPath}</code>
+              </div>
+              {!mcp.configExists && <p className={css.mcpNotice} role="status">{t('未找到 mcp.json，按 Pi 格式创建后重启服务', 'No mcp.json found. Create one in Pi’s format, then restart the service.')}</p>}
+              {mcp.error !== undefined && <p className={css.error} role="alert">{mcp.error}</p>}
+              {mcp.servers.length === 0
+                ? <p className={css.mcpEmpty} role="status">{t('还没有可用的 MCP 服务器。', 'No MCP servers are available yet.')}</p>
+                : <div className={css.mcpServers}>{mcp.servers.map(server => <McpServerCard key={server.name} server={server} t={t} />)}</div>}
+            </>}
+          </div>}
+          {open && tab === 'skills' && <SkillsPanel initialWorkspaceId={props.workspaceId} />}
         </div>
       </section>
     </Modal>
@@ -185,6 +233,46 @@ function Choice({ label, value, options, disabled, onChange }: { label: string; 
 }
 function Toggle({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (value: boolean) => void }) {
   return <button type="button" role="switch" aria-label={label} aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)} className={css.toggle}><span /></button>
+}
+
+/**
+ * One MCP server row: DSH's connection dot with its wording, the transport and
+ * exposure tags, and the native tool catalog behind a disclosure.
+ */
+function McpServerCard({ server, t }: { server: McpServerView; t: (chinese: string, english: string) => string }) {
+  const dot = server.status === 'connected' ? 'done' : server.status === 'error' ? 'error' : 'idle'
+  const toolCount = server.tools.length
+  return <section className={css.mcpServer} data-status={server.status}>
+    <div className={css.mcpServerHead}>
+      <StateDot state={dot} size={10} />
+      <span className={css.mcpServerName}>{server.name}</span>
+      <span className={css.mcpServerStatus}>{mcpStatusName(server.status, t)}</span>
+      <span className={css.mcpTag}>{server.transport}</span>
+      <span className={css.mcpTag} title={t('工具暴露方式', 'Tool exposure')}>{server.exposure}</span>
+      <span className={css.mcpTag} data-disabled={!server.enabled || undefined}>{server.enabled ? t('已启用', 'Enabled') : t('已禁用', 'Disabled')}</span>
+    </div>
+    {server.description !== undefined && server.description !== '' && <p className={css.mcpServerDescription}>{server.description}</p>}
+    {server.error !== undefined && <p className={css.mcpServerError} role="alert">{server.error}</p>}
+    <details className={css.mcpTools}>
+      <summary>{t(`工具 ${toolCount} 个`, `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}`)}</summary>
+      {toolCount === 0
+        ? <p className={css.mcpNoTools}>{t('这个服务器没有提供工具', 'This server exposes no tools')}</p>
+        : <ul className={css.mcpToolList}>{server.tools.map(tool => <li key={tool.name} className={css.mcpTool}>
+          <span className={css.mcpToolName} title={tool.description}>{tool.name}</span>
+          {tool.title !== undefined && tool.title !== tool.name && <span className={css.mcpToolTitle}>{tool.title}</span>}
+          <span className={css.mcpTag}>{tool.exposure}</span>
+        </li>)}</ul>}
+    </details>
+  </section>
+}
+
+/** DSH's MCP connection states in words: the dot alone is not enough for a screen reader. */
+function mcpStatusName(status: McpServerView['status'], t: (chinese: string, english: string) => string): string {
+  switch (status) {
+    case 'connected': return t('已连接', 'Connected')
+    case 'error': return t('连接失败', 'Failed')
+    case 'disabled': return t('已禁用', 'Disabled')
+  }
 }
 /** DSH's font-size control: a filled value box, the unit, then the menu chevron. */
 function SizeSelect({ value, min, max, label, disabled, onChange }: { value: number; min: number; max: number; label: string; disabled?: boolean; onChange: (value: number) => void }) {

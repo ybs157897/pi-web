@@ -245,9 +245,12 @@ class FakeRuntime implements Runtime {
   settingsValue: Protocol.AppSettings = {
     theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
     transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp',
-    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [],
+    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on',
   }
   settings() { return this.settingsValue }
+  mcp(): Protocol.McpView {
+    return { configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] }
+  }
   capabilities(): { accessModes: Protocol.AccessMode[] } { return { accessModes: ['readOnly', 'workspaceWrite', 'fullAccess'] } }
   async updateSettings(input: Protocol.UpdateAppSettingsInput) {
     this.calls.push('settings:' + JSON.stringify(input))
@@ -270,6 +273,23 @@ class FakeRuntime implements Runtime {
   async searchWorkspace(id: string, query: string) { this.calls.push('search:' + query); return this.workspaceFiles(id, '') }
   async workspaceFile(_id: string, path: string): Promise<Protocol.WorkspaceFile> { return { path, kind: 'text', content: 'text', size: 4, modifiedAt: NOW, mimeType: 'text/plain' } }
   async workspaceAsset(_id: string, path: string) { return { mimeType: path.endsWith('.html') ? 'text/html' : 'application/octet-stream', data: new TextEncoder().encode('<script>unsafe()</script>') } }
+  async gitBranches(id: string): Promise<Protocol.GitBranchSnapshot> {
+    this.calls.push('git-branches:' + id)
+    return { isGitAvailable: true, isRepository: true, repoRoot: '/tmp/repo', headRefType: 'branch', currentBranchName: 'main', branches: [{ name: 'main', isCurrent: true, upstreamName: null, commitHash: 'a'.repeat(40), commitTimestampMs: NOW }] }
+  }
+  async switchGitBranch(id: string, input: Protocol.SwitchGitBranchInput): Promise<Protocol.GitBranchMutation> {
+    this.calls.push(`git-switch:${id}:${input.branchName}`)
+    const snapshot = await this.gitBranches(id)
+    return { ok: true, action: 'switch', branchName: input.branchName, didChange: true, created: false, snapshot, issues: [] }
+  }
+  async createGitBranch(id: string, input: Protocol.CreateGitBranchInput): Promise<Protocol.GitBranchMutation> {
+    this.calls.push(`git-create:${id}:${input.branchName}`)
+    const snapshot = await this.gitBranches(id)
+    return { ok: true, action: 'create-and-switch', branchName: input.branchName, didChange: true, created: true, snapshot, issues: [] }
+  }
+  async skills() { return { skills: [], diagnostics: [] } }
+  async skill(): Promise<import('../src/shared/skills.ts').SkillContent> { throw new RuntimeError('NOT_FOUND', 'Skill not found') }
+  async validateSkill() { return { valid: false, errors: ['Skill not found'], warnings: [] } }
   presets(): Protocol.AgentPreset[] { return [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: ['coding'], tools: ['read'], accessMode: 'readOnly' }] }
   async createPreset(input: Protocol.CreateAgentPresetInput) { return { ...input, id: input.id ?? 'preset-new' } }
   async updatePreset(id: string, input: Protocol.UpdateAgentPresetInput) { return { ...this.presets()[0]!, ...input, id } }
@@ -690,6 +710,13 @@ describe('management API', () => {
     const allowlist = await app.request('/api/settings', json('PATCH', { modelAllowlist: ['opencode-go/deepseek*'] }))
     expect(allowlist.status).toBe(200)
     expect((await allowlist.json()).modelAllowlist).toEqual(['opencode-go/deepseek*'])
+    // Pi code mode is a three-value setting; an unknown value never reaches the runtime.
+    expect((await app.request('/api/settings', json('PATCH', { codemodeMode: 'only' }))).status).toBe(200)
+    expect(runtime.settings().codemodeMode).toBe('only')
+    expect((await app.request('/api/settings', json('PATCH', { codemodeMode: 'sometimes' }))).status).toBe(400)
+    const mcp = await app.request('/api/mcp')
+    expect(mcp.status).toBe(200)
+    expect(await mcp.json()).toEqual({ configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] })
     const workspace = await app.request('/api/workspaces', json('POST', { path: '/tmp/pi-web-test', name: 'Project' }))
     expect(workspace.status).toBe(201)
     expect((await workspace.json()).workspace.name).toBe('Project')
@@ -700,6 +727,26 @@ describe('management API', () => {
     expect((await app.request('/api/plugins/coding', json('PATCH', { tools: { read: false } }))).status).toBe(404)
     expect((await app.request('/api/presets', json('POST', { name: 'Review', instructions: 'Review', tools: ['read'], extensions: ['coding'], accessMode: 'readOnly' }))).status).toBe(201)
     expect((await app.request('/api/presets/preset-1', { method: 'DELETE' })).status).toBe(200)
+  })
+
+  it('lists and switches local git branches for a workspace', async () => {
+    const { app, runtime } = createTestApp()
+    const list = await app.request('/api/workspaces/ws-1/git/branches')
+    expect(list.status).toBe(200)
+    expect(await list.json()).toMatchObject({ isRepository: true, currentBranchName: 'main' })
+
+    const switched = await app.request('/api/workspaces/ws-1/git/switch', json('POST', { branchName: 'feature' }))
+    expect(switched.status).toBe(200)
+    expect(await switched.json()).toMatchObject({ ok: true, action: 'switch', branchName: 'feature', didChange: true })
+    expect(runtime.calls).toContain('git-switch:ws-1:feature')
+
+    const created = await app.request('/api/workspaces/ws-1/git/branches', json('POST', { branchName: 'pi/topic' }))
+    expect(created.status).toBe(200)
+    expect(await created.json()).toMatchObject({ ok: true, action: 'create-and-switch', created: true })
+    expect(runtime.calls).toContain('git-create:ws-1:pi/topic')
+
+    expect((await app.request('/api/workspaces/ws-1/git/switch', json('POST', { branchName: '   ' }))).status).toBe(400)
+    expect((await app.request('/api/workspaces/ws-1/git/switch', json('POST', { branchName: 'main', force: true }))).status).toBe(400)
   })
 
   it('supports queue changes, persisted feedback, retry and automation actions', async () => {

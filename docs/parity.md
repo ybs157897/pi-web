@@ -10,19 +10,20 @@
 | ID | 差异 | 说明 | 状态 |
 |---|---|---|---|
 | DF-1 | pi-web 不展示插件管理界面，所有扩展工具恒开启 | 侧栏「插件」入口与设置「内置插件」tab 均已移除，`/api/plugins` 不再提供；工具启用判定不再读取历史 `plugins` 开关，仅保留 schema 解析兼容。DSH 有插件面板/市场。 | 有意不做（用户要求） |
+| DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 只读导入 Pi 用户级 `mcp.json`（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`）。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
 
 ## 输入区
 
 | ID | 问题 | DSH 对照 | 证据 | 状态 |
 |---|---|---|---|---|
 | IN-1 | 附件卡缩水成一行文字：图片 34×34、文件 chip 约 121×44、无边框、12px、无大小元信息、删除键常显 | 图片 64×64；文件卡 240×64、radius 16、1px 边框、14px 名称、`MD 26B`/`PDF 597B` 元信息、删除键 hover 显示 | `dsh-03-attach-zoom.png` / `pi-04-attach-zoom.png` | 已修（实测图片 64×64/radius 20；文件卡 240×64/radius 16/1px 边框/元信息，与 DSH 实测一致） |
-| IN-2 | 拖拽无任何反馈；拖到输入卡外浏览器会直接打开文件 | document 级整页毛玻璃遮罩 + 插图 + 标题 + 图片限制；拒绝态与 `dropEffect` | `dsh-04-drag.png` / `pi-05-drag.png` | 已修（整页遮罩 + 插图 + 标题/限制 + dropEffect；ego 复核） |
+| IN-2 | 拖拽无任何反馈；拖到输入卡外浏览器会直接打开文件 | document 级整页毛玻璃遮罩 + 插图 + 标题 + 图片限制；拒绝态与 `dropEffect` | `dsh-04-drag.png` / `pi-05-drag.png` | 部分修复（整页遮罩 + 插图 + 标题/限制 + dropEffect；Windows 审计发现 Composer 卡片与 document 级 drop 会双触发） |
 | IN-3 | `/` 面板是约 360px 窄浮层，只有 3 条命令，无分组/说明/图标 | 与输入卡同宽，分「添加」「指令」，图标+名称+id+右侧说明 | `dsh-08-slash-menu.png` / `pi-09-slash-menu.png` | 已修（面板宽 774 = 输入卡宽，添加/指令分组；ego 复核） |
 | IN-4 | `@` 面板是窄浮层，只有文件、无分组/目录下钻 | 同宽面板，分组「文件与文件夹」，目录可下钻（Tab），另有子智能体/对话分组 | `dsh-09-at-menu.png` / `pi-10-at-menu.png` | 已修（同宽面板 + 分组 + 目录下钻；实测 @src/ 后列出 src/nested、src/index.ts） |
 | IN-5 | 「繁忙时的发送行为」设置不生效（硬编码 `followUp`） | 设置项决定 Enter/发送按钮行为，备用手势取反 | 代码 `App.tsx:151` | 已修（sendMode 初值取 settings.busySendMode） |
 | IN-6 | 附件并发添加可绕过上限；超限后收到英文 `Request body is invalid` | 客户端预检整批拒绝并给出本地化文案 | 代码 `App.tsx:490-521` | 已修（reading 预留计数；纯函数门控 16/16 用例） |
 | IN-7 | 附件无读取中/失败/重试态；发送失败无幂等重试 | 上传中 spinner/进度、失败点击重试、未完成阻止发送 | 代码 `App.tsx:528-539` | 已修（reading/ready/error 三态 + 失败点击重试 + 未就绪阻止发送；发送失败复用同一 requestId 幂等重试；ego 复核） |
-| IN-8 | AVIF 与 `File.type` 为空的图片被降级为普通文件 | 图片按 MIME 白名单识别并渲染缩略 | 代码 `App.tsx:47` / `server/workspace-files.ts:20` | 已修（avif + 空 MIME 按扩展名推断） |
+| IN-8 | AVIF 与 `File.type` 为空的图片被降级为普通文件 | 图片按 MIME 白名单识别并渲染缩略 | 代码 `App.tsx:47` / `server/workspace-files.ts:20` | 部分修复（前端识别 avif + 空 MIME 按扩展名推断；服务端 `IMAGE_TYPES` 仍不含 avif，发送会 400） |
 | IN-9 | `/compact` 不可达；`/plan` 不存在 | `/` 面板包含压缩/计划/权限/目标/反馈 | 代码 `Composer.tsx:100-106` | 部分修复（`/compact` 已接通 runtime/HTTP/api 并接入 App；`/plan`、目标、反馈仍未实现） |
 | IN-10 | 队列项附件只显示「附件消息」；无重排（DSH 也无重排，此项两边一致） | 队列行显示图片 24×24 / 文件 chip | 代码 `Composer.tsx:196` | 已修（队列行 24×24 图片缩略 + 文件 chip（图标+名+大小）；两边都无重排） |
 | IN-11 | 切换/新建会话静默清空已添加附件 | 草稿与附件按会话保留 | 代码 `App.tsx:286-291` | 已修（附件按 scope 保存，切回恢复） |
@@ -76,6 +77,7 @@
 - 2026-10-19：IN-1 ~ IN-4 落地并 ego 复核（附件卡几何与 DSH 实测一致、整页拖拽遮罩、`/` 与 `@` 同宽面板、目录下钻）；CP-1/CP-2 对齐（文案 + 风险确认）；`/compact` 接通 runtime/HTTP/api 并接入 App。
 - 2026-10-19：IN-5/IN-6/IN-8/IN-11 与 CH-1 落地（sendMode 初值、附件并发门控、AVIF/空 MIME、附件按 scope 保留、会话行「…」菜单）；ST-2 落地（外观三卡 + `N px` 字号下拉，实测与 DSH 坐标误差 ≤1px）；ST-4 落地（自动化筛选/搜索/空态 CTA，ego 复核）。
 - 2026-10-19：小项批次二：CH-2（轨迹工具栏/时序图）、CP-4（打开配置文件）、CP-5（意见反馈）落地并验证；IN-7/IN-10（附件生命周期、队列缩略图）与 CH-1 余项（hover 信息卡）、CH-8（连接提示）在并行实现中。
+- 2026-10-19：Windows 审计复核发现 IN-2 仍有卡片/document 双 drop，IN-8 的 AVIF 仅前端修复、服务端 schema 未同步；两行状态已订正。详见 `docs/windows-support.md`。
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
@@ -110,6 +112,7 @@
 | 面板触发器 | 会话头 `{n} 个子智能体`；运行中 aria-label 用「正在运行」变体、可见文本始终是总数；空 catalog 不渲染；hover 即开 150ms、hover 即关 120ms、点击 pin（`packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx:496-500,536-552,667-716`；文案 `locales.ts:36-42`） | 同文案同位置（标题右侧、header actions 之前）：`SubagentPanel.tsx:193-201`，`aria-haspopup="tree"`，空列表返回 null（`:188`）；hover/pin/外点/Escape 与 DSH 同构（`SubagentPanel.tsx:108-149,173-180`） | 已对齐（触发器 28px 高 / 12px 字 / `--dsw-alias-label-tertiary`，`SubagentPanel.module.css:12-40`；hover 于 2026-10-19 修，`pi-98-subagent-03-hover-open` 对 `dsh-98-hover-03-subagent-open`） |
 | 面板卡 | 336px、`--dsw-specific-menu` 材质 + `--dsw-elevation-prominent`、行 44px、状态点 + label + 10px 副标题（`SubagentHeaderLineage.module.css:100-200,215-235`） | 同几何同材质（`SubagentPanel.module.css:42-63,65-96,98-115`）；行＝label + `正在运行/当前未运行` + 回答摘要 + `停止/跟进/打开` | 已对齐（材质与尺寸）；按钮是 pi 的显式控件 |
 | 打开子会话 | 点整行 → `openChild`；子会话头另有面包屑 switcher 在同级间切换（`SubagentHeaderLineage.tsx:279-286,785-822`） | 「打开」→ 复用现有选会话路径（`App.tsx:1443-1447`），详情走 `GET /api/conversations/:id` | 已实现：子会话头面包屑「父标题 ← 当前标题」+ 同级计数切换（`App.tsx:1478-1495,1763-1790`）；截图 `pi-99-subagent-03..06` |
+| 转录内呈现 | 同一回合的多次 `subagent` 调用各自启动、转录里只有工具回执；回合过程行用 `{n} subagent` 汇总（`packages/client/ui-chat/src/client/locale.ts:153-154`、`conversation-nodes/turn-process.ts:180-184`） | 连续调用合并为一行彩色胶囊（`SubagentRunStrip`）：每个子会话固定配色、运行中转圈 + `{已结束}/{总数}`、完成显示 tokens、失败标红；点胶囊复用既有选会话路径打开子会话 | 有意差异（pi 侧呈现增强）：DSH 的汇总停留在过程标题，pi 把「哪些子智能体、各自什么状态」放进正文一行；会话头 `SubagentPanel` 目录保持不变 |
 | 子会话不进侧栏 | 子会话不进侧栏；`origin==='subagent'` 的会话在该位置不渲染触发器（`SubagentHeaderLineage.tsx:760-777`） | `list()` 只取 `owner===undefined`（`runtime.ts:610-613`）；投影给子会话标 `origin:'subagent'`+`parentId`（`projection.ts:757`），前端据此不插入侧栏（`App.tsx:262-271`） | 已对齐（ego `pi-90-subagent-03`：打开子会话后侧栏仍只有父会话） |
 | 只读转录文案 | 一次性子会话的输入区换为只读说明「一次性子智能体记录 / 一次性任务不支持后续消息…」（`ui-subagent/src/client/SubagentReadOnlyComposer.tsx:19-31`） | 未做：一期子会话可继续（`childMessage` 已实现），输入区保持可用 | 不适用：只读文案属于「一次性且不可继续」，与当前实现形态不符 |
 | catalog 变化推送 | 父会话日志内含 catalog，projection 帧随父会话推送 | 父会话流看不到子会话 entry（owner 边不是可订阅的表），故面板在「有子会话运行中或菜单打开」时 1.5s 轮询（`SubagentPanel.tsx:56-65`） | 有意差异（底座不同）：触发时机等价（ego `pi-90-subagent-05` 抓到运行中） |
@@ -357,3 +360,45 @@
 门禁：`npm run typecheck` / `npx vitest run`（135/135，+7：render-model 4、interactions 1、runtime 1、http 1）/ `npx vite build` 全绿。ego：demo 实例 4418（`/tmp/pi-98-demo` 数据目录）跑 `[ask]`（等待→放弃→已回答）、`[subagent]`（行→回执→打开子会话→hover）、`[team]`（hover 面板/成员模型/窄容器）；DSH 对照在 3080 实例（显式 DeepSeek-V4.1-Flash）跑同一条问句流程。截图 `pi-98-*` 与 `dsh-98-*` 成对存 `artifacts/ego-compare/shots/`。遗留：子会话面包屑 switcher（数据面已具备，待下一步）。
 
 - 2026-10-19：收尾批次三。**计划预览**：Inspector 新增「计划」视图（最新 `plan-review` 的 markdown，空态「计划预览不可用」），`ToolCard` 计划卡加「打开」并首次自动打开、手动关闭后不自动重开（`pi-99-plan-01..05`）；**子会话面包屑**（父标题 ← 当前、同级切换、当前 tag）；**子会话 metrics**（`tokens`/`durationMs` 投影 + 面板 `{tok} · {时长}` 运行中每秒刷新）；**团队健壮性**：`spawn_teammate` replay-safe + 按名字幂等复用、`reconcileProvisioning` 把无子会话的 `provisioning` 行对账为 `failed`（对齐 DSH `roster.ts:375-417`）；fork 继承语义沿用既有测试（父级未完成轮次不进入 fork 前缀）。门禁：typecheck / **144/144 测试**（+9）/ build 全绿。
+
+- 2026-10-19：开启 Pi 1.3.0 code mode 与 MCP（DF-2）。服务端 `createCodemodeExtension` + `CodemodeSandbox` 常驻注册，`codemodeMode` 三态应用到空闲会话（含 `modelTools` 的 only 过滤与清除）；`McpManager` 只读导入 `mcp.json`、注册 `mcp__` 工具并保留连接诊断。前端：代码模式三选、MCP 只读状态页、`codemode` 脚本/输出/子调用卡、MCP 行标题。门禁：typecheck / **166 测试**（+22：mcp 9、runtime 3、render-model 8、http 1 等）/ build 全绿；demo HTTP 验收 codemodeMode 与 `/api/mcp`，真实脚本调用 bash 返回 `codemode-ok`。真实模型复核因 opencode-go key 过期（401 `api_key_expired`）暂缓，脚本 `npm run test:live:codemode` 已就绪。
+
+- 2026-10-19：子智能体转录内一行条（`SubagentRunStrip`，用户选定的「彩色胶囊」形态）。模型 `src/web/subagent-run-model.ts`：同一回合连续的 `subagent` 调用折成一组；**`codemode` 脚本里的嵌套 `tools.subagent` 调用**也提成一组放在脚本卡前（运行中读实时 nested tool 消息，结束后读 `details.calls`；投影会把长 `args` 截断，label/task 用字段前缀还原），脚本卡与 nested 列表不再重复这些行。状态：未匹配子会话且调用未返回 → `creating`（「创建中」/「正在创建子智能体」），失败 > 运行中 > 已完成；tokens/时长来自 `ConversationDetail.subagents`，颜色按父会话子列表顺序分配（缺行时按 id 哈希）。`tool-render-model.ts` 的 `subagentRowModel` 新增 `label`，并识别运行中投影把扩展 details 嵌在 `result` 下的形状。组件：转圈环/✓/×、运行中每秒推进时长（无 settled 时长时回退 live tokens）、`{已结束}/{总数}`、strip 自身容器查询在窄宽度先隐藏完成态 tokens 再隐藏标签、暗色专用配色、`prefers-reduced-motion`。接线：`transcript.tsx` 在 `ProcessGroup` 内分组渲染，新增 `conversationId`/`subagents` 入参与「有子会话运行才轮询」的 1.5s 刷新；`App.tsx` 传 `activeDetail`；点胶囊复用 `onOpenSubagent` → `selectConversation` 打开子会话的「对话」界面（执行过程在转录里可见），父标题面包屑返回父会话。已完成但 label 对不上的胶囊先按 label 前缀、再按最新子会话顺序兜底匹配，避免完成态被禁用。demo 新增 `[subagents]`（同一 assistant 消息三次并行委派，子任务带 child marker）。门禁：typecheck / **183/183 测试**（+16：`tests/subagent-run-model.test.ts`；render-model +2）/ build 全绿。ego 真实浏览器（4317 真实模型会话 827 / 982）：真实 codemode 5 子 agent 的完成态显示 5 个彩色胶囊（essay-1…5，labels 完整，脚本卡不再列 nested 行）、点 essay-1 进入子会话的「对话」、面包屑返回父会话并恢复 strip；2 子 agent 短任务同样成组。CDP demo（4331）覆盖运行态/暗色/窄窗口；截图 `artifacts/subagent-strip-check/pi-100-subagent-strip-01..06`（gitignored）。失败胶囊由单测覆盖。另：4317 进程在真实 5 子 agent 运行后出现过 `/api/conversations` 500（同一数据目录新进程可正常列举），重启进程恢复，待单独复现定位。
+
+## ZCode 参照批次（2026-10-19，用户要求）
+
+本批次不是 DSH 复刻，而是用户指定的 ZCode 参照项（开源仓库 `zai-org/ZCode`，本地浅克隆 `--depth 1`，`--filter=blob:none` + sparse checkout 读的源码）。对照物是 ZCode 源码/文档，不再是 DSH 截图。
+
+| ID | 项 | ZCode 对照（源码行号） | pi-web 落点 | 状态 |
+|---|---|---|---|---|
+| ZC-1 | 空态标题改为 ZCode 的按时间问候 + 背景 Logo（Logo 形状换成 Pi 的 π） | `packages/ui/src/v4/ConversationDraftEmptyState.tsx`：分段 `:20`、问候选择 `:32-44`、跨边界刷新 `:46-60`、20–30px 自适应 `:73-90`、背景 Logo `:204-240`（400×320、5:4、`min(72vw,25rem)`、上移 40px、70% 渐隐遮罩、`foreground-subtlest`）；文案 `i18n/locales/zh-CN.ts:5207-5212` / `en-US.ts:5573-5578` | `src/web/greeting.ts`（分段/文案/字号纯函数）、`Composer.tsx` hero 问候块（定时换档 + ResizeObserver 测量；背景为 Georgia π 的 1px 描边，沿用 ZCode 的 400×320 尺寸/位置/渐隐遮罩）、`Composer.module.css` | 已修（2026-10-20：`tests/greeting.test.ts` 3 例覆盖全部分段、跨午夜与字号下限；CDP 固定 08:00 截图 `09-greeting-morning.png`，核对 30px 文案、400×320 π 描边 Logo、70% 渐隐与 390px 窄屏收缩） |
+| ZC-2 | 侧栏移除头部「新建会话」图标按钮与「新会话」行的快捷键徽标 | 不适用（ZCode 侧栏结构不同；用户直接要求隐藏） | `src/web/App.tsx`（`sidebarHeader` / `newChat`）；`App.module.css` 去掉 `.newChatKeys` | 已修 |
+| ZC-3 | 侧栏折叠后文字重影 | 不适用（ZCode 无此折叠态） | 根因是折叠态 `font-size:0` 只压住按钮文本、压不住绝对定位的快捷键徽标；徽标移除后消失，另在折叠态显式隐藏按钮文本 | 已修 |
+| ZC-4 | 空态隐藏单模式预设选择器 | 不适用（ZCode 空态无模式选择器） | `src/web/Composer.tsx` hero 上下文行：`presets.length === 0` 时不渲染 | 已修 |
+| ZC-5 | Git 分支切换（列表 / 切换 / 新建并切换） | UI：`packages/ui/src/GitBranchSwitcher.tsx`（搜索 + 列表 + 当前分支 `data-branch-current` 置顶 + 底部「新建分支并切换」，`:110`/`:298`/`:312`/`:338`）；hook：`packages/ui/src/hooks/useGitBranchSwitcher.ts`（展开即重读 `:115`、成功后刷新 Git 状态 `:233`/`:350`、HEAD 变化丢弃本地快照 `:97-112`）；服务：`packages/services/src/git/repo/gitCliRepo.ts`（`for-each-ref refs/heads` `:990`、`switch --no-guess` `:1141`、`switch --no-guess -c` `:1227-1228`、`check-ref-format --branch` `:606`、进行中操作标记位 `:616-633`）；错误归一：`packages/services/src/git/repo/gitCliHelpers.ts:64`（issue code 全集见 `packages/shared/src/git.ts:26-35`）；设计文档 `docs/git/branch-switching-service-design.md`（不做 stash/force/remote 浏览） | `src/server/git-branches.ts`（列表/切换/新建 + 结构化 issue）、`GET/POST /api/workspaces/:id/git/*`、`src/web/GitBranchSwitcher.tsx`（hero 上下文行与输入工具条） | 已修（2026-10-19：`tests/git-branches.test.ts` 8 例覆盖列表/切换/no-op/detached/新建/非法名/重复名/目标不存在/tracked 覆盖/冲突索引；demo 实例 4329 + CDP `artifacts/zcode-branch-check/verify.mjs` 17/17 通过，截图 `01-hero`…`08-blocked-switch`：菜单搜索、分支置顶、切换、新建、阻塞原因与受影响文件） |
+
+有意差异（本批次）：
+
+- **不做「提交并重试切换」辅助流程**：ZCode 在切换被未提交改动阻塞时给出「提交当前改动后自动重试」（`packages/ui/src/git-branch-switcher/switchAssist.ts`）。pi-web 目前没有提交流程与 diff 面板，故只按 ZCode 的 issue code 显示阻塞原因与受影响文件，不提供提交入口。
+- **不做 Git Graph / remote 分支浏览 / stash / force**：ZCode 的 `GitBranchSwitcher` 底部还有「Git 图谱」，其服务设计文档也显式把 remote 浏览、stash、rebase 列为非目标；pi-web 同样只做本地分支列表、切换、新建并切换。
+- **未提交改动按 Git 原生行为**：与 ZCode 一致——不因 dirty 一律禁止切换，只把 `git switch` 的真实结果（含被覆盖文件）归一成 issue。
+- **没有 Git 元数据 watcher**：ZCode 由文件 watcher 实时回灌 HEAD，外部 `git switch` 后触发器会立刻变化；pi-web 在每次展开分支菜单时重新读取（`GitBranchSwitcher.load`），因此外部切换要等下一次打开菜单才反映到触发器上。
+
+
+## 默认执行策略与任务进度
+
+基准仍为 DSH `687f282e8625c6b8d11ff58211a90524be2e4317`。本次增强普通执行会话的任务管理指导，并把核心提示词接入 Pi 默认运行时；没有新增界面模式。
+
+| 项目 | DSH 源码 | pi-web 落点 | 结论 |
+| --- | --- | --- | --- |
+| 多步任务主动建清单、及时更新、简单任务跳过 | `packages/todo/tool-todo/src/index.ts:45`；`packages/bundle/base/cordis.patch.yml:437` | `src/server/todo-tools.ts:35`；`src/server/work-policy.ts:27` | 已接入描述与动态路由；真实模型行为待认证恢复后验证 |
+| 从用户长期请求识别 Goal，无需出现 goal 一词 | `packages/goal/tool-goal/src/index.ts:51`、`:115` | `src/server/goal-tools.ts:275`、`:401` | 目标不存在时也注入指导；按真实可调用工具生成，顶层会话可创建 |
+| 阶段文字进度汇报 | 默认 persona 未发现统一汇报节奏，Todo 工具负责状态回执 | `src/server/prompts/runtime-core.md` | 有意增强：简短汇报阶段成果、阻塞和下一步，不承诺固定计时播报 |
+| Plan 只研究、提交方案后等待 | `packages/bundle/web-app/presets/standard.patch.yml:54` | `src/server/work-policy.ts:57`；Todo/Goal 执行与续跑 guard | 已保留；不把自主执行策略当作默认开启 Plan 模式 |
+| 默认加载及历史会话 | DSH profile 组合 persona/tool sections | `src/server/runtime.ts` 的 `ensureRuntimePolicy`、`conversationCreated`、启动迁移 | 工具为空的核心扩展覆盖 Preset、分叉、子会话和历史选择；工具范围与自定义 instructions 保留 |
+
+有意保留的差异：本次没有迁移 DSH 的整套目标授权、会话恢复 rearm 或连续三轮阻塞状态机；暂停、恢复和编辑仍走本项目的用户控件，具体阻塞可按现有规则报告。只读模式可更新会话目标元数据，文件写权限仍关闭。Plan 模式与缺失目标完成工具都会阻止目标自动续跑。
+
+验证：`npm run check` 通过（类型检查、241 项测试、生产构建）。`tests/runtime-policy.test.ts` 在真实 Pi Durable/SQLite 到模型适配器的边界捕获请求，覆盖默认会话、无工具 Preset、codemode-only、Plan、只读 Goal、缺失目标完成工具、子会话/分叉及旧选择重启迁移。受控模型证明接线和约束，不证明真实模型会遵循每条规则。
+
+两侧真实模型采用 `scripts/workflow-fixture.ts` 的同一任务输入，prompt SHA-256 均为 `b7c64df46ef797ca51924a93d027d16e1402bde39fa191520532efba8fa380a0`：pi-web 明确选择 `opencode-go/deepseek-v4.1-flash`，返回 `401 api_key_expired`；DSH 的临时 headless profile 明确选择其标准 `deepseek-official/deepseek-flash`，返回 `MISSING_CREDENTIAL`。两者均未进入工具行为验收，不能声明真实行为已对齐。没有切换配置来绕过认证失败。记录为 `artifacts/live-workflow-check.json` 和 `artifacts/dsh-workflow-check.json`；本次改动表面为提示词与后端策略，未声称完成额外 UI 对齐。

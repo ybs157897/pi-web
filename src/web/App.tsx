@@ -1289,10 +1289,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             <span className={css.brandMark} aria-hidden>π</span>
             <span className={css.brandName}><strong>Pi Durable</strong><small>{appVersion !== '' ? `v${appVersion}` : t('本机工作区', 'LOCAL WORKSPACE')}</small></span>
           </div>
-          <Tooltip label={t('新建会话', 'New conversation')} side="bottom" portal>
-            <Button variant="ghost" size="sm" aria-label={t('新建会话', 'New conversation')}
-              icon={<IconNewChatOutlineRegular size={16} />} onClick={startNewConversation} />
-          </Tooltip>
           {!mobile && <Tooltip label={sidebarCollapsed ? t('展开侧栏', 'Expand sidebar') : t('收起侧栏', 'Collapse sidebar')} side="bottom" portal>
             <Button variant="ghost" size="sm" aria-label={sidebarCollapsed ? t('展开侧栏', 'Expand sidebar') : t('收起侧栏', 'Collapse sidebar')}
               icon={<IconPanelLeftOutlineRegular size={15} />} onClick={() => { setSidebarCollapsed(value => !value) }} />
@@ -1300,7 +1296,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         </div>
         <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startNewConversation}>
           {t('新会话', 'New conversation')}
-          <ShortcutKeys keys={shortcutKeyLabels(resolveShortcuts(settings.shortcuts).newConversation)} className={css.newChatKeys} />
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
           <button type="button" className={css.navItem} data-active={page === 'automations' || undefined}
@@ -1537,7 +1532,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       wasAtBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 88
                     }}>
                       {chatView === 'chat'
-                        ? <Transcript messages={activeDetail.messages} pending={selectedPending} interactions={activeDetail.interactions}
+                        ? <Transcript messages={activeDetail.messages} conversationId={activeDetail.conversation.id}
+                          subagents={activeDetail.subagents} pending={selectedPending} interactions={activeDetail.interactions}
                           onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                           onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
                           onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {
@@ -1603,7 +1599,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           </aside>}
         </div>
       </section>
-      <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes}
+      <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={currentWorkspaceId}
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}
         presetsPanel={<PresetsPanel presets={presets} models={catalog?.models ?? []} defaultPresetId={settings.defaultPresetId}
           loading={presetsLoading} error={presetLoadError} onRefresh={() => { void refreshPresets() }}
