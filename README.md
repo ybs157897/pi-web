@@ -79,16 +79,19 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 - 原生选择器失败时只显示「Internal server error」，不会回退内置目录浏览器；手输工作区路径的对话框实际不可达。
 - 内置目录浏览器拒绝网络共享/UNC/`\\?\` 路径、没有盘符入口，且只按 `.` 前缀判断隐藏文件（Windows 隐藏属性不生效）。
 - 内置浏览器的「新建文件夹」只过滤 `/`，输入 `..\x` 之类反斜杠路径可越出当前目录。
-- 设置里的快捷键编辑/恢复默认当前会返回 400（客户端发送 10 个键、服务端只接受 7 个）。
 - Composer 输入框聚焦时 Ctrl+K 不会进入应用搜索；快捷键标签在 Windows 上格式不统一。
 - 工具产出的反斜杠相对路径、盘符绝对路径或临时绝对路径，在 Inspector/工具卡打开时可能被服务端以「工作区路径无效」拒绝；AVIF 前端可添加但服务端会拒绝。
 - 文件拖放到 Composer 卡片可能被 document 级监听重复处理；微软拼音在重命名/目标/问答/子代理跟进等输入框按 Enter 可能误提交。
-- 自动化 interval 超过约 24.85 天会被 `setTimeout` 截断为 1 ms，可能立即反复执行（Node 24 已复现）。
 - chmod `0600/0700` 在 Windows 不建立 ACL；凭据、app-state、SQLite 会话和附件依赖用户目录继承权限。
+
+### 自动化与模型设置
+
+- 长间隔自动化会按绝对到期时间分段等待；删除仍被自动化引用的工作区或 preset 会返回 `CONFLICT`，需先修改或删除自动化任务。
+- Provider 有未保存的连接配置更改时，测试连接和获取模型会禁用并提示先保存；保存后使用已保存配置进行验证。
 
 ### Windows 上的验证
 
-- 2026-10-20 的 macOS 基线已通过：`npm run typecheck`、20 个测试文件 / 241 项 vitest、`npm run build` 全绿。该结果**不是 Windows 实机结论**，Windows 仍须按实机清单复测。
+- macOS 已通过 `npm run check` 与 HTTP smoke；该结果**不是 Windows 实机结论**，Windows 仍须按实机清单复测。
 - Windows 的 `npm test` **不是只有 1 项失败**：`tests/runtime.test.ts` 的 POSIX mode 断言和 `tests/skills.test.ts` 的 `/` 路径断言会失败；skills 的 symlink 测试还取决于 Developer Mode/权限，Git 相关测试依赖系统 Git。
 - `test:live:tools` 与 `test:live:codemode` 写死 `workspaceWrite`，Windows 上不可用；真实工具的 Windows 验证请改用 `fullAccess` 手动执行，或先平台化脚本。
 - `test:live:skills` 使用 `fullAccess`，理论上可运行，但仍要求真实 DeepSeek 模型、凭据、网络和 Windows 实机记录。`test:live:workflow` 会在 Windows 动态改用 `fullAccess`，但需要 Git Bash、Node `--test` 和真实 DeepSeek，同样未实机验证。

@@ -11,7 +11,7 @@ import type {
   ThinkingLevel,
   WorkspaceSummary,
 } from '../shared/types.ts'
-import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, SHORTCUT_COMMANDS, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 
 const modelRef = z.object({ provider: z.string().min(1).max(100), modelId: z.string().min(1).max(256) }).strict()
 const thinking = z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
@@ -37,7 +37,7 @@ const settingsSchema = z.object({
   codemodeMode: z.enum(CODEMODE_MODES).default('on'),
   defaultPresetId: z.string().min(1).optional(),
   defaultWorkspaceId: z.string().min(1).optional(),
-  shortcuts: z.partialRecord(z.enum(['newConversation', 'search', 'settings', 'toggleSidebar', 'send', 'newline', 'alternateSend']), z.string().min(1).max(80)).optional(),
+  shortcuts: z.partialRecord(z.enum(SHORTCUT_COMMANDS), z.string().min(1).max(80)).optional(),
 }).strict()
 const workspaceSchema = z.object({
   id: z.string().min(1),

@@ -352,6 +352,26 @@ const SUMMARY_FORM = `## Goal
 ## Critical Context
 - [Paths, commands, error strings, ids, data, and user preferences needed to continue]`
 
+const SUMMARY_TEMPLATE_PLACEHOLDERS = [...SUMMARY_FORM.matchAll(/\[([^\[\]]+)\]/g)]
+  .map(match => match[1]!.trim())
+  .filter(placeholder => !/^[ xX]$/.test(placeholder))
+
+function isSummaryTemplatePlaceholder(value: string): boolean {
+  const normalize = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase()
+  const normalized = normalize(value)
+  if (SUMMARY_TEMPLATE_PLACEHOLDERS.some(placeholder => normalize(placeholder) === normalized)) return true
+
+  const shortened = normalized.replace(/(?:\.{3}|…)+\s*$/, '').replace(/[.,:;]+$/, '').trim()
+  return shortened !== normalized && shortened.length >= 6 &&
+    SUMMARY_TEMPLATE_PLACEHOLDERS.some(placeholder => normalize(placeholder).startsWith(shortened))
+}
+
+function stripSummaryTemplatePlaceholders(value: string): string {
+  return value.replace(/\[([^\]\n]+)\](?!\s*\()/g, (match, placeholder: string) =>
+    isSummaryTemplatePlaceholder(placeholder) ? '' : match,
+  )
+}
+
 function keptBoundary(view: ContextView, firstKept: EntryId): KeptBoundary | undefined {
   const index = view.entries.findIndex(entry => entry.id === firstKept)
   if (index < 0) return undefined
@@ -455,21 +475,50 @@ function markdownHeadings(text: string): MarkdownHeading[] {
   return headings
 }
 
+function hasFencedCodeContent(lines: readonly string[]): boolean {
+  let fence: { marker: '`' | '~'; length: number } | undefined
+  for (const line of lines) {
+    const start = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+    if (fence !== undefined) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1]
+      if (close !== undefined && close[0] === fence.marker && close.length >= fence.length) fence = undefined
+      else if (line.trim() !== '') return true
+      continue
+    }
+    if (start !== undefined) fence = { marker: start[0] as '`' | '~', length: start.length }
+  }
+  return false
+}
+
 function hasSectionContent(
   lines: readonly string[],
   headings: readonly MarkdownHeading[],
   firstLine: number,
 ): boolean {
+  if (hasFencedCodeContent(lines)) return true
   const headingLines = new Set(headings.map(heading => heading.line - firstLine))
   return lines.some((line, index) => {
     if (headingLines.has(index) || line.trim() === '') return false
     if (/^ {0,3}(?:`{3,}|~{3,})/.test(line) && /^ {0,3}(?:`{3,}|~{3,})[^\r\n]*$/.test(line)) return false
     if (/^ {0,3}(?:[-*_][ \t]*){3,}$/.test(line)) return false
-    const content = line.trim()
-      .replace(/^(?:(?:[-*+]\s+)|(?:\d+[.)]\s+)|(?:>\s*))+/g, '')
-      .trim()
-    if (content === '' || /^\[[^\]]+\]$/.test(content)) return false
-    if (/^(?:tbd|todo|placeholder)$/i.test(content)) return false
+    let content = line.trim()
+    while (true) {
+      const unwrapped = content.replace(/^(?:>\s*|[-*+]\s+|\d+[.)]\s+|\[[ xX]\]\s+)/, '').trimStart()
+      if (unwrapped === content) break
+      content = unwrapped
+    }
+    if (content === '') return false
+
+    // Inline code is literal evidence, even when it contains bracketed template-like text.
+    if ([...content.matchAll(/(`+)(.*?)\1/g)].some(match => (match[2] ?? '').trim() !== '')) return true
+
+    const withoutEmphasis = content.replace(/[`*_~]/g, '').trim()
+    if (/^\[[^\]]+\]$/.test(withoutEmphasis)) return false
+
+    const residue = stripSummaryTemplatePlaceholders(content)
+      .replace(/[`*_~]/g, '')
+      .replace(/[\s\p{P}\p{S}]/gu, '')
+    if (residue === '' || /^(?:tbd|todo|placeholder)$/i.test(residue)) return false
     return true
   })
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   Button, Checkbox, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
@@ -7,6 +7,11 @@ import {
 import type { ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderModelInput, ProviderSummary } from '../shared/types.ts'
 import { api } from './api.ts'
 import { draftReasoningLevels, pinReasoningLevels, type ReasoningEntry } from './reasoning-levels.ts'
+import {
+  beginProviderCheck, canCheckSavedProviderRequest, clearProviderEditorFeedback, createProviderEditorCheckState,
+  finishProviderCheck, isProviderEditorDirty, loadProviderEditorRequest, markProviderEditorSaved,
+  setProviderEditorFeedback, updateProviderEditorRequest,
+} from './provider-editor-state.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './ModelSettings.module.css'
 
@@ -271,91 +276,129 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
   const [key, setKey] = useState('')
   const [revealed, setRevealed] = useState(false)
   const [pending, setPending] = useState(false)
-  const [discovering, setDiscovering] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [error, setError] = useState('')
-  const [status, setStatus] = useState('')
-  const disabled = saving || pending || loading
+  const [checkState, setCheckState] = useState(createProviderEditorCheckState)
+  const requestVersion = useRef(0)
+  const testing = checkState.activity === 'testing'
+  const discovering = checkState.activity === 'discovering'
+  const disabled = saving || pending || loading || testing || discovering
+  const makeRequestDraft = (nextBaseUrl = baseUrl, nextProtocol = protocol, nextRows = rows) => ({
+    baseUrl: nextBaseUrl,
+    protocol: nextProtocol,
+    // Internal row keys and expansion state are presentation details, not provider request data.
+    models: nextRows.map(row => ({
+      id: row.id, name: row.name, contextWindow: row.contextWindow, maxTokens: row.maxTokens,
+      input: [...row.input], levels: row.levels, base: row.base,
+    })),
+  })
+  const updateRequestDraft = (nextBaseUrl = baseUrl, nextProtocol = protocol, nextRows = rows, credentialDrafted = key !== '') => {
+    requestVersion.current += 1
+    setCheckState(current => updateProviderEditorRequest(current, makeRequestDraft(nextBaseUrl, nextProtocol, nextRows), credentialDrafted))
+  }
+  const clearCheckFeedback = () => setCheckState(current => clearProviderEditorFeedback(current))
+  const showFormError = (message: string) => setCheckState(current => setProviderEditorFeedback(current, { tone: 'error', message }))
   const applyConfig = (value: ProviderConfigSummary) => {
+    const nextRows = value.models.map(draftFromModel)
+    requestVersion.current += 1
     setConfig(value); setId(value.id); setName(value.name)
     setBaseUrl(value.baseUrl ?? ''); setProtocol(value.api)
-    setRows(value.models.map(draftFromModel)); setKey(''); setRevealed(false)
+    setRows(nextRows); setKey(''); setRevealed(false)
+    setCheckState(loadProviderEditorRequest(makeRequestDraft(value.baseUrl ?? '', value.api, nextRows), checkState.nextActivityId))
   }
   useEffect(() => {
     if (create || provider === undefined) return
     let active = true
     setLoading(true)
     api.getProvider(provider.id).then(value => { if (active) applyConfig(value) })
-      .catch(cause => { if (active) setError(cause instanceof Error ? cause.message : t('无法读取配置', 'Could not load configuration')) })
+      .catch(cause => { if (active) setCheckState(current => setProviderEditorFeedback(current, { tone: 'error', message: cause instanceof Error ? cause.message : t('无法读取配置', 'Could not load configuration') })) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [create, provider?.id])
+  const replaceRows = (nextRows: ModelDraft[]) => {
+    setRows(nextRows)
+    updateRequestDraft(baseUrl, protocol, nextRows)
+  }
   const patchRow = (rowKey: string, patch: Partial<ModelDraft>) => {
-    setRows(current => current.map(row => row.key === rowKey ? { ...row, ...patch } : row))
+    replaceRows(rows.map(row => row.key === rowKey ? { ...row, ...patch } : row))
   }
   const addRows = (models: ProviderModelInput[]) => {
-    setRows(current => {
-      const known = new Set(current.map(row => row.id).filter(Boolean))
-      return [...current, ...models.filter(model => model.id === '' || !known.has(model.id)).map(draftFromModel)]
-    })
+    const known = new Set(rows.map(row => row.id).filter(Boolean))
+    replaceRows([...rows, ...models.filter(model => model.id === '' || !known.has(model.id)).map(draftFromModel)])
   }
   const discover = async () => {
     if (provider === undefined) return
-    setDiscovering(true); setError(''); setStatus('')
+    const started = beginProviderCheck(checkState, 'discovering')
+    if (started === checkState || started.activityId === null) return
+    const activityId = started.activityId
+    const version = requestVersion.current
+    setCheckState(started)
     try {
       const found = await api.discoverProvider(provider.id)
-      if (found.length === 0) { setError(t('提供商没有返回任何模型', 'The provider returned no models')); return }
+      if (version !== requestVersion.current) return
+      if (found.length === 0) {
+        setCheckState(current => finishProviderCheck(current, 'discovering', activityId, { tone: 'error', message: t('提供商没有返回任何模型', 'The provider returned no models') }))
+        return
+      }
+      setCheckState(current => finishProviderCheck(current, 'discovering', activityId, null))
       addRows(found.map(model => ({ id: model.id, name: model.name })))
-      setStatus(t(`已获取 ${found.length} 个模型`, `Found ${found.length} models`))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : t('无法获取模型', 'Could not list models')) }
-    finally { setDiscovering(false) }
+      setCheckState(current => setProviderEditorFeedback(current, { tone: 'success', message: t(`已获取 ${found.length} 个模型`, `Found ${found.length} models`) }))
+    } catch (cause) {
+      if (version === requestVersion.current) setCheckState(current => finishProviderCheck(current, 'discovering', activityId, { tone: 'error', message: cause instanceof Error ? cause.message : t('无法获取模型', 'Could not list models') }))
+    }
   }
   const test = async () => {
     if (provider === undefined) return
-    setTesting(true); setError(''); setStatus('')
+    const started = beginProviderCheck(checkState, 'testing')
+    if (started === checkState || started.activityId === null) return
+    const activityId = started.activityId
+    const version = requestVersion.current
+    setCheckState(started)
     try {
       const result = await api.testProvider(provider.id)
-      if (result.status === 'connected') setStatus(t('连接成功', 'Connection successful'))
-      else setError(result.message ?? t('连接失败', 'Connection failed'))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : t('连接失败', 'Connection failed')) }
-    finally { setTesting(false) }
+      if (version !== requestVersion.current) return
+      const feedback = result.status === 'connected'
+        ? { tone: 'success' as const, message: t('连接成功', 'Connection successful') }
+        : { tone: 'error' as const, message: result.message ?? t('连接失败', 'Connection failed') }
+      setCheckState(current => finishProviderCheck(current, 'testing', activityId, feedback))
+    } catch (cause) {
+      if (version === requestVersion.current) setCheckState(current => finishProviderCheck(current, 'testing', activityId, { tone: 'error', message: cause instanceof Error ? cause.message : t('连接失败', 'Connection failed') }))
+    }
   }
   const save = async (event: FormEvent) => {
     event.preventDefault()
     if (disabled) return
-    setError(''); setStatus('')
+    clearCheckFeedback()
     const trimmedId = id.trim()
     const displayName = name.trim() || trimmedId
     if (!PROVIDER_ID_PATTERN.test(trimmedId)) {
-      setError(t('Provider ID 无效：需以字母或数字开头，之后可用字母、数字、点、下划线和短横线。', 'Invalid provider ID: start with a letter or digit, then use letters, digits, dots, underscores, or dashes.')); return
+      showFormError(t('Provider ID 无效：需以字母或数字开头，之后可用字母、数字、点、下划线和短横线。', 'Invalid provider ID: start with a letter or digit, then use letters, digits, dots, underscores, or dashes.')); return
     }
     if (create && catalog?.providers.some(item => item.id === trimmedId)) {
-      setError(t('已有提供商使用了这个 ID。', 'A provider already uses this ID.')); return
+      showFormError(t('已有提供商使用了这个 ID。', 'A provider already uses this ID.')); return
     }
     const normalizedBaseUrl = baseUrl.trim()
     if (create && normalizedBaseUrl === '') {
-      setError(t('自定义模型 API 需要填写 API 地址。', 'A custom model API needs a base URL.')); return
+      showFormError(t('自定义模型 API 需要填写 API 地址。', 'A custom model API needs a base URL.')); return
     }
     if (normalizedBaseUrl !== '' && !isHttpUrl(normalizedBaseUrl)) {
-      setError(t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')); return
+      showFormError(t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')); return
     }
     const drafts = rows.filter(row => row.id.trim() !== '')
     const ids = drafts.map(row => row.id.trim())
     if (new Set(ids).size !== ids.length) {
-      setError(t('模型 ID 不能重复。', 'Each model ID may appear once.')); return
+      showFormError(t('模型 ID 不能重复。', 'Each model ID may appear once.')); return
     }
     if (displayName === '' || drafts.length === 0) {
-      setError(t('请填写提供商名称和至少一个模型。', 'Enter a provider name and at least one model.')); return
+      showFormError(t('请填写提供商名称和至少一个模型。', 'Enter a provider name and at least one model.')); return
     }
     const models: ProviderModelInput[] = []
     for (const row of drafts) {
       const contextWindow = parseCapacity(row.contextWindow)
       if (row.contextWindow.trim() !== '' && contextWindow === undefined) {
-        setError(t('上下文窗口必须是正数，例如 131072、256K 或 1M。', 'Context window must be positive, e.g. 131072, 256K or 1M.')); return
+        showFormError(t('上下文窗口必须是正数，例如 131072、256K 或 1M。', 'Context window must be positive, e.g. 131072, 256K or 1M.')); return
       }
       const maxTokens = parseCapacity(row.maxTokens)
       if (row.maxTokens.trim() !== '' && maxTokens === undefined) {
-        setError(t('最大输出 token 数必须是正数，例如 8192、64K 或 1M。', 'Max output tokens must be positive, e.g. 8192, 64K or 1M.')); return
+        showFormError(t('最大输出 token 数必须是正数，例如 8192、64K 或 1M。', 'Max output tokens must be positive, e.g. 8192, 64K or 1M.')); return
       }
       const modelId = row.id.trim()
       const listed = catalog?.models.find(model => model.provider === trimmedId && model.modelId === modelId)
@@ -383,11 +426,16 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
         ...(config?.headers ? { headers: config.headers } : {}),
         ...(config?.compat ? { compat: config.compat } : {}),
       })
-      setKey(''); setRevealed(false)
+      setKey(''); setRevealed(false); requestVersion.current += 1
+      if (!create) {
+        const savedRows = models.map(draftFromModel)
+        setBaseUrl(normalizedBaseUrl); setRows(savedRows)
+        setCheckState(current => markProviderEditorSaved(current, makeRequestDraft(normalizedBaseUrl, protocol, savedRows)))
+      }
       if (onSaved !== undefined) onSaved(displayName)
       else if (!create) applyConfig(await api.getProvider(trimmedId))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('保存失败', 'Could not save provider'))
+      setCheckState(current => setProviderEditorFeedback(current, { tone: 'error', message: cause instanceof Error ? cause.message : t('保存失败', 'Could not save provider') }))
     } finally { setPending(false) }
   }
   // The editor offers every level the API accepts, not just the model's
@@ -411,6 +459,8 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       ? t(`留空使用环境认证（${keyHint}）`, `Leave blank to use env as auth (${keyHint})`)
       : t('输入 API 密钥', 'Enter an API key')
   const providerId = provider?.id ?? id
+  const requestDirty = provider !== undefined && !loading && isProviderEditorDirty(checkState)
+  const checksAvailable = provider !== undefined && canCheckSavedProviderRequest(checkState)
   const customized = config?.source === 'project'
   const defaults = config?.defaults
   return <div className={css.editor}>
@@ -431,19 +481,19 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
         <label className={css.field}>
           <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
           <Input value={name} placeholder={id || t('显示名称', 'Display name')} aria-label={t('显示名称', 'Display name')} disabled={disabled}
-            onChange={event => setName(event.currentTarget.value)} />
+            onChange={event => { setName(event.currentTarget.value); clearCheckFeedback() }} />
         </label>
         <label className={css.field}>
           <span className={css.fieldLabel}>{t('API 地址', 'Base URL')}</span>
           <Input value={baseUrl} aria-label={t('API 地址', 'Base URL')} disabled={disabled}
             placeholder={protocol === 'anthropic-messages' ? 'https://gateway.example' : 'https://gateway.example/v1'}
-            onChange={event => setBaseUrl(event.currentTarget.value)} />
+            onChange={event => { const value = event.currentTarget.value; setBaseUrl(value); updateRequestDraft(value, protocol, rows) }} />
           {baseUrl !== '' && !isHttpUrl(baseUrl.trim()) && <span className={css.fieldError}>{t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')}</span>}
         </label>
         <label className={css.field}>
           <span className={css.fieldLabel}>{t('接口协议', 'API protocol')}</span>
           <select className={css.selectInput} value={protocol} aria-label={t('接口协议', 'API protocol')} disabled={disabled}
-            onChange={event => setProtocol(event.currentTarget.value)}>
+            onChange={event => { const value = event.currentTarget.value; setProtocol(value); updateRequestDraft(baseUrl, value, rows) }}>
             {API_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
           </select>
         </label>
@@ -458,7 +508,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
         <div className={css.keyInput}>
           <Input type={revealed ? 'text' : 'password'} autoComplete="new-password" value={key} disabled={disabled}
             aria-label={t(`API 密钥 ${providerId}`, `API key ${providerId}`)} placeholder={keyPlaceholder}
-            onChange={event => { setRevealed(false); setKey(event.currentTarget.value) }} />
+            onChange={event => { const value = event.currentTarget.value; setRevealed(false); setKey(value); updateRequestDraft(baseUrl, protocol, rows, value !== '') }} />
           {key !== '' && <button type="button" className={css.keyToggle} aria-pressed={revealed} disabled={disabled}
             aria-label={revealed ? t('隐藏密钥', 'Hide key') : t('显示密钥', 'Show key')}
             onClick={() => setRevealed(value => !value)}><IconChevronDownOutlineRegular size={14} /></button>}
@@ -467,8 +517,8 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       </div>
       {create ? <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
         rows={rows} disabled={disabled} discovering={discovering} canDiscover={false}
-        onRows={setRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
-        onRestore={() => { if (defaults !== undefined) setRows(defaults.map(draftFromModel)) }}
+        onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
+        checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
         availableLevels={availableLevels} t={t} /> : <details className={css.customized}>
         <summary className={css.customizedSummary}>{t('自定义设置', 'Customized settings')}</summary>
         <div className={css.customizedBody}>
@@ -476,12 +526,12 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
             <label className={css.field}>
               <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
               <Input value={name} aria-label={t('显示名称', 'Display name')} disabled={disabled}
-                onChange={event => setName(event.currentTarget.value)} />
+                onChange={event => { setName(event.currentTarget.value); clearCheckFeedback() }} />
             </label>
             <label className={css.field}>
               <span className={css.fieldLabel}>{t('接口协议', 'API protocol')}</span>
               <select className={css.selectInput} value={protocol} aria-label={t('接口协议', 'API protocol')} disabled={disabled}
-                onChange={event => setProtocol(event.currentTarget.value)}>
+                onChange={event => { const value = event.currentTarget.value; setProtocol(value); updateRequestDraft(baseUrl, value, rows) }}>
                 {API_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
             </label>
@@ -490,23 +540,24 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
             <span className={css.fieldLabel}>{t('API 地址', 'Base URL')}</span>
             <Input value={baseUrl} aria-label={t('API 地址', 'Base URL')} disabled={disabled}
               placeholder={config?.baseUrl ?? t('没有默认地址', 'No default address')}
-              onChange={event => setBaseUrl(event.currentTarget.value)} />
+              onChange={event => { const value = event.currentTarget.value; setBaseUrl(value); updateRequestDraft(value, protocol, rows) }} />
             {baseUrl !== '' && !isHttpUrl(baseUrl.trim()) && <span className={css.fieldError}>{t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')}</span>}
           </label>
           <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
             rows={rows} disabled={disabled} discovering={discovering} canDiscover={provider !== undefined}
-            onRows={setRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
-            onRestore={() => { if (defaults !== undefined) setRows(defaults.map(draftFromModel)) }}
+            onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
+            checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
             availableLevels={availableLevels} t={t} />
         </div>
       </details>}
-      {error !== '' && <p className={css.error} role="alert">{error}</p>}
-      {status !== '' && <p className={css.success} role="status">{status}</p>}
+      {checkState.feedback !== null && <p className={checkState.feedback.tone === 'error' ? css.error : css.success}
+        role={checkState.feedback.tone === 'error' ? 'alert' : 'status'}>{checkState.feedback.message}</p>}
+      {requestDirty && <p className={css.advancedHint} role="note">{t('保存更改后测试连接或获取模型。', 'Save changes before testing the connection or fetching models.')}</p>}
       <div className={css.editorActions}>
-        {!create && provider !== undefined && <Button type="button" size="sm" variant="ghost" disabled={testing || disabled}
+        {!create && provider !== undefined && <Button type="button" size="sm" variant="ghost" disabled={disabled || !checksAvailable}
           onClick={() => void test()}>{testing ? t('检测中…', 'Testing…') : t('测试连接', 'Test connection')}</Button>}
         <span className={css.actionSpacer} />
-        <Button type="button" size="sm" variant="outline" disabled={pending} onClick={onCancel}>{t('取消', 'Cancel')}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onCancel}>{t('取消', 'Cancel')}</Button>
         <Button type="submit" size="sm" variant="primary" disabled={disabled}>{pending ? t('保存中…', 'Saving…') : t('保存', 'Save')}</Button>
       </div>
     </form>}
@@ -514,7 +565,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
 }
 
 /** The shared model catalog editor used by both provider families. */
-function ModelDirectory({ catalog, config, customized, defaults, rows, disabled, discovering, canDiscover, onRows, onPatch, onAdd, onDiscover, onRestore, availableLevels, t }: {
+function ModelDirectory({ catalog, config, customized, defaults, rows, disabled, discovering, canDiscover, checksDisabled, onRows, onPatch, onAdd, onDiscover, onRestore, availableLevels, t }: {
   catalog: ModelCatalog | null
   config: ProviderConfigSummary | null
   customized: boolean
@@ -523,6 +574,7 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
   disabled: boolean
   discovering: boolean
   canDiscover: boolean
+  checksDisabled: boolean
   onRows: (rows: ModelDraft[]) => void
   onPatch: (key: string, patch: Partial<ModelDraft>) => void
   onAdd: (models: ProviderModelInput[]) => void
@@ -540,7 +592,7 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
       <div className={css.directoryActions}>
         {customized && defaults !== undefined && <button type="button" className={css.linkButton} disabled={disabled}
           onClick={onRestore}>{t('恢复默认模型', 'Restore default models')}</button>}
-        {canDiscover && <button type="button" className={css.linkButton} disabled={disabled || discovering}
+        {canDiscover && <button type="button" className={css.linkButton} disabled={disabled || discovering || checksDisabled}
           onClick={onDiscover}>{discovering ? t('正在向提供商请求…', 'Asking the provider…') : t('获取可用模型', 'Fetch available models')}</button>}
       </div>
     </div>
@@ -552,7 +604,7 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
             onChange={event => { onPatch(row.key, { id: event.currentTarget.value }) }} />
           <Input aria-label={t(`显示名称 ${index + 1}`, `Display name ${index + 1}`)} value={row.name} placeholder={t('留空时使用模型 ID', 'Uses the model ID when blank')} disabled={disabled}
             onChange={event => { onPatch(row.key, { name: event.currentTarget.value }) }} />
-          <button type="button" className={css.modelIconButton} aria-expanded={row.expanded} title={t('模型选项', 'Model options')}
+          <button type="button" className={css.modelIconButton} aria-expanded={row.expanded} disabled={disabled} title={t('模型选项', 'Model options')}
             aria-label={t(`模型选项 ${index + 1}`, `Model options ${index + 1}`)} onClick={() => { onPatch(row.key, { expanded: !row.expanded }) }}>
             {row.expanded ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronRightOutlineRegular size={14} />}
           </button>

@@ -9,15 +9,16 @@
 
 ## 审计快照门禁
 
-以下是本次审计时的真实门禁，不把「在途代码」当成已交付能力：
+以下是本次审计时记录的 macOS 历史快照门禁，不代表本轮后续修复代码：
 
 - `npm run build`：通过（Vite Web 构建）。
 - `npm run typecheck`：通过。
-- `npx vitest run`：20 个测试文件 / 241 项全绿（2026-10-20 复核）。
+- `npx vitest run`：20 个测试文件 / 241 项全绿（2026-10-20、本轮修复前记录）。
+- macOS 已通过 `npm run check` 与 HTTP smoke；此结果不代表 Windows 实机验收。
 - Git 分支服务端、API、`src/web/GitBranchSwitcher.tsx` 与测试已落地；Skills 与默认任务规划扩展也已接入。
 - 仓库仍无 `.github/` 或任何 Windows CI，上述绿色门禁**只在 macOS 上**成立。
 
-**因此，当前工作树可以按 macOS 基线交付审查，但不能宣称「Windows 可交付」；Windows 仍未实机验收，整体只能按本文的「有条件支持」处理。**
+**这些 macOS 结果不能证明 Windows 可交付；Windows 仍未实机验收，整体只能按本文的「有条件支持」处理。**
 
 ## 结论
 
@@ -28,8 +29,8 @@
 - `workspaceWrite` 访问模式仅 macOS `sandbox-exec` 可用；Windows 只提供 `readOnly` / `fullAccess`，这是设计限制。
 - Windows 原生目录选择器（koffi + COM `IFileOpenDialog`）代码已接入，但从未在 Windows 实机验证；失败时没有可用回退，当前属于高风险路径。
 - Git 分支能力要求 PATH 中同时有 `git.exe` 和兼容的 Git for Windows；它和 bash 的 `bash.exe` 是两个独立探测。
-- **自动化存在跨平台计时器缺陷**：超过约 24.85 天的 `setTimeout` 会被 Node 截断为 1 ms，可能立即重复执行。
 - **测试不可移植**：即使安装 Git Bash，Windows 上仍至少有 POSIX 权限断言和 Skills 路径断言会失败；符号链接测试还取决于 Windows Developer Mode/权限。
+- 本轮围绕五项跨平台缺陷完成源码修复：长间隔自动化分段等待、拒绝删除被 Automation 引用的工作区/Agent preset、快捷键 schema 支持 10 个键、Provider 有未保存变更时要求先保存再测试/发现模型、摘要校验拒绝模板占位内容。Windows 行为仍需实机验收。
 
 ## 状态口径
 
@@ -51,8 +52,9 @@
 | Web UI 基础/主题/字体 | 有条件 | 无 Electron/macOS API；字体栈含 Segoe UI、微软雅黑、Consolas；依赖 `:has`、`color-mix`、`@container`、`100dvh` 等现代 CSS，建议当前稳定版 Edge/Chrome，实机未验。 |
 | 会话、SSE、队列、停止、分叉、刷新/重启恢复 | 支持 | 纯 HTTP + SSE + SQLite；Windows 无需额外适配；长连接休眠/VPN 切换/WAL 强杀恢复待实机。 |
 | 模型目录、Provider、凭据 | 有条件（安全弱化） | 读写 `%USERPROFILE%\.pi-web\{settings,models,auth}.json`；设置页直接修改全局 `models.json` 和 `auth.json`。Windows `chmod 0600/0700` 只切换只读位，不建立 ACL；凭据、app-state、SQLite 会话和附件都依赖用户目录默认 ACL。 |
-| 设置、主题、字号、语言、发送模式 | 支持 | 原生 React 表单/状态；注意快捷键编辑当前必失败（X1）。 |
-| 快捷键编辑/恢复默认 | **不支持（现有回归）** | 客户端发送 10 个快捷键，服务端 strict schema 只接受 7 个，`rename/fork/archive` 触发 400。 |
+| Provider 测试/模型发现 | 支持（先保存） | 有未保存的连接配置变更时禁用测试/发现，并提示先保存；Windows 实际 UI 行为仍待实机验收。 |
+| 设置、主题、字号、语言、发送模式 | 支持 | 原生 React 表单/状态；快捷键名称在 Windows 上的显示顺序与符号仍不统一（见 W11）。 |
+| 快捷键编辑/恢复默认 | 支持（源码契约已修复） | 服务端 schema 与共享类型覆盖 10 个快捷键；Windows 实际界面保存仍待实机验收。 |
 | 工作区添加（原生选择器） | 有条件/高风险 | Win32 koffi + COM 已接入但无 Windows 实机；失败映射 500 且前端无回退；返回 `C:\...` 后前端用 `/` 取名，长路径会添加失败。 |
 | 内置目录浏览器 | 有条件/当前不可达 | 仅在 picker 错误文案包含中文「原生目录选择器」时打开，Windows 实际错误是 `Internal server error`；即使打开也拒绝 UNC/`\\?\`、没有盘符入口。 |
 | 工作区文件浏览、@ 引用、搜索、Inspector | 有条件 | 工作区相对路径统一用 `/`，正常浏览可用；工具产生的 `C:\...`、`src\foo` 或临时绝对路径点击打开会被服务端拒绝；路径行会显示 `C:\root/sub` 混合分隔符。 |
@@ -70,7 +72,7 @@
 | 问答（ask_user_question） | 有条件 | 主流程无 OS 依赖；Enter/Escape 的 IME 组合态保护不完整，微软拼音可能误提交/误关闭。 |
 | 子代理（subagent） | 有条件 | 会话/投影/轮询无 OS 依赖；跟进输入和面板 Escape 的 IME 保护不完整。 |
 | 智能体团队（team） | 支持（静态） | 共享任务板、成员、wait_agent 均为进程内实现；无 OS API。 |
-| 自动化（automation） | **部分不支持（跨平台缺陷）** | schema 允许 365 天，但 `setTimeout` 只接受 32 位毫秒；超过约 24.85 天会 clamp 到 1 ms，导致立即/反复执行。 |
+| 自动化（automation） | 支持（源码已修复长间隔） | 长间隔按绝对期限分段等待，避免 Node 将超长 `setTimeout` 截断为 1 ms；Windows 长期运行与重启恢复仍待实机验收。删除仍被 automation 引用的工作区或 preset 会返回冲突，需先处理引用。 |
 | Skills（技能） | 有条件/待实机 | 服务端路径校验显式处理 Windows 保留名、反斜杠、盘符和 UNC；frontmatter 支持 BOM/CRLF；保存使用同目录 rename。测试本身有 `/` 与 symlink 权限假设；Windows 实机未验。 |
 | Git 分支（列表/切换/新建并切换） | 有条件/待实机 | 服务端/API/UI 已完成，macOS 单测与 demo 浏览器已验；要求 PATH 有 `git.exe`；Git 不存在与「不是仓库」当前返回同一 issue；无 Windows/Git 集成测试。 |
 | 反馈、Session 日志下载 | 有条件 | 浏览器 Blob 下载跨平台；导出名过滤 `\/:*?"<>|`，但未处理 `CON/PRN/AUX/NUL/COM1/LPT1` 等 Windows 保留设备名。 |
@@ -80,7 +82,7 @@
 | `node:sqlite` 持久化 | 有条件 | Node 22.19 Windows 版自带 `node:sqlite`；NTFS WAL、Defender、OneDrive、强制结束后的恢复需实机验证。 |
 | Host/Origin 本地安全 | 支持（静态） | 仅允许 localhost/127.0.0.1/::1，并校验 Origin 与 Sec-Fetch-Site；未见 Windows 特有错误。 |
 | `npm run typecheck` | 支持（macOS 基线） | 纯 tsc；2026-10-20 复核通过。Windows 仍需实机跑一次（理论上跨平台）。 |
-| `npm test` | 有条件/预计失败 | macOS 基线 241/241 通过；Windows 上至少会因 POSIX mode 和 Skills 路径分隔符断言失败，symlink/Git 用例还取决于权限和 PATH。 |
+| `npm test` | 有条件/预计失败 | macOS 已通过 `npm run check`；Windows 上至少会因 POSIX mode 和 Skills 路径分隔符断言失败，symlink/Git 用例还取决于权限和 PATH。 |
 | `test:smoke` | 有条件 | 硬前置是先 `npm run build`；demo 会话会尝试调用 bash，但脚本不把 bash 成功作为硬断言。脚本用 SIGTERM 做优雅关闭断言，在 Windows 上不成立/会假绿。 |
 | `test:live` | 支持（需真实模型） | 无 OS 假设，但需要可用凭据与网络。 |
 | `test:live:tools` / `test:live:codemode` | **不支持** | 写死 `accessMode: 'workspaceWrite'`，Windows create 即 UNSUPPORTED；只能改用 fullAccess 手动验收或平台化脚本。 |
@@ -140,9 +142,9 @@
 
 ### 自动化
 
-- 调度器在 `src/server/runtime.ts:550-559` 直接使用 `setTimeout(delay)`。Node 24 实测：`setTimeout(..., 31536000000)` 打印 `TimeoutOverflowWarning` 并约 2 ms 后触发。
-- UI/schema 允许最长 365 天（`src/server/app.ts` 的 automation schema），因此超过 2^31-1 ms（约 24.85 天）的间隔会失控。该缺陷不是 Windows 专属，但在 Windows 长时间运行/开机自启场景更容易暴露。
-- 当前建议：Windows 上只使用 ≤24 天的 interval，或等平台化修复。
+- 长间隔现在按绝对到期时间分段等待，单次定时不会超过 Node 的 timeout 上限，到期前会重新计算剩余时间。
+- 删除仍被 Automation 引用的工作区或 Agent preset 会返回 `CONFLICT`；先修改或删除相关 Automation，再删除资源。
+- 这些实现已通过本轮 macOS 检查；Windows 长时间运行、休眠唤醒与重启恢复仍需实机验证。
 
 ### 反馈、Session 导出、Preset 与旧数据迁移
 
@@ -249,11 +251,6 @@
 
 ## 二、跨平台但会直接卡住 Windows 使用的现有缺陷
 
-### X1（高）快捷键编辑/恢复默认必失败
-
-- 客户端 `src/web/SettingsDialog.tsx:182-192` 发送 10 个键；服务端 strict schema 只认 7 个（`src/server/app.ts:108`），共享类型也只有 7 个（`src/shared/types.ts:99`）。
-- `PATCH /api/settings` 收到 `rename/fork/archive` 时返回 400 `invalid_body`。Windows 用户无法重绑 Ctrl+K、恢复默认或保存任何快捷键修改。
-
 ### X2（中）IME Enter/Escape 保护不完整
 
 已确认缺少 `isComposing`/`keyCode 229` 的路径至少包括：
@@ -286,12 +283,6 @@
 - Composer 卡片自身也有 `onDrop` 并再次调用 `onAddImages`（约 `:310`），没有 `stopPropagation()`，document 监听也没有检查 `defaultPrevented`。
 - 从 Windows 资源管理器拖入卡片时可能重复添加，批量文件还可能触发「超过 4 张/8 个」的假错误。
 
-### X6（中）自动化长间隔计时器溢出（已用 Node 24 复现）
-
-- `src/server/runtime.ts:550-559` 直接把任意 `intervalMs` 传给 `setTimeout`。Node 超过 2^31-1 ms 会 clamp 到 1 ms，并打印 `TimeoutOverflowWarning`。
-- UI/schema 最长允许 365 天，因此超过约 24.85 天会在保存/启动后立即反复触发。
-- 这不仅影响 Windows，也会消耗真实模型费用，应优先修复。
-
 ### X7（中）旧 workspaceWrite preset 迁移会报错
 
 - 旧 preset 的 accessMode 可能仍是 `workspaceWrite`；Presets 面板下拉只有 readOnly/fullAccess（`src/web/PresetsPanel.tsx:156-157`）。
@@ -307,7 +298,7 @@
 
 ## 三、测试、验收与工程缺口
 
-- **T1（已通过，macOS 基线）**：2026-10-20 复核 `npm run typecheck`、20 文件 / 241 项 vitest 与 `npm run build` 全部通过。该结果不是 Windows 实机结论。
+- **T1（本轮 macOS 验证）**：2026-10-20 `npm run check` 与 HTTP smoke 已通过。该结果不是 Windows 实机结论。
 - **T2（高）`npm test` 在 Windows 上不能全绿**：至少两项确定性失败（POSIX mode、Skills 路径分隔符），symlink 和 Git 相关测试还可能失败。需平台化断言/跳过或使用 Windows 专用 fixture。
 - **T3（高）live 工具验收不可用**：`scripts/live-tools-check.ts` 和 `scripts/live-codemode-check.ts` 写死 `workspaceWrite`，Windows 首步 UNSUPPORTED。应改用 `fullAccess` 或按平台选择，并增加 Windows 实机记录。
 - **T4（中）smoke 与 render-fixture 的前置不同**：`test:smoke` 的硬前置是先 `npm run build`；demo 会话会尝试 bash，但脚本不硬断言 bash 成功，Windows 上真正不成立的是 SIGTERM 优雅关闭断言。`scripts/render-fixture.ts` 才因 `cat`/`base64 -d` 和图片读取在无 Git Bash 时失败，且它不是 npm script，需用 `npx tsx scripts/render-fixture.ts`。
@@ -349,7 +340,7 @@
    Git Bash 可用 POSIX 写法；生产模式先 `npm run build`，再 `npm start`。
 10. 访问模式只能用 `fullAccess`（默认）/`readOnly`；`workspaceWrite` 不可用。
 11. 从 macOS/Linux 迁移 `~/.pi-web` 前：停止旧服务、备份 `~/.pi-web`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId、preset 和所有 accessMode，再启动 Windows 服务。旧项目 `.data` 与 `~/.pi/agent` 会在首次启动时自动导入一次。
-12. 预期门禁：macOS 基线当前为 typecheck/build 通过、241/241 测试通过；Windows 的 `npm test` 仍需按 T2 平台化后才可能全绿；`test:live:tools`/`test:live:codemode` 不可用，`test:live:skills` 与 `test:live:workflow` 需真实模型、Git Bash 与实机记录。
+12. 预期门禁：本轮 macOS `npm run check` 和 HTTP smoke 已通过；Windows 的 `npm test` 仍需按 T2 平台化后才可能全绿；`test:live:tools`/`test:live:codemode` 不可用，`test:live:skills` 与 `test:live:workflow` 需真实模型、Git Bash 与实机记录。
 
 ## 五、建议修复优先级
 
@@ -357,21 +348,19 @@
 
 1. 原生选择器失败时返回稳定的错误码，前端按错误码打开内置目录浏览器；同时打通手动输入工作区路径的入口，并给 Win32 picker 加总超时/取消。
 2. 工作区取名改用路径 basename（服务端或 `path.win32`），覆盖 `C:\`、UNC、`\\?\` 和尾部斜杠。
-3. 快捷键 schema/共享类型补齐 10 个键，或客户端 PATCH 前裁剪；补保存/恢复默认回归测试。
-4. 明确 Windows 支持前提为 Git for Windows，并二选一/同时接入 `createPowerShellTool()` 作为无 bash 兜底。
-5. 平台化 Windows 测试：mode 断言按平台判断，Skills 路径断言用 `path.join`，symlink 测试在权限不足时跳过并记录；移除/改写“仅 1 项失败”的文档。
-6. 补 Git 分支的 Windows 实机/Git 集成测试，并把「Git 不存在」与「目录不是仓库」拆成不同诊断。
+3. 明确 Windows 支持前提为 Git for Windows，并二选一/同时接入 `createPowerShellTool()` 作为无 bash 兜底。
+4. 平台化 Windows 测试：mode 断言按平台判断，Skills 路径断言用 `path.join`，symlink 测试在权限不足时跳过并记录；移除/改写“仅 1 项失败”的文档。
+5. 补 Git 分支的 Windows 实机/Git 集成测试，并把「Git 不存在」与「目录不是仓库」拆成不同诊断。
 
 ### P1（正确性/安全/体验）
 
 1. 修 `createDirectory` 名称校验：拒绝反斜杠、盘符、UNC、`<>:"|?*`、尾部点/空格和保留设备名。
 2. 修工具绝对/临时路径打开逻辑：支持工作区外只读预览或明确提示，而不是一律 400。
-3. 修自动化长间隔：将大 interval 分片/封顶/改用基于 `nextRunAt` 的周期检查。
-4. 修 AVIF 服务端白名单、拖放双触发和附件名/大小上限一致性；附件改为临时文件 + 原子 rename。
-5. 补 IME 保护：重命名、新建文件夹、目标、问答、子代理跟进及 Escape 路径。
-6. 迁移文档补充 preset、defaultWorkspaceId、旧会话 workspaceId；帮助用户处理 `workspaceWrite`。
-7. JSON 配置读取支持 UTF-8 BOM；Windows ACL 用 `icacls` 验证而不是依赖 chmod。
-8. Git 分支把 Git 不存在与不是仓库分开报错；补 Git Bash 与 Git.exe 两条前提的独立诊断。
+3. 修 AVIF 服务端白名单、拖放双触发和附件名/大小上限一致性；附件改为临时文件 + 原子 rename。
+4. 补 IME 保护：重命名、新建文件夹、目标、问答、子代理跟进及 Escape 路径。
+5. 迁移文档补充 preset、defaultWorkspaceId、旧会话 workspaceId；帮助用户处理 `workspaceWrite`。
+6. JSON 配置读取支持 UTF-8 BOM；Windows ACL 用 `icacls` 验证而不是依赖 chmod。
+7. Git 分支把 Git 不存在与不是仓库分开报错；补 Git Bash 与 Git.exe 两条前提的独立诊断。
 
 ### P2（打磨/待实机）
 
@@ -391,9 +380,9 @@
 5. 原生目录选择器：含中文/空格/深路径、UNC、`\\?\` 长路径、取消、ESC、关窗、DPI、多显示器、置顶、请求取消/超时；模拟 koffi/COM/worker 失败确认可回退。
 6. 内置目录浏览器：盘符、UNC（当前预计失败）、隐藏属性、新建文件夹（含 `..\x`）、搜索与超长路径。
 7. 工作区文件：正常相对路径、反斜杠/盘符/临时绝对路径、@ 引用、Inspector 打开、下载、附件拖拽/剪贴板/截图/中文名/非法字符名/201–255 字符名。
-8. 设置：改快捷键、恢复默认、访问模式只显示 readOnly/fullAccess、打开配置文件、旧 workspaceWrite preset 迁移。
+8. 设置：验证快捷键保存/恢复默认、访问模式只显示 readOnly/fullAccess、打开配置文件、旧 workspaceWrite preset 迁移。
 9. 模型：默认模型、Provider 新增/测试/发现/删除、凭据不泄漏、ACL（`icacls`）验证。
-10. 新增能力：Skills 的列表/加载/保存/校验/重启复用/只读与 plan 限制；默认任务规划的 todo/目标路由；MCP stdio（含 `.cmd`/中文路径）与 HTTP；Git 分支列表/切换/新建/非法名/未提交覆盖/冲突/detached/worktree；自动化短间隔和 >24 天 interval；`test:live:workflow`。
+10. 新增能力：Skills 的列表/加载/保存/校验/重启复用/只读与 plan 限制；默认任务规划的 todo/目标路由；MCP stdio（含 `.cmd`/中文路径）与 HTTP；Git 分支列表/切换/新建/非法名/未提交覆盖/冲突/detached/worktree；自动化短间隔与 >24 天分段等待（验证到期前不执行）；`test:live:workflow`。
 11. 协作：子代理、团队面板、目标、计划、待办、问答；用微软拼音在各输入框按 Enter/Escape 选词，确认不误提交。
 12. 浏览器：Edge/Chrome 各跑一遍，检查 Ctrl+K、Ctrl+B、Ctrl+Alt+N/A、AltGr/Win 键、缩放 125%/200%、高对比度。
 13. 关闭：Ctrl+C、关控制台、任务管理器结束、`taskkill` 反复验证 WAL 恢复与残留 bash/MCP 子进程。
@@ -413,4 +402,4 @@
 10. JSON BOM、CRLF、企业代理 TLS/证书、MCP HTTP fetch 代理。
 11. `test:live:workflow` 的 Windows fullAccess、Git Bash 验证和 Node `--test` 行为。
 
-> 本审计未修复任何业务代码；以上修复建议只在文档中列出。Windows 端最终验收应以实机记录、CI 和当前 `npm run check` 为准。
+> 本文记录 Windows 静态审计和实机待验项；本轮五项跨平台修复已完成 macOS 验证。Windows 端结论仍须由实机记录或 Windows CI 证明，macOS 的 `npm run check` 不能替代。

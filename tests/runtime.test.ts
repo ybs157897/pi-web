@@ -484,6 +484,118 @@ describe('Pi Durable runtime', () => {
     await expect(runtime.deleteWorkspace('missing-workspace')).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
+  it('blocks deleting a workspace referenced by a disabled automation, then allows removal after reassignment', async () => {
+    const { runtime, root } = await fixture()
+    const secondPath = join(root, 'automation-workspace')
+    await mkdir(secondPath, { recursive: true })
+    const workspace = await runtime.addWorkspace({ path: secondPath, name: 'Automation workspace' })
+    const bound = await runtime.create({ title: 'Bound automation workspace', workspaceId: workspace.id })
+    const automation = await runtime.createAutomation({
+      name: 'Paused workspace task',
+      prompt: 'Inspect this workspace',
+      enabled: false,
+      workspaceId: workspace.id,
+    })
+
+    await expect(runtime.deleteWorkspace(workspace.id)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining(`${automation.name}（${automation.id}）`),
+    })
+    expect(runtime.workspaces().some(item => item.id === workspace.id)).toBe(true)
+    expect((await runtime.detail(bound.conversation.id)).conversation.workspaceId).toBe(workspace.id)
+
+    const fallbackId = runtime.settings().defaultWorkspaceId
+    expect(fallbackId).toBeTruthy()
+    await runtime.updateAutomation(automation.id, { workspaceId: fallbackId })
+    await runtime.deleteWorkspace(workspace.id)
+    expect(runtime.workspaces().some(item => item.id === workspace.id)).toBe(false)
+    expect((await runtime.detail(bound.conversation.id)).conversation.workspaceId).toBe(fallbackId)
+  })
+
+  it('serializes workspace removal against an automation being created concurrently', async () => {
+    const { runtime, root } = await fixture()
+    const secondPath = join(root, 'concurrent-automation-workspace')
+    await mkdir(secondPath, { recursive: true })
+    const workspace = await runtime.addWorkspace({ path: secondPath, name: 'Concurrent workspace' })
+
+    const deleting = runtime.deleteWorkspace(workspace.id)
+    const creating = runtime.createAutomation({
+      name: 'Racing task',
+      prompt: 'Inspect this workspace',
+      enabled: false,
+      workspaceId: workspace.id,
+    })
+    await expect(deleting).resolves.toBeUndefined()
+    await expect(creating).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(runtime.automations()).toHaveLength(0)
+    expect(runtime.workspaces().some(item => item.id === workspace.id)).toBe(false)
+  })
+
+  it('blocks deleting a preset referenced by an automation until it is reassigned', async () => {
+    const { runtime } = await fixture()
+    const first = await runtime.createPreset({
+      name: 'Scheduled preset', instructions: '', extensions: [], tools: [], accessMode: 'readOnly',
+    })
+    const second = await runtime.createPreset({
+      name: 'Replacement preset', instructions: '', extensions: [], tools: [], accessMode: 'readOnly',
+    })
+    const automation = await runtime.createAutomation({
+      name: 'Preset task', prompt: 'Run with the selected preset', enabled: false, presetId: first.id,
+    })
+
+    await expect(runtime.deletePreset(first.id)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining(`${automation.name}（${automation.id}）`),
+    })
+    expect(runtime.presets().some(item => item.id === first.id)).toBe(true)
+
+    await runtime.updateAutomation(automation.id, { presetId: second.id })
+    await runtime.deletePreset(first.id)
+    expect(runtime.presets().some(item => item.id === first.id)).toBe(false)
+  })
+
+  it('recovers an overdue automation after the runtime restarts', async () => {
+    const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
+    const automation = await runtime.createAutomation({
+      name: 'Restarted task', prompt: 'Verify startup recovery', enabled: true, intervalMs: 60_000,
+    })
+    await runtime.close()
+
+    const statePath = join(dataDir, 'app-state.json')
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as { automations: Array<{ id: string; nextRunAt?: number }> }
+    const saved = state.automations.find(item => item.id === automation.id)
+    expect(saved).toBeDefined()
+    saved!.nextRunAt = Date.now() - 1
+    await writeFile(statePath, JSON.stringify(state))
+
+    const reopened = await createRuntime({ dataDir, workspace, piDir, demo: true })
+    cleanup.closers.push(() => reopened.close())
+    const deadline = Date.now() + 20_000
+    let recovered = reopened.automations().find(item => item.id === automation.id)
+    while (Date.now() < deadline && recovered?.lastRun?.status !== 'completed') {
+      await new Promise(resolve => setTimeout(resolve, 25))
+      recovered = reopened.automations().find(item => item.id === automation.id)
+    }
+    expect(recovered?.lastRun?.status).toBe('completed')
+    expect(recovered?.lastRun?.conversationId).toBeTruthy()
+  })
+
+  it('does not run a 30-day automation immediately after restart', async () => {
+    const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
+    const intervalMs = 30 * 24 * 60 * 60 * 1000
+    const automation = await runtime.createAutomation({
+      name: 'Long interval task', prompt: 'Wait for its due time', enabled: true, intervalMs,
+    })
+    await runtime.close()
+
+    const reopened = await createRuntime({ dataDir, workspace, piDir, demo: true })
+    cleanup.closers.push(() => reopened.close())
+    await new Promise(resolve => setTimeout(resolve, 50))
+    const recovered = reopened.automations().find(item => item.id === automation.id)
+    expect(recovered?.lastRun).toBeUndefined()
+    expect(recovered?.nextRunAt).toBeGreaterThan(Date.now())
+  })
+
   it('spawns teammates as background child conversations and projects the roster and the board', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Team parent' })

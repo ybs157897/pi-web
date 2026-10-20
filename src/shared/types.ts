@@ -3,6 +3,12 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 export type AccessMode = 'readOnly' | 'workspaceWrite' | 'fullAccess'
 export type MessageStatus = 'running' | 'completed' | 'error' | 'cancelled'
 
+/** Commands with user-configurable keyboard bindings. Shared by the browser and persisted settings validators. */
+export const SHORTCUT_COMMANDS = [
+  'newConversation', 'search', 'settings', 'toggleSidebar', 'rename', 'fork', 'archive', 'send', 'newline', 'alternateSend',
+] as const
+export type ShortcutCommand = typeof SHORTCUT_COMMANDS[number]
+
 export interface ModelRef { provider: string; modelId: string }
 export interface ModelOption extends ModelRef { name: string; reasoning: boolean; available: boolean; contextWindow?: number; thinkingLevels?: ThinkingLevel[] }
 export interface ProviderSummary {
@@ -109,7 +115,7 @@ export interface AppSettings {
   codemodeMode: CodemodeMode
   defaultPresetId?: string
   defaultWorkspaceId?: string
-  shortcuts?: Partial<Record<'newConversation' | 'search' | 'settings' | 'toggleSidebar' | 'send' | 'newline' | 'alternateSend', string>>
+  shortcuts?: Partial<Record<ShortcutCommand, string>>
 }
 export type UpdateAppSettingsInput = Omit<Partial<AppSettings>, 'defaultModel' | 'defaultPresetId' | 'defaultWorkspaceId' | 'shortcuts'> & {
   defaultModel?: ModelRef | null

@@ -5,7 +5,7 @@ import { userInfo } from 'node:os'
 import { z } from 'zod'
 import packageJson from '../../package.json' with { type: 'json' }
 import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
-import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
+import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, SHORTCUT_COMMANDS, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
@@ -105,7 +105,7 @@ const providerSchema = z.object({
     samplingParams: jsonObject.optional(), samplingParamsByThinkingLevel: jsonObject.optional(),
   }).passthrough()).min(1).max(2000),
 }).strict()
-const shortcutsSchema = z.object(Object.fromEntries(['newConversation', 'search', 'settings', 'toggleSidebar', 'send', 'newline', 'alternateSend'].map(name => [name, z.string().min(1).max(80).optional()]))).strict()
+const shortcutsSchema = z.object(Object.fromEntries(SHORTCUT_COMMANDS.map(name => [name, z.string().min(1).max(80).optional()]))).strict()
 const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional(), locale: z.enum(['zh', 'en']).optional(),
   fontSize: z.number().int().min(12).max(20).optional(), codeFontSize: z.number().int().min(10).max(16).optional(), terminalFontSize: z.number().int().min(10).max(20).optional(),

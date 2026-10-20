@@ -42,3 +42,6 @@
 - 定了：上下文压缩升级为「压力裁剪 + 预算触发 + 缓存感知摘要」三层（机制见 `docs/families.md` 第 10 节与 `src/server/compaction.ts`）：保留 Pi Durable 的 16k/30k/34k 策略，有效窗口默认使用模型真实窗口（1M 即 1M；模型未声明窗口时回退 200k，可用 `PI_WEB_CONTEXT_BUDGET` 设成本上限）；请求压力超过窗口 85% 时确定性裁剪老 tool result；回合结束超过预算时后台触发压缩；摘要优先复用会话前缀（同 provider session，剩余窗口足够时），使用 6 节工程检查点模板、注入防护与文件跟踪，校验失败自动退回 Pi 内置摘要器。
 - 判据：typecheck / 全量 vitest / build 通过；demo 实例先发小消息再发 180k 字符消息可自动压缩，`pi.compaction` 摘要包含完整模板与 `<read-files>/<modified-files>`；`tests/compaction.test.ts` 覆盖预算、裁剪、序列化、文件列表、校验、请求构建与 memo/失败回退。真实模型因 key 过期未验收。
 - 判据（2026-10-20 补）：真实 `opencode-go/deepseek-v4.1-flash`（1M window）provider 测试 `connected`，真实对话 3 轮后手动压缩成功，`pi.compaction` 摘要 980 字符、含 6 节标题与 `<read-files>`；ego + 真实 `opencode-go/deepseek-v4.1-flash` 验证：运行中在转录末尾显示与完成标记同级的「正在进行上下文压缩」系统行（旧完成标记隐藏、无 toast），完成后该行变为「已完成上下文压缩」（`artifacts/ego-compaction/07-level-running.png` / `08-level-completed.png`）。1M 模型默认使用完整窗口，`PI_WEB_CONTEXT_BUDGET` 可选设上限；测试用 60k 上限与 2k keep 降低真实模型成本。
+- 定了：长间隔调度、引用删除保护、10 键快捷键、Provider 保存门禁与摘要占位校验。
+- 判据：自动化到期才运行、引用删除返 CONFLICT、Provider 用新配置、摘要拒绝占位。
+- 未决：Windows 实机验收仍未完成。

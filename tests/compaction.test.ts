@@ -216,6 +216,83 @@ Ship it.
     expect(validateSummary(valid.replace('### In Progress', '### Done'))).toBeNull()
   })
 
+  it('rejects the exact checkpoint form when it contains only template placeholders', () => {
+    const template = `## Goal
+[What the user is trying to accomplish, across the whole conversation.]
+
+## Constraints & Preferences
+- [Requirements, constraints, and corrections from the user, or "(none)"]
+
+## Progress
+### Done
+- [x] [Completed work, with the evidence that proved it]
+
+### In Progress
+- [ ] [Exactly what was underway at the checkpoint]
+
+### Blocked
+- [Blockers, failures, or open questions, or "(none)"]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale, including alternatives rejected]
+
+## Next Steps
+1. [Ordered next actions, first action concrete]
+
+## Critical Context
+- [Paths, commands, error strings, ids, data, and user preferences needed to continue]`
+    expect(validateSummary(template)).toBeNull()
+  })
+
+  it('rejects the previously reproduced checkbox and abbreviated decision placeholders', () => {
+    const reproduced = valid
+      .replace('- [x] Built the feature; the focused test passed.', '- [x] [Completed work, with the evidence that proved it]')
+      .replace('- [ ] Review the final diff.', '- [ ] [Exactly what was underway at the checkpoint]')
+      .replace('- Keep the summary contract strict so incomplete checkpoints fall back safely.', '- **[Decision]**: [Brief rationale...]')
+
+    expect(validateSummary(reproduced)).toBeNull()
+  })
+
+  it('rejects each template placeholder after Markdown list, quote, checkbox, and emphasis wrappers', () => {
+    const placeholders = [
+      valid.replace('Ship it.', '> - [What the user is trying to accomplish, across the whole conversation.]'),
+      valid.replace('- Keep the scope narrow.', '> - [Requirements, constraints, and corrections from the user, or "(none)"]'),
+      valid.replace('- [x] Built the feature; the focused test passed.', '> - [x] [Completed work, with the evidence that proved it]'),
+      valid.replace('- [ ] Review the final diff.', '> - [ ] [Exactly what was underway at the checkpoint]'),
+      valid.replace('- None.', '> - [Blockers, failures, or open questions, or "(none)"]'),
+      valid.replace('- Keep the summary contract strict so incomplete checkpoints fall back safely.', '> - **[Decision]**: [Brief rationale, including alternatives rejected]'),
+      valid.replace('- Keep the summary contract strict so incomplete checkpoints fall back safely.', '- **[Decision]**: [Brief rationale...]'),
+      valid.replace('1. Review the final diff.', '> 1. [Ordered next actions, first action concrete]'),
+      valid.replace('- src/a.ts', '> - [Paths, commands, error strings, ids, data, and user preferences needed to continue]'),
+    ]
+
+    for (const placeholder of placeholders) expect(validateSummary(placeholder)).toBeNull()
+  })
+
+  it('keeps links, real checkbox tasks, numbered steps, code snippets, and explicit no-blocker content', () => {
+    const summary = valid
+      .replace('1. Review the final diff.', '1. Run `npm test`, then review [the final diff](src/a.ts).')
+      .replace('## Critical Context\n- src/a.ts', '## Critical Context\n- See [src/a.ts](src/a.ts) and run `npm test`.')
+      .replace('### Blocked\n- None.', '### Blocked\n- None; no active blockers.')
+
+    expect(validateSummary(summary)).toBe(summary)
+
+    const codeOnlyContext = valid.replace('## Critical Context\n- src/a.ts', '## Critical Context\n- `npm test`')
+    expect(validateSummary(codeOnlyContext)).toBe(codeOnlyContext)
+
+    const mixedContent = valid.replace(
+      '- Keep the summary contract strict so incomplete checkpoints fall back safely.',
+      '- **[Decision]**: [Brief rationale...] Keep strict validation because incomplete checkpoints must fall back safely.',
+    )
+    expect(validateSummary(mixedContent)).toBe(mixedContent)
+
+    const fencedCodeContext = valid.replace(
+      '## Critical Context\n- src/a.ts',
+      '## Critical Context\n```text\n[Completed work, with the evidence that proved it]\n```',
+    )
+    expect(validateSummary(fencedCodeContext)).toBe(fencedCodeContext)
+  })
+
   it('ignores heading-like lines inside fenced code blocks', () => {
     const withExample = valid.replace(
       '## Critical Context\n- src/a.ts',

@@ -69,6 +69,7 @@ import { clampThinkingLevel, createModelRuntime } from './models.ts'
 import { createDemoModelRuntime } from './demo-model.ts'
 import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from './model-allowlist.ts'
 import { RuntimeError } from './runtime-errors.ts'
+import { AutomationScheduler } from './automation-scheduler.ts'
 import { fallbackSessionTitle, frameTitleMessages, normalizeSessionTitle, titleSystemPrompt, TITLE_POLICY } from './session-title.ts'
 import { TodoTools, Todos } from './todo-tools.ts'
 import { createGoalExtension, GOAL_TOOL_NAMES, Goals, applyGoalCreate, applyGoalUpdate } from './goal-tools.ts'
@@ -582,7 +583,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let runtimeClosed = false
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
-  const automationTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const automationTasks = new Set<Promise<void>>()
   const queueActionLocks = new Map<string, Promise<void>>()
   const withQueueActionLock = async <T>(key: string, action: () => Promise<T>): Promise<T> => {
@@ -595,18 +595,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
   }
   let runAutomation: (id: string) => Promise<{ automation: Automation; conversationId: string }>
+  const automationScheduler = new AutomationScheduler()
   const scheduleAutomation = (automation: Automation): void => {
-    const existing = automationTimers.get(automation.id)
-    if (existing) clearTimeout(existing)
-    automationTimers.delete(automation.id)
+    automationScheduler.cancel(automation.id)
     if (runtimeClosed || !automation.enabled || automation.intervalMs === undefined) return
     const dueAt = automation.nextRunAt ?? Date.now() + automation.intervalMs
-    const timer = setTimeout(() => {
-      automationTimers.delete(automation.id)
+    automationScheduler.schedule(automation.id, dueAt, () => {
       void runAutomation(automation.id).catch(() => undefined)
-    }, Math.max(0, dueAt - Date.now()))
-    timer.unref?.()
-    automationTimers.set(automation.id, timer)
+    })
   }
   harness = await Harness.open(storage, {
     models: modelRuntime.models,
@@ -1800,17 +1796,22 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const deleteWorkspace = async (id: string): Promise<void> => {
     const state = appState.snapshot()
     if (!state.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
+    assertNoAutomationReferences(state.automations, 'workspace', id)
     const remaining = state.workspaces.filter(workspace => workspace.id !== id)
     if (remaining.length === 0) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
-    const fallback = remaining.find(workspace => workspace.id === state.settings.defaultWorkspaceId) ?? remaining[0]
-    if (fallback === undefined) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
-    for (const summary of await list()) {
-      if (summary.workspaceId !== id) continue
-      await withMetadata(parseConversationId(summary.id), draft => { draft.workspaceId = fallback.id })
-    }
-    await appState.update(current => {
+    await appState.update(async current => {
+      if (!current.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
+      assertNoAutomationReferences(current.automations, 'workspace', id)
+      const currentRemaining = current.workspaces.filter(workspace => workspace.id !== id)
+      if (currentRemaining.length === 0) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
+      const currentFallback = currentRemaining.find(workspace => workspace.id === current.settings.defaultWorkspaceId) ?? currentRemaining[0]
+      if (currentFallback === undefined) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
+      for (const summary of await list()) {
+        if (summary.workspaceId !== id) continue
+        await withMetadata(parseConversationId(summary.id), draft => { draft.workspaceId = currentFallback.id })
+      }
       current.workspaces = current.workspaces.filter(workspace => workspace.id !== id)
-      if (current.settings.defaultWorkspaceId === id) current.settings.defaultWorkspaceId = fallback.id
+      if (current.settings.defaultWorkspaceId === id) current.settings.defaultWorkspaceId = currentFallback.id
     })
   }
 
@@ -1869,6 +1870,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     await appState.update(state => {
       const index = state.presets.findIndex(item => item.id === id)
       if (index < 0) throw new RuntimeError('NOT_FOUND', 'Agent preset 不存在')
+      assertNoAutomationReferences(state.automations, 'preset', id)
       state.presets.splice(index, 1)
       if (state.settings.defaultPresetId === id) delete state.settings.defaultPresetId
     })
@@ -2060,6 +2062,24 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (input.presetId) selectedPreset(input.presetId)
   }
 
+  const assertAutomationResourcesExist = (
+    workspaceId: string | undefined,
+    presetId: string | undefined,
+    workspaces: readonly WorkspaceSummary[],
+    presets: readonly AgentPreset[],
+  ): void => {
+    if (workspaceId && !workspaces.some(workspace => workspace.id === workspaceId)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
+    if (presetId && !presets.some(preset => preset.id === presetId)) throw new RuntimeError('NOT_FOUND', 'Agent preset 不存在')
+  }
+
+  const assertNoAutomationReferences = (items: readonly Automation[], resource: 'workspace' | 'preset', id: string): void => {
+    const references = items.filter(item => (resource === 'workspace' ? item.workspaceId : item.presetId) === id)
+    if (references.length === 0) return
+    const resourceName = resource === 'workspace' ? '工作区' : 'Agent preset'
+    const automationList = references.map(item => `${item.name}（${item.id}）`).join('、')
+    throw new RuntimeError('CONFLICT', `${resourceName}仍被以下 Automation 引用：${automationList}。请先修改或删除这些 Automation`)
+  }
+
   const createAutomation = async (input: CreateAutomationInput): Promise<Automation> => {
     validateAutomation(input)
     const now = Date.now()
@@ -2078,6 +2098,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       updatedAt: now,
     }
     const stored = await appState.update(state => {
+      assertAutomationResourcesExist(candidate.workspaceId, candidate.presetId, state.workspaces, state.presets)
       state.automations.push(candidate)
       return structuredClone(candidate)
     })
@@ -2105,6 +2126,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }
       if (input.enabled !== undefined) current.enabled = input.enabled
       if (!current.enabled || current.intervalMs === undefined) delete current.nextRunAt
+      assertAutomationResourcesExist(current.workspaceId, current.presetId, state.workspaces, state.presets)
       current.updatedAt = Date.now()
       return structuredClone(current)
     })
@@ -2116,9 +2138,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const current = appState.snapshot().automations.find(item => item.id === id)
     if (!current) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
     if (current.lastRun?.status === 'running') throw new RuntimeError('CONFLICT', 'Automation 仍在运行')
-    const timer = automationTimers.get(id)
-    if (timer) clearTimeout(timer)
-    automationTimers.delete(id)
+    automationScheduler.cancel(id)
     await appState.update(state => {
       const index = state.automations.findIndex(item => item.id === id)
       if (index < 0) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
@@ -2345,8 +2365,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     async close() {
       if (!closePromise) {
         runtimeClosed = true
-        for (const timer of automationTimers.values()) clearTimeout(timer)
-        automationTimers.clear()
+        automationScheduler.close()
         unsubscribeModels()
         modelListeners.clear()
         modelRuntime.close()

@@ -1,8 +1,10 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createRuntime } from '../src/server/runtime.ts'
+import { createApp } from '../src/server/app.ts'
 import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from '../src/server/model-allowlist.ts'
 
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
@@ -138,6 +140,109 @@ describe('model directory edits', () => {
     expect(ids).toContain(kept[0]!.id)
     expect(ids).not.toContain(removed)
     expect(ids).toContain('glm-5.2')
+  })
+})
+
+describe('provider model request inheritance', () => {
+  it('round-trips inherited endpoints through HTTP without freezing them, while preserving explicit model overrides', async () => {
+    const paths: string[] = []
+    const mock = createServer((request, response) => {
+      paths.push(request.url ?? '')
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      const event = (choice: Record<string, unknown>) => `data: ${JSON.stringify({
+        id: 'chat_test', object: 'chat.completion.chunk', created: 1, model: 'inherit-model', choices: [choice],
+      })}\n\n`
+      response.end([
+        event({ index: 0, delta: { role: 'assistant' }, finish_reason: null }),
+        event({ index: 0, delta: { content: 'OK' }, finish_reason: null }),
+        event({ index: 0, delta: {}, finish_reason: 'stop' }),
+        'data: [DONE]\n\n',
+      ].join(''))
+    })
+    await new Promise<void>((resolve, reject) => {
+      mock.once('error', reject)
+      mock.listen(0, '127.0.0.1', resolve)
+    })
+    const address = mock.address()
+    if (!address || typeof address === 'string') throw new Error('Mock server did not bind a TCP port')
+    const origin = `http://127.0.0.1:${address.port}`
+    const initialBaseUrl = `${origin}/v1`
+    const explicitBaseUrl = `${origin}/explicit/v1`
+    const { runtime, dataDir, workspace, piDir, cleanup } = await fixture({ models: {
+      providers: {
+        'route-probe': {
+          name: 'Route probe', baseUrl: initialBaseUrl, api: 'openai-responses',
+          models: [
+            { id: 'inherit-model', name: 'Inherited model' },
+            { id: 'explicit-model', name: 'Explicit model', baseUrl: explicitBaseUrl, api: 'openai-completions' },
+          ],
+        },
+      },
+    } })
+    let app = createApp(runtime)
+    try {
+      const initialResponse = await app.request('/api/providers/route-probe')
+      expect(initialResponse.status).toBe(200)
+      const initial = (await initialResponse.json() as { provider: { api: string; baseUrl: string; models: Array<Record<string, unknown>> } }).provider
+      expect(initial.api).toBe('openai-responses')
+      expect(initial.baseUrl).toBe(initialBaseUrl)
+      expect(initial.models[0]).not.toHaveProperty('api')
+      expect(initial.models[0]).not.toHaveProperty('baseUrl')
+      expect(initial.models[1]).toMatchObject({ api: 'openai-completions', baseUrl: explicitBaseUrl })
+
+      const nextBaseUrl = `${origin}/review-v2/v1`
+      const save = await app.request('/api/providers', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 'route-probe', name: 'Route probe', baseUrl: nextBaseUrl, api: 'openai-completions', apiKey: 'test-key',
+          // This is the editor's config round-trip: only actual model overrides are present.
+          models: initial.models,
+        }),
+      })
+      expect(save.status).toBe(200)
+
+      const savedResponse = await app.request('/api/providers/route-probe')
+      const saved = (await savedResponse.json() as { provider: { api: string; baseUrl: string; models: Array<Record<string, unknown>> } }).provider
+      expect(saved.api).toBe('openai-completions')
+      expect(saved.baseUrl).toBe(nextBaseUrl)
+      expect(saved.models[0]).not.toHaveProperty('api')
+      expect(saved.models[0]).not.toHaveProperty('baseUrl')
+      expect(saved.models[1]).toMatchObject({ api: 'openai-completions', baseUrl: explicitBaseUrl })
+
+      const file = JSON.parse(await readFile(join(piDir, 'models.json'), 'utf8')) as {
+        providers: Record<string, { api: string; baseUrl: string; models: Array<Record<string, unknown>> }>
+      }
+      expect(file.providers['route-probe']?.models[0]).not.toHaveProperty('api')
+      expect(file.providers['route-probe']?.models[0]).not.toHaveProperty('baseUrl')
+      expect(file.providers['route-probe']?.models[1]).toMatchObject({ api: 'openai-completions', baseUrl: explicitBaseUrl })
+
+      // Reopen from the persisted file so the probe proves the on-disk model
+      // entry still inherits the provider endpoint and protocol.
+      await app.shutdown()
+      await cleanup.closers.shift()?.()
+      const reopenedRuntime = await createRuntime({ dataDir, workspace, piDir })
+      cleanup.closers.push(() => reopenedRuntime.close())
+      app = createApp(reopenedRuntime)
+      const reloadedResponse = await app.request('/api/providers/route-probe')
+      const reloaded = (await reloadedResponse.json() as { provider: { api: string; baseUrl: string; models: Array<Record<string, unknown>> } }).provider
+      expect(reloaded.api).toBe('openai-completions')
+      expect(reloaded.baseUrl).toBe(nextBaseUrl)
+      expect(reloaded.models[0]).not.toHaveProperty('api')
+      expect(reloaded.models[0]).not.toHaveProperty('baseUrl')
+      expect(reloaded.models[1]).toMatchObject({ api: 'openai-completions', baseUrl: explicitBaseUrl })
+
+      const inheritedProbe = await app.request('/api/providers/route-probe/test', { method: 'POST' })
+      const inheritedResult = await inheritedProbe.json()
+      expect(inheritedResult.status, JSON.stringify(inheritedResult)).toBe('connected')
+      expect(paths).toContain('/review-v2/v1/chat/completions')
+      const explicitProbe = await app.request('/api/providers/route-probe/test?modelId=explicit-model', { method: 'POST' })
+      const explicitResult = await explicitProbe.json()
+      expect(explicitResult.status, JSON.stringify(explicitResult)).toBe('connected')
+      expect(paths).toContain('/explicit/v1/chat/completions')
+    } finally {
+      await app.shutdown()
+      await new Promise<void>((resolve, reject) => mock.close(error => error ? reject(error) : resolve()))
+    }
   })
 })
 

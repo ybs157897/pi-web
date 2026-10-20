@@ -341,14 +341,22 @@ function safeHeaders(value: Record<string, string> | undefined): Record<string, 
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
-function publicModel(model: ProviderModel): ProviderModelInput {
+function publicModel(
+  model: ProviderModel,
+  declared?: JsonObject,
+  inherited?: { api?: string; baseUrl?: string },
+): ProviderModelInput {
+  const includeApi = declared === undefined ? model.api !== inherited?.api : Object.hasOwn(declared, 'api')
+  const includeBaseUrl = declared === undefined
+    ? model.baseUrl !== '' && model.baseUrl !== inherited?.baseUrl
+    : Object.hasOwn(declared, 'baseUrl') && model.baseUrl !== ''
   return {
     id: model.id,
     name: model.name,
     reasoning: model.reasoning,
     contextWindow: model.contextWindow,
-    api: model.api,
-    baseUrl: model.baseUrl,
+    ...(includeApi ? { api: model.api } : {}),
+    ...(includeBaseUrl ? { baseUrl: model.baseUrl } : {}),
     input: [...model.input],
     maxTokens: model.maxTokens,
     cost: {
@@ -431,7 +439,6 @@ function storedProviderFromInput(input: ProviderInput, previous?: StoredProvider
       ...((model.contextWindow ?? existing?.contextWindow) !== undefined
         ? { contextWindow: positiveNumber(model.contextWindow ?? numberOr(existing?.contextWindow, 128_000), 128_000) }
         : {}),
-      api: typeof model.api === 'string' ? model.api : typeof existing?.api === 'string' ? existing.api : api,
     }
   })
   if (new Set(models.map((model) => model.id)).size !== models.length) throw new Error('模型 ID 不能重复')
@@ -652,6 +659,10 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       const isCustom = !builtinProviderIds.has(id)
       const source = configured ? 'project' : !builtinProviderIds.has(id) ? 'pi' : 'builtin'
       const models = provider.getModels()
+      const declaredProvider = state.merged.get(id)
+      const declaredModels = new Map(declaredProvider?.models.map(model => [model.id, model]) ?? [])
+      const inheritedApi = declaredProvider?.api ?? models[0]?.api ?? DEFAULT_API
+      const inheritedBaseUrl = provider.baseUrl ?? ''
       let authConfigured = false
       try { authConfigured = await modelCollection.checkAuth(id) !== undefined }
       catch { throw new Error(`无法读取 ${provider.name} 的认证状态`) }
@@ -659,7 +670,11 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       const compat = models[0]?.compat
       // A global entry can be reset to the catalog the provider shipped with.
       const shipped = configured ? builtinProviders.get(id) : undefined
-      const defaults = shipped?.getModels().map(publicModel)
+      const shippedModels = shipped?.getModels() ?? []
+      const defaults = shippedModels.map(model => publicModel(model, undefined, {
+        api: shippedModels[0]?.api ?? DEFAULT_API,
+        baseUrl: shipped?.baseUrl,
+      }))
       const envVars = await providerEnvVars(provider)
       const envConfigured = configuredEnv(envVars)
       return {
@@ -673,8 +688,11 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
         ...(envVars.length > 0 ? { envVars } : {}),
         ...(envConfigured.length > 0 ? { envConfigured } : {}),
         ...(state.credentials.has(id) ? { storedCredential: true } : {}),
-        api: models[0]?.api ?? DEFAULT_API,
-        models: models.map(publicModel),
+        api: declaredProvider?.api ?? models[0]?.api ?? DEFAULT_API,
+        models: models.map(model => publicModel(model, declaredModels.get(model.id), {
+          api: inheritedApi,
+          baseUrl: inheritedBaseUrl,
+        })),
         ...(headers ? { headers } : {}),
         ...(compat ? { compat: { ...compat } } : {}),
         ...(defaults && defaults.length > 0 ? { defaults } : {}),

@@ -10,6 +10,7 @@ import { createApp } from '../src/server/app.ts'
 import { AppStateStore } from '../src/server/app-state.ts'
 import { RuntimeError } from '../src/server/runtime-errors.ts'
 import { validateAnswers } from '../src/server/interactions.ts'
+import { DEFAULT_SHORTCUTS, resolveShortcuts } from '../src/web/keyboard.ts'
 
 const NOW = 1_800_000_000_000
 const QUESTION_SET: AskUserQuestionItem[] = [
@@ -321,6 +322,22 @@ class FakeRuntime implements Runtime {
 
   async close(): Promise<void> {
     this.closeCount += 1
+  }
+}
+
+class PersistedShortcutsRuntime extends FakeRuntime {
+  constructor(private readonly stateStore: AppStateStore) { super() }
+
+  settings(): Protocol.AppSettings { return this.stateStore.snapshot().settings }
+
+  async updateSettings(input: Protocol.UpdateAppSettingsInput): Promise<Protocol.AppSettings> {
+    if (input.shortcuts !== undefined) {
+      await this.stateStore.update(state => {
+        if (input.shortcuts === null) delete state.settings.shortcuts
+        else state.settings.shortcuts = input.shortcuts
+      })
+    }
+    return this.settings()
   }
 }
 
@@ -732,6 +749,31 @@ describe('management API', () => {
     expect(unexpected.status).toBe(500)
     expect((await unexpected.json()).error).toBe('Internal server error')
     expect((await app.request('/api/conversations/conv-1/stop', { method: 'POST' })).status).toBe(422)
+  })
+
+  it('accepts all browser shortcuts over HTTP and restores them from persisted app state', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'pi-web-shortcuts-'))
+    try {
+      const defaultWorkspace = { id: 'ws-shortcuts', name: 'Shortcuts', path: dataDir, createdAt: NOW, updatedAt: NOW }
+      const store = await AppStateStore.open({ dataDir, defaultWorkspace })
+      const { app } = createTestApp(new PersistedShortcutsRuntime(store))
+      const edited = resolveShortcuts({ search: 'Mod+p' })
+      expect(Object.keys(edited)).toHaveLength(10)
+      const editResponse = await app.request('/api/settings', json('PATCH', { shortcuts: edited }))
+      expect(editResponse.status).toBe(200)
+      expect((await editResponse.json()).shortcuts).toEqual(edited)
+
+      // Restore uses the literal DEFAULT_SHORTCUTS object in SettingsDialog.
+      const restored = { ...DEFAULT_SHORTCUTS }
+      const restoreResponse = await app.request('/api/settings', json('PATCH', { shortcuts: restored }))
+      expect(restoreResponse.status).toBe(200)
+      expect((await (await app.request('/api/settings')).json()).shortcuts).toEqual(restored)
+
+      const reopened = await AppStateStore.open({ dataDir, defaultWorkspace })
+      expect(reopened.snapshot().settings.shortcuts).toEqual(restored)
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
   })
 
   it('updates settings, workspace bindings and presets through typed routes', async () => {

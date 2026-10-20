@@ -1,15 +1,19 @@
+import { SHORTCUT_COMMANDS } from '../shared/types.ts'
+import type { ShortcutCommand } from '../shared/types.ts'
+export type { ShortcutCommand } from '../shared/types.ts'
+
 export const DEFAULT_SHORTCUTS = {
   newConversation: 'Alt+Mod+n', search: 'Mod+k', settings: 'Alt+Mod+,', toggleSidebar: 'Mod+b',
   rename: 'Alt+Mod+g', fork: 'Shift+Mod+f', archive: 'Alt+Mod+a',
   send: 'Enter', newline: 'Shift+Enter', alternateSend: 'Mod+Enter',
-} as const
+} satisfies Record<ShortcutCommand, string>
 
-export type ShortcutCommand = keyof typeof DEFAULT_SHORTCUTS
 export type Shortcuts = Record<ShortcutCommand, string>
+
 
 export function resolveShortcuts(overrides?: Partial<Shortcuts>): Shortcuts {
   const resolved: Shortcuts = { ...DEFAULT_SHORTCUTS }
-  for (const name of Object.keys(DEFAULT_SHORTCUTS) as ShortcutCommand[]) {
+  for (const name of SHORTCUT_COMMANDS) {
     const value = overrides?.[name]
     if (value !== undefined) resolved[name] = value
   }
