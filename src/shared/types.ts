@@ -5,7 +5,20 @@ export type MessageStatus = 'running' | 'completed' | 'error' | 'cancelled'
 
 export interface ModelRef { provider: string; modelId: string }
 export interface ModelOption extends ModelRef { name: string; reasoning: boolean; available: boolean; contextWindow?: number; thinkingLevels?: ThinkingLevel[] }
-export interface ProviderSummary { id: string; name: string; configured: boolean; custom: boolean; source: 'builtin' | 'pi' | 'project'; baseUrl?: string }
+export interface ProviderSummary {
+  id: string
+  name: string
+  configured: boolean
+  custom: boolean
+  source: 'builtin' | 'pi' | 'project'
+  baseUrl?: string
+  /** Environment variables this provider consults for authentication, in its own resolution order. Names only, never values. */
+  envVars?: string[]
+  /** The subset of `envVars` present in the server environment. */
+  envConfigured?: string[]
+  /** A credential for this provider is stored in auth.json. */
+  storedCredential?: boolean
+}
 export interface ProviderModelInput {
   id: string
   name: string

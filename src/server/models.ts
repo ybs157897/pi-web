@@ -285,6 +285,42 @@ function customProvider(entry: StoredProvider, key: string | undefined, builtin?
   })
 }
 
+/**
+ * Environment names a provider's own api-key auth would consult, in order.
+ * Resolving against a context that answers every lookup with `undefined`
+ * records the names without reading a value; a provider whose resolution
+ * short-circuits on unconfigured input still reaches every candidate. Names
+ * containing `oauth` are hidden, matching the settings page's "API key"
+ * framing — OAuth sources are not API keys.
+ */
+async function providerEnvVars(provider: Provider): Promise<string[]> {
+  const auth = provider.auth.apiKey
+  if (auth === undefined) return []
+  const names: string[] = []
+  const seen = new Set<string>()
+  try {
+    await auth.resolve({
+      ctx: {
+        env: async (name) => {
+          if (!seen.has(name)) { seen.add(name); names.push(name) }
+          return undefined
+        },
+        fileExists: async () => false,
+      },
+      credential: undefined,
+      signal: new AbortController().signal,
+    })
+  } catch { /* keep what the resolution asked for before it failed */ }
+  return names.filter(name => !name.toLocaleLowerCase().includes('oauth'))
+}
+
+function configuredEnv(names: readonly string[]): string[] {
+  return names.filter(name => {
+    const value = process.env[name]
+    return value !== undefined && value.trim() !== ''
+  })
+}
+
 function sanitizeBaseUrl(value: string | undefined): string | undefined {
   if (!value) return undefined
   try {
@@ -613,7 +649,7 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       const provider = modelCollection.getProvider(id)
       if (!provider) throw new RuntimeError('NOT_FOUND', 'Provider 不存在')
       const configured = Object.prototype.hasOwnProperty.call(state.piProviders, id)
-      const isCustom = configured || !builtinProviderIds.has(id)
+      const isCustom = !builtinProviderIds.has(id)
       const source = configured ? 'project' : !builtinProviderIds.has(id) ? 'pi' : 'builtin'
       const models = provider.getModels()
       let authConfigured = false
@@ -624,6 +660,8 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
       // A global entry can be reset to the catalog the provider shipped with.
       const shipped = configured ? builtinProviders.get(id) : undefined
       const defaults = shipped?.getModels().map(publicModel)
+      const envVars = await providerEnvVars(provider)
+      const envConfigured = configuredEnv(envVars)
       return {
         id: provider.id,
         name: provider.name,
@@ -632,6 +670,9 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
         configured: authConfigured,
         credentialConfigured: authConfigured,
         ...(sanitizeBaseUrl(provider.baseUrl) ? { baseUrl: sanitizeBaseUrl(provider.baseUrl) } : {}),
+        ...(envVars.length > 0 ? { envVars } : {}),
+        ...(envConfigured.length > 0 ? { envConfigured } : {}),
+        ...(state.credentials.has(id) ? { storedCredential: true } : {}),
         api: models[0]?.api ?? DEFAULT_API,
         models: models.map(publicModel),
         ...(headers ? { headers } : {}),
@@ -734,17 +775,24 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
         catch { throw new Error(`无法读取 ${provider.name} 的认证状态`) }
       }))
       const configured = new Map(authStatuses.map(([id, status]) => [id, status !== undefined]))
-      const providers: ProviderSummary[] = providerList.map((provider) => {
+      const providers: ProviderSummary[] = await Promise.all(providerList.map(async (provider) => {
         const global = Object.prototype.hasOwnProperty.call(state.piProviders, provider.id)
+        const envVars = await providerEnvVars(provider)
+        const envConfigured = configuredEnv(envVars)
         return {
           id: provider.id,
           name: provider.name,
           configured: configured.get(provider.id) ?? false,
           source: global ? 'project' : !builtinProviderIds.has(provider.id) ? 'pi' : 'builtin',
-          custom: global || !builtinProviderIds.has(provider.id),
+          // "Custom" means hand-declared, not merely configured: a catalog
+          // route with a stored profile keeps its shipped identity.
+          custom: !builtinProviderIds.has(provider.id),
           ...(sanitizeBaseUrl(provider.baseUrl) ? { baseUrl: sanitizeBaseUrl(provider.baseUrl) } : {}),
+          ...(envVars.length > 0 ? { envVars } : {}),
+          ...(envConfigured.length > 0 ? { envConfigured } : {}),
+          ...(state.credentials.has(provider.id) ? { storedCredential: true } : {}),
         }
-      })
+      }))
       const modelOptions: ModelOption[] = modelCollection.getModels().map((model) => ({
         provider: model.provider,
         modelId: model.id,

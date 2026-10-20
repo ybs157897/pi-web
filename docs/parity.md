@@ -590,3 +590,21 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - `PreviewTest.java`：8 行完整显示、39 个高亮 span、无折叠。
 - 截图 `artifacts/inspector-preview/01-browser-resized.png`、`02-markdown-preview.png`、`03-markdown-source.png`、`04-java-preview.png`。
 - 门禁：`npm run typecheck`、`npx vitest run`（24 文件 282/282）、`npx vite build`。
+
+## 模型设置界面（2026-10-20）
+
+对照 DSH `packages/client/ui-settings-models`：`ModelsSection.tsx` 的「已配置行 + 单张添加卡片」、`ProviderEditor.tsx` 的「API 密钥优先 / 自定义设置折叠」、`CustomProviderCard.tsx` 的创建表单。pi-web 把模型页拆到 `src/web/ModelSettings.tsx` + `ModelSettings.module.css`：
+
+- **提供商行**：每个已配置/已知提供商一张行卡片，标题、手写路由的「自定义」标签、凭据圆点、`编辑`/`删除`。同一时间只展开一张编辑器；打开添加卡片会先收起行编辑器。删除确认文案区分手写路由（同时删 auth.json 凭据）与内置覆盖（保留密钥、恢复内置目录）。
+- **添加卡片**：底部虚线「添加模型提供商」打开一张卡片，顶部 `SegmentedControl` 分「第三方模型提供商 / 自定义模型 API」。目录模式含提供商下拉 + 同一个 `ProviderEditor`；自定义模式含 Provider ID、显示名称、API 地址、协议、API 密钥、空模型目录。两个面板首次显示后保持挂载，切换方式不丢草稿。
+- **API 密钥提示**：`ProviderSummary` 新增 `envVars` / `envConfigured` / `storedCredential`（只暴露变量名，不暴露值）。服务端用「记录式 AuthContext」调用提供商的 `auth.apiKey.resolve()`：所有 `env()` 查询都返回 `undefined`，记录候选变量名，因此不需要复制 pi-ai 的 provider→env 映射。未配置且没有环境变量时显示橙色「未检测到环境变量。请填写 API 密钥，或设置环境变量 X。」；已检测到环境变量显示绿色；有存储凭据时占位文字为「留空使用已保存凭据」。`?` tooltip 列出全部环境后备顺序。
+- **自定义设置**：`<details>` 折叠区，内置提供商只显示 API 地址与模型目录；手写路由额外显示显示名称与接口协议。模型目录的标题/状态与「恢复默认模型 / 获取可用模型」分列两端，与 DSH 的 `modelCatalogHeading` 一致。
+- **保存与语义**：保存成功后关闭卡片并显示「已保存 X。」；`custom` 字段改为「是否手写路由」（不再把任何 models.json 覆盖都叫自定义），因此 DeepSeek 这类目录提供商配置后不带「自定义」标签。
+- 保留 pi-web 原有的「测试连接」，放在页脚左侧；DSH 没有该按钮，但它不影响右侧 `取消/保存` 的布局。
+
+验收：
+
+- 4317（真实全局目录）：模型页显示 OpenCode Go 行（绿点、编辑/删除）；添加卡片默认选中 Amazon Bedrock，显示 `留空使用环境认证（AWS_BEARER_TOKEN_BEDROCK）` 与橙色环境变量提示；提供商下拉宽度 240px、密钥输入占满卡片。
+- 临时真实实例（`/tmp` 数据目录，4320）：自定义路由填 `demo-gateway` 保存后卡片收起、出现「已保存 Demo Gateway。」与新行（带「自定义」）；目录模式添加 DeepSeek 后出现不带标签的 DeepSeek 行；编辑行显示「留空使用已保存凭据」；删除确认后 models.json 与 auth.json 同步移除。
+- 截图 `artifacts/model-settings-parity/01-add-catalog.png` … `06-delete-modal.png`。
+- 门禁：`npm run typecheck`、`npx vitest run`（24 文件 283/283）、`npx vite build`。

@@ -368,6 +368,21 @@ describe('model allowlist in the runtime', () => {
     expect((await reopened.catalog()).models.some(model => nameOf(model) === 'wl-beta/glm-x')).toBe(true)
   })
 
+  it('reports auth environment names and keeps catalog identity after a profile save', async () => {
+    const { runtime } = await fixture()
+    const openai = (await runtime.catalog()).providers.find(provider => provider.id === 'openai')
+    expect(openai?.envVars).toContain('OPENAI_API_KEY')
+    expect(openai).toMatchObject({ source: 'builtin', custom: false, configured: false })
+    // A shipped route with a stored profile is configured, not hand-declared.
+    await runtime.saveProvider({
+      id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: 'test-key',
+      models: [{ id: 'gpt-test', name: 'GPT Test' }],
+    })
+    const saved = (await runtime.catalog()).providers.find(provider => provider.id === 'openai')
+    expect(saved).toMatchObject({ source: 'project', custom: false, configured: true, storedCredential: true })
+    expect(saved?.envVars).toContain('OPENAI_API_KEY')
+  })
+
   it('keeps the scripted demo model selectable whatever the allowlist says', async () => {
     const { runtime } = await fixture({ demo: true })
     await runtime.updateSettings({ modelAllowlist: ['opencode-go/deepseek-v4.1-flash'] })
