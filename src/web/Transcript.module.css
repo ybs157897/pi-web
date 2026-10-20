@@ -672,3 +672,28 @@
   .userBubble { max-width: min(calc(100% - 32px), 92%); }
   .processBody { max-height: 45vh; padding-left: 14px; }
 }
+
+.compactionRunning {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.compactionSpinner {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border: 1.5px solid var(--dsw-alias-border-l3);
+  border-top-color: var(--dsw-alias-label-tertiary);
+  border-radius: 50%;
+  animation: compactionSpin .8s linear infinite;
+}
+
+@keyframes compactionSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compactionSpinner { animation: none; }
+}

@@ -197,6 +197,43 @@ function toolResultText(message: { content: string | readonly { type: string; te
   return message.content.flatMap(part => part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
 }
 
+/** A deterministic checkpoint for compaction requests, so the mechanism is testable without a real model. */
+const DEMO_COMPACTION_SUMMARY = [
+  '## Goal',
+  'Complete the demo task in this conversation.',
+  '',
+  '## Constraints & Preferences',
+  '- Preserve the demo workspace and its files.',
+  '',
+  '## Progress',
+  '### Done',
+  '- [x] Reviewed the conversation and its tool results.',
+  '',
+  '### In Progress',
+  '- [ ] Continue from the retained tail.',
+  '',
+  '### Blocked',
+  '- (none)',
+  '',
+  '## Key Decisions',
+  '- **Keep the retained tail verbatim**: it carries the active work.',
+  '',
+  '## Next Steps',
+  '1. Read the retained messages and continue the task.',
+  '',
+  '## Critical Context',
+  '- Demo compaction checkpoint; exact paths and errors are in the retained tail.',
+].join('\n')
+
+function demoCompactionResponse(context: Parameters<FauxResponseFactory>[0]) {
+  const system = context.messages.filter(message => message.role === 'system').map(message => toolResultText(message)).join('\n')
+  const lastUser = latestUserText(context)
+  const isCompaction = system.includes('context compaction engine')
+    || system.includes('context summarization assistant')
+    || lastUser.includes('Write a checkpoint the next model will continue from')
+  return isCompaction ? fauxAssistantMessage(fauxText(DEMO_COMPACTION_SUMMARY)) : undefined
+}
+
 /** The fixed delegation the `[subagent]` script submits, and the answer its child writes back. */
 const DEMO_SUBAGENT_CHILD_MARKER = '[subagent-child]'
 const DEMO_SUBAGENT_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 归纳子智能体一期机制：子会话如何创建、答案如何取回、面板如何挂上去。`
@@ -219,6 +256,8 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   await waitAtGate(options?.signal)
   const skillResponse = skillsDemoResponse(context)
   if (skillResponse) return skillResponse
+  const compactionResponse = demoCompactionResponse(context)
+  if (compactionResponse) return compactionResponse
   let lastUserIndex = -1
   for (let index = context.messages.length - 1; index >= 0; index--) {
     if (context.messages[index].role === 'user') {

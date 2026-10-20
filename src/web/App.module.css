@@ -307,6 +307,25 @@
   align-items: center;
 }
 .messagesViewport { width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-gutter: stable; }
+.compactionNotice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(var(--dsh-composer-card-max-width) - 32px);
+  margin: 0 16px 6px;
+  padding: 5px 12px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.compactionNotice[data-state="error"] { border-color: var(--dsw-alias-state-error-primary); color: var(--dsw-alias-state-error-primary); }
+.compactionHint { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-tertiary); }
+.compactionNotice[data-state="error"] .compactionHint { color: var(--dsw-alias-state-error-primary); opacity: .8; }
 .heroArea {
   --dsh-chat-content-width: clamp(680px, 64cqw, 920px);
   --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 32px);

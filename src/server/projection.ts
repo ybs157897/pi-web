@@ -15,6 +15,7 @@ import type {
   AskUserQuestionAnswerItem,
   AskUserQuestionItem,
   ChatMessage,
+  CompactionView,
   ContentBlock,
   ConversationDetail,
   ConversationSummary,
@@ -139,6 +140,14 @@ function isLiveState(value: unknown): value is LiveState {
   }
   if (live.tools !== undefined && (!Array.isArray(live.tools) || !live.tools.every(isToolSlot))) return false
   if (live.nestedTools !== undefined && (!Array.isArray(live.nestedTools) || !live.nestedTools.every(isNestedToolSlot))) return false
+  if (live.compactions !== undefined) {
+    if (!Array.isArray(live.compactions)) return false
+    for (const value of live.compactions) {
+      const status = jsonRecord(value)
+      if (!status || !isNumber(status.taskId) || !isString(status.reason)
+        || typeof status.blocking !== 'boolean' || !isNumber(status.attempt)) return false
+    }
+  }
   if (live.compactionFailure !== undefined) {
     const failure = jsonRecord(live.compactionFailure)
     if (!failure || !isString(failure.error)) return false
@@ -708,6 +717,18 @@ function liveToolMessages(live: LiveState, settledToolCallIds: ReadonlySet<strin
   return messages
 }
 
+/** The browser-facing compaction state: running tasks and the newest failure. */
+function compactionViewOf(live: LiveState): CompactionView | undefined {
+  const running = live.compactions?.[0]
+  const failure = live.compactionFailure
+  if (running === undefined && failure === undefined) return undefined
+  return {
+    running: running !== undefined,
+    ...(running === undefined ? {} : { reason: running.reason, blocking: running.blocking, attempt: running.attempt }),
+    ...(failure === undefined ? {} : { failure: safeError(failure.error) }),
+  }
+}
+
 /** Projects one Pi Durable conversation view into the stable browser DTOs. */
 export function projectConversation(
   view: ConversationView,
@@ -740,7 +761,7 @@ export function projectConversation(
     const id = String(entry.id)
     const requestId = entryRequestId(entry)
     const entryMessages = entry.model ?? []
-    const statusText = entry.kind === 'pi.reset' ? '上下文已重置' : entry.kind === 'pi.compaction' ? '较早的上下文已压缩' : undefined
+    const statusText = entry.kind === 'pi.reset' ? '上下文已重置' : entry.kind === 'pi.compaction' ? '已完成上下文压缩' : undefined
     for (const [index, message] of entryMessages.entries()) {
       lastTimestamp = message.timestamp
       latestEntryTimestamp = Math.max(latestEntryTimestamp, message.timestamp)
@@ -812,7 +833,15 @@ export function projectConversation(
     }
 
     if (statusText !== undefined) {
-      messages.push({ id: `entry:${id}:status`, entryId: id, role: 'system', blocks: [{ type: 'text', text: statusText }], timestamp: lastTimestamp, ...(currentRunId ? { runId: currentRunId } : {}) })
+      messages.push({
+        id: `entry:${id}:status`,
+        entryId: id,
+        role: 'system',
+        systemKind: entry.kind === 'pi.compaction' ? 'compaction' : 'reset',
+        blocks: [{ type: 'text', text: statusText }],
+        timestamp: lastTimestamp,
+        ...(currentRunId ? { runId: currentRunId } : {}),
+      })
     }
   }
 
@@ -926,6 +955,7 @@ export function projectConversation(
   const goal = goalView(options.goal)
   const subagents = subagentSummaries(options.subagents)
   const team = teamRecords(options.team)
+  const compaction = compactionViewOf(live)
   return {
     conversation,
     messages,
@@ -936,6 +966,7 @@ export function projectConversation(
     ...(interactions.length ? { interactions } : {}),
     ...(subagents?.length ? { subagents } : {}),
     ...(team ? { team } : {}),
+    ...(compaction ? { compaction } : {}),
     ...(latestError ? { error: latestError } : {}),
     ...(usage ? { usage } : {}),
   }

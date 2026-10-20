@@ -44,6 +44,8 @@ export interface TranscriptProps {
   /** The conversation's projected direct subagents: the strip's first paint before its own poll. */
   subagents?: readonly SubagentSummary[]
   pending?: readonly PendingMessage[]
+  /** A compaction is running: render the same transcript-level status row as the completed marker. */
+  compactionRunning?: boolean
   /** Projected interactions, so question rows read their call's DSH state. */
   interactions?: readonly InteractionRequest[]
   /** Work-details presentation policy; absent uses the saved settings. */
@@ -63,7 +65,7 @@ export interface TranscriptProps {
 
 /** Render Pi Durable conversation messages with DSH process, Markdown, and tool components. */
 export default function Transcript({
-  messages, conversationId, subagents, pending = [], interactions, policy, onFork, onRetry, onFeedback,
+  messages, conversationId, subagents, pending = [], compactionRunning = false, interactions, policy, onFork, onRetry, onFeedback,
   onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
@@ -106,6 +108,10 @@ export default function Transcript({
             showChanges={showChanges} replies={replies} interactions={interactions} />
         ))}
         {model.systemMessages.map(message => <div className={css.systemMessage} key={message.id}>{messageText(message)}</div>)}
+        {compactionRunning && <div className={`${css.systemMessage} ${css.compactionRunning}`} role="status" aria-live="polite">
+          <span className={css.compactionSpinner} aria-hidden="true" />
+          <span>{t('正在进行上下文压缩', 'Context compaction in progress')}</span>
+        </div>}
         {pending.map(message => <PendingRow key={message.id} message={message} onOpenFile={onOpenFile} t={t} />)}
       </MarkdownDelegateProvider>
     </div>

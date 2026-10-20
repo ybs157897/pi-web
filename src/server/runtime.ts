@@ -92,6 +92,7 @@ import { McpManager } from './mcp.ts'
 import { SkillStore } from './skills.ts'
 import { createSkillTools, SKILL_READ_TOOLS } from './skill-tools.ts'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from './work-policy.ts'
+import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
@@ -156,13 +157,14 @@ const READ_ONLY_TOOLS = new Set(['read', 'todo_write', 'ask_user_question', 'exi
 async function ensureRuntimePolicy(tx: Tx, conversationId: ConversationId): Promise<void> {
   const agent = await tx.doc(AgentDoc, conversationId)
   const extensions = agent.extensions
+  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME]
   if (Array.isArray(extensions)) {
-    if (!extensions.includes(WORK_POLICY_EXTENSION_NAME)) extensions.unshift(WORK_POLICY_EXTENSION_NAME)
+    for (const name of required) if (!extensions.includes(name)) extensions.unshift(name)
   } else if (extensions !== undefined) {
     agent.extensions = {
       ...extensions,
-      add: [...new Set([WORK_POLICY_EXTENSION_NAME, ...extensions.add ?? []])],
-      ...(extensions.remove === undefined ? {} : { remove: extensions.remove.filter(name => name !== WORK_POLICY_EXTENSION_NAME) }),
+      add: [...new Set([...required, ...extensions.add ?? []])],
+      ...(extensions.remove === undefined ? {} : { remove: extensions.remove.filter(name => !required.includes(name)) }),
     }
   }
 }
@@ -520,6 +522,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
   registry.install(createWorkPolicyExtension())
+  registry.install(createCompactionExtension({ harness: () => harness }))
   registry.install(CodingTools)
   registry.install(TodoTools)
   registry.install(createGoalExtension({
@@ -594,6 +597,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   harness = await Harness.open(storage, {
     models: modelRuntime.models,
     registry,
+    settings: { compaction: COMPACTION_POLICY },
     env: async (target) => {
       const metadata = await harness.snapshot(META, target.conversationId, CTX)
       const selectedWorkspace = workspaceFiles.workspace(metadata?.workspaceId ?? defaultWorkspace.id)
@@ -867,7 +871,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
     // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)

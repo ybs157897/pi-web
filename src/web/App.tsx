@@ -24,7 +24,7 @@ import GoalBar from './GoalBar.tsx'
 import QuestionComposer from './QuestionComposer.tsx'
 import SettingsDialog from './SettingsDialog.tsx'
 import Transcript, { type PendingMessage } from './transcript.tsx'
-import { conversationStats } from './render-model.ts'
+import { conversationStats, visibleTranscriptMessages } from './render-model.ts'
 import { latestPlan, type PlanDocument } from './plan-preview.ts'
 import TrajectoryView, { transcriptMessageDomId } from './TrajectoryView.tsx'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
@@ -748,9 +748,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   const compact = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
+    if (detailRef.current?.compaction?.running === true) return
     try {
       await api.compact(selectedId)
-      announce(t('已开始压缩上下文', 'Compaction started'), true)
     } catch (cause) { announce(errorText(cause, t('无法压缩上下文', 'Could not compact the context'))) }
   }, [announce, selectedId, t])
 
@@ -1532,7 +1532,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       wasAtBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 88
                     }}>
                       {chatView === 'chat'
-                        ? <Transcript messages={activeDetail.messages} conversationId={activeDetail.conversation.id}
+                        ? <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
                           subagents={activeDetail.subagents} pending={selectedPending} interactions={activeDetail.interactions}
                           onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                           onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
@@ -1545,7 +1545,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                           onOpenSubagent={childId => { selectConversation(childId) }}
                           onOpenPlan={plan => { openPlan(plan) }}
                           onOpenTool={() => { setChatView('trajectory') }} />
-                        : <TrajectoryView messages={activeDetail.messages}
+                        : <TrajectoryView messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)}
                           onJumpToMessage={messageId => {
                             setChatView('chat')
                             requestAnimationFrame(() => document.getElementById(transcriptMessageDomId(messageId))?.scrollIntoView({ block: 'center' }))
@@ -1567,6 +1567,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         setDetailError('')
                         updateConversation(value)
                       }} />
+                    {activeDetail.compaction?.running !== true && activeDetail.compaction?.failure !== undefined && <div className={css.compactionNotice} data-state="error" role="alert">
+                      <span>{t('上下文压缩失败', 'Context compaction failed')}</span>
+                      <span className={css.compactionHint}>{activeDetail.compaction.failure}</span>
+                    </div>}
                     <Composer value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                       busy={busy} disabled={detailLoading || !conversationReady && detailError === ''} queue={activeDetail.queue}
                       sendMode={sendMode} sending={sending} workspace={currentWorkspace} workspaces={workspaces} presets={presets}

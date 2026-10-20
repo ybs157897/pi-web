@@ -370,3 +370,39 @@ describe('Pi Durable conversation projection', () => {
     expect(activeDurationMs(messages.filter(message => message.role !== 'assistant'))).toBeUndefined()
   })
 })
+
+describe('compaction projection', () => {
+  it('exposes running tasks, the newest failure and absence', () => {
+    const running = projectConversation(view([], {
+      'pi.live': persistedObject({
+        compactions: [{ taskId: 5, reason: 'manual', blocking: false, attempt: 1 }],
+        compactionFailure: { taskId: 4, reason: 'threshold', error: 'Provider down' },
+      }),
+    }), metadata(), { workspace: WORKSPACE })
+    expect(running.compaction).toEqual({ running: true, reason: 'manual', blocking: false, attempt: 1, failure: 'Provider down' })
+
+    const failed = projectConversation(view([], {
+      'pi.live': persistedObject({ compactionFailure: { taskId: 4, reason: 'threshold', error: 'Provider down' } }),
+    }), metadata(), { workspace: WORKSPACE })
+    expect(failed.compaction).toEqual({ running: false, failure: 'Provider down' })
+
+    expect('compaction' in projectConversation(view([]), metadata(), { workspace: WORKSPACE })).toBe(false)
+  })
+})
+
+describe('compaction checkpoint label', () => {
+  it('renders the completed compaction status instead of the framed summary', () => {
+    const checkpoint: UserMessage = {
+      role: 'user',
+      content: 'The conversation history before this point was compacted into the following summary:\n\n<summary>\n...\n</summary>',
+      timestamp: 100,
+    }
+    const result = projectConversation(view([entry(1, 'pi.compaction', [checkpoint], { reason: 'manual' })]), metadata(), { workspace: WORKSPACE })
+    expect(result.messages).toContainEqual(expect.objectContaining({
+      role: 'system',
+      systemKind: 'compaction',
+      blocks: [{ type: 'text', text: '已完成上下文压缩' }],
+    }))
+    expect(JSON.stringify(result.messages)).not.toContain('conversation history before this point')
+  })
+})

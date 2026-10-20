@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, InteractionRequest } from '../src/shared/types.ts'
-import { buildRenderModel, conversationStats, reasoningDisplay, toolActivity } from '../src/web/render-model.ts'
+import { buildRenderModel, conversationStats, reasoningDisplay, toolActivity, visibleTranscriptMessages } from '../src/web/render-model.ts'
 import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
 import {
   askQuestionRowModel, buildToolRenderModel, codemodeRowModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows,
@@ -630,5 +630,18 @@ describe('conversation stats', () => {
       contextTokens: 15,
     })
     expect(conversationStats([])).toMatchObject({ runCount: 0, totalTokens: 0, contextTokens: 0 })
+  })
+})
+
+
+describe('visible transcript messages', () => {
+  it('hides completed compaction rows only while a new compaction runs', () => {
+    const messages: ChatMessage[] = [
+      user('user-1', 'request-1'),
+      { id: 'compaction', role: 'system', systemKind: 'compaction', blocks: [{ type: 'text', text: '已完成上下文压缩' }], timestamp: 300 },
+      { id: 'reset', role: 'system', systemKind: 'reset', blocks: [{ type: 'text', text: '上下文已重置' }], timestamp: 400 },
+    ]
+    expect(visibleTranscriptMessages(messages, true).map(message => message.id)).toEqual(['user-1', 'reset'])
+    expect(visibleTranscriptMessages(messages, false)).toBe(messages)
   })
 })

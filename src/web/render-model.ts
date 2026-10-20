@@ -450,3 +450,10 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
   }
 }
 
+
+/** While a new compaction runs, hide older completed markers so only the live state is shown. */
+export function visibleTranscriptMessages(messages: readonly ChatMessage[], compactionRunning: boolean): readonly ChatMessage[] {
+  return compactionRunning
+    ? messages.filter(message => !(message.role === 'system' && message.systemKind === 'compaction'))
+    : messages
+}

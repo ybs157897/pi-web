@@ -300,6 +300,8 @@ export interface ChatMessage {
   id: string
   entryId?: string
   role: 'user' | 'assistant' | 'tool' | 'system'
+  /** Stable identity for host status rows, so the client can coordinate them with live state. */
+  systemKind?: 'compaction' | 'reset'
   blocks: ContentBlock[]
   streaming?: boolean
   timestamp: number
@@ -324,6 +326,17 @@ export interface QueueItem {
   images?: Array<{ data: string; mimeType: string }>
   files?: Array<{ name: string; mimeType: string; size: number; path: string }>
 }
+export interface CompactionView {
+  /** True while at least one compaction task is running. */
+  running: boolean
+  reason?: 'manual' | 'threshold' | 'overflow'
+  /** A blocking compaction is one the next generation waits for. */
+  blocking?: boolean
+  attempt?: number
+  /** Newest failure since the last placed summary, when there is one. */
+  failure?: string
+}
+
 export interface ConversationDetail {
   conversation: ConversationSummary
   messages: ChatMessage[]
@@ -340,6 +353,7 @@ export interface ConversationDetail {
   subagents?: SubagentSummary[]
   /** The agent team this conversation leads (or belongs to); absent until it has a teammate or task. */
   team?: TeamView
+  compaction?: CompactionView
   error?: string
   usage?: { input: number; output: number; totalCost: number }
 }

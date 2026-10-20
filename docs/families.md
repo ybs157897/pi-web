@@ -103,3 +103,110 @@
 ### 附加红线（2026-10-19）
 
 真实模型测试**只允许 DeepSeek 系模型**（默认 `opencode-go/deepseek-v4.1-flash`，需显式在会话/请求上选择），禁止使用 GLM/Qwen/Claude 等其他模型；确定性回归用 demo/faux 模型，不消耗真实额度。
+
+## 10. 上下文压缩（compaction）
+
+DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `packages/compaction/compaction`、默认 backend `compaction-basic`、人用入口 `command-compact`。Web 默认 preset `standard` 挂载 backend + `/compact` + tool-result pruner（`packages/bundle/web-app/presets/standard.patch.yml:73-82`）；pruner 与 image-offload 的宿主行在 base bundle。
+
+### DSH 机制（源码结论）
+
+- **三层缩减，按顺序执行**：
+  1. `tool-result-pruner`：确定性把超过 8192 字符的工具结果中间段替换为 `[... tool result middle pruned ...]`，保留头 4096 + 尾 1024（`packages/compaction/compaction-tool-result-pruner/src/config.ts:11-13`）；只改当前 surface，不调模型。
+  2. `image-offload`：provider 返回 `IMAGE_OFFLOAD_REQUIRED` 时按请求顺序永久省略最老的图片、写 `image/offload` 决策并重试；摘要调用遇到同一错误也走该恢复（`packages/compaction/compaction-image-offload/src/index.ts`）。
+  3. 摘要压缩：`BasicCompactionEngine`，把旧 surface 范围替换成一条摘要 user message。
+- **触发点**：
+  - 普通压力：`agent/pre-step`，在请求派生之前检查（`compaction-basic/src/index.ts:158`）。
+  - 阈值：`thresholdTokens = floor(min(contextWindow * 0.8, contextWindow - reservedCompletionTokens - 65536))`；`retainTokens = floor((contextWindow - reservedCompletionTokens) * 0.16)`（`config.ts:20-23,75-79,191-198`）。保留比例与 headroom 都按模型可覆盖（`modelPolicies`）。
+  - 压力触发时先跑 pruner 并重新计量；仍超阈值才选摘要范围。一次触发最多 `compactionRetries + 1` 次压缩（默认 `compactionRetries=1`），仍不降则报错（`index.ts:318-350`）。
+  - 上下文溢出：`agent/request-error`，错误码 `CONTEXT_WINDOW_EXCEEDED_CODE`；独立预算 `maxOverflowRetries=1`，且只有 surface 真的被替换（`replaceGeneration` 前进）才 `retry`；pruner 已产生持久缩减但摘要后续失败时仍然重试（`index.ts:190-235`）。
+  - 手动 `/compact`：`compactNow()` 要求 agent 空闲，成功返回压缩条数与 token 数；失败分类 `busy/cancelled/changed/summary/commit/persistence`（`command-compact/src/index.ts:24-76`）。
+- **选范围**：从尾部按 token-meter 节点价累计到 `retainTokens`，再向前挪到 tool-call/result 配平的边界；system head 永不在范围内；找不到可用前缀就返回 null（`region.ts:117-157`）。
+- **摘要调用**：复用会话自己的 system prompt、tool schemas 与被 shadow 的消息，最后追加 compaction instruction 作为唯一新输入，从而命中 provider 的 KV prefix cache（`summarizer.ts:27-66,120-166`；`purpose: 'compaction'`）。默认用路由模型（也可配 `summarizationProvider/Model`），`maxTokens` 默认等于 `headroomTokens=65536`。模板固定 8 节：Primary Request and Intent / Key Technical Concepts / Files and Code / Errors and Fixes / Pending Jobs / Current Work / Next Step / Critical Context，要求保留精确路径、命令、错误串。摘要必须纯文本、不能是 tool call、不能被 max-tokens 截断，且 framed summary 的 token 数必须小于被替换范围（`region.ts:387-425`）。
+- **落地与并发**：日志三事件 `compaction/start`（同时是锁）/`compaction/summary`/`compaction/end`；摘要以 replacement `user/message` 落盘（`surfaceOp: {replace,startSeq,endSeq}`，source=`compact-checkpoint` + compactionId）。旧事件保留在日志里，模型 surface 被替换；单会话同时只允许一个压缩，未配对的 start 视为孤儿锁。自动摘要要求整个 surface 未变，手动只要求选中 span 未变（允许期间注入无关 context）。
+- **UI**：Chat 在 checkpoint 落点显示「上下文已压缩 · 已压缩 N 条历史记录（约 X tokens）」，可展开摘要；**被压缩的旧消息仍留在转录里**，marker 只表示模型从何处开始看不到它们（`ui-chat/src/client/chat/CompactionItem.tsx:31-75`、`ui-chat/src/client/locale.ts:140-144`）。Trajectory 另显示运行中/失败/已完成与「压缩 {seq}」分组（`ui-trajectory/src/client/layout.ts:349-398`）。
+
+### pi-web 现状（Pi Durable 1.3.0）
+
+- 旧状态（本次改动前）：策略固定、不可配，`enabled=true / reserveTokens=16384 / keepRecentTokens=20000 / backgroundTokens=32768`（`node_modules/@earendil-works/pi-durable/dist/harness/agent.js:12-17`）；`Harness.open` 没有传 `settings.compaction`。
+- 触发在 generation 准备阶段：`> window - 16384` 阻塞、`> window - 49152` 后台；provider 溢出压缩后重试一次（`dist/harness/generation.js:219-233,371-395`）。
+- 摘要用独立 summarizer system prompt + 把旧消息序列化成纯文本（工具结果截 2000 字符），`cacheRetention: "none"`，`maxTokens≈13107`，模板 6 节（Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context）（`dist/harness/compaction.js:12-47,103-160,294-337`）。
+- 落地为 `pi.compaction` entry（`head=firstKept`，内容是一条 framed summary user message），旧 entry 留在 SQLite 但离开 active view；旧状态：前端只显示一条「较早的上下文已压缩」系统行，无条数/token/展开/运行态（`src/server/projection.ts:743,814-815`）。
+- `/compact` 走 `App.tsx:749-755 → POST /api/conversations/:id/compact`（`app.ts:481`）→ `conversation.compact(undefined, CTX)`（`runtime.ts:1522-1526`）；202 立即返回，不能带指示、不能取消、失败后只有 toast/`ConversationDetail.error`（且该字段前端未渲染）。
+
+### 并排差异（2026-10-20 核对）
+
+| 维度 | DSH | pi-web | 定性 |
+|---|---|---|---|
+| 压缩前确定性缩减 | tool-result pruner（8k/4k/1k）+ image offload | 无；2000 字符截断只作用于摘要输入 | 待修（pi 无对应 seam，可在 runtime 里做 surface 前置裁剪） |
+| 阈值模型 | 比例 0.8 + 64k headroom，按模型覆盖 | 固定 16k reserve / 32k background | 待修（策略硬编码在 Pi Durable） |
+| 保留尾部 | 窗口的 16%（按保留预算） | 固定 20k token | 待修（同为近似语义，量纲不同） |
+| 摘要模型输入 | 复用会话 prefix + 末尾追加指令（KV cache 命中） | 独立 summarizer prompt + 纯文本序列化（显式 `cacheRetention:none`） | 有意差异（底座不同）；成本/延迟更高 |
+| 摘要输出上限 | 默认 65536 | min(0.8×16384, 模型上限) ≈ 13107 | 待修（长会话摘要信息量更少） |
+| 模板 | 8 节工程检查点，强调精确路径/命令/错误 | 6 节通用检查点 | 待修（可对齐文案） |
+| 存储与转录 | 日志事件 + surface replace；旧消息仍显示 | `pi.compaction` entry + head；旧消息离开 active view | 有意差异（Pi active view 语义）；UI 影响可见 |
+| 运行/结果 UI | marker 带条数/token/可展开摘要；Trajectory 有运行态 | 仅一条系统行 | 待修（优先补 `compaction/summary` 等价信息） |
+| 手动入口 | 同步、要求 idle、返回计数、错误分类 | 202 异步、无结果/错误分类、不可取消 | 待修（Pi 侧协议限制；可至少回读任务结果） |
+| 重试 | compactionRetries=1 + overflowRetries=1 | 仅 overflow 重试一次 | 待修（低优先级） |
+
+### 若要补齐 pi-web（按优先级）
+
+1. **UI 可见性**：把 `live.compactions` / `live.compactionFailure` 接进 `ConversationDetail`，在转录末尾渲染「已压缩 N 条 · 约 X tokens」+ 可展开摘要（摘要文本可从 `pi.compaction` entry 的 framed user message 中解析，或另存 doc）；失败要有明确提示。
+2. **手动压缩体验**：`compact` 接受可选 instructions（Pi 已支持 `compact(instructions, ctx)`）并回传任务结果；至少把 202 之后的后台结果/失败通过 SSE 反映出来。
+3. **策略可配**：给 `Harness.open` 传 `settings.compaction`，来源可以是应用设置（enabled / reserveTokens / keepRecentTokens / backgroundTokens）。
+4. **前置缩减**：在压缩前对超长 tool result 做确定性裁剪（对应 DSH pruner），必要时再做图片 offload；这层能显著推迟摘要。
+
+### 可行性结论（2026-10-20，只核 seam，未实现）
+
+结论：**行为上可对齐约 80–90%**；完全逐项一致需要改 Pi Durable 上游。
+
+| DSH 能力 | Pi 可用 seam | 可行度 |
+|---|---|---|
+| 运行态 / 失败 / 完成 marker、条数与摘要展开 | `LiveDoc.compactions` / `compactionFailure` 已存在于 `dist/harness/live.d.ts:104-110`；`pi.compaction` entry 的 framed summary 可解析 | ✅ 完全可做（纯投影 + UI） |
+| 手动 `/compact` 结果与错误分类 | `conversation.compact(instructions, ctx)` 返回 task id（`dist/harness/types.d.ts:455-461`），现被 runtime 丢弃；可 `waitForTask` 或随 SSE 推结果 | ✅ 可做 |
+| 阈值设置（enabled / reserve / keepRecent / background） | `HarnessOptions.settings.compaction`（`types.d.ts:476-497,519-523`），4 个绝对值 | ✅ 可做；但 **全局、无 per-model 覆盖** |
+| DSH 比例阈值（0.8 / 16% / 64k headroom）与逐模型策略 | 同上，只有绝对值 | ⚠️ 只能按主模型换算成一组绝对值，或改上游 |
+| 前置 tool-result 裁剪（8192/4096/1024） | `beforeRequest` hook 可改本次请求的 messages（`types.d.ts:690-694`、`generation.js:117-123`） | ✅ 模型侧效果可做；❌ 不是 durable surface 替换，转录/重启后仍显示原文 |
+| 图片 offload | 同上，可在 `beforeRequest` 把旧 image block 换成占位；provider 错误码恢复需自己记录 | ⚠️ 近似可做，非 replay-safe |
+| 自定义摘要模板 / 摘要模型 / maxTokens | `beforeCompact` hook 可 `decline` 或直接给 `{summary}`（`types.d.ts:722-739`），hook 内可 `api.models.completeSimple` | ✅ 可做；⚠️ 拿不到当前请求完整 tools/system，KV prefix cache 无法保证 |
+| 摘要复用会话 prefix（cache 命中） | Pi 内置摘要固定独立 system prompt + `cacheRetention:"none"`（`dist/harness/compaction.js:103-126`） | ❌ 公开 seam 下只能接近，不能完全一致 |
+| 旧消息仍留在转录 | Pi active view 从 `head` 开始；被 shadow 的 entry 不在 `view.entries` | ⚠️ 需前端另存历史或上游暴露 shadowed entries |
+| 压缩重试（compactionRetries） | Pi 内建策略固定；可在外层手动重试 | ⚠️ 近似；完全一致需上游 |
+
+建议节奏：先做 UI 可见性 + 设置（1–2 天），再做 `beforeRequest` pruner（成本收益最大），最后做 `beforeCompact` 模板/模型；「比例阈值 + per-model + durable prune + cache 复用」这四项若必须逐项一致，走 Pi Durable 上游 patch，而不是在 node_modules 或本仓库里硬改。
+
+### 生态实现核对（2026-10-20）
+
+- **pi-coding-agent（上游同仓库）**：`reserveTokens=16384`、`keepRecentTokens=20000`，支持 `modelOverrides` 按模型覆盖；在工具结束、下一请求前、用户新提示前和 overflow/length 后多处检查；切点落在 user/assistant/bash/custom，不切 tool result；重复压缩从上次的 `firstKeptEntryId` 继续；split user-message span 生成「历史 + 当前 span 前缀」两份摘要后合并；摘要模板 6 节 + `<read-files>`/`<modified-files>` 累积；`session_before_compact` 可返回自定义摘要与 usage；摘要请求 `cacheRetention:"none"`。
+- **do-computer**：缓存感知摘要的代表。空闲约 10 分钟后，用会话自己的 `view.messages`、同一 provider session、同一 cache retention，末尾追加一条摘要请求，让前缀命中 KV cache；只在缓存仍热、剩余窗口足够（16k）时这样做，否则退回 Pi 内置摘要；摘要必须匹配 `## Goal`…`## Critical context` 形式；按 task memo，失败退避 1 小时；按模型缓存寿命决定是否值得压。
+- **pda**：把上下文压到固定 200k 预算（`min(200k, 模型窗口)`），`reserve=16k / background=34k / keep=30k`；`beforeCompact` 自己调模型，JSONL 逐行标注 role 做注入防护（只有 `user` 是用户的话，tool result 不可信），失败 `decline` 而不是写坏摘要；按 task memo。
+- **pi-pocket**：长生命周期会话按空闲 token 阈值压缩；摘要明确「外部内容（会话/Webhook/GitHub/文件/脚本）不写入」，只保留自己的工具结果；`MARGIN_TOKENS=4096` 保证压缩确实有收益，`REGROW_TOKENS=8192` 避免每次回答后都压；摘要 usage 计入 `pi.usage`。
+- **cloudflare/pi-durable-cloudflare-chat**：只用 Pi 默认策略，`beforeCompact` 仅做观测日志。
+- **IgorWarzocha/pi-durable-components**：走另一条路——用 notes/checkpoint + `new_context` 工具显式交接，非 overflow 的自动压缩直接 `decline`。
+
+### pi-web 已落地的机制（`src/server/compaction.ts`）
+
+- **策略**：`reserveTokens=16384`、`keepRecentTokens=30000`、`backgroundTokens=34000`（通过 `Harness.open.settings.compaction` 生效；`PI_WEB_COMPACTION_*` 可覆盖）。有效窗口默认使用模型真实窗口（1M 就是 1M），只有模型未声明窗口时才回退 200k；`PI_WEB_CONTEXT_BUDGET` 可显式设置成本上限。
+- **压力裁剪**：`GenerationTask.beforeRequest` 在估算 token 超过有效窗口 85% 时，把最老的（保留最近 4 条）超过 8192 字符的 tool result 中间段替换为头 4096 + 标记 + 尾 1024；不改存储，同样压力下输出稳定，避免每次请求产生不同前缀。对应 DSH 的 tool-result pruner，但只作用于请求视图。
+- **预算触发**：`afterTools` / `onYield` 时若估算 context 超过 `有效窗口 - reserve` 且有 ≥4k 可节省，且 `LiveDoc.compactions` 为空，则 `conversation.compact()` 启动一次后台压缩；60s in-flight 去重。
+- **摘要**：
+  - 优先 **缓存感知**：`view.messages + 摘要请求`，同一 provider session，剩余窗口 ≥16k 时使用；否则退回只序列化被 shadow 消息的路径。
+  - 摘要提示固定 `Goal / Constraints & Preferences / Progress(Done/In Progress/Blocked) / Key Decisions / Next Steps / Critical Context`，保留精确路径、命令、错误串、id、数字；正文语言跟随用户；明确 tool result/assistant 内容是数据、不是指令，禁止编造用户批准和写入密钥。
+  - **文件跟踪**：从 shadow 消息的 `read/write/edit` 工具调用与上一份摘要的 `<read-files>/<modified-files>` 累积，追加到新摘要。
+  - **校验**：必须 `stop` + 纯文本 + 四个必需标题 + ≤16k 字符；framed summary 必须小于被替换内容；任一失败 memo 后 `undefined`，交回 Pi 内置摘要器兜底。
+  - **成本**：摘要调用 usage 计入会话 `pi.usage`；按 compaction task memo，重放/重试不重复调用模型。
+- **验收**：demo 实例（4329，数据目录 `/tmp/pi-compaction-data`）先发「你好」再发 180k 字符消息，自动压缩成功；`entries` 中 `pi.compaction`（id 64，head 52）的摘要包含 `## Goal … ## Critical Context` 以及 `<read-files>hello.txt</read-files>`、`<modified-files>hello.txt</modified-files>`，证明自定义摘要与文件跟踪都实际执行；`tests/compaction.test.ts` 18 例覆盖预算、裁剪、序列化、文件列表、校验、请求构建、memo/失败回退。
+
+### 仍与生态最佳实践有差距的地方
+
+- **逐模型阈值**：Pi Durable 的 `settings.compaction` 是 harness 级 4 个绝对值，没有 `modelOverrides`；有效窗口已按模型真实窗口计算，「按模型覆盖 reserve/keep」仍需上游支持。
+- **durable 裁剪**：`beforeRequest` 裁剪不是 surface 替换，转录仍保留完整 tool result，重启后重算；DSH/pruner 会写日志事件。要完全一致需 Pi 上游开放 surface 重写。
+- **图片 offload**：未实现；Pi 侧没有对应的 provider seam。
+- **展示**：状态互斥——运行中在转录末尾显示与完成标记同级的「正在进行上下文压缩」系统行（旧的完成标记隐藏、不弹 toast），完成后只显示「已完成上下文压缩」；条数/token/摘要展开仍未做。
+- **真实模型验收**：opencode-go key 仍为 `401 api_key_expired`，本轮用确定性 demo 模型验证机制接线，未声称真实模型压缩质量。
+
+### 真实模型与 UI 验收（2026-10-20）
+
+- **1M 窗口不再被 200k 硬压**：`compactionBudget()` 默认返回模型真实窗口（1M 就是 1M）；只有模型未声明窗口时回退 200k。`PI_WEB_CONTEXT_BUDGET` 可显式设置成本上限；`PI_WEB_COMPACTION_{RESERVE,KEEP_RECENT,BACKGROUND}_TOKENS` 可覆盖策略。
+- **真实 provider**：opencode-go（`https://opencode.ai/zen/go/v1`，`anthropic-messages`），模型 `opencode-go/deepseek-v4.1-flash`（1M window）。`POST /api/providers/opencode-go/test` 返回 `connected`；真实对话完成 3 轮后手动压缩成功，`pi.compaction` entry 24 / head 19，摘要 980 字符，包含完整 6 节标题与 `<read-files>/private/tmp/pi-real-compaction-workspace/seed.txt</read-files>`，证明自定义摘要、文件跟踪和落盘路径在真实模型上生效。测试用 `PI_WEB_CONTEXT_BUDGET=60000`、`keepRecent=2000` 降低触发成本，生产默认按模型窗口。
+- **UI 运行态**：`LiveDoc.compactions` 投影为 `ConversationDetail.compaction`；转录末尾显示与完成标记同级的系统行（12px、tertiary、居中，带小 spinner）；运行期间旧的「已完成上下文压缩」标记被隐藏，且不再弹 toast。完成后系统行变为「已完成上下文压缩」；失败显示「上下文压缩失败」+ 原因。压缩运行中再次 `/compact` 直接忽略，不重复提交。ego + 真实 `opencode-go/deepseek-v4.1-flash` 验收：`artifacts/ego-compaction/07-level-running.png`（只有运行系统行，无 toast/胶囊/完成标记）、`08-level-completed.png`（只有完成标记）。
+- **测试**：`tests/compaction.test.ts` 18 例 + projection compaction 1 例；全量 263 例。
