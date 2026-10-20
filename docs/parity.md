@@ -84,6 +84,9 @@
 - 2026-10-20：推理档位删除持久化：设置页不再把 null-pinned 档位渲染成行；档位下拉使用完整 7 档，删除后可重新添加。详见文末「推理档位删除持久化（2026-10-20）」。
 - 2026-10-20：新会话默认模型：目录校验 + 可用模型回退，失效的 `deepseek-flash` 不再原样显示；显式选择不存在的模型仍报错。详见文末「新会话默认模型（2026-10-20）」。
 - 2026-10-20：补齐 favicon（SVG/PNG/ICO/Apple touch）并让生产模式正确服务根级图标。详见文末「Favicon（2026-10-20）」。
+- 2026-10-20：当前工作区可折叠：切换时自动展开一次，之后 chevron 可折叠选中的会话组。详见文末「当前工作区折叠（2026-10-20）」。
+- 2026-10-20：隐藏模型白名单并清空历史过滤器；选中模型/推理等级会写入默认值，新会话与新窗口沿用。详见文末「模型白名单隐藏与选择记忆（2026-10-20）」。
+- 2026-10-20：侧栏默认打开当前工作区文件目录，分隔线可拖拽；Markdown 增加渲染预览，代码/文本改为全文高亮（不再折叠中间段）。详见文末「侧栏浏览、拖拽与文件预览（2026-10-20）」。
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
@@ -443,7 +446,7 @@ DSH 客户端在 `settings/document-updated`、`credentials/*-updated`、`llm/ad
 - 确定性 mock provider（记录 `reasoning_effort`）：模型只配置 `low/medium/high` 时，菜单只出现 Off/Low/Medium/High；High 的 wire value 配成 `ultra` 时请求体为 `reasoning_effort:"ultra"`；选择 Off 时请求体不含该字段。证据 `artifacts/ego-thinking-model/requests.high.jsonl`、`requests.off.jsonl` 与 `4317-models.png`、`4317-reasoning.png`。
 - 自动刷新：页面停在已展开的模型菜单，外部重写全局 `models.json` 增加 `Probe C (external)`，菜单在无刷新、无重新打开的情况下出现该模型。
 - 真实 `opencode-go/deepseek-v4.1-flash`：provider `test` 返回 `connected`；4317 实例的 DeepSeek 档位为 Off/Low/High/Max；新建会话从默认 Medium clamp 为 High；真实对话（conversation 1032）落盘 `thinkingLevel: high`，返回 `OK`，用量 9.7K tok。该 provider 未回传可见 reasoning block，因此“High 生效”的 wire 证据以 mock 请求体为准，真实侧只证明请求完成与档位落盘。
-- 4317 上另有一条测试残留：`app-state.json` 的 `modelAllowlist` 只放行 `opencode-go/deepseek-v4.1-flash`，导致全局 models.json 里的 29 个模型在输入框只显示 1 个。已备份到 `/tmp/pi-web-4317-app-state-backup.json` 并清空白名单；白名单功能本身保留，留空表示不过滤。
+- 4317 上另有一条测试残留：`app-state.json` 的 `modelAllowlist` 只放行 `opencode-go/deepseek-v4.1-flash`，导致全局 models.json 里的 29 个模型在输入框只显示 1 个。已备份到 `/tmp/pi-web-4317-app-state-backup.json` 并清空白名单；白名单 UI 已于同日隐藏，加载 app-state 时会清空历史列表。
 
 ## 全局配置目录（2026-10-20）
 
@@ -535,3 +538,55 @@ pi-web 修复：
 - 生产模式在 SPA fallback 之前显式服务这些根级文件（`src/server/app.ts`）；开发模式由 Vite 的 `public/` 提供。
 - 验证：开发 `GET /favicon.svg` 返回 `200 image/svg+xml`；生产构建 `dist/web` 含四个图标文件，`/favicon.svg`、`/favicon-32x32.png`、`/apple-touch-icon.png`、`/favicon.ico` 均返回 200 且 Content-Type 正确；`tests/http.test.ts` 覆盖静态根图标路由。
 - 门禁：`npm run typecheck`、`npx vitest run`（24 文件 281/281）、`npx vite build`。
+
+## 当前工作区折叠（2026-10-20）
+
+问题：选中的当前工作区所在的会话组无法折叠。`isExpanded` 原来包含 `currentWorkspaceId === workspace.id`，因此点击折叠只改了 `expandedWorkspaces` 集合，当前工作区仍被强制展开。
+
+修复：
+
+- 移除 `isExpanded` 里的当前工作区短路条件，展开状态只由 `expandedWorkspaces`（搜索时例外）决定。
+- 用 `useLayoutEffect` 在 `currentWorkspaceId` 变化时把它加入展开集合：切换到某个工作区时自动展开一次，之后用户可以随时点 chevron 折叠，包括它仍是当前工作区时。
+- 工作区行仍保持 `data-selected` 高亮，折叠后只隐藏会话列表，不影响行菜单和“设为当前工作区”。
+
+验收（4317，ego）：
+
+- 当前工作区 `deepseek-harness`：初始 `aria-expanded=true`，会话行可见。
+- 点击折叠后 `aria-expanded=false`，会话行消失，行仍为选中态。
+- 再次点击恢复 `aria-expanded=true`，会话行重新出现。
+- 截图 `artifacts/workspace-collapse/collapsed-selected.png`。
+- 门禁：`npm run typecheck`、`npx vitest run`（24 文件 281/281）、`npx vite build`。
+
+## 模型白名单隐藏与选择记忆（2026-10-20）
+
+- **隐藏模型白名单**：设置 → 模型不再显示“模型白名单”输入框；`AppStateStore.open` 在加载时清空任何非空 `modelAllowlist`，避免一个看不见的过滤器继续隐藏模型。字段、HTTP schema 与 `modelWithinAllowlist` 保留，供旧数据和回归测试使用。
+- **记住上次模型与推理等级**：`chooseModel` / `chooseThinking` 在选中后把 `defaultModel` 与 `defaultThinkingLevel` 写回 app-state；新会话以及新开浏览器窗口都会用这套值。已有会话仍保留自己的模型/等级，不受影响。
+- 选择失败（例如模型已从目录删除）只在记住默认值时提示，不会回滚已经成功的会话切换。
+
+验收（4317）：
+
+- 用 API 临时设置白名单为 `opencode-go/deepseek-v4.1-flash`，目录只剩 1 个模型；重启后 `modelAllowlist` 变为 `[]`，目录恢复 29 个可用模型。
+- 在已有会话选择 `Claude Haiku 5.5`（XHigh），点击“新会话”后输入框和模型菜单仍显示 `Claude Haiku 5.5` / XHigh。
+- 恢复默认到 `opencode-go/deepseek-v4.1-flash` / High 后，新会话显示 DeepSeek V4.1 Flash / High。
+- 设置 → 模型页面不再包含“模型白名单”。截图 `artifacts/last-selection/new-conversation-claude.png`、`settings-no-allowlist.png`。
+- 新增 `tests/models.test.ts`：重新打开 app-state 会清空旧白名单并恢复被隐藏的模型。
+- 门禁：`npm run typecheck`、`npx vitest run`（24 文件 282/282）、`npx vite build`。
+
+## 侧栏浏览、拖拽与文件预览（2026-10-20）
+
+DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（Markdown、代码、HTML、图片、PDF、Office、Excel），代码用带行号和语法高亮的只读块，Markdown 用文档渲染器。pi-web 复用现有 primitives 做出对应子集：
+
+- **打开侧栏即文件目录**：顶栏/空态的“打开侧栏”不再打开空的“文件检查器”，而是打开当前工作区的文件浏览器；在浏览器里点文件后进入“文件”标签，“浏览”标签保留原目录和滚动位置。
+- **可拖拽分隔线**：`.inspectorResizer` 是独立 5px 列；拖动改变 `--inspector-width`（默认 360，最小 280，最大 `min(760, 70vw)`）。支持左右方向键每次 16px、双击恢复 360，窗口缩小时自动 clamp；移动端仍是全屏 Inspector，隐藏分隔线。
+- **Markdown 预览**：`.md/.markdown/.mdx` 默认渲染 `MarkdownText`（标题、列表、表格、代码围栏、KaTeX），提供“预览/源码”切换；相对图片路径按 Markdown 文件目录解析成 `/api/workspaces/:id/asset`，绝对 URL/Data URI 交给渲染器。
+- **代码/文本完整预览**：非 Markdown 文本使用 `ReadBlock`，`maxLines = 全文行数`，不再出现“展开另 N 行”的中间折叠；语言由扩展名推断（`.java` → `java`），保留行号、语法高亮、复制和换行控制。
+- 服务端文件读取仍受原有 8 MiB 上限和工作区路径校验约束。
+
+验收（4317，ego）：
+
+- 点击“打开侧栏”后 Inspector 标题为当前工作区 `deepseek-harness`，显示目录内容。
+- 拖动分隔线：宽度 360 → 482.5；`aria-valuenow` 同步。
+- `README.md`：默认“预览”标签，标题正常渲染；切“源码”后显示 78 行、无“展开另”折叠。
+- `PreviewTest.java`：8 行完整显示、39 个高亮 span、无折叠。
+- 截图 `artifacts/inspector-preview/01-browser-resized.png`、`02-markdown-preview.png`、`03-markdown-source.png`、`04-java-preview.png`。
+- 门禁：`npm run typecheck`、`npx vitest run`（24 文件 282/282）、`npx vite build`。

@@ -357,6 +357,17 @@ describe('model allowlist in the runtime', () => {
     expect((await runtime.catalog()).models.some(model => nameOf(model) === 'wl-beta/glm-x')).toBe(true)
   })
 
+  it('clears a hidden stored allowlist when the app state is reopened', async () => {
+    const { runtime, dataDir, workspace, piDir, cleanup } = await fixture({ models: WL_MODELS })
+    await runtime.updateSettings({ modelAllowlist: ['wl-alpha/deepseek*'] })
+    expect(runtime.settings().modelAllowlist).toEqual(['wl-alpha/deepseek*'])
+    await runtime.close()
+    const reopened = await createRuntime({ dataDir, workspace, piDir })
+    cleanup.closers.push(() => reopened.close())
+    expect(reopened.settings().modelAllowlist).toEqual([])
+    expect((await reopened.catalog()).models.some(model => nameOf(model) === 'wl-beta/glm-x')).toBe(true)
+  })
+
   it('keeps the scripted demo model selectable whatever the allowlist says', async () => {
     const { runtime } = await fixture({ demo: true })
     await runtime.updateSettings({ modelAllowlist: ['opencode-go/deepseek-v4.1-flash'] })

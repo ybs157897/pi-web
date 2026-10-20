@@ -145,9 +145,6 @@ export default function SettingsDialog(props: SettingsDialogProps) {
           </div>}
           {tab === 'models' && <div className={css.models}>
             <h3>{t('模型', 'Models')}</h3><p className={css.description}>{t('填入各提供商的 API 密钥即可使用其模型。', 'Configure provider credentials to use their models.')}</p>
-            <SettingRow stacked title={t('模型白名单', 'Model allowlist')}>
-              <AllowlistField value={settings.modelAllowlist} disabled={pending} t={t} onCommit={modelAllowlist => void update({ modelAllowlist })} />
-            </SettingRow>
             {configured.map(provider => <ProviderCard key={provider.id} provider={provider} catalog={catalog} saving={saving} onSave={onSave} onRefresh={onRefreshCatalog} />)}
             {newProvider && <ProviderCard key={`new-${providerChoice?.id ?? 'custom'}`} provider={providerChoice} isNew catalog={catalog} saving={saving} onSave={async input => { await onSave(input); setNewProvider(false) }} onCancel={() => setNewProvider(false)} onRefresh={onRefreshCatalog} />}
             {!newProvider && <Menu open={addMenuOpen} onClose={() => setAddMenuOpen(false)} portal items={[{ id: '__custom', label: t('自定义模型提供商', 'Custom provider') }, ...providers.filter(provider => !configured.some(item => item.id === provider.id)).map(provider => ({ id: provider.id, label: provider.name }))]}
@@ -203,31 +200,6 @@ function SettingRow({ title, description, stacked = false, children }: { title: 
   return <div className={css.settingRow} data-stacked={stacked || undefined}><div className={css.settingLabel}><span>{title}</span>{description && <p>{description}</p>}</div><div className={css.settingControl}>{children}</div></div>
 }
 
-/**
- * The allowlist line: one `provider/modelId` (or `provider/prefix*`) per line or
- * comma-separated entry. The draft commits on blur so typing never writes the
- * project configuration on every keystroke.
- */
-function AllowlistField({ value, disabled, t, onCommit }: {
-  value: string[]; disabled?: boolean; t: (chinese: string, english: string) => string; onCommit: (value: string[]) => void
-}) {
-  const text = value.join('\n')
-  const [draft, setDraft] = useState(text)
-  useEffect(() => { setDraft(text) }, [text])
-  const commit = () => {
-    const entries = [...new Set(draft.split(/[\n,]+/u).map(entry => entry.trim()).filter(entry => entry !== ''))]
-    if (entries.length === value.length && entries.every((entry, index) => entry === value[index])) return
-    onCommit(entries)
-  }
-  return <div className={css.allowlist}>
-    <textarea className={css.allowlistInput} value={draft} disabled={disabled} rows={3}
-      aria-label={t('模型白名单', 'Model allowlist')}
-      placeholder={t('每行一个，例如 opencode-go/deepseek*', 'One per line, for example opencode-go/deepseek*')}
-      onChange={event => setDraft(event.currentTarget.value)} onBlur={commit} />
-    <p className={css.description}>{t('留空表示不过滤。只影响 pi-web 的模型目录与选择，不改写全局模型配置。',
-      'Leave blank for no filtering. Only affects pi-web’s model directory and selection; the global model configuration is not rewritten.')}</p>
-  </div>
-}
 function Choice({ label, value, options, disabled, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; disabled?: boolean; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false)
   return <Menu open={open} onClose={() => setOpen(false)} portal align="end" selectedId={value} items={options.map(option => ({ id: option.value, label: option.label }))} onSelect={id => { onChange(id); setOpen(false) }} anchor={<button className={css.choice} type="button" aria-label={label} disabled={disabled} onClick={() => setOpen(value => !value)}>{options.find(option => option.value === value)?.label ?? value}<IconChevronDownOutlineRegular size={11} /></button>} />

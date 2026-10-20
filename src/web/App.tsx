@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
@@ -198,6 +198,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
   const [inspectorView, setInspectorView] = useState<InspectorView>('file')
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [inspectorWidth, setInspectorWidth] = useState(360)
   const [inspectorLoading, setInspectorLoading] = useState(false)
   const [inspectorError, setInspectorError] = useState('')
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
@@ -232,6 +233,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>())
   const messagesViewport = useRef<HTMLDivElement | null>(null)
   const inspectorRequestId = useRef(0)
+  const inspectorResize = useRef<{ startX: number; startWidth: number } | null>(null)
   /** DSH's `markOpened` (`PlanCard.tsx:72-80`): the one conversation whose plan already opened by itself. */
   const planAutoOpenedFor = useRef<string | null>(null)
   const wasAtBottom = useRef(true)
@@ -283,6 +285,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     : newWorkspaceId ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
   const currentWorkspace = workspaces.find(workspace => workspace.id === currentWorkspaceId)
   const browseWorkspace = browseWorkspaceId === null ? undefined : workspaces.find(workspace => workspace.id === browseWorkspaceId)
+  // Switching to a workspace expands it once; afterwards its own chevron may
+  // collapse it, including while it is the selected/current workspace.
+  useLayoutEffect(() => {
+    if (currentWorkspaceId === undefined) return
+    setExpandedWorkspaces(current => {
+      if (current.has(currentWorkspaceId)) return current
+      const next = new Set(current)
+      next.add(currentWorkspaceId)
+      return next
+    })
+  }, [currentWorkspaceId])
   const selectedPresetId = activeConversation !== null
     ? activeConversation.conversation.presetId
     : newPresetId === null ? undefined : newPresetId ?? settings.defaultPresetId
@@ -827,6 +840,21 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法撤回这条排队消息', 'Could not withdraw this queued message'))) }
   }, [announce, selectedId, t])
 
+  /**
+   * Remember the model/level the operator last chose so the next new
+   * conversation (or a newly opened browser window) starts there. The default
+   * model is also the settings fallback, so this is the same global value.
+   */
+  const rememberModelSelection = useCallback((level: ThinkingLevel, model?: { provider: string; modelId: string }): void => {
+    const patch: UpdateAppSettingsInput = {
+      defaultThinkingLevel: level,
+      ...(model === undefined ? {} : { defaultModel: { ...model } }),
+    }
+    void onSettingsChange(patch).catch(cause => {
+      announce(errorText(cause, t('无法记住模型选择', 'Could not remember the model selection')))
+    })
+  }, [announce, onSettingsChange, t])
+
   const chooseModel = useCallback(async (model: ModelOption): Promise<void> => {
     const selection = { provider: model.provider, modelId: model.modelId }
     const requested = model.reasoning ? activeConversation?.conversation.thinkingLevel ?? newThinking : 'off'
@@ -836,6 +864,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (selectedId === null || !conversationReady) {
       setNewModel(selection)
       setNewThinking(level)
+      rememberModelSelection(level, selection)
       return
     }
     try {
@@ -843,12 +872,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       setDetail(value)
       detailRef.current = value
       updateConversation(value)
+      rememberModelSelection(level, selection)
     } catch (cause) { announce(errorText(cause, t('切换模型失败', 'Could not change model'))) }
-  }, [activeConversation, announce, conversationReady, newThinking, selectedId, t, updateConversation])
+  }, [activeConversation, announce, conversationReady, newThinking, rememberModelSelection, selectedId, t, updateConversation])
 
   const chooseThinking = useCallback(async (level: ThinkingLevel): Promise<void> => {
     if (selectedId === null || !conversationReady) {
       setNewThinking(level)
+      rememberModelSelection(level, selectedModel)
       return
     }
     try {
@@ -856,8 +887,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       setDetail(value)
       detailRef.current = value
       updateConversation(value)
+      rememberModelSelection(level, selectedModel)
     } catch (cause) { announce(errorText(cause, t('更改思考等级失败', 'Could not change reasoning level'))) }
-  }, [announce, conversationReady, selectedId, t, updateConversation])
+  }, [announce, conversationReady, rememberModelSelection, selectedId, selectedModel, t, updateConversation])
 
   const patchConversation = useCallback(async (id: string, patch: {
     title?: string; pinned?: boolean; archived?: boolean;
@@ -1008,7 +1040,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         ? `/api/workspaces/${encodeURIComponent(workspaceId)}/asset?${new URLSearchParams({ path: file.path }).toString()}`
         : undefined
       if (requestId === inspectorRequestId.current) {
-        setInspectorFile({ path: file.path, content: file.content ?? '', mimeType: file.mimeType, size: file.size, ...(assetUrl === undefined ? {} : { url: assetUrl }) })
+        setInspectorFile({ path: file.path, content: file.content ?? '', mimeType: file.mimeType, size: file.size, workspaceId, ...(assetUrl === undefined ? {} : { url: assetUrl }) })
       }
     } catch (cause) {
       if (requestId === inspectorRequestId.current) setInspectorError(errorText(cause, t('无法打开此文件', 'Could not open this file')))
@@ -1300,9 +1332,45 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorLoading(false)
   }
   const toggleInspector = (): void => {
-    if (showInspector) closeInspector()
+    if (showInspector) {
+      closeInspector()
+      return
+    }
+    // The panel opens on the current workspace's directory; a file can then be
+    // opened on top of it, with the "浏览" tab returning to the same folder.
+    if (currentWorkspaceId !== undefined) openWorkspaceBrowser(currentWorkspaceId)
     else setInspectorOpen(true)
   }
+
+  const clampInspectorWidth = (value: number): number =>
+    Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7))
+  const beginInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    inspectorResize.current = { startX: event.clientX, startWidth: inspectorWidth }
+  }
+  const moveInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = inspectorResize.current
+    if (start === null) return
+    // The divider sits on the inspector's left edge, so dragging left widens it.
+    setInspectorWidth(clampInspectorWidth(start.startWidth + (start.startX - event.clientX)))
+  }
+  const endInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    inspectorResize.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+  const nudgeInspector = (delta: number): void => {
+    setInspectorWidth(value => clampInspectorWidth(value + delta))
+  }
+  // A window narrowed after a wide drag must not squeeze the primary column.
+  useEffect(() => {
+    const onResize = (): void => {
+      setInspectorWidth(value => Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7)))
+    }
+    window.addEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize) }
+  }, [])
   /**
    * DSH's `openPlan` (`ui-plan/src/client/PlanCard.tsx:48-57`): focus the exact submitted plan in
    * the right sidebar. `auto` is the one automatic open per conversation (`PlanCard.tsx:72-80`).
@@ -1406,7 +1474,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             const sessions = (workspaceMatches
               ? conversations.filter(item => item.archived === showArchived && matchesWorkspace(item))
               : filteredConversations.filter(matchesWorkspace)).sort(compareConversations)
-            const isExpanded = expandedWorkspaces.has(workspace.id) || currentWorkspaceId === workspace.id || workspaceNeedle !== ''
+            const isExpanded = expandedWorkspaces.has(workspace.id) || workspaceNeedle !== ''
             const viewEntries = workspaceActions(workspace)
             return <div className={css.workspaceGroup} key={workspace.id}>
               <div className={css.workspaceRow} data-selected={workspace.id === currentWorkspaceId || undefined}
@@ -1497,7 +1565,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
           <IconPanelLeftOutlineRegular size={16} />
         </button>}
-        <div className={`${css.mainBody} ${showInspector ? css.withInspector : ''}`}>
+        <div className={`${css.mainBody} ${showInspector ? css.withInspector : ''}`}
+          style={showInspector ? ({ '--inspector-width': `${inspectorWidth}px` } as CSSProperties) : undefined}>
           <div className={css.primaryPanel}>
             {page === 'chat' && <>
               {showConversationHeader && <>
@@ -1660,16 +1729,28 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>
-          {showInspector && <aside className={css.inspectorPane} aria-label={t('文件检查器', 'File inspector')}>
-            <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
-              browse={browseWorkspace === undefined ? null : {
-                workspace: browseWorkspace,
-                onOpenFile: path => { void openWorkspaceFile(path, browseWorkspace.id) },
-              }}
-              view={inspectorView} onView={setInspectorView}
-              loading={inspectorLoading} error={inspectorError}
-              onClose={closeInspector} />
-          </aside>}
+          {showInspector && <>
+            <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
+              aria-label={t('调整侧栏宽度', 'Resize inspector')}
+              aria-valuenow={inspectorWidth} aria-valuemin={280} aria-valuemax={760} tabIndex={0}
+              onPointerDown={beginInspectorResize} onPointerMove={moveInspectorResize}
+              onPointerUp={endInspectorResize} onPointerCancel={endInspectorResize}
+              onDoubleClick={() => { setInspectorWidth(360) }}
+              onKeyDown={event => {
+                if (event.key === 'ArrowLeft') { event.preventDefault(); nudgeInspector(16) }
+                else if (event.key === 'ArrowRight') { event.preventDefault(); nudgeInspector(-16) }
+              }} />
+            <aside className={css.inspectorPane} aria-label={t('文件检查器', 'File inspector')}>
+              <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
+                browse={browseWorkspace === undefined ? null : {
+                  workspace: browseWorkspace,
+                  onOpenFile: path => { void openWorkspaceFile(path, browseWorkspace.id) },
+                }}
+                view={inspectorView} onView={setInspectorView}
+                loading={inspectorLoading} error={inspectorError}
+                onClose={closeInspector} />
+            </aside>
+          </>}
         </div>
       </section>
       <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={currentWorkspaceId}

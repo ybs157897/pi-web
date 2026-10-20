@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, ReadBlock,
+  CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, MarkdownText, ReadBlock,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
@@ -18,6 +18,8 @@ export interface InspectorFile {
   language?: string
   line?: number
   size?: number
+  /** Workspace that owns the path, used to resolve local Markdown images. */
+  workspaceId?: string
   /** Same-origin, workspace-scoped asset URL returned by the server. */
   url?: string
 }
@@ -111,9 +113,35 @@ function DiffContents({ diff }: { diff: InspectorDiff }) {
 function FileContents({ file }: { file: InspectorFile }) {
   const { t } = useUiPreferences()
   const [htmlMode, setHtmlMode] = useState<'preview' | 'source'>('preview')
+  const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>(file.line === undefined ? 'preview' : 'source')
   const mime = file.mimeType?.split(';')[0]?.trim().toLocaleLowerCase() ?? ''
   const assetUrl = safeWorkspaceAssetUrl(file.url, window.location.href)
   const imageUrl = mime.startsWith('image/') ? safeImageUrl(file.url) : undefined
+  // Local Markdown images are workspace assets, not page URLs. Resolve them
+  // relative to the Markdown file so previews match DSH's document surface.
+  const pathImages = useMemo(() => {
+    if (file.workspaceId === undefined) return undefined
+    const directory = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : ''
+    return {
+      resolve: (value: string): string | undefined => {
+        const target = value.trim()
+        if (target === '' || target.startsWith('#') || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu.test(target)) return undefined
+        const relative = target.startsWith('/') ? target.slice(1) : `${directory}${target}`
+        const parts: string[] = []
+        for (const part of relative.replaceAll('\\', '/').split('/')) {
+          if (part === '' || part === '.') continue
+          if (part === '..') {
+            if (parts.length === 0) return undefined
+            parts.pop()
+            continue
+          }
+          parts.push(part)
+        }
+        if (parts.length === 0) return undefined
+        return `/api/workspaces/${encodeURIComponent(file.workspaceId!)}/asset?${new URLSearchParams({ path: parts.join('/') }).toString()}`
+      },
+    }
+  }, [file.path, file.workspaceId])
   if (imageUrl !== undefined) return <div className={css.imageSurface}><img src={imageUrl} alt={file.path} /></div>
   if (isHtmlFile(file, mime) && file.content !== undefined) return (
     <div className={css.documentSurface}>
@@ -144,15 +172,24 @@ function FileContents({ file }: { file: InspectorFile }) {
       </> : <span>{t('没有可用的文件资源地址', 'No file asset URL is available')}</span>}
     </div>
   </div>
-  if (isTextMime(mime) && file.content !== undefined) {
-    const language = file.language ?? languageFromPath(file.path)
-    const lines = file.content.split(/\r?\n/u)
-    return <div className={css.content}>
-      {file.line !== undefined && <div className={css.lineNote}>{t(`定位到第 ${file.line} 行`, `Requested line ${file.line}`)}</div>}
-      <ReadBlock label={file.path} lines={lines.map((text, index) => ({ number: index + 1, text }))}
-        totalLines={lines.length} lang={language} labels={readLabels(t)} />
+  if (isMarkdownFile(file, mime) && file.content !== undefined) return (
+    <div className={css.documentSurface}>
+      <div className={css.documentToolbar} role="group" aria-label={t('Markdown 查看方式', 'Markdown view mode')}>
+        <button type="button" aria-pressed={markdownMode === 'preview'} onClick={() => { setMarkdownMode('preview') }}>
+          {t('预览', 'Preview')}
+        </button>
+        <button type="button" aria-pressed={markdownMode === 'source'} onClick={() => { setMarkdownMode('source') }}>
+          {t('源码', 'Source')}
+        </button>
+      </div>
+      {markdownMode === 'source'
+        ? <SourceView file={file} t={t} />
+        : <div className={`${css.content} ${css.markdownPreview}`}>
+          <MarkdownText text={file.content} labels={markdownLabels(t)} pathImages={pathImages} />
+        </div>}
     </div>
-  }
+  )
+  if (isTextMime(mime) && file.content !== undefined) return <SourceView file={file} t={t} />
   if (mime.startsWith('image/')) return <div className={css.empty}>
     <strong>{t('图片预览地址不可用', 'Image preview URL is unavailable')}</strong>
     <span>{file.mimeType}</span>
@@ -168,6 +205,17 @@ function FileContents({ file }: { file: InspectorFile }) {
   </div>
 }
 
+function SourceView({ file, t }: { file: InspectorFile; t: (chinese: string, english: string) => string }) {
+  const content = file.content ?? ''
+  const language = file.language ?? languageFromPath(file.path)
+  const lines = content.split(/\r?\n/u)
+  return <div className={css.content}>
+    {file.line !== undefined && <div className={css.lineNote}>{t(`定位到第 ${file.line} 行`, `Requested line ${file.line}`)}</div>}
+    <ReadBlock label={file.path} lines={lines.map((text, index) => ({ number: index + 1, text }))}
+      totalLines={lines.length} lang={language} labels={readLabels(t)} maxLines={Math.max(lines.length, 1)} />
+  </div>
+}
+
 function safeImageUrl(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   if (/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/u.test(value)) return value
@@ -176,6 +224,10 @@ function safeImageUrl(value: string | undefined): string | undefined {
 
 function isHtmlFile(file: InspectorFile, mime: string): boolean {
   return mime === 'text/html' || /\.html?$/iu.test(file.path)
+}
+
+function isMarkdownFile(file: InspectorFile, mime: string): boolean {
+  return mime === 'text/markdown' || /\.(?:md|markdown|mdx)$/iu.test(file.path)
 }
 
 function isPdfFile(file: InspectorFile, mime: string): boolean {

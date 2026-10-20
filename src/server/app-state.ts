@@ -232,6 +232,12 @@ export class AppStateStore {
       }
       await writeJsonAtomic(path, state)
     }
+    // The model allowlist control is no longer shown. Clear any stored filter
+    // so it cannot keep hiding models without a visible way to fix it.
+    if (state.settings.modelAllowlist.length > 0) {
+      state = { ...state, settings: { ...state.settings, modelAllowlist: [] } }
+      await writeJsonAtomic(path, state)
+    }
     const store = new AppStateStore(path, state)
     await store.ensureWorkspace(options.defaultWorkspace)
     return store

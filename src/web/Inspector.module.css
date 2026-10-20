@@ -119,6 +119,17 @@
 
 .browseSurface[hidden] { display: none; }
 
+.markdownPreview {
+  padding: 16px 18px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.markdownPreview img {
+  max-width: 100%;
+  height: auto;
+}
+
 .imageSurface {
   display: flex;
   min-width: 0;

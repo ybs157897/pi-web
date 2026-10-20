@@ -268,7 +268,11 @@
 
 .mainPanel { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; outline: none; background: var(--dsw-alias-bg-base); }
 .mainBody { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
-.withInspector { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); }
+.withInspector { grid-template-columns: minmax(0, 1fr) 5px var(--inspector-width, 360px); }
+.inspectorResizer { position: relative; z-index: 3; cursor: col-resize; touch-action: none; background: transparent; }
+.inspectorResizer::after { content: ''; position: absolute; top: 0; right: 2px; bottom: 0; width: 1px; background: var(--dsw-alias-border-l2); transition: width 80ms var(--ds-ease-in-out), background 80ms var(--ds-ease-in-out); }
+.inspectorResizer:hover::after, .inspectorResizer:focus-visible::after { right: 1px; width: 3px; background: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3)); }
+.inspectorResizer:focus-visible { outline: none; }
 .primaryPanel { display: flex; min-width: 0; min-height: 0; flex-direction: column; margin-right: 2px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .panelToggleIcon { transform: scaleX(-1); }
 .heroHeader { display: flex; flex: none; align-items: center; justify-content: space-between; height: 40px; padding: 0 10px 0 16px; }
@@ -345,7 +349,7 @@
 .catalogNotice { display: flex; align-items: center; gap: 8px; width: min(100% - 32px, var(--dsh-chat-content-width)); margin: 0 auto 4px; color: var(--dsw-alias-state-error-primary); font-size: 11px; line-height: 16px; }
 .catalogNotice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .catalogNotice button { flex: none; border: 0; background: transparent; color: var(--dsw-alias-link); cursor: pointer; font: inherit; }
-.inspectorPane { z-index: 2; min-width: 0; min-height: 0; overflow: hidden; border-left: .5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-base); }
+.inspectorPane { z-index: 2; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); }
 .settingsNotice { position: absolute; z-index: 10; right: 14px; bottom: 12px; max-width: min(420px, calc(100% - 28px)); border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); padding: 8px 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
 .appLoading { display: grid; width: 100%; height: 100%; place-items: center; background: var(--dsw-alias-bg-base); }
 .appLoading .spinner { width: 18px; height: 18px; }
@@ -418,6 +422,7 @@
   .topbarActions { gap: 0; }
   .chatTabs { padding: 0 14px; }
   .withInspector { display: block; }
+  .inspectorResizer { display: none; }
   .inspectorPane { position: absolute; inset: 0; width: 100%; height: 100%; border-left: 0; }
   .heroHeader { height: 40px; padding-right: 8px; }
   .heroArea { padding: 0; }
