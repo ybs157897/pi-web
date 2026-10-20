@@ -80,6 +80,8 @@
 - 2026-10-19：Windows 审计复核发现 IN-2 仍有卡片/document 双 drop，IN-8 的 AVIF 仅前端修复、服务端 schema 未同步；两行状态已订正。详见 `docs/windows-support.md`。
 - 2026-10-20：模型目录与推理等级批次：按 DSH `reasoningEfforts` 语义修复档位映射；全局 models.json 热重载 + `/api/models/events` SSE；目录收窄时会话档位按 pi-ai 规则 clamp。详见文末「模型目录与推理等级（2026-10-20）」。
 - 2026-10-20：全局配置目录批次：默认 `~/.pi-web`，设置页直接写全局 `models.json`/`auth.json`，移除 `providers.json`；旧 `~/.pi/agent` 与项目 `.data` 一次性迁移；工作区技能来源改为 `.pi-web/skills`。详见文末「全局配置目录（2026-10-20）」。
+- 2026-10-20：工作区浏览批次：「浏览文件」改为右侧 Inspector，中间正文保留；工作区菜单改用整行矩形容器锚定，修复省略号隐藏后菜单漂到左上角；目录切换滚动复位。详见文末「工作区浏览与菜单锚点（2026-10-20）」。
+- 2026-10-20：推理档位删除持久化：设置页不再把 null-pinned 档位渲染成行；档位下拉使用完整 7 档，删除后可重新添加。详见文末「推理档位删除持久化（2026-10-20）」。
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
@@ -467,3 +469,33 @@ DSH 客户端在 `settings/document-updated`、`credentials/*-updated`、`llm/ad
 - 4317 首次启动迁移 7 个复制文件到 `~/.pi-web`，并把旧 `providers.json` 的目录/凭据合并进全局 `models.json`/`auth.json`：`models.json` 含 opencode-go 29 个模型、`auth.json` 含凭据、`app-state.json` 保留 2 个工作区、`pi-durable.sqlite` 保留 21 个会话；provider 测试 `connected`；模型菜单显示 29 个模型。
 - 临时全局目录写入验证：`POST /api/providers` 直接生成 `models.json` + `auth.json`，不存在 `providers.json`；`DELETE /api/providers` 同时清空 providers 与自定义凭据。文件模式 0600、目录 0700。
 - 门禁：`npm run typecheck` + `npx vitest run`（23 文件 273/273）+ `npx vite build`。
+
+## 工作区浏览与菜单锚点（2026-10-20）
+
+- **浏览文件不再离开正文**：工作区菜单的「浏览文件」改为打开右侧 Inspector（`src/web/Inspector.tsx` 的新 `browse` 视图），中间会话/自动化页面保持不变。浏览器以 compact 模式复用 `WorkspaceBrowserPage`；点文件后文件在 Inspector 的「文件」视图打开，「浏览」标签可回到原文件夹，文件夹路径与滚动位置保留（组件保持挂载）。
+- **菜单不再漂移**：工作区行的 `getAnchorRect` 改为返回整行矩形（`data-workspace-row` + ref fallback），并 `align="end"`。之前锚点是悬停才出现的省略号按钮；鼠标移开后按钮 `display:none` 变成 0×0，portal 菜单会跳到视口左上角。现在即使按钮隐藏，菜单仍贴着行右缘，并随滚动/缩放持续跟踪。
+- **目录切换滚动复位**：`WorkspaceBrowserPage` 在 `path` 变化时把文件列表滚回顶部，避免进入子目录后沿用上一目录的滚动偏移。
+- 验收：ego 4317 实测菜单打开后 80ms 内已贴住行（x=123/y=244），鼠标移开位置不变；「浏览文件」后中间会话仍在，右侧出现文件浏览器；进入 `docs`、打开 `docs/agent-lifecycle.md`、点「浏览」返回后仍停留在 `docs`。截图 `artifacts/workspace-browse/after-fix.png`、`after-fix-docs.png`。
+- 门禁：`npm run typecheck` + `npx vitest run`（23 文件 273/273）+ `npx vite build`。
+
+## 推理档位删除持久化（2026-10-20）
+
+问题：在模型设置里删除一个推理档位后保存，重新打开仍会出现该档位，看起来删不掉。
+
+根因：服务端按 DSH 语义把未声明档位 pin 成 `null`（这是正确的，用于让选择器不提供该档位），但设置页的 `draftFromModel` 把 map 里的**所有 key**（包括 null）都渲染成可编辑行。删除一行保存后，服务端把它重新 pin 成 null，下一次读取又变成一行空值档位，形成“删了又回来”。
+
+修复：
+
+- 新增 `src/web/reasoning-levels.ts`：
+  - `draftReasoningLevels()` 只渲染有字符串 wire value 的档位；`off` 仅在该 map 没有显式 `off: null`（即仍可关闭思考）时补一行。
+  - `pinReasoningLevels()` 负责保存时的 pin/Off 省略，设置页改用该函数。
+- `SettingsDialog` 的档位下拉改用 `catalog.thinkingLevels`（API 接受的完整 7 档），不再使用模型当前目录；这样删掉的档位之后可以重新添加。
+- `tests/reasoning-levels.test.ts` 覆盖：null 档位不渲染、`off: null` 不显示 Off、删除 High 后 round-trip 仍不存在、自定义 wire value 保留。
+
+验收（4317，临时 provider `level-proof`）：
+
+- 初始编辑器只显示 Off/Low/Medium/High（map 里 minimal/xhigh/max 的 null 不再成为行）。
+- 删除 Medium 并保存后：`thinkingLevelMap.medium === null`，catalog `thinkingLevels` 变为 `['off','low','high']`；重新展开编辑器仍是 Off/Low/High。
+- 点“添加档位”能重新加入 XHigh，证明下拉使用完整档位表。
+- 真实 opencode-go DeepSeek 编辑器显示 Off/Low/High/Max，不再出现 minimal/medium/xhigh 的空行。
+- 证据 `artifacts/reasoning-delete/after-delete.png`、`opencode-levels.png`。

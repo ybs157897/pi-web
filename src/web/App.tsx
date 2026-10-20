@@ -30,7 +30,6 @@ import TrajectoryView, { transcriptMessageDomId } from './TrajectoryView.tsx'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
 import type { InspectorDiff, InspectorFile, InspectorView } from './Inspector.tsx'
-import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
@@ -40,7 +39,7 @@ import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'automations' | 'workspace'
+type MainPage = 'chat' | 'automations'
 type ChatView = 'chat' | 'trajectory'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
@@ -187,7 +186,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [page, setPage] = useState<MainPage>('chat')
-  const [workspacePageId, setWorkspacePageId] = useState<string | null>(null)
+  const [browseWorkspaceId, setBrowseWorkspaceId] = useState<string | null>(null)
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
   const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
@@ -229,6 +228,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const mainPanelRef = useRef<HTMLElement | null>(null)
   const sidebarTriggerRef = useRef<HTMLButtonElement | null>(null)
   const workspaceSearchRef = useRef<HTMLInputElement | null>(null)
+  /** Real row rects keep a workspace menu anchored when its ellipsis hides on hover-out. */
+  const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>())
   const messagesViewport = useRef<HTMLDivElement | null>(null)
   const inspectorRequestId = useRef(0)
   /** DSH's `markOpened` (`PlanCard.tsx:72-80`): the one conversation whose plan already opened by itself. */
@@ -268,6 +269,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     ? activeConversation.conversation.workspaceId ?? inferredConversationWorkspace ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
     : newWorkspaceId ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
   const currentWorkspace = workspaces.find(workspace => workspace.id === currentWorkspaceId)
+  const browseWorkspace = browseWorkspaceId === null ? undefined : workspaces.find(workspace => workspace.id === browseWorkspaceId)
   const selectedPresetId = activeConversation !== null
     ? activeConversation.conversation.presetId
     : newPresetId === null ? undefined : newPresetId ?? settings.defaultPresetId
@@ -948,10 +950,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法重命名工作区', 'Could not rename workspace'))) }
   }, [announce, t])
 
-  const navigate = useCallback((next: MainPage, workspaceId?: string): void => {
+  const navigate = useCallback((next: MainPage): void => {
     setPage(next)
     setChatView('chat')
-    if (next === 'workspace' && workspaceId !== undefined) setWorkspacePageId(workspaceId)
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
   }, [mobile])
@@ -963,6 +964,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (!conversations.some(item => item.id === id)) await refreshList()
     setSelectedId(id)
   }, [conversations, refreshList])
+
+  const openWorkspaceBrowser = useCallback((workspaceId: string): void => {
+    inspectorRequestId.current += 1
+    setBrowseWorkspaceId(workspaceId)
+    setInspectorOpen(true)
+    setInspectorView('browse')
+    setInspectorError('')
+    setInspectorLoading(false)
+    setSidebarOpen(false)
+  }, [])
 
   const openWorkspaceFile = useCallback(async (path: string, workspaceId = currentWorkspaceId): Promise<void> => {
     if (workspaceId === undefined) {
@@ -1116,8 +1127,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       // The server rebound this workspace's sessions and its default; reload both views.
       await refreshWorkspaces()
       await refreshList()
+      if (browseWorkspaceId === workspace.id) {
+        setBrowseWorkspaceId(null)
+        setInspectorOpen(false)
+      }
     } catch (cause) { announce(errorText(cause, t('无法删除工作区', 'Could not delete the workspace'))) }
-  }, [announce, refreshList, refreshWorkspaces, t])
+  }, [announce, browseWorkspaceId, refreshList, refreshWorkspaces, t])
 
   const filteredConversations = useMemo(() => conversations
     .filter(item => item.archived === showArchived)
@@ -1168,6 +1183,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorDiff(undefined)
     setInspectorPlan(undefined)
     setInspectorOpen(false)
+    setBrowseWorkspaceId(null)
     inspectorRequestId.current += 1
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
@@ -1263,6 +1279,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const closeInspector = (): void => {
     inspectorRequestId.current += 1
     setInspectorOpen(false)
+    setBrowseWorkspaceId(null)
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
     setInspectorPlan(undefined)
@@ -1379,7 +1396,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             const isExpanded = expandedWorkspaces.has(workspace.id) || currentWorkspaceId === workspace.id || workspaceNeedle !== ''
             const viewEntries = workspaceActions(workspace)
             return <div className={css.workspaceGroup} key={workspace.id}>
-              <div className={css.workspaceRow} data-selected={workspace.id === currentWorkspaceId || undefined}>
+              <div className={css.workspaceRow} data-selected={workspace.id === currentWorkspaceId || undefined}
+                data-workspace-row={workspace.id}
+                ref={node => {
+                  if (node === null) workspaceRowRefs.current.delete(workspace.id)
+                  else workspaceRowRefs.current.set(workspace.id, node)
+                }}>
                 <button type="button" className={css.workspaceToggle} aria-label={workspace.name} aria-expanded={isExpanded} onClick={() => {
                   setExpandedWorkspaces(current => { const next = new Set(current); if (next.has(workspace.id)) next.delete(workspace.id); else next.add(workspace.id); return next })
                 }}>
@@ -1388,11 +1410,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   <span className={css.workspaceName}>{workspace.name}</span>
                 </button>
                 <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal
+                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal align="end"
+                  getAnchorRect={() => {
+                    const row = workspaceRowRefs.current.get(workspace.id)
+                      ?? document.querySelector<HTMLElement>(`[data-workspace-row="${CSS.escape(workspace.id)}"]`)
+                    return row?.getBoundingClientRect() ?? null
+                  }}
                   onSelect={id => {
                     setWorkspaceMenuId(null)
                     if (id === 'select') void selectWorkspace(workspace.id)
-                    else if (id === 'browse') navigate('workspace', workspace.id)
+                    else if (id === 'browse') openWorkspaceBrowser(workspace.id)
                     else if (id === 'rename') setRenameWorkspace(workspace)
                     else if (id === 'delete') setDeleteWorkspace(workspace)
                   }} anchor={<button type="button" className={css.rowIconButton}
@@ -1619,13 +1646,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             </>}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
               onOpenConversation={id => { void openConversation(id) }} />}
-            {page === 'workspace' && (workspaces.find(item => item.id === workspacePageId) === undefined
-              ? <div className={css.contentState}>{t('请选择一个工作区', 'Choose a workspace')}</div>
-              : <WorkspaceBrowserPage workspace={workspaces.find(item => item.id === workspacePageId)!}
-                onOpenFile={path => { void openWorkspaceFile(path, workspacePageId ?? undefined) }} />)}
           </div>
           {showInspector && <aside className={css.inspectorPane} aria-label={t('文件检查器', 'File inspector')}>
             <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
+              browse={browseWorkspace === undefined ? null : {
+                workspace: browseWorkspace,
+                onOpenFile: path => { void openWorkspaceFile(path, browseWorkspace.id) },
+              }}
               view={inspectorView} onView={setInspectorView}
               loading={inspectorLoading} error={inspectorError}
               onClose={closeInspector} />

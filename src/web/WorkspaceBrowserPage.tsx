@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, IconChevronRightOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
 import { api } from './api.ts'
@@ -8,18 +8,24 @@ import css from './WorkspaceBrowserPage.module.css'
 interface WorkspaceBrowserPageProps {
   workspace: WorkspaceSummary
   onOpenFile: (path: string) => void
+  /** Fit the inspector sidebar instead of the full main column. */
+  compact?: boolean
 }
 
 /** Browse one registered workspace using server-validated relative paths. */
-export default function WorkspaceBrowserPage({ workspace, onOpenFile }: WorkspaceBrowserPageProps) {
+export default function WorkspaceBrowserPage({ workspace, onOpenFile, compact = false }: WorkspaceBrowserPageProps) {
   const { t } = useUiPreferences()
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<WorkspaceFileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => { setPath('') }, [workspace.id])
+  // A new folder starts at its first entry instead of inheriting the previous
+  // folder's scroll offset.
+  useEffect(() => { if (listRef.current !== null) listRef.current.scrollTop = 0 }, [path])
   useEffect(() => {
     let active = true
     setLoading(true)
@@ -37,7 +43,7 @@ export default function WorkspaceBrowserPage({ workspace, onOpenFile }: Workspac
     name, path: items.slice(0, index + 1).join('/'),
   })), [path])
 
-  return <div className={css.page}>
+  return <div className={`${css.page}${compact ? ` ${css.compact}` : ''}`}>
     <header className={css.header}>
       <div className={css.heading}>
         <div className={css.crumbs} aria-label={t('当前目录', 'Current folder')}>
@@ -52,7 +58,7 @@ export default function WorkspaceBrowserPage({ workspace, onOpenFile }: Workspac
       <Button variant="ghost" size="sm" aria-label={t('刷新目录', 'Refresh folder')}
         icon={<IconRefreshOutlineRegular size={15} />} onClick={() => { setReload(value => value + 1) }} />
     </header>
-    <div className={css.list}>
+    <div className={css.list} ref={listRef}>
       {path !== '' && <button type="button" className={css.entry} onClick={() => {
         const parts = path.split('/').filter(Boolean)
         parts.pop()

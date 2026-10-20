@@ -219,7 +219,7 @@
 
 ### W11（低）路径展示和快捷键标签不统一
 
-- 工作区文件页显示 `C:\root/sub`（`src/web/WorkspaceBrowserPage.tsx:50`），UI 混用分隔符。
+- 工作区文件浏览器显示 `C:\root/sub`（`src/web/WorkspaceBrowserPage.tsx:50`），UI 混用分隔符。
 - 工作区手动路径占位符仍是 `/Users/you/project`。
 - `shortcutKeyLabels` 在 Windows 上显示 `Win`，但 Settings 的 `displayShortcut` 对 Meta 显示 `Meta`；默认 `Alt+Mod+n` 显示为 `Alt Ctrl N`，顺序不是 Windows 常见的 `Ctrl+Alt+N`；Shift 始终显示 `⇧`。
 

@@ -11,6 +11,7 @@ import type { AccessMode, AppSettings, CodemodeMode, CollapseTiming, McpServerVi
 import { api } from './api.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
+import { draftReasoningLevels, pinReasoningLevels, type ReasoningEntry } from './reasoning-levels.ts'
 import SkillsPanel from './SkillsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
@@ -284,12 +285,6 @@ function SizeSelect({ value, min, max, label, disabled, onChange }: { value: num
     anchor={<button className={css.sizeSelect} type="button" aria-label={label} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen(current => !current)}><span className={css.sizeValue}>{value}</span><span className={css.sizeUnit}>px</span><IconChevronDownOutlineRegular size={11} /></button>} />
 }
 
-interface ReasoningEntry {
-  level: string
-  /** Wire value sent for this level; null is the Off entry, which sends nothing. */
-  value: string | null
-}
-
 interface ModelDraft {
   key: string
   id: string
@@ -310,28 +305,6 @@ const INITIAL_LEVELS = ['off', 'low', 'medium', 'high'] as const
 function defaultLevelValue(level: string): string | null {
   return level === 'off' ? null : level
 }
-
-/** Every level pi-ai knows, in escalation order. */
-const FULL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-
-/**
- * Pin undeclared levels to `null`, matching DSH's `reasoningEfforts` adapter:
- * a level the user did not configure is not offered, instead of pi-ai
- * defaulting the five base levels to "supported". An Off row with no value
- * stays absent so turning thinking off sends no parameter.
- */
-function pinnedLevels(entries: readonly ReasoningEntry[]): Record<string, string | null> {
-  const map: Record<string, string | null> = Object.fromEntries(FULL_LEVELS.map(level => [level, null]))
-  for (const entry of entries) {
-    if (entry.level === 'off' && entry.value === null) {
-      delete map.off
-      continue
-    }
-    map[entry.level] = entry.value ?? entry.level
-  }
-  return map
-}
-
 
 /** DSH accepts a plain count or a K/M suffix for the capacity fields. */
 function parseCapacity(text: string): number | undefined {
@@ -354,6 +327,7 @@ function formatCapacity(value: number | undefined): string {
 }
 
 function draftFromModel(model: ProviderModelInput): ModelDraft {
+  const levels = draftReasoningLevels(model)
   return {
     key: `${model.id}:${crypto.randomUUID()}`,
     id: model.id,
@@ -361,14 +335,7 @@ function draftFromModel(model: ProviderModelInput): ModelDraft {
     contextWindow: '',
     maxTokens: '',
     input: model.input !== undefined && model.input.length > 0 ? [...model.input] : ['text'],
-    ...(model.thinkingLevelMap === undefined || model.thinkingLevelMap === null
-      ? {}
-      : {
-        levels: Object.entries(model.thinkingLevelMap as Record<string, unknown>).map(([level, value]) => ({
-          level,
-          value: typeof value === 'string' ? value : null,
-        })),
-      }),
+    ...(levels === undefined ? {} : { levels }),
     expanded: false,
     base: model,
   }
@@ -454,7 +421,7 @@ function ProviderCard({ provider, catalog, saving, onSave, onCancel, onRefresh, 
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(row.levels === undefined
           ? hadLevels ? { reasoning: false } : {}
-          : { reasoning: true, thinkingLevelMap: pinnedLevels(row.levels) }),
+          : { reasoning: true, thinkingLevelMap: pinReasoningLevels(row.levels) }),
       })
     }
     if (!id.trim() || !name.trim() || models.length === 0) { setError(t('请填写提供商名称和至少一个模型', 'Enter a provider name and at least one model')); return }
@@ -469,10 +436,9 @@ function ProviderCard({ provider, catalog, saving, onSave, onCancel, onRefresh, 
     setError('')
     try { await api.deleteProvider(provider.id); setConfirmDelete(false); await onRefresh?.() } catch (cause) { setError(cause instanceof Error ? cause.message : t('移除失败', 'Could not remove provider')) }
   }
-  const availableLevels = (row: ModelDraft): readonly string[] => {
-    const listed = catalog?.models.find(model => model.provider === id && model.modelId === row.id.trim())
-    return listed?.thinkingLevels ?? catalog?.thinkingLevels ?? [...INITIAL_LEVELS]
-  }
+  // The editor offers every level the API accepts, not just the model's
+  // current directory: a deleted level must be addable again.
+  const availableLevels = (_row: ModelDraft): readonly string[] => catalog?.thinkingLevels ?? [...INITIAL_LEVELS]
   const providerId = provider?.id ?? id
   const keyConfigured = config?.credentialConfigured ?? provider?.configured ?? false
   const customized = config?.source === 'project'

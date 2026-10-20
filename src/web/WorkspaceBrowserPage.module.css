@@ -20,5 +20,21 @@
 .notice { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 10px; color: var(--dsw-alias-state-error-primary); font-size: 13px; }
 .empty { margin: 0; padding: 20px 10px; color: var(--dsw-alias-label-tertiary); font-size: 13px; }
 @keyframes pulse { from { opacity: .48; } to { opacity: 1; } }
+
+/* Inspector sidebar: tighter chrome, name-only rows, and a list that owns the
+   remaining height so folder navigation never grows the pane. */
+.compact { padding: 8px 8px 12px; }
+.compact .header { margin-bottom: 8px; gap: 6px; }
+.compact .crumbs { min-height: 24px; gap: 2px; }
+.compact .crumbs button { padding: 1px 3px; font-size: 14px; line-height: 20px; }
+.compact .crumb > button { font-size: 13px; }
+.compact .heading p { margin-top: 2px; font-size: 11px; line-height: 16px; }
+.compact .list { flex: 1; }
+.compact .entry { min-height: 30px; gap: 7px; padding: 0 6px; }
+.compact .name { font-size: 12px; line-height: 18px; }
+.compact .entry small,
+.compact .entry time { display: none; }
+.compact .skeleton i { height: 28px; }
+
 @media (max-width: 600px) { .page { padding: 16px 12px 24px; }.entry { gap: 8px; }.entry time { display: none; } }
 @media (prefers-reduced-motion: reduce) { .skeleton i { animation: none; } }

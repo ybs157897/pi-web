@@ -6,6 +6,8 @@ import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import PlanPreview, { type PlanDocument } from './PlanPreview.tsx'
+import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
+import type { WorkspaceSummary } from '../shared/types.ts'
 import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
 
@@ -22,14 +24,21 @@ export interface InspectorFile {
 
 export type { InspectorDiff } from './transcript.tsx'
 
-/** The inspector's three document kinds; DSH puts the plan in its own sidebar tab (`ui-plan/index.ts:65-69`). */
-export type InspectorView = 'file' | 'diff' | 'plan'
+/** The inspector's views: a workspace browser beside file, diff and plan documents. */
+export type InspectorView = 'file' | 'diff' | 'plan' | 'browse'
+
+export interface InspectorBrowse {
+  workspace: WorkspaceSummary
+  onOpenFile: (path: string) => void
+}
 
 export interface InspectorProps {
   file?: InspectorFile | null
   diff?: InspectorDiff | null
   /** The latest submitted plan, shown in DSH's plan preview (`PlanPreview.tsx:18-40`). */
   plan?: PlanDocument | null
+  /** A workspace to browse in this pane; keeping it mounted preserves the open folder. */
+  browse?: InspectorBrowse | null
   view?: InspectorView
   onView?: (view: InspectorView) => void
   loading?: boolean
@@ -37,35 +46,48 @@ export interface InspectorProps {
   onClose: () => void
 }
 
-/** Show a workspace file, recorded artifact, or submitted plan inside the app's right inspector panel. */
-export default function Inspector({ file = null, diff = null, plan = null, view, onView, loading = false, error = null, onClose }: InspectorProps) {
+/** Show a workspace file, recorded artifact, submitted plan, or workspace browser in the right inspector panel. */
+export default function Inspector({ file = null, diff = null, plan = null, browse = null, view, onView, loading = false, error = null, onClose }: InspectorProps) {
   const { t } = useUiPreferences()
   const planView = view === 'plan'
-  const path = planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
+  const browseView = browse !== null && view === 'browse'
+  const path = browse !== null && view === 'browse'
+    ? browse.workspace.name
+    : planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
+  const hasDocument = plan !== null || diff !== null || file !== null
   return (
-    <aside className={css.root} aria-label={planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
+    <aside className={css.root} aria-label={browseView
+      ? t('文件浏览器', 'File browser')
+      : planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
       <header className={css.header}>
         <div className={css.fileIcon} aria-hidden="true"><IconBrowseOutlineRegular size={15} /></div>
         <div className={css.path} title={path}>{path}</div>
-        {onView !== undefined && (plan !== null || diff !== null || file !== null) && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
-          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView}
+        {onView !== undefined && (browse !== null || hasDocument) && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
+          {browse !== null && <button type="button" data-browse-view aria-pressed={browseView}
+            onClick={() => { onView('browse') }}>{t('浏览', 'Browse')}</button>}
+          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView && !browseView}
             onClick={() => { onView(diff !== null ? 'diff' : 'file') }}>{diff !== null ? t('差异', 'Diff') : t('文件', 'File')}</button>}
           {plan !== null && <button type="button" data-plan-view aria-pressed={planView}
             onClick={() => { onView('plan') }}>{t('计划', 'Plan')}</button>}
         </div>}
-        <button type="button" className={css.close} onClick={onClose} aria-label={planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')}>
+        <button type="button" className={css.close} onClick={onClose} aria-label={browseView
+          ? t('关闭文件浏览器', 'Close file browser')
+          : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')}>
           <IconCloseOutlineRegular size={15} />
         </button>
       </header>
-      {planView
+      {browse !== null && <div className={css.browseSurface} hidden={!browseView}>
+        <WorkspaceBrowserPage workspace={browse.workspace} onOpenFile={browse.onOpenFile} compact />
+      </div>}
+      {!browseView && (planView
         ? <PlanPreview plan={plan} loading={loading} error={error} />
         : <>
           {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}
           {!loading && error !== null && error !== '' && <div className={css.error} role="alert">{error}</div>}
           {!loading && (error === null || error === '') && diff !== null && <DiffContents diff={diff} />}
           {!loading && (error === null || error === '') && diff === null && file !== null && <FileContents key={file.path} file={file} />}
-          {!loading && error === null && diff === null && file === null && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
-        </>}
+          {!loading && error === null && diff === null && file === null && !browseView && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
+        </>)}
     </aside>
   )
 }
