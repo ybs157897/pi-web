@@ -223,8 +223,8 @@ function AllowlistField({ value, disabled, t, onCommit }: {
       aria-label={t('模型白名单', 'Model allowlist')}
       placeholder={t('每行一个，例如 opencode-go/deepseek*', 'One per line, for example opencode-go/deepseek*')}
       onChange={event => setDraft(event.currentTarget.value)} onBlur={commit} />
-    <p className={css.description}>{t('留空表示不过滤。只影响本项目的模型目录与选择，不改写 Pi 配置。',
-      'Leave blank for no filtering. Only affects this project’s model directory and selection; your Pi configuration is not rewritten.')}</p>
+    <p className={css.description}>{t('留空表示不过滤。只影响 pi-web 的模型目录与选择，不改写全局模型配置。',
+      'Leave blank for no filtering. Only affects pi-web’s model directory and selection; the global model configuration is not rewritten.')}</p>
   </div>
 }
 function Choice({ label, value, options, disabled, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; disabled?: boolean; onChange: (value: string) => void }) {
@@ -309,6 +309,27 @@ const INITIAL_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 function defaultLevelValue(level: string): string | null {
   return level === 'off' ? null : level
+}
+
+/** Every level pi-ai knows, in escalation order. */
+const FULL_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/**
+ * Pin undeclared levels to `null`, matching DSH's `reasoningEfforts` adapter:
+ * a level the user did not configure is not offered, instead of pi-ai
+ * defaulting the five base levels to "supported". An Off row with no value
+ * stays absent so turning thinking off sends no parameter.
+ */
+function pinnedLevels(entries: readonly ReasoningEntry[]): Record<string, string | null> {
+  const map: Record<string, string | null> = Object.fromEntries(FULL_LEVELS.map(level => [level, null]))
+  for (const entry of entries) {
+    if (entry.level === 'off' && entry.value === null) {
+      delete map.off
+      continue
+    }
+    map[entry.level] = entry.value ?? entry.level
+  }
+  return map
 }
 
 
@@ -420,16 +441,20 @@ function ProviderCard({ provider, catalog, saving, onSave, onCancel, onRefresh, 
       }
       const modelId = row.id.trim()
       const listed = catalog?.models.find(model => model.provider === id && model.modelId === modelId)
+      const carried: Record<string, unknown> = { ...(row.base ?? { reasoning: listed?.reasoning, contextWindow: listed?.contextWindow }) }
+      // The switch owns the map: off removes it, on writes the pinned one.
+      const hadLevels = carried.thinkingLevelMap !== undefined
+      delete carried.thinkingLevelMap
       models.push({
-        ...(row.base ?? { reasoning: listed?.reasoning, contextWindow: listed?.contextWindow }),
+        ...carried,
         id: modelId,
         name: row.name.trim() || modelId,
         input: [...row.input],
         ...(contextWindow === undefined ? {} : { contextWindow }),
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(row.levels === undefined
-          ? {}
-          : { thinkingLevelMap: Object.fromEntries(row.levels.map(entry => [entry.level, entry.value])) }),
+          ? hadLevels ? { reasoning: false } : {}
+          : { reasoning: true, thinkingLevelMap: pinnedLevels(row.levels) }),
       })
     }
     if (!id.trim() || !name.trim() || models.length === 0) { setError(t('请填写提供商名称和至少一个模型', 'Enter a provider name and at least one model')); return }
@@ -545,7 +570,7 @@ function ProviderCard({ provider, catalog, saving, onSave, onCancel, onRefresh, 
         </div>
       </>}
     </form>}
-    <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title={t('删除模型提供商', 'Delete model provider')} closeLabel={t('关闭', 'Close')} description={t('只影响这个项目的配置，不修改现有 Pi 配置。', 'Only this project configuration is affected. Existing Pi settings stay unchanged.')} footer={<><Button variant="ghost" onClick={() => setConfirmDelete(false)}>{t('取消', 'Cancel')}</Button><Button variant="primary" onClick={() => void remove()}>{t('删除', 'Delete')}</Button></>} />
+    <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title={t('删除模型提供商', 'Delete model provider')} closeLabel={t('关闭', 'Close')} description={t('会从全局 models.json 删除该提供商；自定义提供商同时删除 auth.json 中的凭据，内置提供商会恢复默认模型目录。', 'Removes the provider from the global models.json. A custom provider also loses its auth.json credential; a built-in provider returns to its shipped model directory.')} footer={<><Button variant="ghost" onClick={() => setConfirmDelete(false)}>{t('取消', 'Cancel')}</Button><Button variant="primary" onClick={() => void remove()}>{t('删除', 'Delete')}</Button></>} />
   </div>
 }
 

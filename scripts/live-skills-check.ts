@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createRuntime } from '../src/server/runtime.ts'
+import { piWebHome } from '../src/server/home.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import type { ConversationDetail } from '../src/shared/types.ts'
 
@@ -31,7 +32,7 @@ async function run(runtime: Runtime, id: string, text: string) {
 let runtime: Runtime | undefined
 const evidence: Record<string, unknown> = { result: 'failed', verifiedAt: new Date().toISOString() }
 try {
-  runtime = await createRuntime({ dataDir: join(root, 'data'), workspace, mcpConfigPath: join(root, 'no-external-mcp.json') })
+  runtime = await createRuntime({ dataDir: join(root, 'data'), workspace, piDir: piWebHome(), mcpConfigPath: join(root, 'no-external-mcp.json') })
   const catalog = await runtime.catalog()
   assert.ok(catalog.defaultModel, 'Configure the intended default model before running this check')
   assert.match(catalog.defaultModel.modelId, /deepseek/i, 'This repository requires DeepSeek for real-model acceptance; no model was changed')
@@ -57,7 +58,7 @@ try {
   const marker = `VERIFIED_${randomUUID()}`
   await writeFile(join(workspace, 'evidence.txt'), marker + '\n')
   await runtime.close()
-  runtime = await createRuntime({ dataDir: join(root, 'data'), workspace, mcpConfigPath: join(root, 'no-external-mcp.json') })
+  runtime = await createRuntime({ dataDir: join(root, 'data'), workspace, piDir: piWebHome(), mcpConfigPath: join(root, 'no-external-mcp.json') })
   const verifier = await runtime.create({ title: 'Use skill after restart', model: catalog.defaultModel, accessMode: 'readOnly' })
   const used = await run(runtime, verifier.conversation.id, '请做一次本地问题单样例核验，使用匹配的项目技能，返回验证标识。')
   const useTools = used.messages.filter(message => message.role === 'tool')

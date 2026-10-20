@@ -38,6 +38,7 @@ function makeDetail(id = 'conv-1', title = 'Test conversation'): ConversationDet
 class FakeRuntime implements Runtime {
   readonly details = new Map<string, ConversationDetail>([['conv-1', makeDetail()]])
   readonly listeners = new Map<string, Set<(value: ConversationDetail) => void>>()
+  readonly modelListeners = new Set<() => void>()
   readonly calls: string[] = []
   cleanupCount = 0
   closeCount = 0
@@ -237,6 +238,15 @@ class FakeRuntime implements Runtime {
     }
   }
 
+  watchModels(listener: () => void): () => void {
+    this.modelListeners.add(listener)
+    return () => { this.modelListeners.delete(listener) }
+  }
+
+  emitModels(): void {
+    for (const listener of [...this.modelListeners]) listener()
+  }
+
   async saveProvider(input: ProviderInput): Promise<void> {
     this.calls.push('saveProvider')
     this.lastProvider = input
@@ -392,6 +402,20 @@ describe('HTTP API', () => {
     expect(await saved.json()).toEqual({ ok: true })
     expect(savedText).not.toContain('private-api-key-value')
     expect(runtime.lastProvider?.apiKey).toBe('private-api-key-value')
+  })
+
+  it('streams a model-catalog change to an already connected client', async () => {
+    const { app, runtime } = createTestApp()
+    const response = await app.request('/api/models/events')
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    const first = decoder.decode((await reader.read()).value)
+    expect(first).toContain('event: ready')
+    runtime.emitModels()
+    const second = decoder.decode((await reader.read()).value)
+    expect(second).toContain('event: changed')
+    await reader.cancel()
   })
 
   it('answers a pending question, rejects concrete validation failures, and stays idempotent', async () => {

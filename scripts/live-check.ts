@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import { createRuntime } from '../src/server/runtime.ts'
+import { piWebHome } from '../src/server/home.ts'
 
 const dir = await mkdtemp(join(tmpdir(), 'pi-web-live-'))
-const runtime = await createRuntime({ dataDir: join(dir, 'data'), workspace: dir })
+const runtime = await createRuntime({ dataDir: join(dir, 'data'), workspace: dir, piDir: piWebHome() })
 try {
   const catalog = await runtime.catalog()
   if (!catalog.defaultModel) throw new Error('当前 Pi 未配置默认模型，请先配置模型后重试')

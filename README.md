@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-打开 http://127.0.0.1:4317。默认模型从本机 `~/.pi/agent/settings.json` 读取；Provider 与认证配置从 `models.json` 和 `auth.json` 只读导入。也可以在页面的模型设置中配置自定义 Provider。新设置保存在本项目的数据目录，已有 Pi 配置不被改写。
+打开 http://127.0.0.1:4317。全局配置位于 `~/.pi-web/`：默认模型从 `settings.json` 读取，Provider 与认证直接读写 `models.json` 和 `auth.json`。设置页的修改会直接写入这些全局文件；项目本地 `.data` 不再使用，首次启动会把旧 `.data` 和 `~/.pi/agent` 一次性迁移到 `~/.pi-web`。
 
 ```sh
 npm run typecheck
@@ -35,7 +35,7 @@ Windows 10/11 属于「有条件支持」，**不是所有功能都已在 Window
   - Git 分支功能直接执行 `git.exe`，要求 Web 服务进程的 PATH 能找到 Git；仅在 Git Bash 内可用不够。
 - `npm ci` 使用默认参数，**不要加 `--omit=optional`**：除 Windows 原生目录选择器依赖 koffi 的预编译 optionalDependencies 外，Vite/Rollup 和 esbuild 也依赖平台 optional 包；省略时可能回退到需要 CMake/MSVC 的源码编译，或直接让 `npm run build` 报缺少 Rollup 原生模块。默认预编译方案不需要额外 Visual Studio/CMake；若 Rollup 报 DLL 加载失败，再安装 Microsoft Visual C++ Redistributable。
 - 以交互式桌面用户会话运行（原生目录选择器/打开配置文件需要窗口站）。项目、数据和 Git 仓库放本地 NTFS，避免 OneDrive/网络盘；配置建议保存为无 BOM UTF-8。
-- 建议使用当前稳定版 Edge/Chrome；界面依赖较新的 CSS 特性。真实模型仍读取 `%USERPROFILE%\.pi\agent\{settings.json,models.json,auth.json}`，也可用 demo 模式。
+- 建议使用当前稳定版 Edge/Chrome；界面依赖较新的 CSS 特性。真实模型读取 `%USERPROFILE%\.pi-web\{settings.json,models.json,auth.json}`，也可用 demo 模式。
 
 ### 启动（cmd / PowerShell）
 
@@ -44,7 +44,7 @@ cmd：
 ```bat
 set PI_WEB_DEMO=1
 set PI_WEB_PORT=4318
-set PI_WEB_DATA_DIR=.data\demo
+set PI_WEB_DATA_DIR=%TEMP%\pi-web-demo
 npm run dev
 ```
 
@@ -53,7 +53,7 @@ PowerShell：
 ```powershell
 $env:PI_WEB_DEMO = '1'
 $env:PI_WEB_PORT = '4318'
-$env:PI_WEB_DATA_DIR = '.data\demo'
+$env:PI_WEB_DATA_DIR = "$env:TEMP\pi-web-demo"
 npm run dev
 ```
 
@@ -69,7 +69,7 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 - **MCP / Code mode**：MCP stdio 通过 cross-spawn 支持 `.cmd`/PATHEXT，关闭时用 `taskkill /T /F`；QuickJS 使用 WASI/worker。企业代理、TLS、强杀残留和嵌套 bash 仍需实机。
 - **打开配置文件**：Windows 使用 `cmd /c start`；路径含 `%`、`&`、`^` 等 cmd 元字符时可能失败。
 - **关闭**：Ctrl+C 走正常关闭；关闭控制台窗口、任务管理器结束或 `taskkill` 不会执行优雅关闭——SQLite 数据可恢复，但正在运行的 MCP/bash 子进程可能残留。
-- **旧数据迁移**：从 macOS/Linux 复制 `.data` 前先停旧服务并备份。迁移后需重新添加工作区，修正默认工作区（`defaultWorkspaceId`）、旧会话 `workspaceId`、Agent Preset，并把默认/会话/preset 的 `accessMode` 从 `workspaceWrite` 改为 `readOnly` 或 `fullAccess`；只改默认会话设置不够。
+- **旧数据迁移**：从 macOS/Linux 复制 `~/.pi-web` 前先停旧服务并备份。迁移后需重新添加工作区，修正默认工作区（`defaultWorkspaceId`）、旧会话 `workspaceId`、Agent Preset，并把默认/会话/preset 的 `accessMode` 从 `workspaceWrite` 改为 `readOnly` 或 `fullAccess`；只改默认会话设置不够。旧版项目内 `.data` 会在首次启动时自动导入一次到 `%USERPROFILE%\.pi-web`。
 
 ### 已知问题与限制
 
@@ -95,15 +95,29 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 - `test:smoke` 的硬前置是先 `npm run build`；其 demo 会话会尝试调用 bash，但脚本不把 bash 成功作为硬断言，Windows 上的 SIGTERM 优雅关闭断言则不成立。`scripts/render-fixture.ts` 由 `npx tsx scripts/render-fixture.ts` 手动运行，demo 的 `base64 -d`/图片读取需要 Git Bash。
 - 最小 Windows 冒烟顺序见 [docs/windows-support.md](docs/windows-support.md)。
 
-## 独立数据
+## 全局目录与独立数据
+
+默认全局目录是 `~/.pi-web`（Windows 为 `%USERPROFILE%\.pi-web`）。它同时保存模型配置、应用状态和会话数据库：
+
+| 文件 | 用途 |
+| --- | --- |
+| `settings.json` | 默认 Provider/模型、思考等级等 Pi 全局设置 |
+| `models.json` | Provider 与模型目录；设置页保存时直接修改此文件 |
+| `auth.json` | Provider 凭据；设置页填写 API key 时直接修改此文件 |
+| `mcp.json` | MCP 服务器配置（只读导入，修改后重启生效） |
+| `app-state.json` | 界面偏好、工作区、Preset、自动化任务 |
+| `pi-durable.sqlite` | Pi Durable 的会话、消息和工具执行记录 |
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `PI_WEB_PORT` | `4317` | HTTP 端口 |
-| `PI_WEB_DATA_DIR` | `.data` | SQLite、应用配置和凭据目录，不提交到 Git |
+| `PI_WEB_HOME` | `~/.pi-web` | 全局配置与会话数据的根目录 |
+| `PI_WEB_DATA_DIR` | `PI_WEB_HOME` | 覆盖数据目录；设置后不再自动迁移旧项目 `.data`，模型配置也从该目录读取 |
 | `PI_WEB_WORKSPACE` | `workspace` | Agent 文件与命令工作的目录 |
-| `PI_WEB_MCP_CONFIG` | 未设置 | 覆盖导入的 Pi MCP 配置文件；未设置时读用户级 `~/.pi/agent/mcp.json`（demo 模式读 `<数据目录>/mcp.json`） |
+| `PI_WEB_MCP_CONFIG` | 未设置 | 覆盖导入的 MCP 配置文件；未设置时读 `PI_WEB_HOME/mcp.json`（demo 模式读 `<数据目录>/mcp.json`） |
 | `PI_WEB_DEMO` | 未设置 | 设为 `1` 使用明确标识的脚本化验收模型，不调用真实模型 |
+
+首次以默认目录启动时，会把 `~/.pi/agent/{settings,models,auth,mcp}.json` 和旧项目 `.data/{providers,app-state}.json`、SQLite 一次性导入 `~/.pi-web`，并写入 `.migrated` 标记。旧目录不会被删除；确认迁移结果后可自行备份并删除项目 `.data`。需要重新导入时删除 `~/.pi-web/.migrated` 后再启动。
 
 Windows 上这些变量用 `set NAME=value`（cmd）或 `$env:NAME='value'`（PowerShell）设置；Git Bash 可直接使用 POSIX 写法。
 
@@ -140,7 +154,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
   - 仅脚本：模型只看到 `codemode`，其余工具（读写、bash、待办、团队等）都从脚本里调用，对应 Pi 的 `codemode.mode: only`。
   - 关闭：不提供代码工具，与旧行为一致。
   - 切换立即应用到空闲会话；正在运行的会话会跳过本次重配置，在下次切换或重启服务时应用。
-- **MCP**：只读导入 Pi 用户级 `~/.pi/agent/mcp.json`（demo 模式读 `<数据目录>/mcp.json`，可用 `PI_WEB_MCP_CONFIG` 覆盖），支持 stdio 与 Streamable HTTP。
+- **MCP**：只读导入全局 `~/.pi-web/mcp.json`（demo 模式读 `<数据目录>/mcp.json`，可用 `PI_WEB_MCP_CONFIG` 覆盖），支持 stdio 与 Streamable HTTP。
   - 工具名 `mcp__<server>__<tool>`；`exposure` 支持 `codemode`（默认，脚本可调）、`deferred`（`tool_search` 加载给模型）、`direct`（直接给模型）与 `hidden`，`toolExposure` 支持精确名与 `*` 模式。
   - 设置 → MCP 显示每个服务器的连接状态、工具清单和错误，不会返回 `env`/`headers`。修改 `mcp.json` 后重启服务生效；OAuth 流程暂未接入，需要令牌的服务器请用 `headers` 或本地 stdio。
 
@@ -150,7 +164,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 在普通会话中输入“帮我创建一个用于……的技能”，Agent 可通过 `skill_list`、`skill_load`、`skill_save`、`skill_validate` 完成创建与检查。创建器正文按需加载，不常驻整段系统提示词。
 
-- 新技能保存到当前工作区 `.agents/skills/<name>/SKILL.md`；也发现 `.pi/skills/` 中的已有技能。首版不扫描或改写用户全局技能目录。
+- 新技能保存到当前工作区 `.agents/skills/<name>/SKILL.md`；也发现 `.pi-web/skills/` 中的已有技能。首版不扫描或改写用户全局技能目录。
 - 来源 ID 为 `builtin:<name>`、`agents:<name>`、`pi:<name>`；同名项保留独立来源，裸名称歧义时要求使用完整 ID。
 - `skill_save` 只原子保存 `SKILL.md`；更新需要加载时的 `version` 作为 `expectedVersion`。相同内容重试视为已保存，不重复覆盖；版本冲突不覆盖。可选 scripts/references/assets 使用已有文件工具管理；校验不会执行脚本。
 - 每次模型请求重新读取精简目录，新保存的技能在下一次请求可见；重启从文件恢复。`SKILL.md` 单次读取上限 512 KiB、普通技能资源上限 2 MiB；拒绝路径越界与符号链接。
@@ -163,7 +177,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 自动化测试使用真实 Pi Durable/SQLite 与可控模型，验证持久化、幂等发送、队列、流式视图和恢复；HTTP 测试验证请求校验与订阅清理。可控模型验证不等于真实供应商调用通过。代码模式用真实 QuickJS 沙箱执行脚本并调用真实 bash；MCP 用内存传输与真实 stdio 子进程夹具覆盖连接、工具注册与失败隔离。
 
 ```sh
-PI_WEB_DEMO=1 PI_WEB_PORT=4318 PI_WEB_DATA_DIR=.data/demo npm run dev
+PI_WEB_DEMO=1 PI_WEB_PORT=4318 PI_WEB_DATA_DIR="${TMPDIR:-/tmp}/pi-web-demo" npm run dev
 npm run test:live
 npm run test:live:tools
 npm run test:live:codemode

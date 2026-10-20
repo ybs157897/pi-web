@@ -101,7 +101,7 @@ describe('model directory edits', () => {
     expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(false)
     expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === kept[0]!.id)).toBe(true)
 
-    // A fresh runtime reads providers.json, and the deleted model stays gone.
+    // A fresh runtime reads the global models.json, and the deleted model stays gone.
     await runtime.close()
     const reopened = await createRuntime({ dataDir, workspace, piDir })
     cleanup.closers.push(() => reopened.close())
@@ -138,6 +138,112 @@ describe('model directory edits', () => {
     expect(ids).toContain(kept[0]!.id)
     expect(ids).not.toContain(removed)
     expect(ids).toContain('glm-5.2')
+  })
+})
+
+describe('provider reasoning levels', () => {
+  it('turns declared levels into a reasoning model with undeclared levels pinned off the picker', async () => {
+    const { runtime } = await fixture()
+    await runtime.saveProvider({
+      id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions', apiKey: 'test-key',
+      models: [{
+        id: 'probe-a', name: 'Probe A', reasoning: false, input: ['text'],
+        thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high' },
+      }],
+    })
+    const catalog = await runtime.catalog()
+    const model = catalog.models.find(candidate => candidate.provider === 'probe' && candidate.modelId === 'probe-a')
+    expect(model?.reasoning).toBe(true)
+    expect(model?.thinkingLevels).toEqual(['off', 'low', 'medium', 'high'])
+
+    const config = await runtime.provider('probe')
+    const saved = config.models[0]!
+    expect(saved.reasoning).toBe(true)
+    expect(saved.thinkingLevelMap).toEqual({
+      minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null,
+    })
+
+    // Deleting a row removes it from the picker; the absent base levels stay pinned.
+    await runtime.saveProvider({
+      id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
+      models: [{ id: 'probe-a', name: 'Probe A', reasoning: true, input: ['text'], thinkingLevelMap: { low: 'low', high: 'high' } }],
+    })
+    const narrowed = await runtime.catalog()
+    expect(narrowed.models.find(candidate => candidate.modelId === 'probe-a')?.thinkingLevels).toEqual(['off', 'low', 'high'])
+
+    // Turning the switch off drops the map and the reasoning flag together.
+    await runtime.saveProvider({
+      id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
+      models: [{ id: 'probe-a', name: 'Probe A', reasoning: false, input: ['text'] }],
+    })
+    const off = await runtime.catalog()
+    const plain = off.models.find(candidate => candidate.modelId === 'probe-a')
+    expect(plain?.reasoning).toBe(false)
+    expect(plain?.thinkingLevels).toBeUndefined()
+    expect((await runtime.provider('probe')).models[0]?.thinkingLevelMap).toBeUndefined()
+  })
+
+  it('clamps a stored level when the model map stops offering it', async () => {
+    const { runtime } = await fixture()
+    const save = (levels: Record<string, string>) => runtime.saveProvider({
+      id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions', apiKey: 'test-key',
+      models: [{ id: 'probe-a', name: 'Probe A', reasoning: true, input: ['text'], thinkingLevelMap: levels }],
+    })
+    await save({ low: 'low', medium: 'medium', high: 'high' })
+    const created = await runtime.create({ model: { provider: 'probe', modelId: 'probe-a' }, thinkingLevel: 'medium' })
+    expect(created.conversation.thinkingLevel).toBe('medium')
+
+    // Narrowing the map makes Medium unsupported; the projection shows the
+    // level the next request will actually send (pi-ai clamps upward first).
+    await save({ low: 'low', high: 'high' })
+    expect((await runtime.detail(created.conversation.id)).conversation.thinkingLevel).toBe('high')
+
+    const configured = await runtime.create({ model: { provider: 'probe', modelId: 'probe-a' }, thinkingLevel: 'medium' })
+    expect(configured.conversation.thinkingLevel).toBe('high')
+  })
+
+  it('upgrades an existing saved map whose reasoning flag was left false', async () => {
+    const { runtime, piDir } = await fixture()
+    await writeFile(join(piDir, 'models.json'), JSON.stringify({
+      providers: {
+        legacy: {
+          name: 'Legacy', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
+          models: [{
+            id: 'legacy-a', name: 'Legacy A', reasoning: false,
+            thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },
+          }],
+        },
+      },
+    }))
+    await writeFile(join(piDir, 'auth.json'), JSON.stringify({ legacy: { type: 'api_key', key: 'test-key' } }))
+    const model = (await runtime.catalog()).models.find(candidate => candidate.modelId === 'legacy-a')
+    expect(model?.reasoning).toBe(true)
+    expect(model?.thinkingLevels).toEqual(['low', 'medium', 'high'])
+  })
+
+  it('picks up a model file written outside the running server and announces the change', async () => {
+    const { runtime, piDir } = await fixture()
+    const announced = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the model catalog reload was not announced')), 5_000)
+      const unsubscribe = runtime.watchModels(() => { clearTimeout(timer); unsubscribe(); resolve() })
+    })
+    await writeFile(join(piDir, 'models.json'), JSON.stringify({
+      providers: {
+        external: {
+          name: 'External', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
+          models: [{ id: 'external-a', name: 'External A', reasoning: true, thinkingLevelMap: { low: 'low', high: 'high' } }],
+        },
+      },
+    }))
+    await writeFile(join(piDir, 'auth.json'), JSON.stringify({ external: { type: 'api_key', key: 'test-key' } }))
+    // A catalog read is the explicit freshness point; the watcher and this
+    // read converge on the same serialized reload and only announce once.
+    const catalog = await runtime.catalog()
+    await announced
+    const model = catalog.models.find(candidate => candidate.provider === 'external' && candidate.modelId === 'external-a')
+    expect(model?.available).toBe(true)
+    expect(model?.thinkingLevels).toEqual(['off', 'low', 'high'])
+    expect(catalog.providers.some(provider => provider.id === 'external')).toBe(true)
   })
 })
 

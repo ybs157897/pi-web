@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { mkdir, realpath } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { Draft, JsonValue } from '@earendil-works/chord'
@@ -66,7 +65,7 @@ import type {
   WorkspaceSummary,
 } from '../shared/types.ts'
 import { activeDurationMs, projectConversation, usageTokens } from './projection.ts'
-import { createModelRuntime } from './models.ts'
+import { clampThinkingLevel, createModelRuntime } from './models.ts'
 import { createDemoModelRuntime } from './demo-model.ts'
 import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from './model-allowlist.ts'
 import { RuntimeError } from './runtime-errors.ts'
@@ -366,6 +365,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await mkdir(requestedWorkspace, { recursive: true })
   const initialWorkspacePath = await realpath(requestedWorkspace)
   const modelRuntime = options.demo ? createDemoModelRuntime() : await createModelRuntime({ dataDir, piDir: options.piDir })
+  /** Catalog reloads (file edits, saves, another instance) fanned out to web clients. */
+  const modelListeners = new Set<() => void>()
+  const unsubscribeModels = modelRuntime.subscribe(() => {
+    for (const listener of [...modelListeners]) {
+      try { listener() } catch { /* a dropped event stream must not stop the reload */ }
+    }
+  })
   const initialWorkspace: WorkspaceSummary = {
     id: randomUUID(),
     name: basename(initialWorkspacePath) || initialWorkspacePath,
@@ -513,11 +519,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   /**
    * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
-   * MCP is a read-only import of the user-level Pi configuration; a missing file, a
-   * bad entry, or a failing server is reported in the MCP view, never a startup failure.
+   * MCP is a read-only import of the global `mcp.json`; a missing file, a bad
+   * entry, or a failing server is reported in the MCP view, never a startup failure.
    */
   const mcpConfigPath = options.mcpConfigPath ??
-    (options.demo ? join(dataDir, 'mcp.json') : join(options.piDir ?? join(homedir(), '.pi', 'agent'), 'mcp.json'))
+    (options.demo ? join(dataDir, 'mcp.json') : join(options.piDir ?? dataDir, 'mcp.json'))
   const mcp = await McpManager.open({ configPath: mcpConfigPath })
   const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
@@ -679,7 +685,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const settings = appState.snapshot().settings
     const fallbackWorkspace = workspaceFiles.workspace(currentMetadata.workspaceId ?? settings.defaultWorkspaceId ?? defaultWorkspace.id)
     const team = options.team === true ? await teamProjection(id) : undefined
-    return projectConversation(view, cloneMetadata(currentMetadata), {
+    const detail = projectConversation(view, cloneMetadata(currentMetadata), {
       workspace: fallbackWorkspace.path,
       defaultModel: settings.defaultModel ?? modelRuntime.defaultModel,
       todos: await harness.snapshot(Todos, id, CTX),
@@ -691,6 +697,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       ...(options.subagents === true ? { subagents: await subagentSummaries(id) } : {}),
       ...(team === undefined ? {} : { team }),
     })
+    // A stored level can predate the model's current level map (a hand-edited
+    // provider file narrows it, for example). The request would be clamped by
+    // pi-ai anyway, so project that same clamp instead of a level no picker
+    // offers.
+    const activeModel = detail.conversation.model
+    const supportedLevels = activeModel === undefined
+      ? undefined
+      : modelRuntime.supportedThinkingLevels(activeModel.provider, activeModel.modelId)
+    if (activeModel === undefined || supportedLevels === undefined) return detail
+    const effective = clampThinkingLevel(detail.conversation.thinkingLevel, supportedLevels)
+    return effective === detail.conversation.thinkingLevel
+      ? detail
+      : { ...detail, conversation: { ...detail.conversation, thinkingLevel: effective } }
   }
 
   /** The Lead (or the Lead of a member conversation) this conversation's team record lives on. */
@@ -914,13 +933,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
     const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
+    // Store what the model will actually send. A configured level list can
+    // narrow after the conversation last chose one; keeping the unsupported
+    // value in `pi.agent` makes the composer label disagree with the request.
+    const supportedLevels = model ? modelRuntime.supportedThinkingLevels(model.provider, model.modelId) : undefined
+    const effectiveThinking = thinkingLevel && supportedLevels
+      ? clampThinkingLevel(thinkingLevel, supportedLevels)
+      : thinkingLevel
     return {
       cwd: workspace.path,
       extensions,
       tools,
       modelTools,
       ...(model ? { model } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(effectiveThinking ? { thinkingLevel: effectiveThinking } : {}),
       ...(preset?.instructions ? { instructions: preset.instructions } : {}),
     }
   }
@@ -2199,6 +2225,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     retry,
     watch,
     catalog,
+    watchModels: (listener: () => void) => {
+      modelListeners.add(listener)
+      return () => { modelListeners.delete(listener) }
+    },
     saveProvider,
     provider,
     deleteProvider,
@@ -2242,6 +2272,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         runtimeClosed = true
         for (const timer of automationTimers.values()) clearTimeout(timer)
         automationTimers.clear()
+        unsubscribeModels()
+        modelListeners.clear()
+        modelRuntime.close()
         closePromise = (async () => {
           try {
             await Promise.all([...activeWatchStops].map((unsubscribe) => unsubscribe()))

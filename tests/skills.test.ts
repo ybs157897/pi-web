@@ -74,7 +74,7 @@ describe('SkillStore', () => {
   it('requires source-qualified IDs when a name exists in multiple roots', async () => {
     const { workspace, builtin, store } = await fixture()
     await putSkill(builtin, 'shared-name', skill('shared-name', 'Bundled version.'))
-    await putSkill(join(workspace, '.pi', 'skills'), 'shared-name', skill('shared-name', 'Pi version.'))
+    await putSkill(join(workspace, '.pi-web', 'skills'), 'shared-name', skill('shared-name', 'Pi version.'))
 
     await expect(store.load(workspace, 'shared-name')).rejects.toMatchObject({ code: 'CONFLICT' })
     await expect(store.load(workspace, 'pi:shared-name')).resolves.toMatchObject({ skill: { source: 'pi', description: 'Pi version. with a second line' } })
@@ -113,7 +113,7 @@ describe('SkillStore', () => {
     const builtinContent = skill('same-name', 'Bundled copy.')
     const piContent = skill('same-name', 'Pi copy.')
     const builtinDirectory = await putSkill(builtin, 'same-name', builtinContent)
-    const piDirectory = await putSkill(join(workspace, '.pi', 'skills'), 'same-name', piContent)
+    const piDirectory = await putSkill(join(workspace, '.pi-web', 'skills'), 'same-name', piContent)
 
     await store.save(workspace, { name: 'same-name', content: skill('same-name', 'Workspace copy.') })
     expect(await readFile(join(builtinDirectory, 'SKILL.md'), 'utf8')).toBe(builtinContent)
@@ -128,7 +128,7 @@ describe('SkillStore', () => {
     await writeFile(join(outside, 'SKILL.md'), skill('escaped-skill'))
     await mkdir(join(workspace, '.agents', 'skills'), { recursive: true })
     await symlink(outside, join(workspace, '.agents', 'skills', 'escaped-skill'))
-    const resourceDirectory = await putSkill(join(workspace, '.pi', 'skills'), 'linked-resource', skill('linked-resource'))
+    const resourceDirectory = await putSkill(join(workspace, '.pi-web', 'skills'), 'linked-resource', skill('linked-resource'))
     await symlink(join(outside, 'SKILL.md'), join(resourceDirectory, 'external.md'))
 
     const catalog = await store.list(workspace)

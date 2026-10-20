@@ -50,7 +50,7 @@
 | 环境变量启动 | 支持 | cmd 用 `set NAME=value`；PowerShell 用 `$env:NAME='value'`；Git Bash 用 POSIX 写法。 |
 | Web UI 基础/主题/字体 | 有条件 | 无 Electron/macOS API；字体栈含 Segoe UI、微软雅黑、Consolas；依赖 `:has`、`color-mix`、`@container`、`100dvh` 等现代 CSS，建议当前稳定版 Edge/Chrome，实机未验。 |
 | 会话、SSE、队列、停止、分叉、刷新/重启恢复 | 支持 | 纯 HTTP + SSE + SQLite；Windows 无需额外适配；长连接休眠/VPN 切换/WAL 强杀恢复待实机。 |
-| 模型目录、Provider、凭据 | 有条件（安全弱化） | 只读导入 `%USERPROFILE%\.pi\agent\{settings,models,auth}.json`；应用自己的 Provider/凭据写入数据目录 `providers.json`。Windows `chmod 0600/0700` 只切换只读位，不建立 ACL；凭据、app-state、SQLite 会话和附件都依赖用户目录默认 ACL。 |
+| 模型目录、Provider、凭据 | 有条件（安全弱化） | 读写 `%USERPROFILE%\.pi-web\{settings,models,auth}.json`；设置页直接修改全局 `models.json` 和 `auth.json`。Windows `chmod 0600/0700` 只切换只读位，不建立 ACL；凭据、app-state、SQLite 会话和附件都依赖用户目录默认 ACL。 |
 | 设置、主题、字号、语言、发送模式 | 支持 | 原生 React 表单/状态；注意快捷键编辑当前必失败（X1）。 |
 | 快捷键编辑/恢复默认 | **不支持（现有回归）** | 客户端发送 10 个快捷键，服务端 strict schema 只接受 7 个，`rename/fork/archive` 触发 400。 |
 | 工作区添加（原生选择器） | 有条件/高风险 | Win32 koffi + COM 已接入但无 Windows 实机；失败映射 500 且前端无回退；返回 `C:\...` 后前端用 `/` 取名，长路径会添加失败。 |
@@ -93,7 +93,7 @@
 
 ### Skills（技能目录、加载、保存、校验）
 
-- 服务端 `src/server/skills.ts` 从仓库内置 `skills/`、当前工作区 `.agents/skills/` 和 `.pi/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
+- 服务端 `src/server/skills.ts` 从仓库内置 `skills/`、当前工作区 `.agents/skills/` 和 `.pi-web/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
 - Windows 相关静态结论：
   - 所有路径用 `node:path` 与 `realpath`/`lstat` 处理，不硬编码 `/` 作为文件系统分隔符；HTTP 协议里的资源路径则明确要求 `/`，并拒绝 `\`、盘符、UNC、`..`。
   - 技能名按小写 kebab-case 校验，同时显式拒绝 `con/prn/aux/nul/com1..9/lpt1..9` 等 Windows 保留设备名。
@@ -148,9 +148,9 @@
 
 - Session 导出使用浏览器 Blob，跨平台可用；文件名已过滤 `\/:*?"<>|`，但还需处理 Windows 保留设备名（如 `CON.jsonl`）和控制字符。
 - Agent Preset 中的 `workspaceWrite`：
-  - 旧 `.data` 从 macOS/Linux 迁到 Windows 后，默认 accessMode、每个会话的 metadata、每个 Agent Preset 都可能仍是 `workspaceWrite`。
+  - 旧 `~/.pi-web`（或迁移前的项目 `.data`）从 macOS/Linux 迁到 Windows 后，默认 accessMode、每个会话的 metadata、每个 Agent Preset 都可能仍是 `workspaceWrite`。
   - Windows capability 和无 OS 沙盒的保存校验都会拒绝它；Presets 下拉只提供 readOnly/fullAccess。仅改默认会话设置不够，必须逐个修正 preset 和已存在会话。
-- 迁移前请停止旧服务并备份 `.data`；复制后重新添加工作区，修正 `defaultWorkspaceId`、旧会话 `workspaceId`、accessMode 与 preset。
+- 迁移前请停止旧服务并备份 `~/.pi-web`；复制后重新添加工作区，修正 `defaultWorkspaceId`、旧会话 `workspaceId`、accessMode 与 preset。首次以默认目录启动时，旧项目 `.data` 与 `~/.pi/agent` 会自动导入一次到 `~/.pi-web`。
 
 ## 一、Windows 专属缺陷与限制
 
@@ -225,7 +225,7 @@
 
 ### W12（中）旧数据迁移说明不完整，不能只改 accessMode
 
-- 从 macOS/Linux 复制 `.data` 后，旧工作区绝对路径、`settings.defaultWorkspaceId`、每个会话 metadata 的 `workspaceId`、Agent Preset 的 accessMode 都可能失效。
+- 从 macOS/Linux 复制 `~/.pi-web` 后，旧工作区绝对路径、`settings.defaultWorkspaceId`、每个会话 metadata 的 `workspaceId`、Agent Preset 的 accessMode 都可能失效。
 - 启动时 runtime 会优先沿用旧 `defaultWorkspaceId`；仅重新添加工作区不足以保证会话绑定正确。
 - 必须在停服、备份后：重新添加工作区 → 修正默认工作区 → 重绑/清理旧会话 → 把 default/session/preset 的 `workspaceWrite` 改成 readOnly/fullAccess。
 
@@ -327,13 +327,13 @@
    - 给 Git 分支功能用：确保 `git.exe` 在服务进程 PATH 上。仅能在 Git Bash 内运行不等于 Web 服务能 spawn 到 git。
 6. 以交互式桌面用户会话运行（koffi/COM picker 和打开配置文件需要窗口站）。
 7. 使用当前稳定版 Edge 或 Chrome；项目依赖较新的 CSS 特性，未承诺 IE/旧 Edge。
-8. 真实模型：准备 `%USERPROFILE%\.pi\agent\{settings.json,models.json,auth.json}`，或使用 `PI_WEB_DEMO=1`。配置建议保存为无 BOM UTF-8。
+8. 真实模型：准备 `%USERPROFILE%\.pi-web\{settings.json,models.json,auth.json}`，或使用 `PI_WEB_DEMO=1`。配置建议保存为无 BOM UTF-8。
 9. 启动（cmd）：
 
    ```bat
    set PI_WEB_DEMO=1
    set PI_WEB_PORT=4318
-   set PI_WEB_DATA_DIR=.data\demo
+   set PI_WEB_DATA_DIR=%TEMP%\pi-web-demo
    npm run dev
    ```
 
@@ -342,13 +342,13 @@
    ```powershell
    $env:PI_WEB_DEMO = '1'
    $env:PI_WEB_PORT = '4318'
-   $env:PI_WEB_DATA_DIR = '.data\demo'
+   $env:PI_WEB_DATA_DIR = "$env:TEMP\pi-web-demo"
    npm run dev
    ```
 
    Git Bash 可用 POSIX 写法；生产模式先 `npm run build`，再 `npm start`。
 10. 访问模式只能用 `fullAccess`（默认）/`readOnly`；`workspaceWrite` 不可用。
-11. 从 macOS/Linux 迁移 `.data` 前：停止旧服务、备份 `.data`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId、preset 和所有 accessMode，再启动 Windows 服务。
+11. 从 macOS/Linux 迁移 `~/.pi-web` 前：停止旧服务、备份 `~/.pi-web`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId、preset 和所有 accessMode，再启动 Windows 服务。旧项目 `.data` 与 `~/.pi/agent` 会在首次启动时自动导入一次。
 12. 预期门禁：macOS 基线当前为 typecheck/build 通过、241/241 测试通过；Windows 的 `npm test` 仍需按 T2 平台化后才可能全绿；`test:live:tools`/`test:live:codemode` 不可用，`test:live:skills` 与 `test:live:workflow` 需真实模型、Git Bash 与实机记录。
 
 ## 五、建议修复优先级

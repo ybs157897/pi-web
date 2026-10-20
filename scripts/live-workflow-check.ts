@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createRuntime } from '../src/server/runtime.ts'
+import { piWebHome } from '../src/server/home.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import type { ConversationDetail } from '../src/shared/types.ts'
 import { WORKFLOW_ORACLE, WORKFLOW_PROMPT, prepareWorkflowFixture } from './workflow-fixture.ts'
@@ -37,7 +38,7 @@ async function run(id: string, text: string): Promise<ConversationDetail> {
 
 try {
   await prepareWorkflowFixture(workspace)
-  runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace, mcpConfigPath: join(directory, 'no-mcp.json') })
+  runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace, piDir: piWebHome(), mcpConfigPath: join(directory, 'no-mcp.json') })
   const catalog = await runtime.catalog()
   assert.ok(catalog.defaultModel, 'Configure the intended DeepSeek model first')
   assert.match(catalog.defaultModel.modelId, /deepseek/i, 'Acceptance requires an explicitly selected DeepSeek model; no model was changed')

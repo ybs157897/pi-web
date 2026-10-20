@@ -67,6 +67,22 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
+const THINKING_ORDER: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** Project the level the runtime will actually store: nearest supported level above, then below. */
+export function clampThinkingLevel(level: ThinkingLevel, supported: readonly ThinkingLevel[] | undefined): ThinkingLevel {
+  if (supported === undefined || supported.length === 0 || supported.includes(level)) return level
+  const requested = THINKING_ORDER.indexOf(level)
+  if (requested === -1) return supported[0]!
+  for (let index = requested; index < THINKING_ORDER.length; index += 1) {
+    if (supported.includes(THINKING_ORDER[index]!)) return THINKING_ORDER[index]!
+  }
+  for (let index = requested - 1; index >= 0; index -= 1) {
+    if (supported.includes(THINKING_ORDER[index]!)) return THINKING_ORDER[index]!
+  }
+  return supported[0]!
+}
+
 /**
  * The first attachment limit the batch breaks, or null when every attachment fits.
  * Batches still being read are part of the batch, so two additions queued in one tick
@@ -243,7 +259,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const conversationReady = detail?.conversation.id === selectedId
   const activeConversation = conversationReady ? detail : null
   const selectedModel = activeConversation?.conversation.model ?? newModel ?? settings.defaultModel ?? catalog?.defaultModel
-  const thinkingLevel = activeConversation?.conversation.thinkingLevel ?? newThinking
+  const selectedModelOption = selectedModel === undefined ? undefined
+    : catalog?.models.find(model => model.provider === selectedModel.provider && model.modelId === selectedModel.modelId)
+  const thinkingLevel = clampThinkingLevel(activeConversation?.conversation.thinkingLevel ?? newThinking, selectedModelOption?.thinkingLevels)
   const inferredConversationWorkspace = activeConversation === null ? undefined
     : workspaces.find(workspace => workspace.path === activeConversation.conversation.cwd)?.id
   const currentWorkspaceId = activeConversation !== null
@@ -339,6 +357,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     void refreshCapabilities()
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
   }, [refreshCapabilities, refreshCatalog, refreshList, refreshPresets, refreshWorkspaces])
+
+  // DSH re-reads its model directory when the host reports a settings or
+  // adapter change. The server pushes the same signal for saves made here,
+  // another instance's writes, and hand-edited provider files.
+  useEffect(() => {
+    const source = api.watchModels(() => { void refreshCatalog() })
+    return () => { source.close() }
+  }, [refreshCatalog])
 
   useEffect(() => {
     const scope = selectedId ?? '__new__'
@@ -788,7 +814,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   const chooseModel = useCallback(async (model: ModelOption): Promise<void> => {
     const selection = { provider: model.provider, modelId: model.modelId }
-    const level = model.reasoning ? activeConversation?.conversation.thinkingLevel ?? newThinking : 'off'
+    const requested = model.reasoning ? activeConversation?.conversation.thinkingLevel ?? newThinking : 'off'
+    // Switching to a model that does not offer the current level stores the
+    // nearest one it does offer, the same value the runtime would clamp to.
+    const level = clampThinkingLevel(requested, model.thinkingLevels)
     if (selectedId === null || !conversationReady) {
       setNewModel(selection)
       setNewThinking(level)
