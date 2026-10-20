@@ -481,7 +481,7 @@ export class SkillStore {
     return [
       { source: 'builtin', path: this.builtinRoot },
       { source: 'agents', path: join(workspaceRoot, '.agents', 'skills') },
-      { source: 'pi', path: join(workspaceRoot, '.pi', 'skills') },
+      { source: 'pi', path: join(workspaceRoot, '.pi-web', 'skills') },
     ]
   }
 
@@ -500,7 +500,7 @@ export class SkillStore {
   private async rootPath(root: SkillRoot, workspaceRoot: string, diagnostics: SkillCatalog['diagnostics']): Promise<string | undefined> {
     try {
       if (root.source === 'agents' || root.source === 'pi') {
-        const segments = root.source === 'agents' ? ['.agents', 'skills'] : ['.pi', 'skills']
+        const segments = root.source === 'agents' ? ['.agents', 'skills'] : ['.pi-web', 'skills']
         return await checkedDirectory(workspaceRoot, segments, false)
       }
       return await assertNoSymlinkComponents(root.path)
@@ -531,7 +531,7 @@ export class SkillStore {
       const rootPath = root.source === 'agents'
         ? await checkedDirectory(workspaceRoot, ['.agents', 'skills'], false)
         : root.source === 'pi'
-          ? await checkedDirectory(workspaceRoot, ['.pi', 'skills'], false)
+          ? await checkedDirectory(workspaceRoot, ['.pi-web', 'skills'], false)
           : await this.optionalBuiltinRoot()
       if (!rootPath) continue
       const directory = await checkedDirectory(rootPath, [name], false)

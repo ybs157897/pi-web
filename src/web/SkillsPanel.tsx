@@ -328,7 +328,7 @@ function sourceName(source: SkillSummary['source'], t: (chinese: string, english
   switch (source) {
     case 'builtin': return t('内置', 'Built in')
     case 'agents': return '.agents/skills'
-    case 'pi': return '.pi/skills'
+    case 'pi': return '.pi-web/skills'
   }
 }
 

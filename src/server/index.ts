@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { createServer as createViteServer, type ViteDevServer } from 'vite'
 import { createAdaptorServer, getRequestListener, type ServerType } from '@hono/node-server'
 import { createApp } from './app.ts'
+import { migrateGlobalHome, piWebHome } from './home.ts'
 import { createRuntime } from './runtime.ts'
 
 const host = '127.0.0.1'
@@ -53,9 +54,20 @@ function startFailureMessage(error: unknown, port: number, production: boolean):
 /** Starts the local web server and returns an idempotent graceful close operation. */
 export async function startServer() {
   const port = parsePort(process.env.PI_WEB_PORT)
-  const dataDir = resolve(process.env.PI_WEB_DATA_DIR ?? '.data')
+  const home = piWebHome()
+  const dataDir = resolve(process.env.PI_WEB_DATA_DIR ?? home)
   const workspace = resolve(process.env.PI_WEB_WORKSPACE ?? 'workspace')
   const demo = process.env.PI_WEB_DEMO === '1'
+  // One-time import of the old project-local `.data` and `~/.pi/agent` files
+  // into the global home. Explicit data directories (tests/demo) are untouched.
+  if (!demo && process.env.PI_WEB_DATA_DIR === undefined) {
+    try {
+      const migrated = await migrateGlobalHome(home, resolve('.data'))
+      if (migrated.length > 0) console.info(`Pi Web migrated ${migrated.length} file(s) into ${home}`)
+    } catch (error) {
+      console.warn(`Pi Web skipped the legacy import into ${home}: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
+  }
   // Optional override for the imported Pi MCP file; the runtime otherwise reads the
   // user-level `mcp.json` (demo mode keeps its own copy under the data directory).
   const mcpConfigPath = process.env.PI_WEB_MCP_CONFIG === undefined ? undefined : resolve(process.env.PI_WEB_MCP_CONFIG)

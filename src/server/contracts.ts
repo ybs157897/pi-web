@@ -66,6 +66,8 @@ export interface Runtime {
   fork(id: string, entryId: string): Promise<ConversationDetail>
   watch(id: string, listener: (value: ConversationDetail) => void): Promise<() => Promise<void>>
   catalog(): Promise<ModelCatalog>
+  /** Observe provider catalog reloads; returns the subscription's release. */
+  watchModels(listener: () => void): () => void
   saveProvider(input: ProviderInput): Promise<void>
   provider(id: string): Promise<ProviderConfigSummary>
   deleteProvider(id: string): Promise<void>

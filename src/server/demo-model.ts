@@ -789,5 +789,10 @@ export function createDemoModelRuntime(): RuntimeModels {
         thinkingLevels: [...THINKING_LEVELS],
       }
     },
+    supportedThinkingLevels(id, modelId) {
+      return id === DEMO_MODEL.provider && modelId === DEMO_MODEL.modelId ? [...THINKING_LEVELS] : undefined
+    },
+    subscribe() { return () => undefined },
+    close() { /* Nothing to release. */ },
   }
 }

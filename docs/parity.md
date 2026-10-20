@@ -78,6 +78,8 @@
 - 2026-10-19：IN-5/IN-6/IN-8/IN-11 与 CH-1 落地（sendMode 初值、附件并发门控、AVIF/空 MIME、附件按 scope 保留、会话行「…」菜单）；ST-2 落地（外观三卡 + `N px` 字号下拉，实测与 DSH 坐标误差 ≤1px）；ST-4 落地（自动化筛选/搜索/空态 CTA，ego 复核）。
 - 2026-10-19：小项批次二：CH-2（轨迹工具栏/时序图）、CP-4（打开配置文件）、CP-5（意见反馈）落地并验证；IN-7/IN-10（附件生命周期、队列缩略图）与 CH-1 余项（hover 信息卡）、CH-8（连接提示）在并行实现中。
 - 2026-10-19：Windows 审计复核发现 IN-2 仍有卡片/document 双 drop，IN-8 的 AVIF 仅前端修复、服务端 schema 未同步；两行状态已订正。详见 `docs/windows-support.md`。
+- 2026-10-20：模型目录与推理等级批次：按 DSH `reasoningEfforts` 语义修复档位映射；全局 models.json 热重载 + `/api/models/events` SSE；目录收窄时会话档位按 pi-ai 规则 clamp。详见文末「模型目录与推理等级（2026-10-20）」。
+- 2026-10-20：全局配置目录批次：默认 `~/.pi-web`，设置页直接写全局 `models.json`/`auth.json`，移除 `providers.json`；旧 `~/.pi/agent` 与项目 `.data` 一次性迁移；工作区技能来源改为 `.pi-web/skills`。详见文末「全局配置目录（2026-10-20）」。
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
@@ -345,7 +347,7 @@
 
 ## 收尾（2026-10-19）
 
-六族全部落地并验证：待办、问答、目标、计划模式、子智能体、智能体团队。约束与环境：真实模型只用 `opencode-go/deepseek-v4.1-flash`（pi-web 侧模型白名单强制、`~/.pi` 全局配置已裁剪并备份）；对标工作按 skill `dsh-parity` 执行（先读 DSH 源码 → 两侧同一条流程 → 代码级并排分析）。
+六族全部落地并验证：待办、问答、目标、计划模式、子智能体、智能体团队。约束与环境：真实模型只用 `opencode-go/deepseek-v4.1-flash`（pi-web 侧模型白名单强制、旧 `~/.pi` 全局配置已裁剪并备份，当前运行时使用 `~/.pi-web`）；对标工作按 skill `dsh-parity` 执行（先读 DSH 源码 → 两侧同一条流程 → 代码级并排分析）。
 
 ### 交互收尾批次（2026-10-19 追加）
 
@@ -402,3 +404,66 @@
 验证：`npm run check` 通过（类型检查、241 项测试、生产构建）。`tests/runtime-policy.test.ts` 在真实 Pi Durable/SQLite 到模型适配器的边界捕获请求，覆盖默认会话、无工具 Preset、codemode-only、Plan、只读 Goal、缺失目标完成工具、子会话/分叉及旧选择重启迁移。受控模型证明接线和约束，不证明真实模型会遵循每条规则。
 
 两侧真实模型采用 `scripts/workflow-fixture.ts` 的同一任务输入，prompt SHA-256 均为 `b7c64df46ef797ca51924a93d027d16e1402bde39fa191520532efba8fa380a0`：pi-web 明确选择 `opencode-go/deepseek-v4.1-flash`，返回 `401 api_key_expired`；DSH 的临时 headless profile 明确选择其标准 `deepseek-official/deepseek-flash`，返回 `MISSING_CREDENTIAL`。两者均未进入工具行为验收，不能声明真实行为已对齐。没有切换配置来绕过认证失败。记录为 `artifacts/live-workflow-check.json` 和 `artifacts/dsh-workflow-check.json`；本次改动表面为提示词与后端策略，未声称完成额外 UI 对齐。
+
+## 模型目录与推理等级（2026-10-20）
+
+用户报告两件事：配置推理等级不生效；配置模型后输入框的模型列表不自动刷新。对照 DSH `687f282e86` 后确认是两条独立链路。
+
+### 1) 推理等级映射
+
+DSH 的 pi-ai 适配器把 `reasoningEfforts` 当作**完整声明**（`packages/llm/llm-pi-ai/src/catalog.ts:704-772`）：
+
+- 声明了任一非 Off 档位就强制 `reasoning: true`；只声明 Off 或空表会被拒绝。
+- 未声明的档位在 `thinkingLevelMap` 里 pin 成 `null`，不再吃 pi-ai 对五个基础档位“缺省即支持”的默认值；`off: null` 是不支持关闭，`off` 缺失是支持关闭且不发参数。
+
+pi-web 原来的保存路径把模型自带的 `reasoning: false` 原样带回，pi-ai 的 `getSupportedThinkingLevels` 直接返回 `['off']`，所以设置里的档位整组失效。修复：
+
+- `src/server/models.ts` 新增 `pinnedThinkingLevelMap` 与 `upgradeStoredModel`。全局配置保存时 pin 全档位并强制 `reasoning: true`；读取旧 `providers.json` 或全局 `models.json` 时也把“有档位但 reasoning=false”升级为 reasoning 模型，兼容已落盘的坏配置。
+- `src/web/SettingsDialog.tsx` 的开关改为完整控制：关闭时显式 `reasoning: false` 并移除 map；开启时写 pin 后的 map。未配置的档位不再出现在选择器里。
+- `src/server/runtime.ts` 新增 `clampThinkingLevel` 调用点：创建/更新会话时存模型实际支持的档位；投影历史会话时按同一规则 clamp（例如目录收窄后 Medium 显示为 High），避免菜单没有选中项、标签与请求不一致。`src/web/App.tsx` 对新会话与切换模型做同样的客户端 clamp。
+- `RuntimeModels.supportedThinkingLevels` 由 pi-ai 的 `getSupportedThinkingLevels` 派生；demo runtime 返回全档位。
+
+### 2) 模型列表自动刷新
+
+DSH 客户端在 `settings/document-updated`、`credentials/*-updated`、`llm/adapters-updated` 时调用 `catalog.refresh()`（`packages/client/ui-model-selection/src/client/service.ts:54-57`、`packages/client/ui-settings-models/src/client/index.ts:122-128`）。pi-web 原来只在挂载时和 `saveProvider` 之后各读一次 `/api/models`，运行中的服务不会重读磁盘上的全局 `models.json`。
+
+修复：
+
+- `src/server/models.ts` 用目录 watcher 监听全局 `models.json` / `auth.json` / `settings.json`；防抖后全量重读，并在**同一个 `MutableModels` 对象**上 `clearProviders()` + 重建 builtin/custom provider，保证 harness、压缩任务和运行中的请求看到的目录一起更新。`saveProvider` / `deleteProvider` 走同一条重载路径。
+- `GET /api/models/events`（SSE）把重载通知推给所有打开的页面；`src/web/api.ts` 的 `watchModels` + `App.tsx` 订阅后重新拉取 catalog。外部编辑、另一个实例写入、本窗口保存三条路径都会触发。
+- 每次 `catalog()` 读也会串行执行一次 freshness check，watcher 失效时仍能在下一次读取拿到新目录；非法/写到一半的文件保留上一份好目录。
+
+### 3) 验收
+
+- 门禁：`npm run typecheck` + `npx vitest run`（22 文件 270/270）+ `npx vite build`。
+- 确定性 mock provider（记录 `reasoning_effort`）：模型只配置 `low/medium/high` 时，菜单只出现 Off/Low/Medium/High；High 的 wire value 配成 `ultra` 时请求体为 `reasoning_effort:"ultra"`；选择 Off 时请求体不含该字段。证据 `artifacts/ego-thinking-model/requests.high.jsonl`、`requests.off.jsonl` 与 `4317-models.png`、`4317-reasoning.png`。
+- 自动刷新：页面停在已展开的模型菜单，外部重写全局 `models.json` 增加 `Probe C (external)`，菜单在无刷新、无重新打开的情况下出现该模型。
+- 真实 `opencode-go/deepseek-v4.1-flash`：provider `test` 返回 `connected`；4317 实例的 DeepSeek 档位为 Off/Low/High/Max；新建会话从默认 Medium clamp 为 High；真实对话（conversation 1032）落盘 `thinkingLevel: high`，返回 `OK`，用量 9.7K tok。该 provider 未回传可见 reasoning block，因此“High 生效”的 wire 证据以 mock 请求体为准，真实侧只证明请求完成与档位落盘。
+- 4317 上另有一条测试残留：`app-state.json` 的 `modelAllowlist` 只放行 `opencode-go/deepseek-v4.1-flash`，导致全局 models.json 里的 29 个模型在输入框只显示 1 个。已备份到 `/tmp/pi-web-4317-app-state-backup.json` 并清空白名单；白名单功能本身保留，留空表示不过滤。
+
+## 全局配置目录（2026-10-20）
+
+用户要求配置修改直接落到全局文件，不再使用 Pi 的 `~/.pi`，也不再使用项目内 `.data`。现在默认全局目录为 `~/.pi-web`（`PI_WEB_HOME` 可覆盖），模型与应用数据集中在该目录：
+
+| 文件 | 读写方 | 用途 |
+| --- | --- | --- |
+| `settings.json` | 启动时读取 | 默认 Provider/模型、思考等级 |
+| `models.json` | 设置页直接读写 | Provider 与模型目录（Pi 格式 `providers`） |
+| `auth.json` | 设置页直接读写 | Provider 凭据；删除自定义 Provider 时一并删除 |
+| `mcp.json` | 启动时只读导入 | MCP 服务器配置 |
+| `app-state.json` | 应用读写 | 界面偏好、工作区、Preset、自动化任务 |
+| `pi-durable.sqlite` | Pi Durable 读写 | 会话、消息、工具执行记录 |
+
+实现要点：
+
+- `src/server/home.ts`：`piWebHome()` 默认 `~/.pi-web`，`PI_WEB_HOME` 可覆盖；`migrateGlobalHome()` 一次性把 `~/.pi/agent/{settings,models,auth,mcp}.json`、旧项目 `.data/{providers,app-state}.json`、SQLite 和 WAL 导入全局目录。旧 `.data/providers.json` 的 providers 与 credentials 会合并进全局 `models.json`/`auth.json`；已有全局 `models.json`/`auth.json` 时不会覆盖。写入 `.migrated` 标记保证幂等。
+- `src/server/models.ts`：删除 `providers.json` 路径；`saveProvider` 读改写全局 `models.json` 的 `providers[id]`，有 API key 时同步写 `auth.json`；`deleteProvider` 删除 `models.json` 条目，自定义 Provider 同时删除 `auth.json` 凭据，内置 Provider 删除覆盖后恢复 shipped catalog。watcher 监听 `models.json`/`auth.json`/`settings.json`。
+- `src/server/index.ts`：`PI_WEB_DATA_DIR` 未设置时 `dataDir = PI_WEB_HOME`，并执行一次迁移；设置后跳过迁移，`piDir` 默认跟随 dataDir。`src/server/runtime.ts` 的 MCP 路径改为 `dataDir/mcp.json`。
+- 工作区技能来源从 `.pi/skills` 改为 `.pi-web/skills`；`src/web/SkillsPanel.tsx`、`tests/skills.test.ts`、README/architecture/windows 文档同步。
+- README 新增全局目录表与 `PI_WEB_HOME`、迁移说明；demo 命令改用 `%TEMP%`/`${TMPDIR:-/tmp}`，不再写入项目 `.data`。
+
+验证：
+
+- 4317 首次启动迁移 7 个复制文件到 `~/.pi-web`，并把旧 `providers.json` 的目录/凭据合并进全局 `models.json`/`auth.json`：`models.json` 含 opencode-go 29 个模型、`auth.json` 含凭据、`app-state.json` 保留 2 个工作区、`pi-durable.sqlite` 保留 21 个会话；provider 测试 `connected`；模型菜单显示 29 个模型。
+- 临时全局目录写入验证：`POST /api/providers` 直接生成 `models.json` + `auth.json`，不存在 `providers.json`；`DELETE /api/providers` 同时清空 providers 与自定义凭据。文件模式 0600、目录 0700。
+- 门禁：`npm run typecheck` + `npx vitest run`（23 文件 273/273）+ `npx vite build`。

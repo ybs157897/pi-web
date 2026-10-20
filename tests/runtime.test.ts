@@ -18,7 +18,7 @@ async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Pr
   await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(workspace, { recursive: true }), mkdir(piDir, { recursive: true })])
   await writeFile(join(piDir, 'settings.json'), '{}\n')
   if (appState !== undefined) await writeFile(join(dataDir, 'app-state.json'), JSON.stringify(appState))
-  // Demo runtimes read their own MCP file under the data directory, so tests never touch ~/.pi.
+  // Demo runtimes read their own MCP file under the data directory, so tests never touch ~/.pi-web.
   if (mcpConfig !== undefined) await writeFile(join(dataDir, 'mcp.json'), JSON.stringify(mcpConfig))
   const runtime = await createRuntime({ dataDir, workspace, piDir, demo })
   const cleanup = { root, closers: [() => runtime.close()] }
@@ -435,7 +435,7 @@ describe('Pi Durable runtime', () => {
   })
 
   it('saves custom providers immediately and restores multiple protected credentials without catalog disclosure', async () => {
-    const { runtime, dataDir, cleanup } = await fixture(false)
+    const { runtime, dataDir, piDir, cleanup } = await fixture(false)
     const providers = [
       { id: 'runtime-provider-one', name: 'Provider One', baseUrl: 'https://one.example/v1', apiKey: 'secret-one', models: [{ id: 'one-model', name: 'One Model' }] },
       { id: 'runtime-provider-two', name: 'Provider Two', baseUrl: 'https://two.example/v1', apiKey: 'secret-two', models: [{ id: 'two-model', name: 'Two Model' }] },
@@ -446,9 +446,11 @@ describe('Pi Durable runtime', () => {
     expect(catalog.providers.filter(provider => provider.id.startsWith('runtime-provider-')).every(provider => provider.configured)).toBe(true)
     expect(JSON.stringify(catalog)).not.toContain('secret-one')
     expect(JSON.stringify(catalog)).not.toContain('secret-two')
-    const providerFile = await stat(join(dataDir, 'providers.json'))
+    const modelFile = await stat(join(piDir, 'models.json'))
+    const authFile = await stat(join(piDir, 'auth.json'))
     const dataDirectory = await stat(dataDir)
-    expect(providerFile.mode & 0o777).toBe(0o600)
+    expect(modelFile.mode & 0o777).toBe(0o600)
+    expect(authFile.mode & 0o777).toBe(0o600)
     expect(dataDirectory.mode & 0o777).toBe(0o700)
 
     await runtime.close()

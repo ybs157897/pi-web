@@ -248,6 +248,10 @@ function sseFrame(data: ConversationDetail): Uint8Array {
   return new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
+function sseEvent(event: string): Uint8Array {
+  return new TextEncoder().encode(`event: ${event}\ndata: {}\n\n`)
+}
+
 /** Creates the local JSON API and owns active SSE subscriptions. */
 export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoot?: string } = {}) {  const app = new Hono()
   const shutdown = new AbortController()
@@ -498,6 +502,58 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     return c.json(await runtime.fork(id.data, input.entryId), 201)
   })
   app.get('/api/models', async c => c.json(await runtime.catalog()))
+  /**
+   * DSH refreshes its model picker when the host reports a settings or
+   * adapter change. Pi Web does the same over SSE: edits from this window,
+   * another pi-web instance, or a hand-edited global models.json all announce
+   * here, so an open composer never keeps a stale directory.
+   */
+  app.get('/api/models/events', c => {
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+    let onAbort: (() => void) | undefined
+    const cleanup = (): void => {
+      if (cancelled) return
+      cancelled = true
+      unsubscribe?.()
+      unsubscribe = undefined
+      if (onAbort) {
+        shutdown.signal.removeEventListener('abort', onAbort)
+        c.req.raw.signal.removeEventListener('abort', onAbort)
+      }
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const send = (): void => {
+          if (cancelled) return
+          try { controller.enqueue(sseEvent('changed')) }
+          catch { cleanup() }
+        }
+        unsubscribe = runtime.watchModels(send)
+        onAbort = () => {
+          cleanup()
+          try { controller.close() }
+          catch { /* the client has already closed the stream */ }
+        }
+        shutdown.signal.addEventListener('abort', onAbort, { once: true })
+        c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
+        if (shutdown.signal.aborted || c.req.raw.signal.aborted) {
+          onAbort()
+          return
+        }
+        controller.enqueue(sseEvent('ready'))
+      },
+      cancel() { cleanup() },
+    })
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    })
+  })
   app.post('/api/providers', async c => {
     const input = await readJson(c.req.raw, providerSchema) as ProviderInput
     await runtime.saveProvider(input)

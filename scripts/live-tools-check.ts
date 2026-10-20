@@ -5,10 +5,11 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { createRuntime } from '../src/server/runtime.ts'
+import { piWebHome } from '../src/server/home.ts'
 
 const directory = await mkdtemp(join(tmpdir(), 'pi-web-live-tools-'))
 const workspace = join(directory, 'workspace')
-const runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace })
+const runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace, piDir: piWebHome() })
 try {
   const catalog = await runtime.catalog()
   assert.ok(catalog.defaultModel, 'Configure a default Pi model before running the real tool check')

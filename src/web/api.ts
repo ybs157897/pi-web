@@ -280,4 +280,10 @@ export const api = {
     })
     return source
   },
+  /** The provider catalog changed: this window saved, another instance wrote, or a file was edited. */
+  watchModels(listener: () => void): EventSource {
+    const source = new EventSource('/api/models/events')
+    source.addEventListener('changed', () => { listener() })
+    return source
+  },
 }
