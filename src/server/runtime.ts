@@ -22,7 +22,7 @@ import type { ConversationView, Cursor } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { createRegistry } from '@earendil-works/pi-durable'
 import { type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
-import { CODEMODE_TOOL_NAME, createCodemodeExtension } from '@earendil-works/pi-durable/codemode'
+import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { createToolSearchExtension } from '@earendil-works/pi-durable/tool-search'
 import { CodemodeSandbox } from '@earendil-works/pi-codemode'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
@@ -91,6 +91,9 @@ import { McpManager } from './mcp.ts'
 import { SkillStore } from './skills.ts'
 import { createSkillTools, SKILL_READ_TOOLS } from './skill-tools.ts'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from './work-policy.ts'
+import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME, inheritPlanConstraint } from './execution-policy.ts'
+import { createRuntimeCodemodeExtension } from './codemode-policy.ts'
+import { ResearchTools } from './research-tools.ts'
 import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
@@ -150,13 +153,14 @@ const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'med
 /** The Pi code mode extension's registry name (`createCodemodeExtension`). */
 const CODEMODE_EXTENSION_NAME = 'codemode'
 /** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
-const READ_ONLY_TOOLS = new Set(['read', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
+const READ_ONLY_TOOLS = new Set(['read', 'list_files', 'search_files', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
 
 /** Add the host's tool-free policy without changing a conversation's tools or custom instructions. */
-async function ensureRuntimePolicy(tx: Tx, conversationId: ConversationId): Promise<void> {
+async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): Promise<void> {
+  const conversationId = record.id
   const agent = await tx.doc(AgentDoc, conversationId)
   const extensions = agent.extensions
-  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME]
+  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME]
   if (Array.isArray(extensions)) {
     for (const name of required) if (!extensions.includes(name)) extensions.unshift(name)
   } else if (extensions !== undefined) {
@@ -166,6 +170,7 @@ async function ensureRuntimePolicy(tx: Tx, conversationId: ConversationId): Prom
       ...(extensions.remove === undefined ? {} : { remove: extensions.remove.filter(name => !required.includes(name)) }),
     }
   }
+  if (record.owner) await inheritPlanConstraint(tx, conversationId, record.owner.conversationId)
 }
 
 function parseNumericId(value: string, label: string): number {
@@ -516,6 +521,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     metadata.workspaceId = parent.workspaceId ?? defaultWorkspace.id
     metadata.presetId = parent.presetId ?? null
     metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
+    await inheritPlanConstraint(tx, childId, parentId)
   }
   /**
    * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
@@ -530,6 +536,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(createWorkPolicyExtension())
   registry.install(createCompactionExtension({ harness: () => harness }))
   registry.install(CodingTools)
+  registry.install(ResearchTools)
   registry.install(TodoTools)
   registry.install(createGoalExtension({
     canCreate: async (id, context) => {
@@ -562,7 +569,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     watchMembers: watchTeamMembers,
     memberSession,
   }))
-  registry.install(createCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
+  registry.install(createRuntimeCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
   const mcpExtension = mcp.extension()
   if (mcpExtension !== undefined) registry.install(mcpExtension)
   // `tool_search` loads deferred MCP tools into the model's next request. Tools behind
@@ -571,6 +578,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
     registry.install(createToolSearchExtension())
   }
+  registry.install(createExecutionPolicyExtension(registry.snapshot().installed()))
   let runtimeClosed = false
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
@@ -611,7 +619,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       return createExecutionEnv(selectedWorkspace.path, selectedMode)
     },
     conversationCreated: async (tx, conversation) => {
-      await ensureRuntimePolicy(tx, conversation.id)
+      await ensureRuntimePolicy(tx, conversation)
       const metadata = await tx.doc(META, conversation.id)
       const now = Date.now()
       metadata.createdAt = now
@@ -634,6 +642,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
         metadata.feedback = {}
         metadata.queueEdits = {}
+        const parentPlan = await tx.doc(Plans, conversation.parent.conversationId)
+        if (parentPlan.active) {
+          const plan = await tx.doc(Plans, conversation.id)
+          plan.active = true
+          plan.updatedAt = now
+        }
       }
     },
     onReport: () => undefined,
@@ -907,7 +921,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
     // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
@@ -1569,9 +1583,27 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const conversation = await requireConversation(value)
     const id = conversation.id
     await harness.commit(async (tx) => {
+      // Read the ownership tree before document writes; entering Plan must also constrain
+      // already-created workers that can keep running or be resumed after a crash.
+      const constrained = [id]
+      if (active) {
+        for (let index = 0; index < constrained.length; index += 1) {
+          let cursor: Cursor | undefined
+          do {
+            const page = await tx.scanConversations({ ownerConversationId: constrained[index] }, 250, cursor)
+            constrained.push(...page.items.map(record => record.id))
+            cursor = page.next
+          } while (cursor)
+        }
+      }
       const doc = await tx.doc(Plans, id)
       doc.active = active
       doc.updatedAt = Date.now()
+      for (const childId of constrained.slice(1)) {
+        const child = await tx.doc(Plans, childId)
+        child.active = true
+        child.updatedAt = doc.updatedAt
+      }
     }, CTX)
     return currentDetail(id)
   }
@@ -1917,6 +1949,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       draft.title = metadata.title
       draft.titleSource = metadata.titleSource
     })
+    if ((await harness.snapshot(Plans, source.id, CTX))?.active === true) {
+      await harness.commit(async tx => {
+        const plan = await tx.doc(Plans, child.id)
+        plan.active = true
+        plan.updatedAt = Date.now()
+      }, CTX)
+    }
     const submitInput: SubmitInput = { text, requestId, whenBusy: 'reject', ...(images.length ? { images } : {}) }
     const submitted = await submitWithReferences(child, submitInput, files)
     return { conversationId: String(child.id), submissionId: submitted.submissionId }
@@ -2223,17 +2262,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
   }
 
-  await recoverQueueEdits()
-  await recoverAutomations()
-  await reconcileTeamRosters()
-  // Upgrade stored selections, including child conversations, before resuming any model request.
-  // In-flight request checkpoints retain their original prompt; the next preparation sees the policy.
+  // Submission recovery can start the scheduler itself. Install guards on every stored
+  // conversation before any recovery path is allowed to submit or resume work.
   let policyCursor: Cursor | undefined
   do {
     const page = await harness.commit(tx => tx.scanConversations({ order: 'ascending' }, 250, policyCursor), CTX)
-    for (const record of page.items) await harness.commit(tx => ensureRuntimePolicy(tx, record.id), CTX)
+    for (const record of page.items) await harness.commit(tx => ensureRuntimePolicy(tx, record), CTX)
     policyCursor = page.next
   } while (policyCursor)
+  await recoverQueueEdits()
+  await recoverAutomations()
+  await reconcileTeamRosters()
   harness.resume()
   // Upgrades add code mode to an existing registry, and the stored agent selection is
   // per conversation: bring idle conversations onto the current presentation before serving.

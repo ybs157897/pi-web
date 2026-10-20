@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord/context'
 import type { Extension } from '@earendil-works/pi-durable'
 import { Goals, createGoalExtension } from '../src/server/goal-tools.ts'
-import { Plans } from '../src/server/plan-tools.ts'
+import { PlanExtension, Plans } from '../src/server/plan-tools.ts'
 import { TodoTools, Todos } from '../src/server/todo-tools.ts'
 
 type PromptInput = {
@@ -26,6 +26,7 @@ function tool(extension: Extension, name: string) {
   if (!found) throw new Error(`Missing ${name} tool`)
   return found as unknown as {
     description: string
+    parameters: unknown
     execute(args: never, api: never, context: never): Promise<unknown>
   }
 }
@@ -89,6 +90,23 @@ async function renderGoalPolicy(options: {
   return (await render(input, context)) ?? ''
 }
 
+async function renderPlanPolicy(options: { offered?: string[]; callable?: string[] } = {}): Promise<string> {
+  const policy = PlanExtension.sections?.find(candidate => candidate.key === 'plan-policy')
+  if (!policy) throw new Error('Missing plan policy section')
+  const input: PromptInput = {
+    conversationId: 'conversation-1',
+    agent: {
+      tools: (options.offered ?? []).map(name => ({ name })),
+      callable: (options.callable ?? []).map(name => ({ name })),
+    },
+    env: undefined,
+    shown: {},
+    read: { snapshot: async document => document === Plans ? { active: true, updatedAt: 1 } : undefined },
+  }
+  const render = policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>
+  return (await render(input, context)) ?? ''
+}
+
 function onYield(extension: Extension) {
   const registration = extension.hooks?.find(candidate => typeof candidate.handlers === 'object' && candidate.handlers !== null && 'onYield' in candidate.handlers)
   if (!registration) throw new Error('Missing goal continuation hook')
@@ -97,6 +115,26 @@ function onYield(extension: Extension) {
 }
 
 describe('planning tool prompt policy', () => {
+  it('routes plan submission only through tools available in the current request', async () => {
+    const direct = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
+    expect(direct).toContain('Call `exit_plan_mode({ plan: "<plan markdown>" })` directly.')
+    expect(direct).not.toContain('codemode')
+
+    const codemode = await renderPlanPolicy({ offered: ['codemode'], callable: ['exit_plan_mode'] })
+    expect(codemode).toContain('Through `codemode`, call `await tools.exit_plan_mode({ plan: "<plan markdown>" })` inside the script.')
+
+    const unavailable = await renderPlanPolicy()
+    expect(unavailable).toContain('Put the plan in your final response')
+    expect(unavailable).not.toContain('exit_plan_mode')
+    expect(unavailable).not.toContain('pending')
+  })
+
+  it('states the host-enforced read-only Plan boundary and plan format', async () => {
+    const prompt = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
+    expect(prompt).toContain('workspace mutation, bash, and external MCP calls are unavailable')
+    expect(prompt).toContain('first line is a level-1 heading')
+  })
+
   it('describes concrete multi-step todo use, timely status updates, and real parallel work', () => {
     const description = tool(TodoTools, 'todo_write').description
     expect(description).toContain('multi-step')
@@ -138,7 +176,7 @@ describe('planning tool prompt policy', () => {
     const prompt = await renderGoalPolicy({
       goal: { goal: { id: 'g1', revision: 1, objective: 'continue work', phase: 'active', roundsStarted: 0, maxGoalRounds: 3, createdAt: 1, updatedAt: 1 } },
     })
-    expect(prompt).toContain('Current goal (revision 1)')
+    expect(prompt).toContain('Current goal: goal_id "g1", revision 1')
     expect(prompt).not.toContain('`get_goal`')
     expect(prompt).not.toContain('`create_goal`')
     expect(prompt).not.toContain('`update_goal`')
@@ -175,7 +213,7 @@ describe('planning tool prompt policy', () => {
       offered: ['create_goal', 'update_goal'],
       planActive: true,
     })
-    expect(prompt).toContain('Current goal (revision 3)')
+    expect(prompt).toContain('Current goal: goal_id "g1", revision 3')
     expect(prompt).toContain('This goal remains active')
     expect(prompt).not.toContain('`create_goal`')
     expect(prompt).not.toContain('`update_goal`')
@@ -190,6 +228,19 @@ describe('planning tool prompt policy', () => {
     expect(prompt).toContain('requested verification has passed, with concrete evidence')
     expect(prompt).toContain('a concrete condition makes further progress impossible')
     expect(prompt).not.toContain('consecutive rounds')
+  })
+
+  it('exposes only model-owned goal actions while retaining exact goal identifiers in policy', async () => {
+    const activeGoal = { goal: { id: 'goal-42', revision: 7, objective: 'ship and verify', phase: 'active', roundsStarted: 1, maxGoalRounds: 4, createdAt: 1, updatedAt: 2 } }
+    const prompt = await renderGoalPolicy({ offered: ['update_goal'], goal: activeGoal })
+    expect(prompt).toContain('goal_id "goal-42", revision 7')
+
+    const parameters = JSON.stringify(tool(createGoalExtension(), 'update_goal').parameters)
+    expect(parameters).toContain('"complete"')
+    expect(parameters).toContain('"blocked"')
+    for (const userControl of ['edit', 'pause', 'resume', 'objective', 'max_goal_rounds']) {
+      expect(parameters).not.toContain(`"${userControl}"`)
+    }
   })
 })
 

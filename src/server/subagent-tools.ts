@@ -8,6 +8,7 @@ import type {
 } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord/context'
 import { Type, type Message } from '@earendil-works/pi-ai'
+import { inheritPlanConstraint } from './execution-policy.ts'
 
 /** Model-facing tool name; also the read-only whitelist entry and the tool row's label. */
 export const SUBAGENT_TOOL = 'subagent'
@@ -100,7 +101,9 @@ export function createSubagentTools(options: {
           'Delegate a self-contained task to a subagent: a separate agent that works in its own conversation',
           'and returns its result, not its intermediate steps.',
           'It inherits this conversation\'s agent configuration — tools, model, working directory — but not its',
-          'messages, so include everything the task needs.',
+          'messages, so make the task self-contained: state the task, scope, applicable constraints and authorization,',
+          'acceptance criteria, and the result evidence to return. The child shares the working directory; assign',
+          'disjoint write paths and require it to preserve changes outside its assigned scope.',
           'This call waits for the subagent to finish and returns its final answer as the tool result;',
           'use it to offload focused, independent work so it does not consume this conversation\'s context.',
         ].join(' '),
@@ -133,6 +136,7 @@ export function createSubagentTools(options: {
           if (child === undefined) {
             return fail(api, context, `child conversation ${String(childId)} is no longer available`, { conversationId: String(childId), status: 'failed', label })
           }
+          await api.commit(tx => inheritPlanConstraint(tx, childId, parentId), context)
           let settled: SettledSubmissionRecord
           try {
             // The stable request ID makes the resubmission after a crash idempotent.

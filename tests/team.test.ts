@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord/context'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
 import {
   MAX_TEAM_MEMBERS,
   MAX_TEAM_TASKS,
+  Team,
+  TeamLink,
   claimTask,
   completeTask,
   createTask,
@@ -22,6 +24,8 @@ import {
   setDependencies,
   taskReady,
   taskView,
+  createTeamTools,
+  type TeamToolOptions,
   type TeamActor,
   type TeamDocAccess,
   type TeamDocValue,
@@ -29,11 +33,19 @@ import {
   type MemberSessionState,
   type TeamTaskRecord,
 } from '../src/server/team-tools.ts'
+import { createSubagentTools } from '../src/server/subagent-tools.ts'
+import { Plans } from '../src/server/plan-tools.ts'
 
 const NOW = 1_800_000_000_000
 const LEAD: TeamActor = { lead: true, name: 'lead' }
 const OWNER: TeamActor = { lead: false, name: 'researcher' }
 const STRANGER: TeamActor = { lead: false, name: 'writer' }
+const teamOptions: TeamToolOptions = {
+  prepareChild: async () => undefined,
+  conversationInfo: async () => ({ status: 'inactive' }),
+  watchMembers: async () => async () => undefined,
+  memberSession: async () => ({ exists: false, linked: false, promptRejected: false, running: false }),
+}
 
 function doc(tasks: TeamTaskRecord[] = [], members: TeamMemberRecord[] = []): TeamDocValue {
   return { members, tasks }
@@ -57,6 +69,232 @@ function task(overrides: Partial<TeamTaskRecord> = {}): TeamTaskRecord {
 function added(base: TeamDocValue, input: Parameters<typeof createTask>[1]): { doc: TeamDocValue; task: TeamTaskRecord } {
   return createTask(base, input, NOW)
 }
+
+async function renderTeamPolicy(options: {
+  role?: 'lead' | 'teammate'
+  offered?: string[]
+  callable?: string[]
+  planActive?: boolean
+} = {}): Promise<string> {
+  const policy = createTeamTools(teamOptions).sections?.find(candidate => candidate.key === 'team-policy')
+  if (!policy) throw new Error('Missing team policy section')
+  const isTeammate = options.role === 'teammate'
+  const input = {
+    conversationId: 'conversation-1',
+    agent: {
+      tools: (options.offered ?? []).map(name => ({ name })),
+      callable: (options.callable ?? []).map(name => ({ name })),
+    },
+    env: undefined,
+    shown: {},
+    read: {
+      snapshot: async (document: unknown) => {
+        if (document === TeamLink) return isTeammate ? { leadConversationId: 'lead-1', name: 'researcher' } : { leadConversationId: null, name: null }
+        if (document === Team) return isTeammate
+          ? { members: [], tasks: [] }
+          : { members: [{ name: 'researcher', role: 'teammate', phase: 'active', conversationId: 'child-1' }], tasks: [] }
+        return document === Plans ? { active: options.planActive === true, updatedAt: 1 } : undefined
+      },
+    },
+  }
+  const render = policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>
+  return (await render(input, {} as Context)) ?? ''
+}
+
+function registeredTool(extension: { tools?: readonly { name: string }[] }, name: string) {
+  const found = extension.tools?.find(candidate => candidate.name === name)
+  if (!found) throw new Error(`Missing ${name} tool`)
+  return found as unknown as { execute(args: unknown, api: unknown, context: unknown): Promise<unknown> }
+}
+
+describe('Plan inheritance before child submissions', () => {
+  it('reapplies Plan mode before a replayed subagent submits to its reused child', async () => {
+    const parentId = 1 as ConversationId
+    const childId = 2 as ConversationId
+    const plans = new Map<string, { active: boolean; updatedAt: number }>([
+      [String(parentId), { active: true, updatedAt: 1 }],
+      [String(childId), { active: false, updatedAt: 2 }],
+    ])
+    let submitSawPlan = false
+    const child = {
+      submit: vi.fn(async () => {
+        submitSawPlan = plans.get(String(childId))?.active === true
+        return { wait: async () => ({ status: 'done', answer: 42 }) }
+      }),
+    }
+    const api = {
+      conversationId: parentId,
+      taskId: 9,
+      callId: 'replayed-subagent',
+      commit: vi.fn(async (change: (tx: unknown) => unknown) => change({
+        scanConversations: async () => ({ items: [{ id: childId }] }),
+        doc: async (document: unknown, id: ConversationId) => {
+          if (document === Plans) return plans.get(String(id))!
+          throw new Error('Unexpected document')
+        },
+        entry: async () => ({ model: [{ role: 'assistant', content: [{ type: 'text', text: 'reused result' }] }] }),
+      })),
+      details: vi.fn(async () => undefined),
+      diagnostic: vi.fn(),
+      conversation: vi.fn(async () => child),
+    }
+
+    await registeredTool(createSubagentTools({ prepareChild: async () => undefined }), 'subagent').execute(
+      { task: 'continue scoped research' }, api, {} as Context,
+    )
+
+    expect(submitSawPlan).toBe(true)
+    expect(plans.get(String(childId))?.active).toBe(true)
+    expect(child.submit).toHaveBeenCalledOnce()
+  })
+
+  it('reapplies Plan mode before a replayed teammate submits to its reused child', async () => {
+    const leadId = 1 as ConversationId
+    const childId = 2 as ConversationId
+    const plans = new Map<string, { active: boolean; updatedAt: number }>([
+      [String(leadId), { active: true, updatedAt: 1 }],
+      [String(childId), { active: false, updatedAt: 2 }],
+    ])
+    const team: TeamDocValue = {
+      members: [
+        { name: 'lead', role: 'lead', phase: 'active', conversationId: String(leadId) },
+        { name: 'worker', role: 'teammate', phase: 'active', conversationId: String(childId) },
+      ],
+      tasks: [],
+    }
+    let submitSawPlan = false
+    const child = {
+      submit: vi.fn(async () => { submitSawPlan = plans.get(String(childId))?.active === true }),
+    }
+    const api = {
+      conversationId: leadId,
+      callId: 'replayed-teammate',
+      snapshot: vi.fn(async (document: unknown) => document === TeamLink
+        ? { leadConversationId: null, name: null }
+        : document === Team ? team : undefined),
+      commit: vi.fn(async (change: (tx: unknown) => unknown) => change({
+        doc: async (document: unknown, id: ConversationId) => {
+          if (document === Plans) return plans.get(String(id))!
+          if (document === Team) return team
+          throw new Error('Unexpected document')
+        },
+      })),
+      details: vi.fn(async () => undefined),
+      diagnostic: vi.fn(),
+      conversation: vi.fn(async () => child),
+    }
+
+    await registeredTool(createTeamTools({
+      ...teamOptions,
+      memberSession: async () => ({ exists: true, linked: true, promptRejected: false, running: false }),
+    }), 'spawn_teammate').execute(
+      { name: 'worker', prompt: 'continue the assigned task' }, api, {} as Context,
+    )
+
+    expect(submitSawPlan).toBe(true)
+    expect(plans.get(String(childId))?.active).toBe(true)
+    expect(child.submit).toHaveBeenCalledOnce()
+  })
+
+  it('constrains a teammate target before a team message is submitted', async () => {
+    const memberId = 1 as ConversationId
+    const leadId = 2 as ConversationId
+    const plans = new Map<string, { active: boolean; updatedAt: number }>([
+      [String(memberId), { active: true, updatedAt: 1 }],
+      [String(leadId), { active: false, updatedAt: 2 }],
+    ])
+    const team: TeamDocValue = {
+      members: [
+        { name: 'lead', role: 'lead', phase: 'active', conversationId: String(leadId) },
+      ],
+      tasks: [],
+    }
+    let submitSawPlan = false
+    const target = {
+      submit: vi.fn(async () => { submitSawPlan = plans.get(String(leadId))?.active === true }),
+    }
+    const api = {
+      conversationId: memberId,
+      callId: 'message-from-plan-member',
+      snapshot: vi.fn(async (document: unknown) => document === TeamLink
+        ? { leadConversationId: String(leadId), name: 'worker' }
+        : document === Team ? team : undefined),
+      commit: vi.fn(async (change: (tx: unknown) => unknown) => change({
+        doc: async (document: unknown, id: ConversationId) => {
+          if (document === Plans) return plans.get(String(id))!
+          throw new Error('Unexpected document')
+        },
+      })),
+      diagnostic: vi.fn(),
+      conversation: vi.fn(async () => target),
+    }
+
+    await registeredTool(createTeamTools(teamOptions), 'send_message').execute(
+      { target: 'lead', message: 'research complete' }, api, {} as Context,
+    )
+
+    expect(submitSawPlan).toBe(true)
+    expect(plans.get(String(leadId))?.active).toBe(true)
+    expect(target.submit).toHaveBeenCalledOnce()
+  })
+})
+
+describe('team tool prompt policy', () => {
+  it('shows only directly callable Lead tools and their direct routes', async () => {
+    const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
+    expect(prompt).toContain('Call `spawn_teammate({ name: "worker", prompt: "..." })` directly.')
+    expect(prompt).toContain('Call `team_task_list({})` directly.')
+    expect(prompt).not.toContain('send_message')
+    expect(prompt).not.toContain('wait_agent')
+    expect(prompt).not.toContain('team_task_update')
+  })
+
+  it('routes codemode-only Lead tools through codemode and omits unavailable workflow steps', async () => {
+    const prompt = await renderTeamPolicy({
+      offered: ['codemode'],
+      callable: ['spawn_teammate', 'list_agents', 'wait_agent', 'team_task_get', 'team_task_update'],
+    })
+    expect(prompt).toContain('Through `codemode`, call `await tools.spawn_teammate({ name: "worker", prompt: "..." })` inside the script.')
+    expect(prompt).toContain('Through `codemode`, call `await tools.team_task_update({ task_id: "task-1", expected_revision: 1, action: "claim" })` inside the script.')
+    expect(prompt).not.toContain('send_message')
+    expect(prompt).not.toContain('team_task_create')
+  })
+
+  it('keeps teammate guidance distinct from Lead delegation and honors inherited Plan mode', async () => {
+    const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
+    expect(teammate).toContain('You are teammate "researcher"')
+    expect(teammate).toContain('Call `send_message({ target: "lead", message: "..." })` directly.')
+    expect(teammate).not.toContain('spawn_teammate')
+    expect(teammate).not.toContain('wait_agent')
+
+    const plan = await renderTeamPolicy({
+      planActive: true,
+      offered: ['codemode'],
+      callable: ['spawn_teammate', 'list_agents', 'wait_agent', 'team_task_list', 'team_task_get'],
+    })
+    expect(plan).toContain('Plan mode is read-only for every member')
+    expect(plan).toContain('the child inherits Plan mode')
+    expect(plan).not.toContain('team_task_update')
+    expect(plan).not.toContain('claim')
+    expect(plan).not.toContain('complete only after')
+  })
+
+  it('makes subagent and teammate delegation prompts self-contained and scope-bounded', () => {
+    const subagent = createSubagentTools({ prepareChild: async () => undefined })
+      .tools?.find(candidate => candidate.name === 'subagent')?.description ?? ''
+    const teammate = createTeamTools(teamOptions)
+      .tools?.find(candidate => candidate.name === 'spawn_teammate')?.description ?? ''
+    for (const description of [subagent, teammate]) {
+      expect(description).toContain('self-contained')
+      expect(description).toContain('scope')
+      expect(description).toContain('constraints and authorization')
+      expect(description).toContain('acceptance criteria')
+      expect(description).toContain('evidence')
+      expect(description).toContain('disjoint')
+      expect(description).toContain('preserve')
+    }
+  })
+})
 
 describe('team task board', () => {
   it('creates revision-one pending tasks, normalized and de-duplicated', () => {

@@ -2,6 +2,7 @@ import { defineDoc, defineExtension, defineTool, section, type Extension } from 
 import { Type } from '@earendil-works/pi-ai'
 import type { AskUserQuestionAnswerItem } from '../shared/types.ts'
 import { Interactions } from './interaction-tools.ts'
+import { resolveToolRoute, toolRouteInstruction } from './tool-routing.ts'
 
 /**
  * Plan mode as the conversation document stores it. Pi re-renders every section before each request,
@@ -129,13 +130,19 @@ export function decidePlanReview(review: StoredPlanReview, answers: readonly Ask
 const planSection = section('plan-policy', async (input, context) => {
   const doc = await input.read.snapshot(Plans, input.conversationId, context)
   if (doc?.active !== true) return undefined
+  const route = resolveToolRoute(input.agent, 'exit_plan_mode')
+  const submission = toolRouteInstruction('exit_plan_mode', route, '{ plan: "<plan markdown>" }')
   return [
     'Plan mode is on for this conversation: produce a plan, not changes.',
-    'Research first (read files, search, inspect) and keep reading until the plan is concrete and complete; do not modify files, run mutating commands, or start implementing yet.',
+    'The host enforces read-only planning: workspace mutation, bash, and external MCP calls are unavailable. Research with available file reads and safe metadata tools; do not start implementation.',
     `Write the plan as Markdown whose first line is a level-1 heading ("${HEADING_PREFIX}"), followed by the steps and the verification you will run.`,
-    'Submit it with exit_plan_mode: the call settles immediately and the user reviews the plan in the transcript, so never wait inside the tool and never submit the same plan twice.',
-    'While the plan is pending, do not execute it; end the turn instead.',
-    'When the user asks for changes, revise the plan and submit it again with exit_plan_mode. When the user approves, plan mode turns off and their confirmation arrives as a follow-up message: execute the approved plan then.',
+    ...(submission === undefined
+      ? ['No plan-submission tool is callable in this request. Put the plan in your final response; do not claim that it was submitted for review or wait for a tool result.']
+      : [
+          `Submit it with ${submission} and end the turn without waiting; the user reviews it in the transcript.`,
+          'While the plan is pending, do not execute it; end the turn instead.',
+          'When the user asks for changes, revise and resubmit the plan. When the user approves, plan mode turns off and their confirmation arrives as a follow-up message; execute the approved plan then.',
+        ]),
   ].join('\n')
 })
 

@@ -14,6 +14,7 @@ import {
   type Tx,
 } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
+import { resolveToolRoute, toolRouteInstruction, type ToolCatalog, type ToolRoute } from './tool-routing.ts'
 
 /** DSH phases of one goal; `complete` is terminal and the UI hides the bar for it. */
 export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete'
@@ -237,24 +238,15 @@ export function goalContinuation(docValue: GoalDocValue | undefined, roundsStart
   }
 }
 
-type GoalToolRoute = 'direct' | 'codemode' | undefined
-
-function goalToolRoutes(input: {
-  agent: { tools: readonly { name: string }[]; callable: readonly { name: string }[] }
-}): Record<(typeof GOAL_TOOL_NAMES)[number], GoalToolRoute> {
-  const offered = new Set(input.agent.tools.map(tool => tool.name))
-  const nested = new Set(input.agent.callable.map(tool => tool.name))
-  const codemodeAvailable = offered.has('codemode')
+function goalToolRoutes(agent: ToolCatalog): Record<(typeof GOAL_TOOL_NAMES)[number], ToolRoute> {
   return Object.fromEntries(GOAL_TOOL_NAMES.map(name => [
     name,
-    offered.has(name) ? 'direct' : codemodeAvailable && nested.has(name) ? 'codemode' : undefined,
-  ])) as Record<(typeof GOAL_TOOL_NAMES)[number], GoalToolRoute>
+    resolveToolRoute(agent, name),
+  ])) as Record<(typeof GOAL_TOOL_NAMES)[number], ToolRoute>
 }
 
-function toolRouteInstruction(name: (typeof GOAL_TOOL_NAMES)[number], route: GoalToolRoute): string | undefined {
-  if (route === 'direct') return `Call \`${name}\` directly.`
-  if (route === 'codemode') return `Through \`codemode\`, call \`await tools.${name}({ ... })\` inside the script.`
-  return undefined
+function goalToolInstruction(name: (typeof GOAL_TOOL_NAMES)[number], route: ToolRoute): string | undefined {
+  return toolRouteInstruction(name, route)
 }
 
 async function allowed(
@@ -277,13 +269,13 @@ function createGoalSection(options: Required<GoalToolOptions>) {
       input.read.snapshot(Goals, input.conversationId, context),
       input.read.snapshot(Plans, input.conversationId, context),
     ])
-    const routes = goalToolRoutes(input)
+    const routes = goalToolRoutes(input.agent)
     const planMode = plan?.active === true
     const createCallable = !planMode
-      && routes.create_goal !== undefined
+      && routes.create_goal !== 'unavailable'
       && await allowed(options.canCreate, input.conversationId, context)
     const updateCallable = !planMode
-      && routes.update_goal !== undefined
+      && routes.update_goal !== 'unavailable'
       && await allowed(options.canContinue, input.conversationId, context)
     const goal = doc?.goal
     const lines = [
@@ -292,20 +284,20 @@ function createGoalSection(options: Required<GoalToolOptions>) {
       ...(!goal ? ['No goal is currently set for this conversation.'] : []),
     ]
 
-    const getInstruction = toolRouteInstruction('get_goal', routes.get_goal)
+    const getInstruction = goalToolInstruction('get_goal', routes.get_goal)
     if (getInstruction !== undefined) lines.push(`Read the current goal when the user asks about it. ${getInstruction}`)
 
     if (!goal || goal.phase === 'complete') {
       if (createCallable) {
-        lines.push('For a qualifying long-running objective, create a goal with the user’s direct request as its scope.', toolRouteInstruction('create_goal', routes.create_goal)!)
-      } else if (!planMode && routes.create_goal !== undefined) {
+        lines.push('For a qualifying long-running objective, create a goal with the user’s direct request as its scope.', goalToolInstruction('create_goal', routes.create_goal)!)
+      } else if (!planMode && routes.create_goal !== 'unavailable') {
         lines.push('Goal creation is unavailable for this conversation in the current request; do not claim to set a goal.')
       }
       if (goal?.phase === 'complete') lines.push(`The previous goal is complete: "${goal.objective}". Treat a new objective as a new goal only when the human asks for long-running work.`)
       return lines.join('\n')
     }
 
-    lines.push(`Current goal (revision ${goal.revision}): "${goal.objective}".`)
+    lines.push(`Current goal: goal_id "${goal.id}", revision ${goal.revision}, objective "${goal.objective}".`)
     if (goal.phase === 'active') {
       lines.push(`It is active; ${goal.roundsStarted}/${goal.maxGoalRounds} automatic continuation rounds have started.`)
       if (planMode) {
@@ -317,7 +309,7 @@ function createGoalSection(options: Required<GoalToolOptions>) {
         lines.push(
           'The model may report only action "complete" or "blocked". Report complete only after the objective is achieved and requested verification has passed, with concrete evidence. Report blocked only when a concrete condition makes further progress impossible, and state that condition; difficulty, uncertainty, or remaining work alone is not a blocker.',
           'Editing, pausing, and resuming are user requests handled by the goal controls; do not call update_goal with those actions.',
-          toolRouteInstruction('update_goal', routes.update_goal)!,
+          goalToolInstruction('update_goal', routes.update_goal)!,
         )
       } else if (!planMode) {
         lines.push('No goal update action is callable in this request; do not claim to change the goal state or start an automatic continuation.')
@@ -445,17 +437,14 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
 const updateGoalTool = defineTool({
   name: 'update_goal',
   description: [
-    'Update the conversation goal. Pass the goal_id and revision shown in the current goal context; a stale revision is rejected.',
-    'The model may only report action "complete" or "blocked" (blocked needs blocked_reason).',
-    'Only complete and blocked are valid model actions; edit, pause, and resume are user requests handled by the goal controls.',
+    'Report the current goal as complete or blocked. Copy goal_id and revision exactly from the current goal policy; stale revisions are rejected.',
+    'The only model actions are "complete" and "blocked"; blocked requires blocked_reason. Editing, pausing, and resuming are user controls.',
   ].join(' '),
   parameters: Type.Object({
     goal_id: Type.String(),
     revision: Type.Number(),
-    action: Type.Union([Type.Literal('edit'), Type.Literal('pause'), Type.Literal('resume'), Type.Literal('complete'), Type.Literal('blocked')]),
-    objective: Type.Optional(Type.String()),
+    action: Type.Union([Type.Literal('complete'), Type.Literal('blocked')]),
     blocked_reason: Type.Optional(Type.String()),
-    max_goal_rounds: Type.Optional(Type.Number()),
   }),
   execute: async (args, api, context) => {
     const goal = await api.commit(async (tx) => {
@@ -464,9 +453,7 @@ const updateGoalTool = defineTool({
         goalId: args.goal_id,
         revision: args.revision,
         action: args.action,
-        ...(args.objective === undefined ? {} : { objective: args.objective }),
         ...(args.blocked_reason === undefined ? {} : { blockedReason: args.blocked_reason }),
-        ...(args.max_goal_rounds === undefined ? {} : { maxGoalRounds: args.max_goal_rounds }),
       }, { actor: 'model', now: Date.now() })
       if (!outcome.ok) throw new Error(outcome.error)
       doc.goal = outcome.goal

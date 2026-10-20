@@ -17,6 +17,9 @@ import {
 } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import type { TeamMemberPhase, TeamMemberView, TeamTaskStatus, TeamTaskView, TeamView } from '../shared/types.ts'
+import { resolveToolRoute, toolRouteInstruction, type ToolCatalog, type ToolRoute } from './tool-routing.ts'
+import { Plans } from './plan-tools.ts'
+import { inheritPlanConstraint } from './execution-policy.ts'
 
 /**
  * Agent Teams, following DSH `packages/experimental/agent-team`.
@@ -851,30 +854,105 @@ export async function waitForTeamChange(
   }
 }
 
-const LEAD_POLICY = [
-  'The Team Lead and all teammates share the same working directory and filesystem. Edits are immediately visible to every member. Split write work into disjoint scopes, record expected write scopes on shared tasks, and use task dependencies when work must be ordered. Write-scope overlap is advisory, not a lock.',
-  'Use spawn_teammate only as the Lead. A spawned teammate runs in its own child conversation and does not block you. target names come from spawn_teammate or list_agents; use send_message to steer a running target at its nearest step boundary or to start/resume an inactive one.',
-  'inactive means no turn is executing; it does not describe task completion, success, failure, or waiting for other agents. provisioning means member creation is in progress; failed means member creation failed. A successful send does not mean the recipient has processed it.',
-  'Shared-task workflow: team_task_list, team_task_get, team_task_update action "claim" with the current revision, do the work, then action "complete". Task readiness never starts an owner. Read the latest revision before every update; a stale revision is rejected.',
-  'Before wait_agent, use list_agents and make sure another required member is running or provisioning; use send_message first when the required member is inactive. wait_agent observes only changes after that call starts, never wakes a member, and returns noProgress immediately when no other member can produce a change. Re-list after wakeup or timeout. The Lead must wait for required teammates before giving the final answer.',
-].join('\n\n')
+type TeamToolName = (typeof TEAM_TOOL_NAMES)[number]
+
+const TEAM_TOOL_EXAMPLES: Record<TeamToolName, string> = {
+  spawn_teammate: '{ name: "worker", prompt: "..." }',
+  send_message: '{ target: "worker", message: "..." }',
+  list_agents: '{}',
+  wait_agent: '{ timeout_ms: 30000 }',
+  interrupt_agent: '{ target: "worker" }',
+  team_task_create: '{ subject: "...", description: "...", write_scopes: ["..."] }',
+  team_task_list: '{}',
+  team_task_get: '{ task_id: "task-1" }',
+  team_task_update: '{ task_id: "task-1", expected_revision: 1, action: "claim" }',
+}
+
+function teamRoutes(agent: ToolCatalog): Record<TeamToolName, ToolRoute> {
+  return Object.fromEntries(TEAM_TOOL_NAMES.map(name => [name, resolveToolRoute(agent, name)])) as Record<TeamToolName, ToolRoute>
+}
+
+function teamCall(name: TeamToolName, routes: Record<TeamToolName, ToolRoute>, args = TEAM_TOOL_EXAMPLES[name]): string | undefined {
+  return toolRouteInstruction(name, routes[name], args)
+}
+
+function sharedTeamPolicy(planActive: boolean): string {
+  return planActive
+    ? 'The Team shares one working directory. Plan mode is read-only for every member: inspect and report evidence, preserve all files, and do not make workspace changes.'
+    : 'The Team shares one working directory; file changes are immediately visible to every member. Preserve other members’ edits, stay within your assigned write scope, and coordinate overlapping work before changing shared files.'
+}
 
 const teamSection = section('team-policy', async (input, context) => {
-  const link = await input.read.snapshot(TeamLink, input.conversationId, context)
+  const [link, plan] = await Promise.all([
+    input.read.snapshot(TeamLink, input.conversationId, context),
+    input.read.snapshot(Plans, input.conversationId, context),
+  ])
+  const planActive = plan?.active === true
+  const routes = teamRoutes(input.agent)
   if (link?.leadConversationId) {
-    return [
+    const lines = [
       `You are teammate "${link.name ?? 'teammate'}" of an Agent Team. Your Team Lead is named "lead".`,
-      'To message your Team Lead, use send_message({ target: "lead", message: "..." }). Use list_agents({}) to find your teammates and their names.',
-      LEAD_POLICY,
-    ].join('\n')
+      sharedTeamPolicy(planActive),
+      planActive
+        ? 'Follow only the assigned research task; report findings and concrete evidence to the Team Lead.'
+        : 'Follow only the assigned task; report the outcome and concrete verification evidence to the Team Lead. The Lead coordinates the team and owns task assignment.',
+    ]
+    const message = teamCall('send_message', routes, '{ target: "lead", message: "..." }')
+    if (message) lines.push(`To contact the Lead, ${message}`)
+    const list = teamCall('list_agents', routes)
+    if (list) lines.push(`To inspect teammate names and availability, ${list}`)
+    if (planActive && routes.team_task_list !== 'unavailable' && routes.team_task_get !== 'unavailable') {
+      lines.push('Use task board reads only to understand the assigned research scope; do not attempt task updates during Plan mode.')
+    } else if (!planActive && routes.team_task_list !== 'unavailable' && routes.team_task_get !== 'unavailable' && routes.team_task_update !== 'unavailable') {
+      lines.push('For your assigned shared task, inspect its latest revision, claim it if it is pending and unowned, then mark it complete only after its work and requested verification are done.')
+    } else if (routes.team_task_update !== 'unavailable') {
+      lines.push('Use only task identifiers and revisions supplied in the assignment; do not guess either value.')
+    }
+    const taskCalls = (['team_task_list', 'team_task_get', 'team_task_update'] as const)
+      .map(name => teamCall(name, routes)).filter((line): line is string => line !== undefined)
+    if (taskCalls.length) lines.push(...taskCalls)
+    return lines.join('\n')
   }
   const doc = await input.read.snapshot(Team, input.conversationId, context)
   const teammates = (doc?.members ?? []).filter(member => member.role === 'teammate')
   if (teammates.length === 0) return undefined
-  return [
+  const lines = [
     `You are the Team Lead named "lead". Your Team has ${teammates.length} teammate${teammates.length === 1 ? '' : 's'}: ${teammates.map(member => member.name).join(', ')}.`,
-    LEAD_POLICY,
-  ].join('\n')
+    sharedTeamPolicy(planActive),
+  ]
+
+  const spawn = teamCall('spawn_teammate', routes)
+  if (spawn) {
+    lines.push(planActive
+      ? `Delegate only independent read-only research with separate research scopes. Make each prompt self-contained with the task, scope, constraints and authorization, acceptance criteria, and required evidence; the child inherits Plan mode. ${spawn}`
+      : `Delegate only focused work with disjoint write scopes. A teammate prompt must be self-contained and include the task, scope, constraints and authorization, acceptance criteria, and required result evidence; preserve changes outside its assigned scope. A spawned teammate runs in the background. ${spawn}`)
+  }
+  const list = teamCall('list_agents', routes)
+  if (list) lines.push(`Use the roster to check each member’s availability; inactive means no turn is running, not task completion. ${list}`)
+  const message = teamCall('send_message', routes)
+  if (message) lines.push(`Use a message to steer a running member or start/resume an inactive one; a successful send does not mean it was processed. ${message}`)
+  const interrupt = teamCall('interrupt_agent', routes)
+  if (interrupt) lines.push(`Interrupt only a member whose current turn should stop. ${interrupt}`)
+
+  const createTask = teamCall('team_task_create', routes)
+  if (createTask) lines.push(`Use shared tasks for work that needs ownership or dependencies; record write scopes and blockers when relevant. ${createTask}`)
+  const taskList = teamCall('team_task_list', routes)
+  const taskGet = teamCall('team_task_get', routes)
+  const taskUpdate = teamCall('team_task_update', routes)
+  if (taskList) lines.push(planActive
+    ? `Inspect only current task scope and status for research planning. ${taskList}`
+    : `Inspect readiness and ownership before assigning work. ${taskList}`)
+  if (taskGet) lines.push(planActive
+    ? `Read task details only to understand the current research scope. ${taskGet}`
+    : `Read a task’s latest revision before changing or executing it. ${taskGet}`)
+  if (taskUpdate) {
+    lines.push(`Use the latest revision for each update; claim before work and complete only after verification passes. Task readiness does not start an owner. ${taskUpdate}`)
+  }
+  const wait = teamCall('wait_agent', routes)
+  if (wait && list) {
+    lines.push(`Wait only after the roster shows another required member running or provisioning; this observes later changes and never wakes a member. Re-list after wakeup or timeout. Wait for required teammates before the final answer. ${wait}`)
+  }
+  return lines.join('\n')
 })
 
 /** Build the Team extension; `options` is closed over by every tool definition in this call. */
@@ -908,7 +986,8 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     description: [
       'Create one named, durable teammate in a separate child conversation; it runs in the background and this call returns without waiting for its answer.',
       'Only the Team Lead may call this tool. The name must be unique lower-kebab-case, at most 64 characters, and never "lead"; a name is never reused, even after a failed creation.',
-      'The prompt is the teammate\'s complete initial task: it inherits your agent configuration, tools, model and working directory, but not your messages.',
+      'The prompt is the teammate\'s complete, self-contained initial task: it inherits your agent configuration, tools, model and working directory, but not your messages. Include the task, assigned scope, applicable constraints and authorization, acceptance criteria, and required result evidence.',
+      'Members share the working directory. Assign disjoint write scopes and require the teammate to preserve edits outside its assigned scope.',
     ].join(' '),
     parameters: Type.Object({
       name: Type.String(),
@@ -1007,6 +1086,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         return spawnFailure(api, reason)
       }
       try {
+        await api.commit(tx => inheritPlanConstraint(tx, childId, leadId), context)
         await child.submit({
           type: 'input',
           content: prompt,
@@ -1066,6 +1146,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       const target = await api.conversation(targetId, context)
       if (target === undefined) throw new TeamRuleError(`conversation ${String(targetId)} is no longer available`, 'member-not-found')
       try {
+        await api.commit(tx => inheritPlanConstraint(tx, targetId, api.conversationId), context)
         await target.submit({
           type: 'input',
           content: framed,

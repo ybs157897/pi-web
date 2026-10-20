@@ -19,7 +19,7 @@
 - TypeScript、Hono、React、Vite；Pi Durable、Pi AI、Pi Codemode、Pi MCP 锁定为 1.3.0，使用 SQLite。Durable README 标注 Experimental；它不是带 beta 后缀的版本号。用户所说的 beta Durable 指这条新运行时路线，不要把它当作旧 Pi CLI，也不要凭名称推断成熟度。
 - 应用会话对应 Pi Conversation，Entry 是历史记录，Task 是持久任务，Doc 承载可恢复状态；应用元数据和浏览器草稿各有自己的所有者。
 - 已有读写编辑与 shell、队列和插入消息、停止、分叉、压缩、目标、计划、问答、普通子 Agent、团队看板、Agent Preset、自动化、code mode 和 MCP 相关实现。已有代码不等于所有场景都已验收。
-- 已接入内置 skill-creator、Markdown Skill 发现/按需加载、受控保存和校验；工作区 AGENTS.md 自动注入尚未接入。Preset 的 instructions 是角色配置，不等于 Skill；源码内 registry.install 也不等于用户可安装插件。
+- 已接入内置 skill-creator、Markdown Skill 发现/按需加载、受控保存和校验；工作区根 AGENTS.md 按请求自动注入，子目录指令仍按操作路径逐级读取。Preset 的 instructions 是角色配置，不等于 Skill；源码内 registry.install 也不等于用户可安装插件。
 - 问题单闭环和可复现验证环境是后续产品方向，必须按实际接入状态展示，不能在提示词或 UI 中宣称已经可用。
 
 先形成简短能力清单：功能、上游支持、项目接入、模型可见、权限约束、测试证据、缺口。不要把历史文档中的“已通过”当成本次验证结果，也不要为了调研进行无关重构或升级依赖。

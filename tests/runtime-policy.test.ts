@@ -1,16 +1,16 @@
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { AgentDoc, Harness, createRegistry, type ConversationId } from '@earendil-works/pi-durable'
+import { AgentDoc, Harness, createRegistry, defineDoc, type ConversationId } from '@earendil-works/pi-durable'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { getCurrentSystemMessage, getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { SystemMessage } from '@earendil-works/pi-ai'
-import { createRuntime } from '../src/server/runtime.ts'
+import { createRuntime, type ConversationMetadata } from '../src/server/runtime.ts'
 import { createDemoModelRuntime, observeDemoRequests } from '../src/server/demo-model.ts'
 import { RUNTIME_CORE_PROMPT } from '../src/server/work-policy.ts'
 import type { Runtime } from '../src/server/contracts.ts'
@@ -100,6 +100,24 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(f.runtime.presets().find(item => item.id === preset.id)?.tools).toEqual([])
   })
 
+  it('loads and refreshes only the bound workspace root instructions at the provider boundary', async () => {
+    const f = await fixture()
+    await writeFile(join(f.root, 'AGENTS.md'), 'OUTSIDE_SCOPE_541')
+    await writeFile(join(f.options.workspace, 'AGENTS.md'), 'ROOT_RULE_REVISION_ONE_541')
+    const preset = await f.runtime.createPreset({ name: 'Root context reader', instructions: '', extensions: [], tools: [], accessMode: 'readOnly' })
+    const conversation = await f.runtime.create({ title: 'Root instructions', presetId: preset.id })
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] root-one')
+    const first = currentRequest(f.requests, '[prompt-probe] root-one')
+    expect(first.system?.sections?.['project-instructions']).toContain('ROOT_RULE_REVISION_ONE_541')
+    expect(first.system?.sections?.['project-instructions']).not.toContain('OUTSIDE_SCOPE_541')
+    expect(first.tools).toEqual([])
+    await writeFile(join(f.options.workspace, 'AGENTS.md'), 'ROOT_RULE_REVISION_TWO_541')
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] root-two')
+    const second = currentRequest(f.requests, '[prompt-probe] root-two')
+    expect(second.system?.sections?.['project-instructions']).toContain('ROOT_RULE_REVISION_TWO_541')
+    expect(second.system?.sections?.['project-instructions']).not.toContain('ROOT_RULE_REVISION_ONE_541')
+  })
+
   it('gives script-only routing while the provider sees only codemode', async () => {
     const f = await fixture()
     await f.runtime.updateSettings({ codemodeMode: 'only' })
@@ -110,6 +128,10 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(request.tools).toEqual(['codemode'])
     expect(request.system?.sections?.['work-policy']).toContain('tools.todo_write')
     expect(request.system?.sections?.['goal-policy']).toContain('codemode')
+    expect(request.system?.sections?.codemode).toContain('Only codemode is directly offered')
+    expect(request.system?.sections?.codemode).toContain('Ordinary assistant text is still available')
+    expect(request.system?.sections?.codemode).toContain('use describeTool(name)')
+    expect(request.system?.sections?.codemode).not.toContain('Use direct tools for individual operations')
   })
 
   it('keeps plan mode research-only and suspends an existing goal continuation', async () => {
@@ -122,9 +144,100 @@ describe('default policy at the actual Pi provider boundary', () => {
     expectCore(request)
     expect(request.system?.sections?.['plan-policy']).toBeTruthy()
     expect(request.system?.sections?.['work-policy']).not.toContain('tools.todo_write')
+    expect(request.tools).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash']))
+    expect(request.tools).not.toContain('send_message')
+    expect(request.system?.sections?.codemode).not.toContain('tools.bash(')
     expect(detail.goal?.roundsStarted).toBe(0)
     expect(f.requests.filter(item => item.user.startsWith('[goal '))).toHaveLength(0)
     expect(await readdir(f.options.workspace)).toEqual([])
+  })
+
+  it('rejects attempted writes and shell execution in Plan, then restores the same preset tools on exit', async () => {
+    const f = await fixture()
+    await f.runtime.updateSettings({ codemodeMode: 'off' })
+    const conversation = await f.runtime.create({ title: 'Plan enforcement', accessMode: 'fullAccess' })
+    const id = conversation.conversation.id
+    await f.runtime.setPlan(id, true)
+    const planned = await send(f.runtime, id, '[render-fixture]')
+    const writes = planned.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    expect(writes.map(message => message.toolName)).toEqual(['write', 'edit', 'bash'])
+    expect(writes.every(message => message.isError === true)).toBe(true)
+    expect(planned.plan?.active).toBe(true)
+    expect(await readdir(f.options.workspace)).toEqual([])
+
+    await f.runtime.setPlan(id, false)
+    const resumed = await send(f.runtime, id, '[render-fixture]')
+    const latestWrite = resumed.messages.findLast(message => message.role === 'tool' && message.toolName === 'write')
+    expect(latestWrite?.isError ?? false).toBe(false)
+    expect(await readFile(join(f.options.workspace, 'render-fixture.md'), 'utf8')).toContain('# After')
+  })
+
+  it('blocks a code-mode script from reaching shell tools while Plan is active', async () => {
+    const f = await fixture()
+    await f.runtime.updateSettings({ codemodeMode: 'only' })
+    const conversation = await f.runtime.create({ title: 'Plan nested enforcement' })
+    await f.runtime.setPlan(conversation.conversation.id, true)
+    const result = await send(f.runtime, conversation.conversation.id, '[codemode]')
+    expect(result.messages.some(message => message.role === 'tool' && message.toolName === 'codemode' && message.isError)).toBe(true)
+    expect(result.messages.some(message => message.role === 'tool' && message.toolName === 'bash' && !message.isError)).toBe(false)
+    expect(await readdir(f.options.workspace)).toEqual([])
+  })
+
+  it('keeps delegated child calls in Plan and preserves the guard after restart', async () => {
+    const f = await fixture()
+    const parent = await f.runtime.create({ title: 'Plan delegation' })
+    await f.runtime.setPlan(parent.conversation.id, true)
+    const parentDetail = await send(f.runtime, parent.conversation.id, '[subagent]')
+    const child = (await f.runtime.children(parent.conversation.id))[0]!
+    expect((await f.runtime.detail(child.id)).plan?.active).toBe(true)
+    await f.restart()
+    const result = await send(f.runtime, child.id, '[render-fixture]')
+    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    expect(denied).toHaveLength(3)
+    expect(denied.every(message => message.isError)).toBe(true)
+    expect(await readdir(f.options.workspace)).toEqual([])
+    const entry = parentDetail.messages.findLast(message => message.role === 'assistant' && message.entryId)!.entryId!
+    const fork = await f.runtime.fork(parent.conversation.id, entry)
+    expect(fork.plan?.active).toBe(true)
+  })
+
+  it('constrains an existing child when its owner enters Plan, including restart and reuse', async () => {
+    const f = await fixture()
+    const parent = await f.runtime.create({ title: 'Existing writer' })
+    await send(f.runtime, parent.conversation.id, '[subagent]')
+    const child = (await f.runtime.children(parent.conversation.id))[0]!
+    expect((await f.runtime.detail(child.id)).plan?.active).toBe(false)
+    await f.runtime.setPlan(parent.conversation.id, true)
+    expect((await f.runtime.detail(child.id)).plan?.active).toBe(true)
+    await f.restart()
+    const result = await send(f.runtime, child.id, '[render-fixture]')
+    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    expect(denied).toHaveLength(3)
+    expect(denied.every(message => message.isError)).toBe(true)
+    expect(await readdir(f.options.workspace)).toEqual([])
+  })
+
+  it('does not advertise a plan submission route when the preset has no such tool', async () => {
+    const f = await fixture()
+    const preset = await f.runtime.createPreset({ name: 'Plan analyst', instructions: '', extensions: ['plan'], tools: [], accessMode: 'readOnly' })
+    const conversation = await f.runtime.create({ title: 'Text plan', presetId: preset.id })
+    await f.runtime.setPlan(conversation.conversation.id, true)
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] no-plan-tool')
+    const request = currentRequest(f.requests, '[prompt-probe] no-plan-tool')
+    expect(request.tools).toEqual([])
+    expect(request.system?.sections?.['plan-policy']).not.toContain('Submit it with exit_plan_mode')
+  })
+
+  it('deduplicates code-mode declarations without hiding their discovery route', async () => {
+    const f = await fixture()
+    const conversation = await f.runtime.create({ title: 'Compact tool context' })
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] compact-tools')
+    const request = currentRequest(f.requests, '[prompt-probe] compact-tools')
+    expect(request.tools).toEqual(expect.arrayContaining(['read', 'write', 'bash', 'codemode']))
+    const code = request.system?.sections?.codemode ?? ''
+    expect(code).toContain('describeTool')
+    expect(code.length).toBeLessThan(2_000)
+    expect(code).not.toContain('declare function')
   })
 
   it('does not continue an active goal when a preset lacks its completion tools', async () => {
@@ -184,5 +297,55 @@ describe('default policy at the actual Pi provider boundary', () => {
     expectCore(request)
     expect(request.tools).toEqual(['read'])
     expect(request.system?.sections?.instructions).toContain('PERSISTED_READER_ROLE')
+  })
+
+  it('installs execution guards before recovering a queued edit that starts the scheduler', async () => {
+    const f = await fixture()
+    const preset = await f.runtime.createPreset({
+      name: 'Legacy writer', instructions: '', extensions: ['coding-tools'],
+      tools: ['read', 'write', 'edit', 'bash'], accessMode: 'fullAccess',
+    })
+    const conversation = await f.runtime.create({ title: 'Recovered plan', presetId: preset.id })
+    const id = Number(conversation.conversation.id) as ConversationId
+    await f.runtime.setPlan(String(id), true)
+    await f.runtime.close()
+    const registry = createRegistry()
+    registry.install(CodingTools)
+    const harness = await Harness.open(await openNodeSqliteStorage(join(f.options.dataDir, 'pi-durable.sqlite')), {
+      models: createDemoModelRuntime().models, registry,
+    }, BACKGROUND_CONTEXT)
+    const metadata = defineDoc<ConversationMetadata>({
+      kind: 'pi-durable-web.conversation', version: 1, scope: 'conversation',
+      history: 'latest', fork: 'initial',
+      initial: () => { throw new Error('The fixture must already have conversation metadata') },
+    })
+    try {
+      await harness.commit(async tx => {
+        const source = await tx.createSubmission({ type: 'input', conversationId: id, status: 'unanswered', reason: 'aborted' })
+        const agent = await tx.doc(AgentDoc, id)
+        agent.extensions = ['coding-tools']
+        const doc = await tx.doc(metadata, id)
+        doc.queueEdits['recovered-plan-edit'] = {
+          fingerprint: 'recovery-fixture', sourceSubmissionId: Number(source.id),
+          status: 'aborted', submissionId: null,
+          input: { text: '[render-fixture] recovered-plan', whenBusy: 'followUp', images: [], files: [] },
+        }
+      }, BACKGROUND_CONTEXT)
+    } finally { await harness.close(BACKGROUND_CONTEXT) }
+    await f.restart()
+    const deadline = Date.now() + 15_000
+    let result = await f.runtime.detail(String(id))
+    while ((result.conversation.busy || !result.messages.some(message => message.role === 'tool')) && Date.now() < deadline) {
+      await delay(20)
+      result = await f.runtime.detail(String(id))
+    }
+    expect(result.conversation.busy).toBe(false)
+    const request = currentRequest(f.requests, 'recovered-plan')
+    expectCore(request)
+    expect(request.tools).not.toContain('write')
+    const writes = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    expect(writes).toHaveLength(3)
+    expect(writes.every(message => message.isError)).toBe(true)
+    expect(await readdir(f.options.workspace)).toEqual([])
   })
 })

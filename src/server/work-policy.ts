@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { defineExtension, section, type Extension } from '@earendil-works/pi-durable'
 import { Plans } from './plan-tools.ts'
+import { loadProjectInstructions, renderProjectInstructions } from './project-instructions.ts'
 
 export const WORK_POLICY_EXTENSION_NAME = 'runtime-policy'
 
@@ -54,6 +55,11 @@ function projectScope(input: { env: { cwd?: string } | undefined }): string {
 
 const runtimeCoreSection = section('runtime-core', () => RUNTIME_CORE_PROMPT)
 
+// Re-read on every request so edits to the workspace's root instructions take effect immediately.
+const projectInstructionsSection = section('project-instructions', async (input) => {
+  return renderProjectInstructions(await loadProjectInstructions(input.env?.cwd))
+})
+
 const workPolicySection = section('work-policy', async (input, context) => {
   const plan = await input.read.snapshot(Plans, input.conversationId, context)
   if (plan?.active === true) {
@@ -70,6 +76,6 @@ const workPolicySection = section('work-policy', async (input, context) => {
 export function createWorkPolicyExtension(): Extension {
   return defineExtension({
     name: WORK_POLICY_EXTENSION_NAME,
-    sections: [runtimeCoreSection, workPolicySection],
+    sections: [runtimeCoreSection, projectInstructionsSection, workPolicySection],
   })
 }

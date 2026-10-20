@@ -27,3 +27,25 @@ export const WORKFLOW_ORACLE = [
   'assert.throws(()=>subtotal([{price:2,quantity:"3"}]));',
   'console.log("WORKFLOW_ORACLE_OK");',
 ].join('\n')
+
+/** Preserve the generated implementation's validation/errors; mutate only the requested behavior. */
+export const WORKFLOW_MUTANTS = {
+  ignoresQuantity: 'const result = original(items); return items.reduce((sum, item) => sum + item.price, 0);',
+  treatsZeroAsOne: 'const result = original(items); return result + items.reduce((sum, item) => sum + (item.quantity === 0 ? item.price : 0), 0);',
+  omitsValidation: [
+    'try { return original(items); } catch (error) {',
+    '  const invalid = value => typeof value !== "number" || !Number.isFinite(value) || value < 0;',
+    '  if (Array.isArray(items) && items.every(item => item !== null && typeof item === "object")',
+    '      && items.some(item => invalid(item.price) || invalid(item.quantity))) return 0;',
+    '  throw error;',
+    '}',
+  ].join('\n'),
+} as const
+
+export function workflowMutantSource(body: string): string {
+  return [
+    'export * from "./workflow-original.mjs";',
+    'import { subtotal as original } from "./workflow-original.mjs";',
+    `export function subtotal(items) { ${body} }`,
+  ].join('\n')
+}

@@ -1,3 +1,6 @@
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/work-policy.ts'
 
@@ -34,7 +37,7 @@ describe('default runtime work policy', () => {
     const extension = createWorkPolicyExtension()
 
     expect(extension.name).toBe(WORK_POLICY_EXTENSION_NAME)
-    expect(extension.sections?.map(section => section.key)).toEqual(['runtime-core', 'work-policy'])
+    expect(extension.sections?.map(section => section.key)).toEqual(['runtime-core', 'project-instructions', 'work-policy'])
     expect(extension.tools).toBeUndefined()
   })
 
@@ -64,6 +67,23 @@ describe('default runtime work policy', () => {
 
     expect(prompt).toContain('当前工作区（默认当前项目）由 Host 提供')
     expect(prompt).toContain('/workspace/pi-web')
+  })
+
+  it('includes the root instruction section even when the request has no tools', async () => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-')))
+    const body = '# Root project rules\nKeep this request scoped.\n'
+    try {
+      await writeFile(join(cwd, 'AGENTS.md'), body, 'utf8')
+      const prompt = await renderPolicy({ cwd })
+
+      expect(prompt).toContain('project-instructions')
+      expect(prompt).toContain('Root project rules')
+      expect(prompt).toContain('Keep this request scoped.')
+      expect(prompt).toContain('"status":"loaded"')
+      expect(prompt).not.toContain('todo_write')
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
   })
 
   it('uses short textual progress when no todo tool is available', async () => {
