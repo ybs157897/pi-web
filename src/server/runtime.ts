@@ -1723,7 +1723,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
     const previousCodemodeMode = appState.snapshot().settings.codemodeMode
-    const previousDocStyle = appState.snapshot().settings.docStyle
     const saved = await appState.update(state => {
       if (input.theme !== undefined) state.settings.theme = input.theme
       if (input.locale !== undefined) state.settings.locale = input.locale
@@ -1750,10 +1749,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
       return structuredClone(state.settings)
     })
-    // Code mode and the document-layout contract are stored in each conversation's agent,
-    // so an explicit switch applies now.
+    // Code mode is stored in each conversation's agent, so an explicit switch applies now.
+    // The document-layout switch is deliberately not synced here: it changes the contract
+    // for conversations created from now on, and an open conversation keeps the one it
+    // started with. A restart still aligns every idle conversation with the current setting.
     if (input.codemodeMode !== undefined && input.codemodeMode !== previousCodemodeMode) await syncIdleAgents()
-    if (input.docStyle !== undefined && input.docStyle !== previousDocStyle) await syncIdleAgents()
     return saved
   }
 

@@ -7,6 +7,58 @@
  * answers in the user's language; the YAML keys stay English so the renderer
  * can read them.
  */
+/**
+ * 一次「交付说明」的完整形状，单独用数组拼出来：里面全是反引号，塞进模板
+ * 字符串需要逐行转义，反而更容易写错。
+ */
+const COMPLETE_EXAMPLE = [
+  '## 目标理解',
+  '',
+  '把工作区代码从 `dcc6f2b` 更新到 `462d428`，重新构建并重启服务，确认新实例可用。',
+  '',
+  '## 实际改动',
+  '',
+  '```doc',
+  'type: changes',
+  'items:',
+  '  - path: src/server/shell-tools.ts',
+  '    summary: 新增原生 Windows PowerShell 工具',
+  '    stats: +120 −0',
+  '  - path: src/web/transcript.tsx',
+  '    summary: 接入新的工具卡',
+  '    stats: +12 −3',
+  '```',
+  '',
+  '## 验证结果',
+  '',
+  '```doc',
+  'type: checks',
+  'items:',
+  '  - status: pass',
+  '    label: 构建',
+  "    detail: '`npm run build` 通过（3.17s）'",
+  '  - status: pass',
+  '    label: 启动',
+  '    detail: 端口 `4317` 监听，`GET /` 返回 HTTP 200',
+  '  - status: skip',
+  '    label: 类型检查',
+  '    detail: 本轮未执行 `npm run typecheck`',
+  '```',
+  '',
+  '## 风险与未覆盖项',
+  '',
+  '- **Windows pwsh 未实机验证**：本机是 macOS，`pwsh` 工具没有在 Windows 上跑过。',
+  '',
+  '```doc',
+  'type: note',
+  'icon: warn',
+  'title: 建议补验证',
+  'body: 合并前在 Windows 实机跑一次 `pwsh`，并补跑 `npm test`。',
+  "code: 'npm test && npm run typecheck'",
+  'label: 待办',
+  '```',
+].join('\n')
+
 export const DOC_STYLE_INSTRUCTION = `## 结论文档排版
 
 当你的回答属于「结论、方案、评审、对比、总结」这类内容时，用下面的结构化块输出，前端会把它渲染成设计稿里的卡片、对比与提示块；普通解释、闲聊和代码讨论照常用普通 Markdown，不要滥用结构化块。
@@ -25,6 +77,12 @@ items:
       - 标题 700
       - 正文 400
 \`\`\`
+
+### 完整示例
+
+下面是一次交付说明的完整形状：分节标题用 \`##\`，改动、验证和结尾建议各用一个块，块之间照常用 Markdown 写。
+
+${COMPLETE_EXAMPLE}
 
 ### 卡片组
 
@@ -110,7 +168,7 @@ items:
     stats: +12 −3
 \`\`\`
 
-字段：\`type\` 固定为 \`changes\`；\`items\` 每项有 \`path\`、\`summary\`（可选）、\`stats\`（可选，写成 \`+120 −0\` 这种增删数）。
+字段：\`type\` 固定为 \`changes\`；\`items\` 每项有 \`path\`、\`summary\`（可选）、\`stats\`（可选，写成 \`+120 −0\` 这种增删数）。\`stats\` 写你能确定的数字；这一行确实是本轮改过的文件时，前端会用真实 diff 覆盖它，拿不准可以省略，但不要编造。
 
 ### 提示
 

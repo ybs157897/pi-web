@@ -632,7 +632,7 @@ function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetr
       data-streaming={streaming || undefined}>
       <div className={doc === true && docLayout === true ? `${css.assistantBody} ${docCss.docScope}` : css.assistantBody}>
         {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${block.slot ?? index}`} block={block}
-          doc={doc} docLayout={docLayout} streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
+          doc={doc} docLayout={docLayout} artifacts={run.artifacts} streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
           fileMentions={fileMentions} pathImages={pathImages} />)}
         {!streaming && run.status === 'cancelled' && <div className={css.runNotice} data-status="cancelled" role="status">
           {t('回答已停止', 'Response stopped')}
@@ -693,7 +693,7 @@ function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetr
   )
 }
 
-function ContentBlockView({ block, streaming = false, plainText = false, doc, docLayout, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
+function ContentBlockView({ block, streaming = false, plainText = false, doc, docLayout, artifacts, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
   block: ContentBlock
   streaming?: boolean
   plainText?: boolean
@@ -701,6 +701,8 @@ function ContentBlockView({ block, streaming = false, plainText = false, doc, do
   doc?: boolean
   /** Whether the document layout sheet is on. */
   docLayout?: boolean
+  /** This run's file changes; the changes block derives its diff stats from them. */
+  artifacts?: readonly FileArtifact[]
   onOpenFile?: TranscriptProps['onOpenFile']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   t: Translate
@@ -713,7 +715,7 @@ function ContentBlockView({ block, streaming = false, plainText = false, doc, do
       return plainText ? <div className={css.userText}>{block.text}</div>
         : doc === true
           ? <DocText text={block.text} streaming={streaming} layout={docLayout === true} labels={labels ?? markdownLabels(t)}
-            fileMentions={fileMentions} pathImages={pathImages}
+            fileMentions={fileMentions} pathImages={pathImages} artifacts={artifacts}
             onOpenFile={onOpenFile === undefined ? undefined : path => { onOpenFile(path) }} />
           : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
             fileMentions={fileMentions} pathImages={pathImages} />

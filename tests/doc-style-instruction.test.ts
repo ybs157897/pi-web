@@ -56,13 +56,29 @@ describe('doc style instruction', () => {
     expect(system).toContain('type: note')
   })
 
-  it('drops the instruction once the operator turns the layout off', async () => {
+  it('drops the instruction for conversations created after the switch went off', async () => {
     const { runtime, systems } = await fixture()
     await runtime.updateSettings({ docStyle: false })
     const conversation = await runtime.create({ title: 'Plain layout' })
     await send(runtime, conversation.conversation.id, '总结一下')
     const system = systems.at(-1) ?? ''
     expect(system).not.toContain('type: cards')
+  })
+
+  it('leaves a conversation that already started on its own contract', async () => {
+    const { runtime, systems } = await fixture()
+    const existing = await runtime.create({ title: 'Started with layout' })
+    await send(runtime, existing.conversation.id, '总结一下')
+    expect(systems.at(-1) ?? '').toContain('type: cards')
+
+    // 开关只影响新会话：改完之后老会话的下一条仍然带着原来的契约。
+    await runtime.updateSettings({ docStyle: false })
+    await send(runtime, existing.conversation.id, '再总结一下')
+    expect(systems.at(-1) ?? '').toContain('type: cards')
+
+    const fresh = await runtime.create({ title: 'Created after the switch' })
+    await send(runtime, fresh.conversation.id, '总结一下')
+    expect(systems.at(-1) ?? '').not.toContain('type: cards')
   })
 
   it('keeps the preset instructions of the operator alongside the doc contract', async () => {

@@ -66,8 +66,10 @@ import {
   IconWarningTriangleOutlineRegular,
   IconWorkspaceTreeOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { FileArtifact } from '../shared/types.ts'
 import { DocInline } from './DocInline.tsx'
 import { classifyCode } from './doc-inline.ts'
+import { fileStats, formatFileStats } from './file-stats.ts'
 import css from './DocBlock.module.css'
 
 export interface DocCard {
@@ -437,14 +439,21 @@ function ChecksBlock({ items, onOpenFile }: {
   </ul>
 }
 
-/** 改动清单：文件行，路径可点开 Inspector，右侧显示增删统计。 */
-function ChangesBlock({ items, onOpenFile }: {
+/**
+ * 改动清单：文件行，路径可点开 Inspector，右侧显示增删统计。
+ *
+ * 统计优先用本轮真实的产物算（模型写的不一定准，也可能漏）；这一行不是本轮
+ * 改过的文件时，才退回模型自己写的数字。
+ */
+function ChangesBlock({ items, artifacts, onOpenFile }: {
   readonly items: readonly DocChange[]
+  readonly artifacts?: readonly FileArtifact[] | undefined
   readonly onOpenFile?: ((path: string) => void) | undefined
 }): ReactElement {
   return <ul className={css.changeList}>
-    {items.map((item, index) => (
-      <li key={`${index}:${item.path}`} className={css.changeRow}>
+    {items.map((item, index) => {
+      const stats = formatFileStats(fileStats(artifacts ?? [], item.path)) ?? item.stats
+      return <li key={`${index}:${item.path}`} className={css.changeRow}>
         <span className={css.changeIcon} aria-hidden="true"><IconDeliverDocRegular size={15} /></span>
         <span className={css.changeBody}>
           {/* 模型偶尔把「3 个测试文件」这种说明写进 path；不像路径的就别做成可点按钮。 */}
@@ -453,9 +462,9 @@ function ChangesBlock({ items, onOpenFile }: {
             onClick={() => { onOpenFile?.(item.path) }}>{item.path}</button>
           {item.summary !== undefined && <span className={css.changeSummary}><DocInline text={item.summary} onOpenFile={onOpenFile} /></span>}
         </span>
-        {item.stats !== undefined && <span className={css.changeStats}>{item.stats}</span>}
+        {stats !== undefined && <span className={css.changeStats}>{stats}</span>}
       </li>
-    ))}
+    })}
   </ul>
 }
 
@@ -488,8 +497,10 @@ function NoteBlock({ block, onOpenFile }: {
  * `: `（例如 `code: const s = create(({ tab: 'x' }))`），YAML 解析器会整块
  * 拒绝。整块消失比显示得不好更糟——读者会以为这一节本来就不存在。
  */
-export function DocBlockView({ source, onOpenFile }: {
+export function DocBlockView({ source, artifacts, onOpenFile }: {
   readonly source: string
+  /** This run's file changes; the changes block derives its diff stats from them. */
+  readonly artifacts?: readonly FileArtifact[] | undefined
   /** Opens a workspace file from a path chip; absent on surfaces without an inspector. */
   readonly onOpenFile?: ((path: string) => void) | undefined
 }): ReactElement | null {
@@ -510,7 +521,7 @@ export function DocBlockView({ source, onOpenFile }: {
     return <div className={css.root} data-doc-block="checks"><ChecksBlock items={block.items} onOpenFile={onOpenFile} /></div>
   }
   if (block.type === 'changes') {
-    return <div className={css.root} data-doc-block="changes"><ChangesBlock items={block.items} onOpenFile={onOpenFile} /></div>
+    return <div className={css.root} data-doc-block="changes"><ChangesBlock items={block.items} artifacts={artifacts} onOpenFile={onOpenFile} /></div>
   }
   return <div className={css.root} data-doc-block="note"><NoteBlock block={block} onOpenFile={onOpenFile} /></div>
 }

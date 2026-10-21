@@ -11,6 +11,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => new Proxy({}, {
 
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DocBlockView, parseDocBlock } from '../src/web/DocBlock.tsx'
+import { DOC_STYLE_INSTRUCTION } from '../src/server/doc-style-instruction.ts'
 
 describe('doc block parsing', () => {
   it('reads the cards layout', () => {
@@ -159,6 +160,20 @@ describe('doc block parsing', () => {
     expect(parseDocBlock('只是一段文本')).toBeUndefined()
     expect(parseDocBlock('- 一\n- 二\n')).toBeUndefined()
     expect(parseDocBlock('')).toBeUndefined()
+  })
+})
+
+describe('format contract', () => {
+  it('every example in the instruction parses as a block', () => {
+    // 模型会照抄示例；示例写错就等于把错误示范发给模型。
+    const blocks = [...DOC_STYLE_INSTRUCTION.matchAll(/```doc\n([\s\S]*?)```/gu)].map(match => match[1])
+    expect(blocks.length).toBeGreaterThanOrEqual(6)
+    for (const block of blocks) expect(parseDocBlock(block)).toBeDefined()
+  })
+
+  it('covers the developer blocks in the complete example', () => {
+    expect(DOC_STYLE_INSTRUCTION).toContain('type: changes')
+    expect(DOC_STYLE_INSTRUCTION).toContain('type: checks')
   })
 })
 

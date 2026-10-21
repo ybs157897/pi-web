@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import {
   MarkdownText, type MarkdownFileMentions, type MarkdownLabels, type MarkdownPathImages,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { FileArtifact } from '../shared/types.ts'
 import { DocBlockView } from './DocBlock.tsx'
 import { splitDocBlocks } from './doc-split.ts'
 import docCss from './DocBody.module.css'
@@ -14,6 +15,8 @@ export interface DocTextProps {
   readonly labels: MarkdownLabels
   readonly fileMentions?: MarkdownFileMentions
   readonly pathImages?: MarkdownPathImages
+  /** This run's file changes; the changes block derives its diff stats from them. */
+  readonly artifacts?: readonly FileArtifact[]
   /** Opens a path chip inside a doc block; absent on surfaces without an inspector. */
   readonly onOpenFile?: (path: string) => void
 }
@@ -30,12 +33,12 @@ export interface DocTextProps {
  * as structured blocks, and turning the layout off should not turn a card back
  * into a YAML dump.
  */
-export function DocText({ text, streaming, layout, labels, fileMentions, pathImages, onOpenFile }: DocTextProps) {
+export function DocText({ text, streaming, layout, labels, fileMentions, pathImages, artifacts, onOpenFile }: DocTextProps) {
   const segments = useMemo(() => splitDocBlocks(text), [text])
   return (
     <>
       {segments.map((segment, index) => segment.kind === 'doc'
-        ? <DocBlockView key={`doc:${index}`} source={segment.text} onOpenFile={onOpenFile} />
+        ? <DocBlockView key={`doc:${index}`} source={segment.text} artifacts={artifacts} onOpenFile={onOpenFile} />
         : (
           <div className={layout === true ? docCss.docBody : undefined} data-doc-body={layout === true ? '' : undefined}
             key={`md:${index}`}>
