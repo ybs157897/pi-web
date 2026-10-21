@@ -713,7 +713,8 @@ function ContentBlockView({ block, streaming = false, plainText = false, doc, do
       return plainText ? <div className={css.userText}>{block.text}</div>
         : doc === true
           ? <DocText text={block.text} streaming={streaming} layout={docLayout === true} labels={labels ?? markdownLabels(t)}
-            fileMentions={fileMentions} pathImages={pathImages} />
+            fileMentions={fileMentions} pathImages={pathImages}
+            onOpenFile={onOpenFile === undefined ? undefined : path => { onOpenFile(path) }} />
           : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
             fileMentions={fileMentions} pathImages={pathImages} />
     case 'thinking':

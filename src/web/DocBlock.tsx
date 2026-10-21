@@ -66,6 +66,8 @@ import {
   IconWarningTriangleOutlineRegular,
   IconWorkspaceTreeOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { DocInline } from './DocInline.tsx'
+import { classifyCode } from './doc-inline.ts'
 import css from './DocBlock.module.css'
 
 export interface DocCard {
@@ -83,9 +85,25 @@ export interface DocPanel {
   readonly footer: string | undefined
 }
 
+/** 一条验证结果：构建通过、测试未跑这类「做了什么验证」的条目。 */
+export interface DocCheck {
+  readonly status: 'pass' | 'fail' | 'skip'
+  readonly label: string
+  readonly detail: string | undefined
+}
+
+/** 一条改动：文件路径 + 一句说明 + 增删统计，交付说明和 Code Review 用。 */
+export interface DocChange {
+  readonly path: string
+  readonly summary: string | undefined
+  readonly stats: string | undefined
+}
+
 export type ParsedDocBlock =
   | { readonly type: 'cards'; readonly items: readonly DocCard[] }
   | { readonly type: 'compare'; readonly left: DocPanel; readonly right: DocPanel }
+  | { readonly type: 'checks'; readonly items: readonly DocCheck[] }
+  | { readonly type: 'changes'; readonly items: readonly DocChange[] }
   | { readonly type: 'note'; readonly icon: string | undefined; readonly title: string | undefined
     readonly body: string | undefined; readonly code: string | undefined; readonly label: string | undefined }
 
@@ -234,6 +252,26 @@ function readPanel(value: unknown): DocPanel | undefined {
   return { badge, title, subtitle: subtitle.value, bullets, footer: footer.value }
 }
 
+function readCheck(value: unknown): DocCheck | undefined {
+  if (!isRecord(value)) return undefined
+  const label = requiredText(value.label)
+  if (label === undefined) return undefined
+  if (value.status !== 'pass' && value.status !== 'fail' && value.status !== 'skip') return undefined
+  const detail = optionalText(value.detail)
+  if (!detail.ok) return undefined
+  return { status: value.status, label, detail: detail.value }
+}
+
+function readChange(value: unknown): DocChange | undefined {
+  if (!isRecord(value)) return undefined
+  const path = requiredText(value.path)
+  if (path === undefined) return undefined
+  const summary = optionalText(value.summary)
+  const stats = optionalText(value.stats)
+  if (!summary.ok || !stats.ok) return undefined
+  return { path, summary: summary.value, stats: stats.value }
+}
+
 /**
  * 解析一段围栏里的 YAML。结构不合法时返回 undefined，调用方退回普通 markdown 渲染，
  * 所以这里只认契约里的形状，多余字段忽略、少字段一律判非法。
@@ -264,6 +302,28 @@ export function parseDocBlock(source: string): ParsedDocBlock | undefined {
     if (left === undefined || right === undefined) return undefined
     return { type: 'compare', left, right }
   }
+  if (document.type === 'checks') {
+    const items = document.items
+    if (!Array.isArray(items) || items.length === 0) return undefined
+    const checks: DocCheck[] = []
+    for (const entry of items) {
+      const check = readCheck(entry)
+      if (check === undefined) return undefined
+      checks.push(check)
+    }
+    return { type: 'checks', items: checks }
+  }
+  if (document.type === 'changes') {
+    const items = document.items
+    if (!Array.isArray(items) || items.length === 0) return undefined
+    const changes: DocChange[] = []
+    for (const entry of items) {
+      const change = readChange(entry)
+      if (change === undefined) return undefined
+      changes.push(change)
+    }
+    return { type: 'changes', items: changes }
+  }
   if (document.type === 'note') {
     const icon = optionalText(document.icon)
     const title = optionalText(document.title)
@@ -288,14 +348,22 @@ function DocBadge({ icon, className, size }: { readonly icon: DocIcon | undefine
   return <span className={className} aria-hidden="true"><Glyph size={size} /></span>
 }
 
-function DocBullets({ items }: { readonly items: readonly string[] }) {
+function DocBullets({ items, onOpenFile }: {
+  readonly items: readonly string[]
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}) {
   if (items.length === 0) return null
   return <ul className={css.bullets}>
-    {items.map((item, index) => <li key={`${index}:${item}`} className={css.bullet}>{item}</li>)}
+    {items.map((item, index) => <li key={`${index}:${item}`} className={css.bullet}>
+      <DocInline text={item} onOpenFile={onOpenFile} />
+    </li>)}
   </ul>
 }
 
-function CardsBlock({ items }: { readonly items: readonly DocCard[] }): ReactElement {
+function CardsBlock({ items, onOpenFile }: {
+  readonly items: readonly DocCard[]
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
   // 列数由卡片数量决定：3 张一排是设计稿的基准，更多就固定两列并给第二行加顶线。
   const count = items.length > 3 ? 'many' : String(items.length)
   return <div className={css.cardGrid} data-count={count}>
@@ -303,23 +371,27 @@ function CardsBlock({ items }: { readonly items: readonly DocCard[] }): ReactEle
       <section key={`${index}:${item.title}`} className={css.card}>
         <DocBadge icon={iconOf(item.icon)} className={css.cardBadge} size={18} />
         <h3 className={css.cardTitle}>{item.title}</h3>
-        {item.body !== undefined && <p className={css.cardBody}>{item.body}</p>}
-        <DocBullets items={item.bullets} />
+        {item.body !== undefined && <p className={css.cardBody}><DocInline text={item.body} onOpenFile={onOpenFile} /></p>}
+        <DocBullets items={item.bullets} onOpenFile={onOpenFile} />
       </section>
     ))}
   </div>
 }
 
 /** 对比栏：左栏是弱化版，右栏是强调版；徽章用 ✓/✕ 表达取舍。 */
-function ComparePanel({ panel, tone }: { readonly panel: DocPanel; readonly tone: 'muted' | 'accent' }): ReactElement {
+function ComparePanel({ panel, tone, onOpenFile }: {
+  readonly panel: DocPanel
+  readonly tone: 'muted' | 'accent'
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
   const badge = panel.badge === 'check' ? IconCheckOutlineRegular
     : panel.badge === 'cross' ? IconCloseOutlineRegular : undefined
   return <section className={tone === 'accent' ? css.panelAccent : css.panelMuted} data-badge={panel.badge}>
     <DocBadge icon={badge} className={css.panelBadge} size={12} />
     <h3 className={css.panelTitle}>{panel.title}</h3>
-    {panel.subtitle !== undefined && <p className={css.panelSubtitle}>{panel.subtitle}</p>}
-    <DocBullets items={panel.bullets} />
-    {panel.footer !== undefined && <p className={css.panelFooter}>{panel.footer}</p>}
+    {panel.subtitle !== undefined && <p className={css.panelSubtitle}><DocInline text={panel.subtitle} onOpenFile={onOpenFile} /></p>}
+    <DocBullets items={panel.bullets} onOpenFile={onOpenFile} />
+    {panel.footer !== undefined && <p className={css.panelFooter}><DocInline text={panel.footer} onOpenFile={onOpenFile} /></p>}
   </section>
 }
 
@@ -334,14 +406,63 @@ function compareTone(panel: DocPanel, fallback: 'muted' | 'accent'): 'muted' | '
   return fallback
 }
 
-function CompareBlock({ left, right }: { readonly left: DocPanel; readonly right: DocPanel }): ReactElement {
+function CompareBlock({ left, right, onOpenFile }: {
+  readonly left: DocPanel
+  readonly right: DocPanel
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
   return <div className={css.compareGrid}>
-    <ComparePanel panel={left} tone={compareTone(left, 'muted')} />
-    <ComparePanel panel={right} tone={compareTone(right, 'accent')} />
+    <ComparePanel panel={left} tone={compareTone(left, 'muted')} onOpenFile={onOpenFile} />
+    <ComparePanel panel={right} tone={compareTone(right, 'accent')} onOpenFile={onOpenFile} />
   </div>
 }
 
-function NoteBlock({ block }: { readonly block: Extract<ParsedDocBlock, { type: 'note' }> }): ReactElement {
+/** 验证结果：✓ 通过 / ✗ 失败 / – 未执行，右侧是可复制的命令或说明。 */
+function ChecksBlock({ items, onOpenFile }: {
+  readonly items: readonly DocCheck[]
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
+  return <ul className={css.checkList}>
+    {items.map((item, index) => (
+      <li key={`${index}:${item.label}`} className={css.checkRow} data-status={item.status}>
+        <span className={css.checkMark} aria-hidden="true">
+          {item.status === 'pass' ? <IconCheckCircleOutlineRegular size={15} />
+            : item.status === 'fail' ? <IconCloseCircleFillRegular size={15} />
+              : <span className={css.checkSkip}>–</span>}
+        </span>
+        <span className={css.checkLabel}>{item.label}</span>
+        {item.detail !== undefined && <span className={css.checkDetail}><DocInline text={item.detail} onOpenFile={onOpenFile} /></span>}
+      </li>
+    ))}
+  </ul>
+}
+
+/** 改动清单：文件行，路径可点开 Inspector，右侧显示增删统计。 */
+function ChangesBlock({ items, onOpenFile }: {
+  readonly items: readonly DocChange[]
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
+  return <ul className={css.changeList}>
+    {items.map((item, index) => (
+      <li key={`${index}:${item.path}`} className={css.changeRow}>
+        <span className={css.changeIcon} aria-hidden="true"><IconDeliverDocRegular size={15} /></span>
+        <span className={css.changeBody}>
+          {/* 模型偶尔把「3 个测试文件」这种说明写进 path；不像路径的就别做成可点按钮。 */}
+          <button type="button" className={`${css.inlineCode} ${css.inlinePath} ${css.changePath}`}
+            disabled={onOpenFile === undefined || classifyCode(item.path) !== 'path'} title={item.path}
+            onClick={() => { onOpenFile?.(item.path) }}>{item.path}</button>
+          {item.summary !== undefined && <span className={css.changeSummary}><DocInline text={item.summary} onOpenFile={onOpenFile} /></span>}
+        </span>
+        {item.stats !== undefined && <span className={css.changeStats}>{item.stats}</span>}
+      </li>
+    ))}
+  </ul>
+}
+
+function NoteBlock({ block, onOpenFile }: {
+  readonly block: Extract<ParsedDocBlock, { type: 'note' }>
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement {
   // 没指定图标时用灯泡，指定了但映射查不到就不画。
   const icon = block.icon === undefined ? IconLightOutlineRegular : iconOf(block.icon)
   return <div className={css.note}>
@@ -351,7 +472,7 @@ function NoteBlock({ block }: { readonly block: Extract<ParsedDocBlock, { type: 
         <h3 className={css.noteTitle}>{block.title}</h3>
         {block.code === undefined && block.label !== undefined && <span className={css.noteChip}>{block.label}</span>}
       </div>}
-      {block.body !== undefined && <p className={css.noteBody}>{block.body}</p>}
+      {block.body !== undefined && <p className={css.noteBody}><DocInline text={block.body} onOpenFile={onOpenFile} /></p>}
       {block.code !== undefined && <div className={css.noteCodeWrap} data-label={block.label !== undefined}>
         {block.label !== undefined && <span className={css.noteChip}>{block.label}</span>}
         <pre className={css.noteCode}>{block.code}</pre>
@@ -367,7 +488,11 @@ function NoteBlock({ block }: { readonly block: Extract<ParsedDocBlock, { type: 
  * `: `（例如 `code: const s = create(({ tab: 'x' }))`），YAML 解析器会整块
  * 拒绝。整块消失比显示得不好更糟——读者会以为这一节本来就不存在。
  */
-export function DocBlockView({ source }: { readonly source: string }): ReactElement | null {
+export function DocBlockView({ source, onOpenFile }: {
+  readonly source: string
+  /** Opens a workspace file from a path chip; absent on surfaces without an inspector. */
+  readonly onOpenFile?: ((path: string) => void) | undefined
+}): ReactElement | null {
   const block = parseDocBlock(source)
   if (block === undefined) {
     return <div className={css.fallback} data-doc-block="invalid" role="note">
@@ -376,10 +501,16 @@ export function DocBlockView({ source }: { readonly source: string }): ReactElem
     </div>
   }
   if (block.type === 'cards') {
-    return <div className={css.root} data-doc-block="cards"><CardsBlock items={block.items} /></div>
+    return <div className={css.root} data-doc-block="cards"><CardsBlock items={block.items} onOpenFile={onOpenFile} /></div>
   }
   if (block.type === 'compare') {
-    return <div className={css.root} data-doc-block="compare"><CompareBlock left={block.left} right={block.right} /></div>
+    return <div className={css.root} data-doc-block="compare"><CompareBlock left={block.left} right={block.right} onOpenFile={onOpenFile} /></div>
   }
-  return <div className={css.root} data-doc-block="note"><NoteBlock block={block} /></div>
+  if (block.type === 'checks') {
+    return <div className={css.root} data-doc-block="checks"><ChecksBlock items={block.items} onOpenFile={onOpenFile} /></div>
+  }
+  if (block.type === 'changes') {
+    return <div className={css.root} data-doc-block="changes"><ChangesBlock items={block.items} onOpenFile={onOpenFile} /></div>
+  }
+  return <div className={css.root} data-doc-block="note"><NoteBlock block={block} onOpenFile={onOpenFile} /></div>
 }

@@ -361,3 +361,187 @@
   line-height: 1.7;
   white-space: pre;
 }
+
+/* ---------- 行内格式：路径 / 命令 / 普通代码 ---------- */
+
+.root strong {
+  font-weight: 600;
+}
+
+.root a {
+  color: var(--dsw-alias-link);
+  text-decoration: none;
+}
+
+.root a:hover {
+  text-decoration: underline dotted var(--dsw-alias-link);
+  text-underline-offset: 3px;
+}
+
+.inlineCode {
+  display: inline;
+  max-width: 100%;
+  padding: 1px 5px;
+  border: 0.5px solid var(--doc-hairline);
+  border-radius: 5px;
+  background: var(--dsw-alias-markdown-inline-code);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--ds-font-family-code);
+  font-size: 0.94em;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* 路径可点：hover 只提亮描边，不换底色，避免整块卡片都在发光。 */
+button.inlineCode.inlinePath {
+  border-color: var(--dsw-alias-link);
+  color: var(--dsw-alias-link);
+  cursor: pointer;
+}
+
+button.inlineCode.inlinePath:hover:not(:disabled) {
+  background: var(--dsw-alias-markdown-inline-code);
+  text-decoration: underline dotted var(--dsw-alias-link);
+  text-underline-offset: 3px;
+}
+
+button.inlineCode.inlinePath:disabled {
+  border-color: var(--doc-hairline);
+  color: var(--dsw-alias-label-primary);
+  cursor: default;
+}
+
+button.inlineCode.inlineCommand {
+  cursor: copy;
+}
+
+button.inlineCode.inlineCommand[data-copied] {
+  border-color: var(--doc-ok);
+  color: var(--doc-ok);
+}
+
+button.inlineCode:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: 2px;
+}
+
+/* ---------- 验证结果 ---------- */
+
+.checkList {
+  display: flex;
+  flex-direction: column;
+  margin: 14px 0;
+  padding: 0;
+  border: 1px solid var(--doc-hairline);
+  border-radius: var(--doc-radius);
+  list-style: none;
+}
+
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 10px 14px;
+}
+
+.checkRow + .checkRow {
+  border-top: 1px solid var(--doc-hairline);
+}
+
+.checkMark {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--doc-ok);
+}
+
+.checkRow[data-status='fail'] .checkMark {
+  color: var(--doc-accent);
+}
+
+.checkRow[data-status='skip'] .checkMark {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.checkSkip {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.checkLabel {
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.checkDetail {
+  min-width: 0;
+  flex: 1 1 220px;
+  color: var(--doc-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* ---------- 改动清单 ---------- */
+
+.changeList {
+  display: flex;
+  flex-direction: column;
+  margin: 14px 0;
+  padding: 0;
+  border: 1px solid var(--doc-hairline);
+  border-radius: var(--doc-radius);
+  list-style: none;
+}
+
+.changeRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 14px;
+}
+
+.changeRow + .changeRow {
+  border-top: 1px solid var(--doc-hairline);
+}
+
+.changeIcon {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.changeBody {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+}
+
+.changePath {
+  font-size: 12.5px;
+}
+
+.changeSummary {
+  min-width: 0;
+  color: var(--doc-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.changeStats {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

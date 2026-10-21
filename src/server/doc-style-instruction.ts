@@ -75,6 +75,43 @@ right:
 
 字段：\`type\` 固定为 \`compare\`；\`left\` 和 \`right\` 各有 \`badge\`（\`check\` 表示推荐，\`cross\` 表示不推荐）、\`title\`、\`subtitle\`（可选）、\`bullets\`（可选）、\`footer\`（可选）。
 
+### 验证结果
+
+一条一条列验证项，\`status\` 用 \`pass\`（通过）、\`fail\`（失败）、\`skip\`（未执行）：
+
+\`\`\`doc
+type: checks
+items:
+  - status: pass
+    label: 构建
+    detail: '\`npm run build\` 通过（3.17s）'
+  - status: pass
+    label: 启动
+    detail: 端口 \`4317\` 监听，\`GET /\` 返回 HTTP 200
+  - status: skip
+    label: 类型检查
+    detail: 本轮未执行 \`npm run typecheck\`
+\`\`\`
+
+字段：\`type\` 固定为 \`checks\`；\`items\` 每项有 \`status\`、\`label\`、\`detail\`（可选）。
+
+### 改动清单
+
+交付代码改动时列出文件：
+
+\`\`\`doc
+type: changes
+items:
+  - path: src/server/shell-tools.ts
+    summary: 新增原生 Windows PowerShell 工具
+    stats: +120 −0
+  - path: src/web/transcript.tsx
+    summary: 接入新的工具卡
+    stats: +12 −3
+\`\`\`
+
+字段：\`type\` 固定为 \`changes\`；\`items\` 每项有 \`path\`、\`summary\`（可选）、\`stats\`（可选，写成 \`+120 −0\` 这种增删数）。
+
 ### 提示
 
 回答末尾的补充说明、提醒或下一步：
@@ -96,7 +133,8 @@ label: 可选
 
 ### 规则
 
-- 一次回答最多用 2 到 3 个 doc 块，块之间的普通段落照常用 Markdown 写。
+- 块内的路径、命令、提交号、URL 一律用反引号包起来（例如 \`src/app.ts\`、\`npm test\`、\`462d428\`）：前端会把它们渲染成 chip，路径可点开文件、命令点击可复制；不包反引号就只是普通文字。
+- 一次回答最多用 2 到 4 个 doc 块，块之间的普通段落照常用 Markdown 写。
 - 结论分节时每节至少有一个 doc 块或两段以上的正文，不要出现只有标题的空节。
 - 只有结论本身值得并排、对比或提醒时才用结构化块，其余内容保持普通 Markdown。
 - 卡片图标只能从下面这份白名单里选：text、doc、file、code、list、todo、edit、copy、compare、plan、goal、tree、branch、queue、api、link、injection、time、deadline、check、cross、done、failed、info、warn、question、loading、pause、stop、run、refresh、pin、add、agent、team、folder、workspace、chat、preset、settings、sliders、shield、plugin、skill、data、globe、chart、layers、space、color、sparkle、think、enhance、bulb、search、inspect、archive、restore、share、download、attach、send、expand、delete。

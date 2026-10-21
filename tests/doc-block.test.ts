@@ -80,6 +80,45 @@ describe('doc block parsing', () => {
     })
   })
 
+  it('reads the verification checklist', () => {
+    const parsed = parseDocBlock([
+      'type: checks',
+      'items:',
+      '  - status: pass',
+      '    label: 构建',
+      '    detail: npm run build 通过（3.17s）',
+      '  - status: skip',
+      '    label: 类型检查',
+    ].join('\n'))
+
+    expect(parsed).toEqual({
+      type: 'checks',
+      items: [
+        { status: 'pass', label: '构建', detail: 'npm run build 通过（3.17s）' },
+        { status: 'skip', label: '类型检查', detail: undefined },
+      ],
+    })
+  })
+
+  it('reads the changed-file list', () => {
+    const parsed = parseDocBlock([
+      'type: changes',
+      'items:',
+      '  - path: src/server/shell-tools.ts',
+      '    summary: 新增原生 Windows PowerShell 工具',
+      '    stats: +120 −0',
+      '  - path: src/web/transcript.tsx',
+    ].join('\n'))
+
+    expect(parsed).toEqual({
+      type: 'changes',
+      items: [
+        { path: 'src/server/shell-tools.ts', summary: '新增原生 Windows PowerShell 工具', stats: '+120 −0' },
+        { path: 'src/web/transcript.tsx', summary: undefined, stats: undefined },
+      ],
+    })
+  })
+
   it('defaults the bullets to an empty list and the badge to none', () => {
     const cards = parseDocBlock('type: cards\nitems:\n  - title: 只有标题\n')
     expect(cards).toEqual({ type: 'cards', items: [{ icon: undefined, title: '只有标题', body: undefined, bullets: [] }] })
@@ -98,6 +137,9 @@ describe('doc block parsing', () => {
     expect(parseDocBlock('type: cards\nitems:\n  - title: "  "\n')).toBeUndefined()
     expect(parseDocBlock('type: compare\nleft:\n  title: 左\n')).toBeUndefined()
     expect(parseDocBlock('type: compare\nright:\n  title: 右\n')).toBeUndefined()
+    expect(parseDocBlock('type: checks\nitems:\n  - label: 构建\n')).toBeUndefined()
+    expect(parseDocBlock('type: checks\nitems:\n  - status: done\n    label: 构建\n')).toBeUndefined()
+    expect(parseDocBlock('type: changes\nitems:\n  - summary: 没写路径\n')).toBeUndefined()
     expect(parseDocBlock('type: compare\nleft:\n  title: 左\nright:\n  subtitle: 没有标题\n')).toBeUndefined()
     // 标题和正文都没有的提示块没有可读内容。
     expect(parseDocBlock('type: note\nicon: info\n')).toBeUndefined()
