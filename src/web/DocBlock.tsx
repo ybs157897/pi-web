@@ -189,6 +189,9 @@ const ICONS: Record<string, ComponentType<{ size?: number }>> = {
 
 type DocIcon = ComponentType<{ size?: number }>
 
+/** The icon names the renderer can draw; the contract may only ask for these. */
+export const DOC_ICON_NAMES: readonly string[] = Object.freeze(Object.keys(ICONS))
+
 function iconOf(name: string | undefined): DocIcon | undefined {
   if (name === undefined) return undefined
   return ICONS[name]
@@ -269,6 +272,11 @@ const RESERVED_START = /^[`#&!*@%[{]/u
  * 悄悄少半句。激进修复只在解析失败后做（tab 缩进、没闭合的引号）。
  */
 function parseLoose(source: string): unknown {
+  // 结构化输出的模型会在围栏里写 JSON；先按 JSON 解析，失败再走 YAML 修复链。
+  const trimmed = source.trim()
+  if (trimmed.startsWith('{')) {
+    try { return JSON.parse(trimmed) } catch { /* 不是合法 JSON，退回 YAML */ }
+  }
   const preserved = preserveScalars(source)
   try {
     return parseYaml(preserved)
@@ -614,6 +622,13 @@ function NoteBlock({ block, onOpenFile }: {
  * 原始 YAML、最后再跳一下。
  */
 export function parseDocBlockPartial(source: string): ParsedDocBlock | undefined {
+  // 结构化输出的模型写的是 JSON：一行写完，没有「按行往回退」可退，
+  // 只能从里面挑出已经写完的条目。
+  const json = partialJsonDocument(source)
+  if (json !== undefined) {
+    const block = lenientBlock(json)
+    if (block !== undefined) return block
+  }
   const lines = source.split('\n')
   for (let end = lines.length; end > 0; end -= 1) {
     const document = parseLoose(lines.slice(0, end).join('\n'))
@@ -622,6 +637,56 @@ export function parseDocBlockPartial(source: string): ParsedDocBlock | undefined
     if (block !== undefined) return block
   }
   return undefined
+}
+
+/**
+ * 从写了一半的 JSON 载荷里取出已经写完的条目。
+ *
+ * 只认 `type` + `items` 的形状：卡片、检查清单、改动清单都是条目数组，
+ * 边写边把写完的条目交出去；对比块和提示块是整体结构，只能等写完。
+ */
+function partialJsonDocument(source: string): Record<string, unknown> | undefined {
+  const type = /"type"\s*:\s*"([a-z]+)"/u.exec(source)?.[1]
+  if (type === undefined) return undefined
+  const items = completeArrayItems(source)
+  if (items === undefined) return undefined
+  return { type, items }
+}
+
+/** 取出 `items` 数组里已经闭合的条目；最后半截的那条丢掉。 */
+function completeArrayItems(source: string): unknown[] | undefined {
+  const key = /"items"\s*:\s*\[/u.exec(source)
+  if (key === null) return undefined
+  const items: unknown[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let index = key.index + key[0].length; index < source.length; index += 1) {
+    const char = source[index]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') { inString = true; continue }
+    if (char === '{' || char === '[') {
+      if (depth === 0) start = index
+      depth += 1
+      continue
+    }
+    if (char === '}' || char === ']') {
+      depth -= 1
+      if (depth < 0) break
+      if (depth === 0 && start >= 0) {
+        const text = source.slice(start, index + 1)
+        try { items.push(JSON.parse(text)) } catch { /* 半个条目直接丢掉 */ }
+        start = -1
+      }
+    }
+  }
+  return items
 }
 
 /** 只保留结构完整的条目；末尾半截的条目丢掉，整块没有完整内容时返回 undefined。 */

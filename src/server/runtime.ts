@@ -96,7 +96,7 @@ import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME, inheri
 import { createRuntimeCodemodeExtension } from './codemode-policy.ts'
 import { ResearchTools } from './research-tools.ts'
 import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
-import { DOC_STYLE_INSTRUCTION } from './doc-style-instruction.ts'
+import { docStyleContract } from './doc-style-instruction.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
@@ -972,8 +972,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
     // Document layout is a contract with the browser, so it travels as an instruction:
-    // a preset's own instructions come first, the block format after them.
-    const instructions = [preset?.instructions, state.settings.docStyle ? DOC_STYLE_INSTRUCTION : undefined]
+    // a preset's own instructions come first, the block format after them. A model
+    // declared able to return structured output gets the JSON payload variant.
+    const structuredOutput = model !== undefined && modelRuntime.structuredOutput(model.provider, model.modelId)
+    const docContract = docStyleContract(state.settings.docStyle, structuredOutput)
+    const instructions = [preset?.instructions, docContract]
       .filter((part): part is string => typeof part === 'string' && part !== '')
       .join('\n\n')
     // Store what the model will actually send. A configured level list can

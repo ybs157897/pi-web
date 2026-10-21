@@ -431,6 +431,22 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       ].join('\n')),
     ])
   }
+  if (userText.includes('[doc-json-fixture]')) {
+    return fauxAssistantMessage([
+      fauxThinking('按结构化输出返回 JSON 载荷。'),
+      fauxText([
+        '## 结构化输出',
+        '',
+        '```doc',
+        '{"type":"cards","items":[{"icon":"shield","title":"JSON 载荷","body":"围栏里是 JSON 对象，渲染层先按 JSON 解析。","bullets":["字段与 YAML 契约一致","解析失败退回 YAML"]},{"icon":"check","title":"三层兜底","body":"JSON → YAML → 原文。","bullets":["JSON 解析","YAML 修复链","原文兜底"]}]}',
+        '```',
+        '',
+        '```doc',
+        '{"type":"checks","items":[{"status":"pass","label":"JSON 解析","detail":"`JSON.parse` 成功"},{"status":"pass","label":"渲染","detail":"卡片与清单都正常"}]}',
+        '```',
+      ].join('\n')),
+    ])
+  }
   if (userText.includes('[codemode]')) {
     const codemodeResults = currentResults.filter((message) => message.toolName === 'codemode')
     if (codemodeResults.length === 0) {
@@ -818,6 +834,7 @@ export function createDemoModelRuntime(): RuntimeModels {
   models.setProvider(faux.provider)
   return {
     models,
+    structuredOutput: () => false,
     defaultModel: DEMO_MODEL,
     defaultThinkingLevel: 'medium',
     async saveProvider(_input: ProviderInput) {

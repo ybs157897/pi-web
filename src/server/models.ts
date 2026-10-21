@@ -43,6 +43,8 @@ export interface RuntimeModels {
   catalog(): Promise<ModelCatalog>
   /** Levels one configured model actually accepts, in escalation order. */
   supportedThinkingLevels(provider: string, modelId: string): ThinkingLevel[] | undefined
+  /** Whether a stored model declares provider-enforced structured output. */
+  structuredOutput(provider: string, modelId: string): boolean
   /** Observe catalog reloads (a change, a save, or another instance's write). */
   subscribe(listener: () => void): () => void
   close(): void
@@ -354,6 +356,9 @@ function publicModel(
     id: model.id,
     name: model.name,
     reasoning: model.reasoning,
+    ...(declared?.structuredOutput === true || (model as { structuredOutput?: unknown }).structuredOutput === true
+      ? { structuredOutput: true }
+      : {}),
     contextWindow: model.contextWindow,
     ...(includeApi ? { api: model.api } : {}),
     ...(includeBaseUrl ? { baseUrl: model.baseUrl } : {}),
@@ -609,8 +614,13 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
     // explicit refresh still picks the files up.
   }
 
+  const structuredOutput = (provider: string, modelId: string): boolean => {
+    const declared = state.merged.get(provider)?.models.find(model => model.id === modelId)
+    return declared?.structuredOutput === true
+  }
   return {
     models: modelCollection,
+    structuredOutput,
     get defaultModel() { return defaultModel },
     get defaultThinkingLevel() { return defaultThinkingLevel },
     subscribe(listener) {
@@ -817,6 +827,7 @@ export async function createModelRuntime(options: { dataDir: string; piDir?: str
         name: model.name,
         reasoning: model.reasoning,
         available: configured.get(model.provider) ?? false,
+        ...(structuredOutput(model.provider, model.id) ? { structuredOutput: true } : {}),
         ...(Number.isFinite(model.contextWindow) ? { contextWindow: model.contextWindow } : {}),
         ...(model.reasoning ? { thinkingLevels: getSupportedThinkingLevels(model).filter((level): level is ThinkingLevel => THINKING_LEVELS.includes(level as ThinkingLevel)) } : {}),
       }))

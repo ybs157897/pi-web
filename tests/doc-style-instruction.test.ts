@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getCurrentSystemMessage, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import { createRuntime } from '../src/server/runtime.ts'
+import { docStyleContract } from '../src/server/doc-style-instruction.ts'
 import { observeDemoRequests } from '../src/server/demo-model.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 
@@ -91,5 +92,25 @@ describe('doc style instruction', () => {
     const system = systems.at(-1) ?? ''
     expect(system).toContain('ONLY_TRANSLATE_ROLE_928')
     expect(system).toContain('type: cards')
+  })
+})
+
+describe('doc style contract', () => {
+  it('sends no contract when the layout is off', () => {
+    expect(docStyleContract(false, false)).toBeUndefined()
+    expect(docStyleContract(false, true)).toBeUndefined()
+  })
+
+  it('teaches YAML to a model without the structured-output capability', () => {
+    const contract = docStyleContract(true, false) ?? ''
+    expect(contract).toContain('type: cards')
+    expect(contract).not.toContain('结构化输出')
+  })
+
+  it('teaches JSON payloads to a model with the structured-output capability', () => {
+    const contract = docStyleContract(true, true) ?? ''
+    expect(contract).toContain('type: cards')
+    expect(contract).toContain('结构化输出')
+    expect(contract).toContain('{"type":"cards"')
   })
 })

@@ -201,6 +201,31 @@ label: 可选
 - 每个 doc 块只表达一件事，字段不要留空字符串，确实没有内容就省略该字段。
 - YAML 值里只要出现「冒号 + 空格」（\`: \`）、\`#\`，或者值本身以反引号开头，整段值就用单引号包起来，例如这样写：- '\`npm test\` 通过'。YAML 把反引号当保留字符，以它开头的裸值会让整块解析失败。\`code\` 字段一律用单引号包起来，例如 \`code: 'const s = create({ tab: 1 })'\`。值里的单引号写成两个单引号转义。`
 
+/**
+ * Appended when the model is declared able to return structured output: the
+ * payload stays a single JSON object inside the fence, with the same fields
+ * the YAML examples above describe.
+ */
+export const DOC_STYLE_JSON_SUFFIX = `### 结构化输出
+
+本模型支持结构化输出：\`doc\` 围栏里请直接写 **JSON 对象**（不要写 YAML），字段名与上面各节一致；一次回答里每个块仍是一个围栏，围栏里只有一个 JSON 对象。例如：
+
+\`\`\`doc
+{"type":"cards","items":[{"icon":"text","title":"字重对比","body":"标题层更重，正文更轻。","bullets":["标题 700","正文 400"]}]}
+\`\`\`
+
+JSON 里不要写注释、不要有结尾逗号；字符串中的换行写成 \\n，双引号写成 \\\"。块内的路径、命令、提交号仍用反引号包起来（\`src/app.ts\`）。`
+
+/**
+ * The contract a new conversation receives. Off means no contract at all;
+ * a model declared able to return structured output is asked for JSON payloads
+ * instead of YAML.
+ */
+export function docStyleContract(docStyle: boolean, structuredOutput: boolean): string | undefined {
+  if (!docStyle) return undefined
+  return structuredOutput ? `${DOC_STYLE_INSTRUCTION}\n\n${DOC_STYLE_JSON_SUFFIX}` : DOC_STYLE_INSTRUCTION
+}
+
 /** The icon names a `doc` block may use; the model must not invent others. */
 export const DOC_STYLE_ICONS = [
   'text', 'doc', 'file', 'code', 'list', 'todo', 'edit', 'copy', 'compare',

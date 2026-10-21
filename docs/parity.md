@@ -710,3 +710,14 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
   - 改前：流式节点 `live-assistant:1178` 与落盘节点 `entry:1182:0` 是**两个不同的 DOM 节点**（tag0/tag1）→ 子树重挂载。
   - 改后：只有**一个** DOM 节点，流式与落盘的 `data-message-id` 同为 `assistant:1192:1792570187567`，标记仍在 → 子树未重挂载。
   - `tests/projection.test.ts` 新增 3 例覆盖「流式与落盘同名」「重试的两条 entry 靠时间戳区分」「无 task 的 entry 退回 entry id」。
+
+## 结论文档排版的结构化输出与 JSON 载荷（2026-10-21）
+
+对照 ZCode `packages/ui/src/settings/model-provider-section/ProviderModelMetadataDialog.tsx` 的「模型能力 → 结构化输出」开关与 DSH 的 doc 块渲染：
+
+- **能力开关**：ZCode 把「结构化输出」放在模型编辑弹窗的「模型能力」分组里（与「原生联网搜索」「对话中系统消息」并列）。pi-web 只移植第一项——Pi 的 provider 模型描述里没有「联网搜索」和「系统消息」字段，另两项没有对应物。开关存成 `ProviderModelInput.structuredOutput`（写进 `models.json` 的模型条目），目录 `/api/models` 与供应商详情都透出，模型目录行显示 `结构化` chip。
+- **能力的作用**：开启后**新建**会话的 agent 指令追加 JSON 变体（`DOC_STYLE_JSON_SUFFIX`）：`doc` 围栏里写 JSON 对象而不是 YAML。与 DSH 不同，DSH 的 doc 块只认 YAML。
+- **与 ZCode 的差异（有意）**：ZCode 的结构化输出是**供应商强制**（请求里带 `response_format`/schema）。pi-web 做不到：Pi Durable 的 `ConversationStreamOptions` 没有 `samplingParams`，模型级 `samplingParams` 会连标题、压缩、工具轮次一起改掉；DeepSeek 官方也只支持 `response_format: json_object`（`json_schema` 返回 400）。所以 pi-web 的开关含义是「这个模型按契约写 JSON 可靠」，**约束落在提示词上**，不是供应商层。
+- **三层兜底**：JSON → YAML（带修复链）→ 原文兜底。三个渲染层同时存在，第一层失败自动退到第二层，两层都失败才显示原文（`data-doc-block="invalid"`）。因此没有打开能力的老模型、旧会话、别的供应商的模型都不受影响。
+- **流式渐进**：JSON 载荷一行写完，YAML 那套「按行往回退」用不上；改为从写了一半的 JSON 里挑出已闭合的 `items` 条目（`completeArrayItems`），逐张出现，最后一条没写完的丢掉。`compare` / `note` 是整体结构，等写完再显示。
+- 验收（真实实例 4317，`opencode-go/deepseek-v4.1-flash` 打开 `structuredOutput`）：两条会话的 `doc` 围栏**全部是合法 JSON**（cards / compare / checks），界面 `invalid` 块 0 个、`partial` 块 0 个；流式采样 partial 卡片 1 → 2 → 3 递增后转正式块。截图 `artifacts/doc-layout-check/90-93-json-*.png`。

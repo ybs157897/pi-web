@@ -10,8 +10,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => new Proxy({}, {
 }))
 
 import { renderToStaticMarkup } from 'react-dom/server'
-import { DocBlockView, parseDocBlock, parseDocBlockPartial } from '../src/web/DocBlock.tsx'
-import { DOC_STYLE_INSTRUCTION } from '../src/server/doc-style-instruction.ts'
+import { DocBlockView, DOC_ICON_NAMES, parseDocBlock, parseDocBlockPartial } from '../src/web/DocBlock.tsx'
+import { DOC_STYLE_ICONS, DOC_STYLE_INSTRUCTION, DOC_STYLE_JSON_SUFFIX } from '../src/server/doc-style-instruction.ts'
 
 describe('doc block parsing', () => {
   it('reads the cards layout', () => {
@@ -202,6 +202,28 @@ describe('partial blocks while streaming', () => {
     const settled = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - icon: api', partial: true, streaming: false })!)
     expect(settled).toContain('data-doc-block="invalid"')
   })
+
+  it('renders the finished entries of a JSON payload while it is still streaming', () => {
+    // 结构化输出的模型一行写完 JSON，没有「按行往回退」可退。
+    const source = '{"type":"cards","items":[{"icon":"text","title":"字重对比"},{"icon":"code","title":"代码'
+    expect(parseDocBlockPartial(source)).toMatchObject({
+      type: 'cards',
+      items: [{ title: '字重对比' }],
+    })
+  })
+
+  it('drops the entry a JSON payload has not finished writing', () => {
+    const source = '{"type":"checks","items":[{"status":"pass","label":"全局态清单"},{"status":"skip","label":"团'
+    expect(parseDocBlockPartial(source)).toMatchObject({
+      type: 'checks',
+      items: [{ label: '全局态清单' }],
+    })
+  })
+
+  it('returns nothing before a JSON payload has a finished entry', () => {
+    expect(parseDocBlockPartial('{"type":"cards","items":[{"icon":"te')).toBeUndefined()
+    expect(parseDocBlockPartial('{"type":"car')).toBeUndefined()
+  })
 })
 
 describe('format contract', () => {
@@ -215,6 +237,11 @@ describe('format contract', () => {
   it('covers the developer blocks in the complete example', () => {
     expect(DOC_STYLE_INSTRUCTION).toContain('type: changes')
     expect(DOC_STYLE_INSTRUCTION).toContain('type: checks')
+  })
+
+  it('offers exactly the icons the contract allows', () => {
+    // 契约里写了图标名，渲染器却没有对应组件，模型就会拿到一个画不出来的名字。
+    expect([...DOC_ICON_NAMES].sort()).toEqual([...DOC_STYLE_ICONS].sort())
   })
 })
 
@@ -306,5 +333,33 @@ describe('card badges', () => {
   it('keeps the badge slot when the icon name is not in the map', () => {
     const html = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - icon: no-such-icon\n    title: 表外图标\n' })!)
     expect(html).toContain('badgeDot')
+  })
+})
+
+describe('JSON payloads', () => {
+  it('reads a JSON cards payload inside the fence', () => {
+    const source = '{"type":"cards","items":[{"icon":"text","title":"字重对比","bullets":["标题 700"]}]}'
+    expect(parseDocBlock(source)).toEqual({
+      type: 'cards',
+      items: [{ icon: 'text', title: '字重对比', body: undefined, bullets: ['标题 700'] }],
+    })
+  })
+
+  it('reads a JSON payload with inline code kept as text', () => {
+    const source = '{"type":"checks","items":[{"status":"pass","label":"构建","detail":"`npm run build` 通过"}]}'
+    expect(parseDocBlock(source)).toMatchObject({
+      type: 'checks',
+      items: [{ status: 'pass', label: '构建', detail: '`npm run build` 通过' }],
+    })
+  })
+
+  it('falls back to YAML when the payload is not JSON', () => {
+    expect(parseDocBlock('type: note\ntitle: 提示\nbody: 正文\n')).toMatchObject({ type: 'note', title: '提示' })
+  })
+
+  it('every JSON example in the structured-output suffix parses', () => {
+    const blocks = [...DOC_STYLE_JSON_SUFFIX.matchAll(/```doc\n([\s\S]*?)```/gu)].map(match => match[1])
+    expect(blocks.length).toBeGreaterThanOrEqual(1)
+    for (const block of blocks) expect(parseDocBlock(block)).toBeDefined()
   })
 })

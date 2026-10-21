@@ -202,3 +202,4 @@ select.selectInput {width:auto;max-width:240px;}
 .disableReasoning:hover:not(:disabled) {color:var(--dsw-alias-label-primary);}
 .jsonSlot {box-sizing:border-box;width:100%;height:112px;min-height:112px;max-height:112px;resize:none;overflow-y:auto;padding:8px 10px;border:.5px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;}
 .jsonSlot:focus {outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;}
+.modelFieldHint {color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow-wrap:anywhere;}
