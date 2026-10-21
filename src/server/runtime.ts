@@ -96,6 +96,7 @@ import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME, inheri
 import { createRuntimeCodemodeExtension } from './codemode-policy.ts'
 import { ResearchTools } from './research-tools.ts'
 import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
+import { DOC_STYLE_INSTRUCTION } from './doc-style-instruction.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
@@ -970,6 +971,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
     const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
+    // Document layout is a contract with the browser, so it travels as an instruction:
+    // a preset's own instructions come first, the block format after them.
+    const instructions = [preset?.instructions, state.settings.docStyle ? DOC_STYLE_INSTRUCTION : undefined]
+      .filter((part): part is string => typeof part === 'string' && part !== '')
+      .join('\n\n')
     // Store what the model will actually send. A configured level list can
     // narrow after the conversation last chose one; keeping the unsupported
     // value in `pi.agent` makes the composer label disagree with the request.
@@ -984,18 +990,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       modelTools,
       ...(model ? { model } : {}),
       ...(effectiveThinking ? { thinkingLevel: effectiveThinking } : {}),
-      ...(preset?.instructions ? { instructions: preset.instructions } : {}),
+      ...(instructions ? { instructions } : {}),
     }
   }
 
   /**
-   * Pi stores the selected extensions and tools in every conversation's `pi.agent`, so a
-   * settings change (`on`/`only`/`off`) or an upgrade that adds code mode would leave
-   * existing conversations on their old presentation. Recompute each idle ownerless
-   * conversation's agent from its metadata, preserving its model and thinking level.
+   * Pi stores the selected extensions, tools and instructions in every conversation's
+   * `pi.agent`, so a settings change (`on`/`only`/`off`, document layout on or off) or
+   * an upgrade that adds code mode would leave existing conversations on their old
+   * presentation. Recompute each idle ownerless conversation's agent from its metadata,
+   * preserving its model and thinking level.
    * A conversation whose stored configuration no longer resolves keeps its old agent.
    */
-  const syncCodemodeAgents = async (): Promise<void> => {
+  const syncIdleAgents = async (): Promise<void> => {
     const records: ConversationRecord[] = []
     let cursor: Cursor | undefined
     do {
@@ -1716,6 +1723,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
     const previousCodemodeMode = appState.snapshot().settings.codemodeMode
+    const previousDocStyle = appState.snapshot().settings.docStyle
     const saved = await appState.update(state => {
       if (input.theme !== undefined) state.settings.theme = input.theme
       if (input.locale !== undefined) state.settings.locale = input.locale
@@ -1727,6 +1735,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (input.performanceUsage !== undefined) state.settings.performanceUsage = input.performanceUsage
       if (input.codingViews !== undefined) state.settings.codingViews = input.codingViews
       if (input.busySendMode !== undefined) state.settings.busySendMode = input.busySendMode
+      if (input.docStyle !== undefined) state.settings.docStyle = input.docStyle
       if (nextAllowlist !== undefined) state.settings.modelAllowlist = nextAllowlist
       if (input.defaultThinkingLevel !== undefined) state.settings.defaultThinkingLevel = input.defaultThinkingLevel
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
@@ -1741,8 +1750,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
       return structuredClone(state.settings)
     })
-    // Code mode is stored in each conversation's agent, so an explicit switch applies now.
-    if (input.codemodeMode !== undefined && input.codemodeMode !== previousCodemodeMode) await syncCodemodeAgents()
+    // Code mode and the document-layout contract are stored in each conversation's agent,
+    // so an explicit switch applies now.
+    if (input.codemodeMode !== undefined && input.codemodeMode !== previousCodemodeMode) await syncIdleAgents()
+    if (input.docStyle !== undefined && input.docStyle !== previousDocStyle) await syncIdleAgents()
     return saved
   }
 
@@ -2296,7 +2307,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   harness.resume()
   // Upgrades add code mode to an existing registry, and the stored agent selection is
   // per conversation: bring idle conversations onto the current presentation before serving.
-  await syncCodemodeAgents()
+  await syncIdleAgents()
 
   return {
     list,

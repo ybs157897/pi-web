@@ -29,6 +29,8 @@ const settingsSchema = z.object({
   performanceUsage: z.enum(PERFORMANCE_USAGE_MODES),
   codingViews: z.boolean(),
   busySendMode: z.enum(['followUp', 'steer']),
+  /** 结论文档排版默认开启；该字段出现之前写入的状态文件按开启处理。 */
+  docStyle: z.boolean().default(true),
   defaultModel: modelRef.optional(),
   modelAllowlist,
   defaultThinkingLevel: thinking,
@@ -172,6 +174,7 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     performanceUsage: 'detailed',
     codingViews: true,
     busySendMode: 'followUp',
+    docStyle: true,
     modelAllowlist: [],
     defaultThinkingLevel: defaultThinkingLevel ?? 'medium',
     defaultAccessMode: DEFAULT_ACCESS,

@@ -102,6 +102,12 @@ export interface AppSettings {
   performanceUsage: PerformanceUsageMode
   codingViews: boolean
   busySendMode: 'followUp' | 'steer'
+  /**
+   * Document layout for the final answer: numbered sections, cards and callouts.
+   * While it is on, the runtime adds a format contract to the agent's instructions
+   * so the model emits the matching `doc` blocks.
+   */
+  docStyle: boolean
   defaultModel?: ModelRef
   /**
    * Models this project may use: `provider/modelId` entries, or `provider/prefix*`

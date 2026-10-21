@@ -5,7 +5,7 @@ import type { AppSettings } from '../shared/types.ts'
 export const DEFAULT_UI_SETTINGS: AppSettings = {
   theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
   transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true,
-  busySendMode: 'followUp', defaultThinkingLevel: 'off', defaultAccessMode: 'fullAccess', modelAllowlist: [], codemodeMode: 'on',
+  busySendMode: 'followUp', docStyle: true, defaultThinkingLevel: 'off', defaultAccessMode: 'fullAccess', modelAllowlist: [], codemodeMode: 'on',
 }
 
 interface UiPreferences {

@@ -11,6 +11,7 @@
 |---|---|---|---|
 | DF-1 | pi-web 不展示插件管理界面，所有扩展工具恒开启 | 侧栏「插件」入口与设置「内置插件」tab 均已移除，`/api/plugins` 不再提供；工具启用判定不再读取历史 `plugins` 开关，仅保留 schema 解析兼容。DSH 有插件面板/市场。 | 有意不做（用户要求） |
 | DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 只读导入 Pi 用户级 `mcp.json`（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`）。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
+| DF-3 | 回答的最终结论按「设计文档」版式渲染 | 结论正文走文档排版层（红色两位章节号、空心描边序号、提示块、只留横细线的表格，`src/web/DocBody.module.css`）与结构块（模型用三反引号 + `doc` 的 YAML 围栏输出卡片组 / 对比面板 / 提示块，`src/web/DocBlock.tsx`）。过程区、推理区、Inspector 文档预览不变。DSH 无此版式，正文外观与 DSH 不一致。设置项 `docStyle`（默认开）可关，关掉后回到 DSH 正文观感。分支 `feat/doc-style-conclusion`。 | 有意差异（用户要求） |
 
 ## 输入区
 

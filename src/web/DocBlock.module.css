@@ -1,0 +1,268 @@
+/*
+ * 设计稿版式：暖白纸感底、红色强调、极细分割线、圆形描边徽章。
+ * 卡片之间只有一根竖细线，没有外框和阴影，正文不被组件抢注意力。
+ */
+.root {
+  --doc-accent: #c0483c;
+  --doc-hairline: rgb(0 0 0 / 8%);
+  --doc-muted: var(--dsw-alias-label-secondary);
+  --doc-soft: var(--dsw-alias-bg-module-platform);
+  --doc-raised: var(--dsw-alias-bg-layer-1);
+  --doc-ok: #3f7d58;
+  --doc-radius: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--doc-radius);
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+/* 深色下把强调色提亮，描边换成半透明白，避免灰底上糊成一片。 */
+:global(body[data-ds-dark-theme]) .root {
+  --doc-accent: #e0897c;
+  --doc-hairline: rgb(255 255 255 / 10%);
+  --doc-ok: #74c08d;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  container-type: inline-size;
+}
+
+.card {
+  min-width: 0;
+  padding: 0 20px;
+}
+
+.card:first-child {
+  padding-left: 0;
+}
+
+.card:not(:first-child) {
+  border-left: 1px solid var(--doc-hairline);
+}
+
+.cardBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 10px;
+  border: 1px solid var(--doc-hairline);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.cardTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.cardBody {
+  margin: 6px 0 0;
+  color: var(--doc-muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.bullets {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bullet {
+  position: relative;
+  padding-left: 14px;
+  color: var(--doc-muted);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.bullet::before {
+  content: '';
+  position: absolute;
+  top: 9px;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+/* 强调色只留给章节号，卡片内的圆点保持中性，避免整页都是红点。 */
+.card .bullet::before {
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.compareGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.panel {
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--doc-radius);
+}
+
+.panelMuted {
+  background: var(--doc-soft);
+}
+
+.panelAccent {
+  border: 1px solid var(--doc-hairline);
+  background: var(--doc-raised);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+.panelBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-bottom: 8px;
+  border: 1px solid var(--doc-hairline);
+  border-radius: 999px;
+  color: var(--doc-muted);
+}
+
+.panel[data-badge='check'] .panelBadge {
+  color: var(--doc-ok);
+}
+
+.panel[data-badge='cross'] .panelBadge {
+  color: var(--doc-accent);
+}
+
+.panelTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.panelSubtitle {
+  margin: 4px 0 0;
+  color: var(--doc-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.panelFooter {
+  margin: 10px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.noteBadge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--doc-hairline);
+  border-radius: 999px;
+  color: var(--doc-accent);
+}
+
+.noteContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.noteTitleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.noteTitle {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.noteBody {
+  margin: 4px 0 0;
+  color: var(--doc-muted);
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+
+.noteCodeWrap {
+  position: relative;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--doc-soft);
+}
+
+/* 有标签时给代码让出位置，标签贴在代码块右上角而不压住正文。 */
+.noteCodeWrap[data-label] {
+  padding-top: 24px;
+}
+
+.noteCode {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.noteChip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--doc-raised);
+  color: var(--doc-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.noteCodeWrap .noteChip {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+}
+
+/* 单列时卡片之间不该有竖线，否则第二张卡左边多出一条没有来由的分割线。 */
+@container (max-width: 400px) {
+  .card {
+    padding: 12px 0 0;
+  }
+
+  .card:not(:first-child) {
+    border-left: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .compareGrid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -13,7 +13,7 @@
 .settingRow {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:64px;padding:13px 0;border-bottom:.5px solid var(--dsw-alias-border-l2);}
 .settingRow:last-child {border-bottom:0;}
 .settingLabel {min-width:0;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);}
-.settingLabel p {margin:3px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}
+.settingLabel p {margin:3px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow-wrap:anywhere;}
 .settingControl {flex:none;max-width:52%;display:flex;justify-content:flex-end;}
 .settingRow[data-stacked] {flex-direction:column;align-items:stretch;gap:10px;}
 .settingRow[data-stacked] .settingControl {max-width:none;}

@@ -19,6 +19,8 @@ import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
 import { activityRunning, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, processTitleFromCounts, toolLiveDetail, type LateAnswer } from './tool-render-model.ts'
 import { toolActivity } from './render-model.ts'
+import { DocText } from './DocText.tsx'
+import docCss from './DocBody.module.css'
 import css from './Transcript.module.css'
 
 export interface PendingMessage {
@@ -100,6 +102,9 @@ export default function Transcript({
   const openMarkdownFile = useMemo(() => onOpenFile === undefined ? undefined
     : (path: string, options?: { line?: number }) => { onOpenFile(path, options?.line) }, [onOpenFile])
   const showChanges = settings.codingViews
+  // The document layout is a presentation choice for the turn's conclusion, so it
+  // follows the operator's setting rather than the transcript detail level.
+  const docStyle = settings.docStyle === true
   const lastRun = model.runs.at(-1)
   const lastRunKey = lastRun?.key
   // DSH mounts its running status at the end of the flow; ZCode decides whether the
@@ -114,7 +119,7 @@ export default function Transcript({
       <MarkdownDelegateProvider openFile={openMarkdownFile} fileImages={fileImages}>
         {model.timeline.map(entry => entry.kind === 'run'
           ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey}
-            liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation}
+            liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation} docStyle={docStyle}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
             resolveFileImage={resolveFileImage} labels={labels} t={t} subagents={liveSubagents}
@@ -180,7 +185,7 @@ function useLiveSubagents(conversationId: string | undefined, projected: readonl
 }
 
 function RunTranscript({
-  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, replies, interactions,
+  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, docStyle, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
@@ -200,6 +205,8 @@ function RunTranscript({
   t: Translate
   subagents: readonly SubagentSummary[]
   showChanges: boolean
+  /** Whether the turn's conclusion renders in the document layout. */
+  docStyle: boolean
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
@@ -215,6 +222,7 @@ function RunTranscript({
       {run.systemRows.filter(row => row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {run.responses.map((response, index) => (
         <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1}
+          doc={index === run.responses.length - 1} docLayout={docStyle}
           onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
           labels={labels} resolveFileImage={resolveFileImage} t={t} />
       ))}
@@ -569,10 +577,14 @@ function latestCompletedParagraphFirstLine(text: string): string {
   }
 }
 
-function AssistantResponse({ response, run, last, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
+function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
   response: ResponsePart
   run: RenderRun
   last: boolean
+  /** Whether this answer is the turn's conclusion. */
+  doc?: boolean
+  /** Whether the document layout sheet is on. */
+  docLayout?: boolean
   onFork?: TranscriptProps['onFork']
   onRetry?: TranscriptProps['onRetry']
   onFeedback?: TranscriptProps['onFeedback']
@@ -618,9 +630,9 @@ function AssistantResponse({ response, run, last, onFork, onRetry, onFeedback, o
   return (
     <div className={css.message} id={transcriptMessageDomId(message.id)} data-message-id={message.id} data-role="assistant"
       data-streaming={streaming || undefined}>
-      <div className={css.assistantBody}>
+      <div className={doc === true && docLayout === true ? `${css.assistantBody} ${docCss.docScope}` : css.assistantBody}>
         {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${block.slot ?? index}`} block={block}
-          streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
+          doc={doc} docLayout={docLayout} streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
           fileMentions={fileMentions} pathImages={pathImages} />)}
         {!streaming && run.status === 'cancelled' && <div className={css.runNotice} data-status="cancelled" role="status">
           {t('回答已停止', 'Response stopped')}
@@ -681,10 +693,14 @@ function AssistantResponse({ response, run, last, onFork, onRetry, onFeedback, o
   )
 }
 
-function ContentBlockView({ block, streaming = false, plainText = false, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
+function ContentBlockView({ block, streaming = false, plainText = false, doc, docLayout, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
   block: ContentBlock
   streaming?: boolean
   plainText?: boolean
+  /** Whether the block belongs to a turn's conclusion. */
+  doc?: boolean
+  /** Whether the document layout sheet is on. */
+  docLayout?: boolean
   onOpenFile?: TranscriptProps['onOpenFile']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   t: Translate
@@ -695,8 +711,11 @@ function ContentBlockView({ block, streaming = false, plainText = false, onOpenF
   switch (block.type) {
     case 'text':
       return plainText ? <div className={css.userText}>{block.text}</div>
-        : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
-          fileMentions={fileMentions} pathImages={pathImages} />
+        : doc === true
+          ? <DocText text={block.text} streaming={streaming} layout={docLayout === true} labels={labels ?? markdownLabels(t)}
+            fileMentions={fileMentions} pathImages={pathImages} />
+          : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
+            fileMentions={fileMentions} pathImages={pathImages} />
     case 'thinking':
       return null
     case 'image':

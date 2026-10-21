@@ -111,7 +111,7 @@ const settingsSchema = z.object({
   fontSize: z.number().int().min(12).max(20).optional(), codeFontSize: z.number().int().min(10).max(16).optional(), terminalFontSize: z.number().int().min(10).max(20).optional(),
   transcriptView: z.enum(TRANSCRIPT_VIEW_MODES).optional(), collapseTiming: z.enum(COLLAPSE_TIMINGS).optional(),
   performanceUsage: z.enum(PERFORMANCE_USAGE_MODES).optional(),
-  codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), defaultModel: modelRef.nullable().optional(),
+  codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), docStyle: z.boolean().optional(), defaultModel: modelRef.nullable().optional(),
   modelAllowlist: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
   codemodeMode: z.enum(CODEMODE_MODES).optional(),
