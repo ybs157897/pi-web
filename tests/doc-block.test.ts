@@ -128,8 +128,12 @@ describe('doc block rendering', () => {
     expect(html).toContain('注意')
   })
 
-  it('renders nothing when the source is not a doc block', () => {
-    expect(DocBlockView({ source: 'type: unknown' })).toBeNull()
-    expect(DocBlockView({ source: '只是普通文本' })).toBeNull()
+  it('keeps the authored text when the source does not parse', () => {
+    // A model-written value with an unquoted `: ` breaks YAML; dropping the block
+    // would silently delete a section of the answer.
+    const broken = "type: note\ntitle: 落地步骤\nbody: 先建 store。\ncode: const s = create({ tab: 'x' })\n"
+    const html = renderToStaticMarkup(DocBlockView({ source: broken })!)
+    expect(html).toContain('data-doc-block="invalid"')
+    expect(html).toContain('const s = create')
   })
 })

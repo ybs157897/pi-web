@@ -90,13 +90,19 @@ label: 可选
 
 字段：\`type\` 固定为 \`note\`；\`icon\`、\`title\`、\`body\` 必填，\`code\`（一行命令或代码片段）和 \`label\`（一个小标签）可选。
 
+### 版面结构
+
+多部分的结论先用 \`##\` 小节标题分节，节标题控制在理由级短语（不超过 10 个字），每个节下面放一个 doc 块或普通段落。前端会给小节自动编号（01、02…），所以不要自己在标题里写序号，也不要用一级标题 \`#\`。
+
 ### 规则
 
 - 一次回答最多用 2 到 3 个 doc 块，块之间的普通段落照常用 Markdown 写。
+- 结论分节时每节至少有一个 doc 块或两段以上的正文，不要出现只有标题的空节。
 - 只有结论本身值得并排、对比或提醒时才用结构化块，其余内容保持普通 Markdown。
 - 卡片图标只能从下面这份白名单里选：text、space、color、code、doc、compare、sparkle、bulb、check、cross、info、warn、plan、goal、tree、search、skill、data、layers、chart、sliders、globe、branch、archive、agent、folder、settings、think、enhance、injection、queue。
 - doc 块里不要放代码围栏（不要出现三个反引号），也不要写引用式链接和脚注；这些在块里无法正确渲染。
-- 每个 doc 块只表达一件事，字段不要留空字符串，确实没有内容就省略该字段。`
+- 每个 doc 块只表达一件事，字段不要留空字符串，确实没有内容就省略该字段。
+- YAML 值里只要出现「冒号 + 空格」（\`: \`）、\`#\`、或者以 \`{\` \`[\` 开头，整段值就用单引号包起来；\`code\` 字段一律用单引号包起来，例如 \`code: 'const s = create({ tab: 1 })'\`。值里的单引号写成两个单引号转义。`
 
 /** The icon names a `doc` block may use; the model must not invent others. */
 export const DOC_STYLE_ICONS = [

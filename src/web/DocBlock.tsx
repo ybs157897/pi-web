@@ -249,10 +249,21 @@ function ComparePanel({ panel, tone }: { readonly panel: DocPanel; readonly tone
   </section>
 }
 
+/**
+ * 强调跟着徽章走，而不是跟着左右位置走：模型可能把推荐项放在左边，
+ * 只按位置写死会让「✓ 推荐」拿到灰底、「✗ 不推荐」拿到白底加边框，
+ * 视觉语义正好反过来。两侧徽章相同时才退回左弱右强的排法。
+ */
+function compareTone(panel: DocPanel, fallback: 'muted' | 'accent'): 'muted' | 'accent' {
+  if (panel.badge === 'check') return 'accent'
+  if (panel.badge === 'cross') return 'muted'
+  return fallback
+}
+
 function CompareBlock({ left, right }: { readonly left: DocPanel; readonly right: DocPanel }): ReactElement {
   return <div className={css.compareGrid}>
-    <ComparePanel panel={left} tone="muted" />
-    <ComparePanel panel={right} tone="accent" />
+    <ComparePanel panel={left} tone={compareTone(left, 'muted')} />
+    <ComparePanel panel={right} tone={compareTone(right, 'accent')} />
   </div>
 }
 
@@ -275,10 +286,21 @@ function NoteBlock({ block }: { readonly block: Extract<ParsedDocBlock, { type: 
   </div>
 }
 
-/** 渲染一个 doc 块。source 解析失败时返回 null，调用方按普通 markdown 渲染。 */
+/**
+ * 渲染一个 doc 块。
+ *
+ * 解析失败时按原文显示而不是返回 null：模型偶尔会在值里写出未加引号的
+ * `: `（例如 `code: const s = create(({ tab: 'x' }))`），YAML 解析器会整块
+ * 拒绝。整块消失比显示得不好更糟——读者会以为这一节本来就不存在。
+ */
 export function DocBlockView({ source }: { readonly source: string }): ReactElement | null {
   const block = parseDocBlock(source)
-  if (block === undefined) return null
+  if (block === undefined) {
+    return <div className={css.fallback} data-doc-block="invalid" role="note">
+      <span className={css.fallbackLabel}>结构化块格式错误，已按原文显示</span>
+      <pre className={css.fallbackCode}>{source.trimEnd()}</pre>
+    </div>
+  }
   if (block.type === 'cards') {
     return <div className={css.root} data-doc-block="cards"><CardsBlock items={block.items} /></div>
   }

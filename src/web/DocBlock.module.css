@@ -266,3 +266,31 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* 解析失败的兜底：保留原文，用弱化的等宽块呈现，不抢正文的层级。 */
+.fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--doc-hairline);
+  border-radius: var(--doc-radius);
+  background: var(--doc-soft);
+}
+
+.fallbackLabel {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.fallbackCode {
+  margin: 0;
+  overflow-x: auto;
+  color: var(--doc-muted);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre;
+}
