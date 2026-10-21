@@ -10,6 +10,9 @@ import css from './ChangedFiles.module.css'
 /** Rows shown before the fold, matching DSH's closing-message summary height. */
 const COLLAPSED_ROWS = 4
 
+/** Counts use the same grouping DSH's card does, so 1234 reads as 1,234. */
+const GROUPED = new Intl.NumberFormat('en-US')
+
 /** One file of the turn, with the content its preview and its diff need. */
 export interface ChangedFileEntry {
   readonly path: string
@@ -40,6 +43,8 @@ export interface ChangedFilesProps {
 export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFilesProps) {
   const files = useMemo(() => collectChangeFiles(artifacts), [artifacts])
   const [expanded, setExpanded] = useState(false)
+  // DSH 的卡没有整卡折叠；这里补一个，让长长的改动列表能收回到卡头。
+  const [collapsed, setCollapsed] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
   if (files.length === 0) return null
   const total = files.length
@@ -69,8 +74,8 @@ export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFil
           : t(`已编辑 ${single.name}`, `Edited ${single.name}`)}</span>
         <span className={css.stat}>
           <span className={css.statCounts}>
-            <span className={css.added}>{`+${added}`}</span>
-            <span className={css.deleted}>{`-${deleted}`}</span>
+            <span className={css.added}>{`+${GROUPED.format(added)}`}</span>
+            <span className={css.deleted}>{`-${GROUPED.format(deleted)}`}</span>
           </span>
           <span className={css.previewHint}>{t('在侧边栏预览', 'Preview in sidebar')}</span>
         </span>
@@ -78,12 +83,21 @@ export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFil
     </button>
   )
   return (
-    <div ref={cardRef} className={css.card} data-changed-files="" data-single={single === undefined ? undefined : ''}>
-      {single === undefined
-        ? header
-        : <HoverCard variant="preview" widthAnchorRef={cardRef} openDelayMs={500} anchor={header}
-          content={<ChangePreview file={single} t={t} />} />}
-      {single === undefined && (
+    <div ref={cardRef} className={css.card} data-changed-files="" data-single={single === undefined ? undefined : ''}
+      data-collapsed={collapsed ? '' : undefined}>
+      <div className={css.headerRow}>
+        {single === undefined
+          ? header
+          : <HoverCard variant="preview" widthAnchorRef={cardRef} openDelayMs={500} anchor={header}
+            content={<ChangePreview file={single} t={t} />} />}
+        <button type="button" className={css.collapse} aria-expanded={!collapsed}
+          aria-label={collapsed ? t('展开改动文件列表', 'Expand changed files') : t('收起改动文件列表', 'Collapse changed files')}
+          title={collapsed ? t('展开改动文件列表', 'Expand changed files') : t('收起改动文件列表', 'Collapse changed files')}
+          onClick={() => { setCollapsed(value => !value) }}>
+          {collapsed ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronUpOutlineRegular size={14} />}
+        </button>
+      </div>
+      {!collapsed && single === undefined && (
         <ul className={css.list}>
           {rows.map(file => (
             <li key={file.path}>
@@ -93,8 +107,8 @@ export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFil
                   onClick={() => { open(file) }}>
                   <span className={css.path}>{file.path}</span>
                   <span className={css.counts}>
-                    <span className={css.added}>{`+${file.added}`}</span>
-                    <span className={css.deleted}>{`-${file.deleted}`}</span>
+                    <span className={css.added}>{`+${GROUPED.format(file.added)}`}</span>
+                    <span className={css.deleted}>{`-${GROUPED.format(file.deleted)}`}</span>
                   </span>
                 </button>}
                 content={<ChangePreview file={file} t={t} />} />
@@ -102,7 +116,7 @@ export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFil
           ))}
         </ul>
       )}
-      {foldable && (
+      {!collapsed && foldable && (
         <button type="button" className={css.toggle} aria-expanded={expanded}
           aria-label={expanded ? t('收起改动文件列表', 'Collapse changed files') : t(`展开全部 ${total} 个改动文件`, `Show all ${total} changed files`)}
           onClick={() => { setExpanded(value => !value) }}>

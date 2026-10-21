@@ -224,6 +224,7 @@ function RunTranscript({
       {run.responses.map((response, index) => (
         <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1}
           doc={index === run.responses.length - 1} docLayout={docStyle}
+          showChanges={showChanges} onInspectDiff={onInspectDiff}
           onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
           labels={labels} resolveFileImage={resolveFileImage} t={t} />
       ))}
@@ -246,7 +247,6 @@ function RunTranscript({
           )}
         </div>
       )}
-      {showChanges && <ChangedFiles artifacts={run.artifacts} onInspectDiff={onInspectDiff} t={t} />}
       {liveCompaction && <CompactionRunningRow t={t} />}
     </section>
   )
@@ -577,7 +577,7 @@ function latestCompletedParagraphFirstLine(text: string): string {
   }
 }
 
-function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
+function AssistantResponse({ response, run, last, doc, docLayout, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
   response: ResponsePart
   run: RenderRun
   last: boolean
@@ -585,6 +585,9 @@ function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetr
   doc?: boolean
   /** Whether the document layout sheet is on. */
   docLayout?: boolean
+  /** Whether the coding views (including the changed-files card) are on. */
+  showChanges?: boolean
+  onInspectDiff?: TranscriptProps['onInspectDiff']
   onFork?: TranscriptProps['onFork']
   onRetry?: TranscriptProps['onRetry']
   onFeedback?: TranscriptProps['onFeedback']
@@ -640,6 +643,8 @@ function AssistantResponse({ response, run, last, doc, docLayout, onFork, onRetr
         {!streaming && run.status === 'error' && <div className={css.runNotice} data-status="error" role="alert">
           {t('回答失败', 'Response failed')}
         </div>}
+        {/* DSH 的回合尾顺序：改动文件卡在操作栏之前，操作栏留在最后。 */}
+        {last && showChanges === true && <ChangedFiles artifacts={run.artifacts} onInspectDiff={onInspectDiff} t={t} />}
         <div className={css.actionRow}>
           <Tooltip label={copied ? t('已复制', 'Copied') : t('复制', 'Copy')} side="bottom" portal>
             <button type="button" className={css.iconAction} aria-label={t('复制回答', 'Copy response')} onClick={() => { void copy() }}>
