@@ -727,3 +727,29 @@
 @media (prefers-reduced-motion: reduce) {
   .compactionSpinner { animation: none; }
 }
+
+/* The transcript-tail spinner; it sits where the next assistant output will land. */
+.runningIndicator {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 16px;
+}
+
+.runningIndicatorIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  animation: runningIndicatorSpin 1s linear infinite;
+}
+
+@keyframes runningIndicatorSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runningIndicatorIcon { animation: none; }
+}

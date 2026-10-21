@@ -292,12 +292,18 @@ export interface ConversationSummary {
   status?: MessageStatus
 }
 
+/**
+ * One block of a message. `slot` is the block's position in the model's own content array:
+ * Pi only appends to that array, so the slot stays a stable identity while the answer streams
+ * and a block that starts later cannot shift the blocks before it. It is absent on the blocks
+ * the browser builds itself.
+ */
 export type ContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'thinking'; text: string; redacted?: boolean }
-  | { type: 'image'; url: string; mimeType: string }
-  | { type: 'file'; name: string; path: string; mimeType: string; size: number }
-  | { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown> }
+  | { type: 'text'; text: string; slot?: number }
+  | { type: 'thinking'; text: string; redacted?: boolean; slot?: number }
+  | { type: 'image'; url: string; mimeType: string; slot?: number }
+  | { type: 'file'; name: string; path: string; mimeType: string; size: number; slot?: number }
+  | { type: 'toolCall'; id: string; name: string; arguments: Record<string, unknown>; slot?: number }
 export interface MessageUsage {
   input: number
   output: number

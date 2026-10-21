@@ -5,3 +5,4 @@ workspace/
 .env
 artifacts/
 *.log
+.video_agent/

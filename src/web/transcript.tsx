@@ -2,7 +2,8 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   DisclosureRow, IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
   IconChevronUpOutlineRegular, CodeBlock, DiffBlock, IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
-  IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconThinkOutlineRegular, ImageLightbox, MarkdownDelegateProvider,
+  IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconLoadingOutlineRegular, IconThinkOutlineRegular,
+  ImageLightbox, MarkdownDelegateProvider,
   Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, ReadBlock, StateDot, TextShimmer, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -13,7 +14,7 @@ import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns } from './subagent-run-model.ts'
 import ToolCard from './ToolCard.tsx'
 import { diffLabels, formatTokens, markdownLabels, readLabels, type Translate } from './render-labels.ts'
-import { buildRenderModel, messageText, transcriptMessageDomId, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
+import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
 import { activityRunning, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, processTitleFromCounts, toolLiveDetail, type LateAnswer } from './tool-render-model.ts'
@@ -46,6 +47,8 @@ export interface TranscriptProps {
   pending?: readonly PendingMessage[]
   /** A compaction is running: render the same transcript-level status row as the completed marker. */
   compactionRunning?: boolean
+  /** The conversation has a live run: the tail spinner marks the transcript as still working. */
+  running?: boolean
   /** Projected interactions, so question rows read their call's DSH state. */
   interactions?: readonly InteractionRequest[]
   /** Work-details presentation policy; absent uses the saved settings. */
@@ -65,7 +68,7 @@ export interface TranscriptProps {
 
 /** Render Pi Durable conversation messages with DSH process, Markdown, and tool components. */
 export default function Transcript({
-  messages, conversationId, subagents, pending = [], compactionRunning = false, interactions, policy, onFork, onRetry, onFeedback,
+  messages, conversationId, subagents, pending = [], compactionRunning = false, running = false, interactions, policy, onFork, onRetry, onFeedback,
   onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
@@ -97,7 +100,15 @@ export default function Transcript({
   const openMarkdownFile = useMemo(() => onOpenFile === undefined ? undefined
     : (path: string, options?: { line?: number }) => { onOpenFile(path, options?.line) }, [onOpenFile])
   const showChanges = settings.codingViews
-  const lastRunKey = model.runs.at(-1)?.key
+  const lastRun = model.runs.at(-1)
+  const lastRunKey = lastRun?.key
+  // DSH mounts its running status at the end of the flow; ZCode decides whether the
+  // turn-tail spinner may show at all. Both point at the same place: the transcript tail.
+  const tailLoading = turnChatLoadingVisible({
+    isRunning: running,
+    blockedByInteraction: interactionBlocksTurnLoading(interactions),
+    blockedByActiveWork: compactionRunning,
+  })
   return (
     <div className={css.transcript}>
       <MarkdownDelegateProvider openFile={openMarkdownFile} fileImages={fileImages}>
@@ -111,7 +122,24 @@ export default function Transcript({
           : <SystemMessageRow key={entry.row.key} message={entry.row.message} />)}
         {compactionRunning && lastRunKey === undefined && <CompactionRunningRow t={t} />}
         {pending.map(message => <PendingRow key={message.id} message={message} onOpenFile={onOpenFile} t={t} />)}
+        {tailLoading && <TurnRunningIndicator t={t} />}
       </MarkdownDelegateProvider>
+    </div>
+  )
+}
+
+/**
+ * The transcript-tail spinner, shaped like ZCode's `ChatLoading`: a lone rotating icon
+ * with no caption, because the process group already names the live work. The rotation
+ * lives on the HTML wrapper rather than on the SVG, so the animation stays on the
+ * compositor instead of re-triggering main-thread style updates every frame.
+ */
+function TurnRunningIndicator({ t }: { t: Translate }) {
+  return (
+    <div className={css.runningIndicator} role="status" aria-live="polite" aria-label={t('加载中', 'Loading')}>
+      <span className={css.runningIndicatorIcon} aria-hidden="true">
+        <IconLoadingOutlineRegular size={16} />
+      </span>
     </div>
   )
 }
@@ -482,17 +510,16 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
     onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
     onOpenPlan={onOpenPlan} t={t} />
   if (part.kind === 'content') return <div className={css.processOutput} data-message-id={part.message.id}>
-    <ContentBlockView block={part.block} streaming={runRunning && part.message.streaming === true}
+    <ContentBlockView block={part.block} streaming={part.streaming}
       onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} labels={labels} t={t} />
   </div>
-  return <ReasoningPart part={part} runRunning={runRunning} preview={policy.settledReasoningPreview}
+  return <ReasoningPart part={part} preview={policy.settledReasoningPreview}
     onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} labels={labels} t={t} />
 }
 
 /** DSH's Think row: a fixed-height disclosure whose summary tracks the reasoning tail while running. */
-function ReasoningPart({ part, runRunning, preview, onOpenFile, resolveFileImage, labels, t }: {
+function ReasoningPart({ part, preview, onOpenFile, resolveFileImage, labels, t }: {
   part: Extract<ProcessPart, { kind: 'reasoning' }>
-  runRunning: boolean
   preview: boolean
   onOpenFile?: TranscriptProps['onOpenFile']
   resolveFileImage?: TranscriptProps['resolveFileImage']
@@ -500,7 +527,7 @@ function ReasoningPart({ part, runRunning, preview, onOpenFile, resolveFileImage
   t: Translate
 }) {
   const [open, setOpen] = useState(false)
-  const running = runRunning && part.message.streaming === true
+  const running = part.streaming
   const redacted = part.redacted
   const text = part.text
   const summary = (running ? latestCompletedParagraphFirstLine(text) : firstLine(text)).replaceAll('**', '')
@@ -592,7 +619,7 @@ function AssistantResponse({ response, run, last, onFork, onRetry, onFeedback, o
     <div className={css.message} id={transcriptMessageDomId(message.id)} data-message-id={message.id} data-role="assistant"
       data-streaming={streaming || undefined}>
       <div className={css.assistantBody}>
-        {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${index}`} block={block}
+        {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${block.slot ?? index}`} block={block}
           streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
           fileMentions={fileMentions} pathImages={pathImages} />)}
         {!streaming && run.status === 'cancelled' && <div className={css.runNotice} data-status="cancelled" role="status">

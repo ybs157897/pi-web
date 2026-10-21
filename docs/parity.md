@@ -669,3 +669,42 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - 根因：所有 system 消息被 `buildRenderModel` 收进 `model.systemMessages`，统一渲染在所有回合之后。
 - 修复：`src/web/render-model.ts` 改为按消息流顺序编排时间线（`timeline`），带 `runId` 的系统行进入对应回合内部（按是否在该回合回答之前区分 `beforeAnswer`），无 `runId` 的按其在消息流中的位置插在回合之间；「正在进行上下文压缩」运行态提示落在最后一个回合的末尾。锚定用消息流位置而非时间戳：压缩条目替换的是它上面的历史，标记就该留在被替换内容的位置。
 - 验收（4323 demo 实例，ego）：压缩标记在转录子节点中的序号由「最后一个」变为「第一个」（`markerIndex` 2 → 0），即回到它所替换内容的位置；`tests/render-model.test.ts` 覆盖「替换历史的标记留在其内容之上」。
+
+## 末尾运行指示器与块级流式状态（2026-10-21）
+
+### 1. 消息流末尾缺少「正在运行」指示器
+
+- 现象：任务运行时转录末尾没有任何提示，用户无法直观看出任务是否已经停下（对比 ZCode：消息流末尾有一个孤立的旋转图标）。
+- 上游依据：
+  - ZCode `packages/ui/src/components/ai-elements/chat-loading.tsx`：lucide `LoaderIcon` + 外层 `animate-spin` 容器（源码注释说明旋转 HTML 容器而非 SVG 本体，是为了让动画走合成层）；`role="status"` + 本地化 `aria-label`；**只有图标、没有文案**。
+  - ZCode `packages/ui/src/v4/chatLoadingVisibility.ts` 的 `shouldShowTurnChatLoading`：只在「最后一轮 + 运行中」显示；等待用户回答/授权（permission、AskUserQuestion）时隐藏，因为弹窗/问答卡已经是唯一的进度反馈；上下文压缩、目标校验在跑时隐藏；行级 fallback 用于避免恢复/乱序窗口里 loading 闪回。**刻意不做防抖**——源码注释写明「running 是 ChatLoading 的权威事实；额外静默计时会让 projection 更新反复重启可见性，并使 UI 晚于真实状态」。
+  - DSH `packages/client/ui-chat/src/client/chat/ChatFlow.tsx:60`：运行状态挂在**整个消息流的最末尾**（`[...rows, ...pendingRows, ...running ? [<RunningStatus/>] : []]`），DSH 用的是鲸尾动画 + 「深入中 N 秒」文字，pi-web 没有该图片资源，故取 ZCode 的图标形态。
+- 修复：`src/web/transcript.tsx` 新增 `TurnRunningIndicator`，挂在转录末尾（`pending` 之后）；图标用 `@deepseek-ai/dsh-client-ui-primitives` 的 `IconLoadingOutlineRegular`（16px，strokeWidth=1），旋转加在 HTML 包装层（`.runningIndicatorIcon`，`1s linear infinite`，配 `prefers-reduced-motion` 降级）；判定函数 `turnChatLoadingVisible` 与 `interactionBlocksTurnLoading` 对齐 ZCode 的规则。
+- **运行事实取会话 `busy` 而非最后一轮的 `status`**：轮的 status 由该轮已记录的消息推导，两个工具轮次之间会掉到 `completed`，指示器会在任务未停时闪一下。改用 `conversation.busy`（= `live.run !== undefined`）后，ZCode 那句「running 是权威事实」才真正成立。
+- 验收（ego，demo 4320 与真实 4317）：运行中指示器是转录最后一个子节点，`role="status"`、`aria-live="polite"`、`aria-label="加载中"`、16px、`1s linear infinite`；运行结束后消失；**运行期间「忙但无指示器」的帧数为 0**（改用 `busy` 前为多次闪烁）；有待回答的 question 交互时隐藏。
+
+### 2. 思考还在 loading，正文已经提前出现
+
+- 现象：思考块还在流式输出时，下一步的正文已经渲染出来，两块之间没有顺序约束。
+- 根因（三处叠加）：
+  - **块级流式状态被整条消息的 `streaming` 代替**：`ReasoningPart` 用 `part.message.streaming === true` 判断「思考是否还在流」，而同一条消息的 `streaming` 在整个生成期间恒为 true。于是正文一开始出现，思考行仍在 shimmer。DSH 的判定是**按块**：`AssistantMarkdown.tsx:103` 的 `running={streaming && i === last}`——只有数组里最后一个块才是流式尾巴。
+  - **正文块在「回答区」与「过程区」之间搬家**：`finalResponseOf()` 要求消息「没有 toolCall 块」，而流式消息的 blocks 是逐步追加的（thinking → text → toolCall）。于是快照 B（thinking+text）时正文进回答区，快照 C（thinking+text+toolCall）时又被拽回过程区——过程区与回答区是两个独立 DOM 子树，正文块在两者间跳变即用户看到的错位。
+  - **React key 建立在过滤后的下标上**：投影层丢弃空块，渲染层又用过滤后数组的下标做 key，前面任一块从「空」变「非空」，后面所有块的下标 +1 → key 改变 → 节点重挂载、流式 Markdown 重新解析。
+- 修复：
+  - `src/shared/types.ts`：`ContentBlock` 各变体增加可选 `slot?: number`，表示块在模型 content 数组里的位置（Pi 只追加，该位置即稳定身份）。
+  - `src/server/projection.ts` 的 `assistantBlocks()` 改为 1:1 `map` 并盖 `slot`，不再丢弃空块；空块过滤下移到渲染层。
+  - `src/web/render-model.ts`：key 改用 `block.slot ?? blockIndex`；`ProcessPart` 的 reasoning/content 变体增加 `streaming` 字段，判定为「该消息仍在流式 **且** 该块是该消息最后一个有内容的块」（对齐 DSH 的 `i === last`）；流式中的 assistant 消息（`isLiveAnswer`）固定占有回答区，正文不再随 toolCall 到来而搬家。
+  - `src/web/transcript.tsx`：`ReasoningPart` / `ProcessPartView` 改用 `part.streaming`；回答区块的 key 同样改用 `slot`。
+- 验收（ego，真实模型 `opencode-go/minimax-m3` 推理等级 High，conversation 1079）：思考行 `data-running` 在正文出现前为 1（t+3092，正文长度 0），正文一出现立刻变 0（t+3189，正文长度 38）——「正文可见但思考仍在流式」的帧数为 **0**，「正文误入过程区」的帧数为 **0**。`tests/render-model.test.ts` 新增 6 例覆盖正文不搬家、块级流式状态与 slot 稳定性，`tests/projection.test.ts` 新增 2 例覆盖空块保留与 slot 盖章。
+- 未处理（超出本批次）：落盘后 `live-assistant:${taskId}` → `entry:${entryId}:${index}` 的 id 变化仍会让整棵子树重挂载；本批次的「正文一次性回到过程区」与该重挂载发生在同一时刻，故不额外处理。
+
+### 3. assistant 消息在流式与落盘之间换了身份（2026-10-21）
+
+- 现象：一条 assistant 消息在流式期间是 `live-assistant:${taskId}`，落盘后变成 `entry:${entryId}:${index}`。前端用 `message.id` 做 React key，于是这条消息在生成结束的那一刻整棵子树被卸载重建——流式 Markdown 重新解析、已渲染内容闪一下，`data-message-id` 与 DOM 锚点（`chat-message-*`）也跟着换掉，轨迹视图的跳转定位随之失效。
+- 上游依据：Pi Durable 在每条 entry 上盖了 `byTaskId`（`EntryRecord.byTaskId`，`@earendil-works/pi-durable` 的 `session/transaction.js` 在 `appendEntry` 时写入当前 transaction scope 的 task id），而 `LiveState.run.taskId` 正是当前 generation task 的 id（`harness/generation.js` 的 `startRun` → `createGeneration`）。写入 assistant entry 的正是这个 task，因此**两阶段的 task id 是同一个数**。
+- 修复：`src/server/projection.ts` 新增 `assistantMessageId(byTaskId, timestamp)`，assistant 消息的身份改为 `assistant:${byTaskId}:${timestamp}`——流式取 `live.run.taskId` + `partial.timestamp`，落盘取 `entry.byTaskId` + `message.timestamp`（同一个 message 对象被 provider 持续 mutate，两者时间戳相同）。时间戳同时区分了重试时同一 task 写下的两条 entry，task id 则区分了两条在同一毫秒内开始的请求。
+- 边界：调度器 fault/orphan 兜底路径写入的 entry 没有 task scope（Pi Durable 的 `live.d.ts` 里明写「The scheduler's commit has no task scope, so that entry has no `byTaskId`」），这类 entry 退回 `entry:${entryId}:${index}`，仍会重挂载——属于上游固有限制。
+- 验收（真实模型 `opencode-go/minimax-m3`，ego，页面内给 assistant 节点打标记后看标记是否还在）：
+  - 改前：流式节点 `live-assistant:1178` 与落盘节点 `entry:1182:0` 是**两个不同的 DOM 节点**（tag0/tag1）→ 子树重挂载。
+  - 改后：只有**一个** DOM 节点，流式与落盘的 `data-message-id` 同为 `assistant:1192:1792570187567`，标记仍在 → 子树未重挂载。
+  - `tests/projection.test.ts` 新增 3 例覆盖「流式与落盘同名」「重试的两条 entry 靠时间戳区分」「无 task 的 entry 退回 entry id」。

@@ -1672,6 +1672,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       {chatView === 'chat'
                         ? <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
                           subagents={activeDetail.subagents} pending={selectedPending} interactions={activeDetail.interactions}
+                          running={activeDetail.conversation.busy === true}
                           onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                           onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
                           onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {

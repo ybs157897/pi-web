@@ -1,4 +1,4 @@
-import type { ChatMessage, ContentBlock, FileArtifact, MessageUsage } from '../shared/types.ts'
+import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, MessageUsage } from '../shared/types.ts'
 
 export interface ToolItem {
   readonly key: string
@@ -12,8 +12,8 @@ export interface ToolItem {
 
 export type ProcessPart =
   | { readonly kind: 'user'; readonly key: string; readonly message: ChatMessage; readonly order: number }
-  | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly order: number }
-  | { readonly kind: 'content'; readonly key: string; readonly message: ChatMessage; readonly block: ContentBlock; readonly order: number }
+  | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly streaming: boolean; readonly order: number }
+  | { readonly kind: 'content'; readonly key: string; readonly message: ChatMessage; readonly block: ContentBlock; readonly streaming: boolean; readonly order: number }
   | { readonly kind: 'tool'; readonly key: string; readonly item: ToolItem; readonly order: number }
 
 export interface ResponsePart {
@@ -313,19 +313,26 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     if (message.role === 'user' && message.id !== run.users[0]?.id) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
     }
+    // A turn that is still streaming owns the answer area: it has not settled yet, and a
+    // block that moved between the two areas mid-stream would jump on screen.
+    const answer = message.role === 'assistant'
+      && (message.id === finalResponse?.id || isLiveAnswer(message))
+    // The model writes the tail of its message last, so only that block is still streaming.
+    const tail = liveTailIndex(message.blocks)
     for (const [blockIndex, block] of message.blocks.entries()) {
+      const slot = block.slot ?? blockIndex
+      const streaming = message.streaming === true && blockIndex === tail
       if (message.role === 'assistant' && block.type === 'thinking' && (block.text.trim() !== '' || block.redacted === true)) {
-        process.push({ kind: 'reasoning', key: `${message.id}:reasoning:${blockIndex}`, message, text: block.text,
-          redacted: block.redacted === true, order: messageIndex + blockIndex / 1000 })
+        process.push({ kind: 'reasoning', key: `${message.id}:reasoning:${slot}`, message, text: block.text,
+          redacted: block.redacted === true, streaming, order: messageIndex + blockIndex / 1000 })
       }
-      if (message.role === 'assistant' && message.id !== finalResponse?.id
-        && (block.type === 'text' || block.type === 'image' || block.type === 'file')) {
-        process.push({ kind: 'content', key: `${message.id}:process:${blockIndex}`, message, block,
-          order: messageIndex + blockIndex / 1000 })
+      if (message.role === 'assistant' && !answer && isContentBlock(block) && blockCarriesContent(block)) {
+        process.push({ kind: 'content', key: `${message.id}:process:${slot}`, message, block,
+          streaming, order: messageIndex + blockIndex / 1000 })
       }
     }
-    if (message.role === 'assistant' && message.id === finalResponse?.id) {
-      const blocks = message.blocks.filter(block => block.type === 'text' || block.type === 'image' || block.type === 'file')
+    if (answer) {
+      const blocks = message.blocks.filter(block => isContentBlock(block) && blockCarriesContent(block))
       if (blocks.length > 0) responses.push({ key: `${message.id}:response`, message, blocks })
     }
     if (message.role === 'tool' && message.toolCallId === undefined) {
@@ -371,6 +378,43 @@ function finalResponseOf(messages: readonly ChatMessage[]): ChatMessage | undefi
     && message.parentToolCallId === undefined
     && !message.blocks.some(block => block.type === 'toolCall')
     && message.blocks.some(block => block.type === 'text' && block.text !== '' || block.type === 'image' || block.type === 'file'))
+}
+
+/**
+ * A streaming assistant turn is the run's live answer. It owns the answer area until it
+ * settles, so a text block never hops between the process area and the answer area while
+ * the model is still writing it.
+ */
+function isLiveAnswer(message: ChatMessage): boolean {
+  return message.role === 'assistant' && message.streaming === true && message.parentToolCallId === undefined
+}
+
+/** The blocks that answer the user: text, images, and files. */
+function isContentBlock(block: ContentBlock): boolean {
+  return block.type === 'text' || block.type === 'image' || block.type === 'file'
+}
+
+/**
+ * Whether a block shows something. The projection keeps the blocks the model has not
+ * written yet, so the render layer is where an empty block is dropped.
+ */
+function blockCarriesContent(block: ContentBlock): boolean {
+  if (block.type === 'text') return block.text !== ''
+  if (block.type === 'thinking') return block.text.trim() !== '' || block.redacted === true
+  return true
+}
+
+/**
+ * The block the model is still writing: the last block of the message that carries
+ * content. DSH marks the same tail as running (`AssistantMarkdown.tsx:103`), so a
+ * reasoning block stops shimmering as soon as the answer follows it.
+ */
+function liveTailIndex(blocks: readonly ContentBlock[]): number {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (block !== undefined && blockCarriesContent(block)) return index
+  }
+  return -1
 }
 
 /** Rank this run's tool categories the way DSH titles a settled process group. */
@@ -463,7 +507,7 @@ export function reasoningDisplay(text: string, redacted: boolean, hiddenLabel: s
 /** Plain text used by copy controls and compact trajectory summaries. */
 export function messageText(message: ChatMessage): string {
   return message.blocks.flatMap(block => {
-    if (block.type === 'text') return [block.text]
+    if (block.type === 'text') return block.text === '' ? [] : [block.text]
     if (block.type === 'thinking') return block.redacted === true ? [] : [block.text]
     if (block.type === 'toolCall') return [JSON.stringify({ tool: block.name, arguments: block.arguments })]
     return []
@@ -542,4 +586,40 @@ export function visibleTranscriptMessages(messages: readonly ChatMessage[], comp
   return compactionRunning
     ? messages.filter(message => !(message.role === 'system' && message.systemKind === 'compaction'))
     : messages
+}
+
+export interface TurnChatLoadingState {
+  /** The conversation has a live run. */
+  readonly isRunning: boolean
+  /** A permission prompt or a question card is waiting for the user. */
+  readonly blockedByInteraction: boolean
+  /** Context compaction (or another maintenance task) is running. */
+  readonly blockedByActiveWork: boolean
+}
+
+/**
+ * ZCode's `shouldShowTurnChatLoading` (`packages/ui/src/v4/chatLoadingVisibility.ts`): the
+ * tail spinner belongs to the live turn only, and it steps aside while the turn waits for
+ * the user or for a maintenance task — the prompt then is the only progress signal.
+ * Running is the authoritative fact, so there is no debounce: an extra quiet period
+ * would restart the visibility on every projection update and lag the real state.
+ *
+ * The running fact comes from the conversation, not from the last run's status: a run's
+ * status is derived from the messages it recorded, so it drops to `completed` between two
+ * tool rounds and the spinner would blink out of a turn that never stopped. ZCode reads
+ * the same session-level fact for the same reason.
+ */
+export function turnChatLoadingVisible(state: TurnChatLoadingState): boolean {
+  if (!state.isRunning) return false
+  return !state.blockedByActiveWork && !state.blockedByInteraction
+}
+
+/**
+ * A pending interaction stops the turn until the user answers, so the tail spinner would
+ * only add noise next to the prompt. Every pending kind blocks — `approval` (permission),
+ * `question` (AskUserQuestion) and `plan-review` all need the user to move on; a settled
+ * interaction (`continued`, `answered`, …) does not, because the model already moved on.
+ */
+export function interactionBlocksTurnLoading(interactions: readonly InteractionRequest[] | undefined): boolean {
+  return (interactions ?? []).some(interaction => interaction.status === 'pending')
 }

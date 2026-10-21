@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, InteractionRequest } from '../src/shared/types.ts'
-import { buildRenderModel, conversationStats, reasoningDisplay, toolActivity, visibleTranscriptMessages } from '../src/web/render-model.ts'
+import {
+  buildRenderModel, conversationStats, interactionBlocksTurnLoading, reasoningDisplay, toolActivity, turnChatLoadingVisible,
+  visibleTranscriptMessages,
+} from '../src/web/render-model.ts'
 import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
 import {
   askQuestionRowModel, buildToolRenderModel, codemodeRowModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows,
@@ -739,5 +742,140 @@ describe('system rows in the transcript', () => {
 
     expect(model.runs[0]?.systemRows).toEqual([])
     expect(model.timeline.map(entry => entry.kind)).toEqual(['run', 'system'])
+  })
+})
+
+describe('transcript tail loading indicator', () => {
+  const idle = {
+    isRunning: false,
+    blockedByInteraction: false,
+    blockedByActiveWork: false,
+  }
+
+  it('shows the tail spinner only while the conversation runs', () => {
+    expect(turnChatLoadingVisible({ ...idle, isRunning: true })).toBe(true)
+    expect(turnChatLoadingVisible(idle)).toBe(false)
+    // The running fact comes from the conversation, so a turn that keeps working
+    // across several tool rounds never blinks its spinner away.
+    expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByInteraction: false })).toBe(true)
+  })
+
+  it('hides the tail spinner while a maintenance task or a user prompt blocks the turn', () => {
+    expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByActiveWork: true })).toBe(false)
+    expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByInteraction: true })).toBe(false)
+  })
+
+  it('blocks the tail spinner while any pending interaction waits for the user', () => {
+    const pending = (kind: InteractionRequest['kind']): InteractionRequest => ({ id: `i-${kind}`, kind, status: 'pending', createdAt: 1 })
+
+    expect(interactionBlocksTurnLoading([pending('approval')])).toBe(true)
+    expect(interactionBlocksTurnLoading([pending('question')])).toBe(true)
+    expect(interactionBlocksTurnLoading([pending('plan-review')])).toBe(true)
+    expect(interactionBlocksTurnLoading(undefined)).toBe(false)
+    expect(interactionBlocksTurnLoading([])).toBe(false)
+  })
+
+  it('stops blocking once the interaction is settled', () => {
+    const settled = (status: InteractionRequest['status']): InteractionRequest => ({ id: 'i-1', kind: 'approval', status, createdAt: 1 })
+
+    // `continued` means the permission was granted and the model moved on.
+    expect(interactionBlocksTurnLoading([settled('continued')])).toBe(false)
+    expect(interactionBlocksTurnLoading([settled('answered')])).toBe(false)
+    expect(interactionBlocksTurnLoading([settled('expired')])).toBe(false)
+    expect(interactionBlocksTurnLoading([settled('cancelled')])).toBe(false)
+  })
+})
+
+describe('streaming turn layout', () => {
+  const prompt: ChatMessage = { id: 'user-1', role: 'user', blocks: [{ type: 'text', text: 'hi' }], timestamp: 50, runId: 'run-1' }
+  const live = (blocks: ChatMessage['blocks']): ChatMessage => ({
+    id: 'live-assistant:task-1', role: 'assistant', blocks, timestamp: 100, streaming: true, status: 'running', runId: 'run-1',
+  })
+
+  it('keeps the answer of a streaming turn in the answer area, also once a tool call arrives', () => {
+    const beforeTool = buildRenderModel([prompt, live([
+      { type: 'thinking', text: 'Checking', slot: 0 },
+      { type: 'text', text: 'The file says hello.', slot: 1 },
+    ])]).runs[0]
+    const afterTool = buildRenderModel([prompt, live([
+      { type: 'thinking', text: 'Checking', slot: 0 },
+      { type: 'text', text: 'The file says hello.', slot: 1 },
+      { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'hello.txt' }, slot: 2 },
+    ])]).runs[0]
+
+    expect(beforeTool?.responses.map(response => response.key)).toEqual(['live-assistant:task-1:response'])
+    // The tool call does not send the answer back into the process area: the block stays
+    // where it is, so it neither jumps on screen nor loses its rendered markdown.
+    expect(afterTool?.responses.map(response => response.key)).toEqual(['live-assistant:task-1:response'])
+    expect(afterTool?.responses[0]?.blocks).toEqual(beforeTool?.responses[0]?.blocks)
+    expect(afterTool?.process.map(part => part.kind)).toEqual(['reasoning', 'tool'])
+  })
+
+  it('returns the answer to the process area once the turn settles as a tool round', () => {
+    const settled = buildRenderModel([prompt, {
+      id: 'live-assistant:task-1', role: 'assistant', runId: 'run-1', timestamp: 100, status: 'completed',
+      blocks: [
+        { type: 'thinking', text: 'Checking', slot: 0 },
+        { type: 'text', text: 'The file says hello.', slot: 1 },
+        { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'hello.txt' }, slot: 2 },
+      ],
+    }]).runs[0]
+
+    expect(settled?.responses).toHaveLength(0)
+    expect(settled?.process.map(part => part.kind)).toEqual(['reasoning', 'content', 'tool'])
+  })
+
+  it('marks only the block the model is still writing as streaming', () => {
+    const answered = buildRenderModel([prompt, live([
+      { type: 'thinking', text: 'Checking', slot: 0 },
+      { type: 'text', text: 'The file says hello.', slot: 1 },
+    ])]).runs[0]
+    const reasoning = answered?.process.find(part => part.kind === 'reasoning')
+    // The answer already follows the reasoning, so the reasoning is done and must not
+    // keep shimmering: DSH marks the same tail as running.
+    expect(reasoning?.kind === 'reasoning' ? reasoning.streaming : undefined).toBe(false)
+
+    const thinking = buildRenderModel([prompt, live([{ type: 'thinking', text: 'Checking', slot: 0 }])]).runs[0]
+    const liveReasoning = thinking?.process.find(part => part.kind === 'reasoning')
+    expect(liveReasoning?.kind === 'reasoning' ? liveReasoning.streaming : undefined).toBe(true)
+  })
+
+  it('streams the text of a turn that is not the run\'s answer', () => {
+    const delegated: ChatMessage = {
+      id: 'live-assistant:sub-1', role: 'assistant', parentToolCallId: 'call-1', runId: 'run-1', timestamp: 100,
+      streaming: true, status: 'running', blocks: [{ type: 'text', text: 'Working on it', slot: 0 }],
+    }
+    const run = buildRenderModel([prompt, delegated]).runs[0]
+    const content = run?.process.find(part => part.kind === 'content')
+
+    expect(content?.kind === 'content' ? content.streaming : undefined).toBe(true)
+    expect(run?.responses).toHaveLength(0)
+  })
+
+  it('keys a block by its slot, so a block that starts later cannot shift the ones before it', () => {
+    const unwritten = buildRenderModel([prompt, live([
+      { type: 'thinking', text: 'Checking', slot: 0 },
+      { type: 'text', text: '', slot: 1 },
+    ])]).runs[0]
+    const written = buildRenderModel([prompt, live([
+      { type: 'thinking', text: 'Checking', slot: 0 },
+      { type: 'text', text: 'The file says hello.', slot: 1 },
+    ])]).runs[0]
+
+    expect(unwritten?.process.find(part => part.kind === 'reasoning')?.key).toBe('live-assistant:task-1:reasoning:0')
+    expect(written?.process.find(part => part.kind === 'reasoning')?.key).toBe('live-assistant:task-1:reasoning:0')
+    // The block the model has not written yet stays out of the answer area, and the
+    // answer that follows it keeps the slot it was pushed at.
+    expect(unwritten?.responses).toHaveLength(0)
+    expect(written?.responses[0]?.blocks.map(block => block.slot)).toEqual([1])
+  })
+
+  it('drops the empty blocks the model has not written yet', () => {
+    const run = buildRenderModel([prompt, {
+      id: 'assistant-1', role: 'assistant', runId: 'run-1', timestamp: 100, status: 'completed',
+      blocks: [{ type: 'text', text: '', slot: 0 }, { type: 'text', text: 'Hello', slot: 1 }],
+    }]).runs[0]
+
+    expect(run?.responses[0]?.blocks).toEqual([{ type: 'text', text: 'Hello', slot: 1 }])
   })
 })

@@ -158,10 +158,10 @@ describe('Pi Durable conversation projection', () => {
       ],
     })
     expect(first.messages[1]?.blocks).toEqual([
-      { type: 'text', text: 'I checked it.' },
-      { type: 'thinking', text: '', redacted: true },
-      { type: 'thinking', text: 'Visible reasoning' },
-      { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'pwd' } },
+      { type: 'text', text: 'I checked it.', slot: 0 },
+      { type: 'thinking', text: '', redacted: true, slot: 1 },
+      { type: 'thinking', text: 'Visible reasoning', slot: 2 },
+      { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'pwd' }, slot: 3 },
     ])
     expect(JSON.stringify(first.messages)).not.toContain('private reasoning')
     expect(JSON.stringify(first.messages)).not.toContain('system prompt that must not appear')
@@ -215,7 +215,7 @@ describe('Pi Durable conversation projection', () => {
       updatedAt: 900,
     })
     expect(result.messages).toHaveLength(2)
-    expect(result.messages[0]).toMatchObject({ id: 'live-assistant:77', role: 'assistant', streaming: true, timestamp: 900 })
+    expect(result.messages[0]).toMatchObject({ id: 'assistant:77:900', role: 'assistant', streaming: true, timestamp: 900 })
     expect(result.messages[1]).toMatchObject({
       id: 'live-tool:call-live',
       role: 'tool',
@@ -404,5 +404,85 @@ describe('compaction checkpoint label', () => {
       blocks: [{ type: 'text', text: '已完成上下文压缩' }],
     }))
     expect(JSON.stringify(result.messages)).not.toContain('conversation history before this point')
+  })
+})
+
+describe('assistant block projection', () => {
+  it('keeps the blocks the model has not written yet and stamps every block with its slot', () => {
+    const partial = assistant([
+      { type: 'text', text: '' },
+      { type: 'thinking', thinking: 'Working' },
+      { type: 'text', text: 'Done' },
+    ], 900, 'pending')
+    const result = projectConversation(view([], {
+      'pi.live': persistedObject({
+        run: { taskId: 5, inputs: [1] },
+        generation: { attempt: 1, message: persistedJson(partial) },
+      }),
+    }), metadata(), { workspace: WORKSPACE })
+
+    // The slot is the block's position in the model's content array: Pi only appends to
+    // that array, so the slot stays the identity of a block while the answer streams.
+    expect(result.messages[0]?.blocks).toEqual([
+      { type: 'text', text: '', slot: 0 },
+      { type: 'thinking', text: 'Working', slot: 1 },
+      { type: 'text', text: 'Done', slot: 2 },
+    ])
+  })
+
+  it('stamps the settled blocks with the same slots', () => {
+    const settled = assistant([
+      { type: 'text', text: 'Hello' },
+      { type: 'toolCall', id: 'c1', name: 'read', arguments: { path: 'a.txt' } },
+    ], 100, 'toolUse')
+    const result = projectConversation(view([entry(1, 'pi.assistant', [settled])]), metadata(), { workspace: WORKSPACE })
+
+    expect(result.messages[0]?.blocks).toEqual([
+      { type: 'text', text: 'Hello', slot: 0 },
+      { type: 'toolCall', id: 'c1', name: 'read', arguments: { path: 'a.txt' }, slot: 1 },
+    ])
+  })
+})
+
+describe('assistant message identity', () => {
+  it('names the streaming partial and the entry it becomes the same', () => {
+    const partial = assistant([{ type: 'text', text: 'Hello' }], 900, 'pending')
+    const streaming = projectConversation(view([], {
+      'pi.live': persistedObject({
+        run: { taskId: 5, inputs: [1] },
+        generation: { attempt: 1, message: persistedJson(partial) },
+      }),
+    }), metadata(), { workspace: WORKSPACE })
+
+    const settled = projectConversation(view([
+      { ...entry(9, 'pi.assistant', [assistant([{ type: 'text', text: 'Hello' }], 900)]), byTaskId: 5 as TaskId },
+    ]), metadata(), { workspace: WORKSPACE })
+
+    // The browser keys the transcript on the message id, so the partial and the entry
+    // have to agree: Pi Durable stamps the entry with the task that wrote it, and
+    // that task is the one the live run carries.
+    expect(streaming.messages[0]?.id).toBe('assistant:5:900')
+    expect(settled.messages[0]?.id).toBe('assistant:5:900')
+  })
+
+  it('separates the two entries a retrying task writes', () => {
+    const failed = assistant([{ type: 'text', text: 'Retrying' }], 900, 'error')
+    const final = assistant([{ type: 'text', text: 'Done' }], 1200)
+    const result = projectConversation(view([
+      { ...entry(9, 'pi.assistant', [failed]), byTaskId: 5 as TaskId },
+      { ...entry(10, 'pi.assistant', [final]), byTaskId: 5 as TaskId },
+    ]), metadata(), { workspace: WORKSPACE })
+
+    // One task wrote both entries, so the request timestamp is what tells them apart.
+    expect(result.messages.map(message => message.id)).toEqual(['assistant:5:900', 'assistant:5:1200'])
+  })
+
+  it('keeps the entry id for an entry no task wrote', () => {
+    const orphan = assistant([{ type: 'text', text: 'Aborted' }], 900, 'aborted')
+    const result = projectConversation(view([entry(9, 'pi.assistant', [orphan])]), metadata(), { workspace: WORKSPACE })
+
+    // The scheduler's fault path writes its entry without a task scope, so there is
+    // no streaming counterpart for it to keep the identity of.
+    expect(result.messages[0]?.id).toBe('entry:9:0')
   })
 })

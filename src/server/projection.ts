@@ -198,19 +198,36 @@ function textBlocks(content: string | readonly (ImageContent | { type: 'text'; t
   })
 }
 
+/**
+ * Project the model's content array into browser blocks. Pi only appends to that array, so
+ * every block keeps the slot it was pushed at: the slot is the identity that survives the
+ * blocks behind it filling up. The blocks the model has not written yet are kept as well,
+ * because dropping them would move the slots of the blocks that follow.
+ */
 function assistantBlocks(message: AssistantMessage): ContentBlock[] {
-  return message.content.flatMap<ContentBlock>(part => {
-    if (part.type === 'text') return part.text.length > 0 ? [{ type: 'text' as const, text: part.text }] : []
+  return message.content.map<ContentBlock>((part, slot) => {
+    if (part.type === 'text') return { type: 'text', text: part.text, slot }
     if (part.type === 'thinking') {
-      if (part.redacted) return [{ type: 'thinking' as const, text: '', redacted: true }]
-      if (part.thinking.length === 0) return []
-      return [{ type: 'thinking' as const, text: part.thinking }]
+      if (part.redacted) return { type: 'thinking', text: '', redacted: true, slot }
+      return { type: 'thinking', text: part.thinking, slot }
     }
-    return [{ type: 'toolCall' as const, id: part.id, name: part.name, arguments: { ...part.arguments } }]
+    return { type: 'toolCall', id: part.id, name: part.name, arguments: { ...part.arguments }, slot }
   })
 }
 
-function messageFromPi(message: Message, entryId: string, index: number, requestId?: string): ChatMessage | undefined {
+/**
+ * The identity of an assistant message, shared by the streaming partial and the entry it
+ * becomes. Pi Durable stamps every entry the generation task writes with that task's id
+ * (`EntryRecord.byTaskId`), and the live run carries the same id, so the task plus the
+ * request timestamp names one message across both stages. The timestamp also separates
+ * the two entries a retrying task writes, and the task separates two requests that start
+ * within the same millisecond.
+ */
+function assistantMessageId(byTaskId: number | undefined, timestamp: number): string {
+  return `assistant:${byTaskId ?? 'unknown'}:${timestamp}`
+}
+
+function messageFromPi(message: Message, entryId: string, index: number, requestId?: string, byTaskId?: number): ChatMessage | undefined {
   const id = `entry:${entryId}:${index}`
   if (message.role === 'system') return undefined
   if (message.role === 'user') {
@@ -230,7 +247,9 @@ function messageFromPi(message: Message, entryId: string, index: number, request
       blocks.push({ type: 'text', text: errorMessage })
     }
     return {
-      id,
+      // An entry without a task scope (the scheduler's fault path) keeps the entry id;
+      // it has no streaming counterpart to stay identical to.
+      id: byTaskId === undefined ? id : assistantMessageId(byTaskId, message.timestamp),
       entryId,
       role: 'assistant',
       blocks,
@@ -774,7 +793,7 @@ export function projectConversation(
         currentRunId = `run:${requestId ?? id}`
         runStartedAt.set(currentRunId, message.timestamp)
       }
-      const projected = messageFromPi(message, id, index, requestId)
+      const projected = messageFromPi(message, id, index, requestId, entry.byTaskId)
       if (projected) {
         projected.runId = currentRunId
         if (message.role === 'user') projected.blocks.push(...fileBlocks(entryFiles(entry)))
@@ -877,7 +896,10 @@ export function projectConversation(
         blocks.push({ type: 'text', text: errorMessage })
       }
       messages.push({
-        id: `live-assistant:${String(live.run?.taskId ?? view.conversation.id)}`,
+        // The same identity the settled entry will carry: the run's task and the
+        // request timestamp, so the browser keeps this message mounted when the
+        // partial turns into the entry that replaced it.
+        id: assistantMessageId(live.run?.taskId, partial.timestamp),
         role: 'assistant',
         blocks,
         timestamp: partial.timestamp,
