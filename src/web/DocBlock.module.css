@@ -428,9 +428,13 @@ button.inlineCode:focus-visible {
 
 /* ---------- 验证结果 ---------- */
 
+/* 列轨道定义在列表上，每行用 subgrid 复用：标签列按最长标签自适应，且跨行对齐。
+   行本身不带任何内边距——内边距加在单元格上，subgrid 的轨道才不会被平移
+   （上一版把 padding 留在行上，Chromium 会把轨道整体挪 8-14px，标签压到图标上）。 */
 .checkList {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 30px max-content minmax(0, 1fr);
+  column-gap: 12px;
   container-type: inline-size;
   margin: 14px 0;
   padding: 0;
@@ -439,16 +443,41 @@ button.inlineCode:focus-visible {
   list-style: none;
 }
 
-/* 三列：标记 / 标签 / 细节。标签列用固定宽度，所有行天然对齐；细节列只放
-   细节，命令再长也不会折到标签下面。（subgrid 在行有横向 padding 时会把轨道
-   算错，标签会压到图标上，所以这里不用它。） */
+/* 三列：标记 / 标签 / 细节。行只负责跨满三列，内边距全在单元格上。 */
 .checkRow {
   display: grid;
-  grid-template-columns: 16px 120px minmax(0, 1fr);
+  grid-column: 1 / -1;
+  grid-template-columns: 30px max-content minmax(0, 1fr);
   align-items: baseline;
   column-gap: 12px;
-  row-gap: 2px;
-  padding: 10px 14px;
+  box-shadow: inset 0 1px 0 var(--doc-hairline);
+}
+
+.checkRow:first-child {
+  box-shadow: none;
+}
+
+.checkRow > * {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* 不支持 subgrid 的浏览器：退回固定标签列宽，行内仍然对齐。 */
+@supports not (grid-template-columns: subgrid) {
+  .checkList {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .checkRow {
+    grid-template-columns: 30px 120px minmax(0, 1fr);
+  }
+}
+
+@supports (grid-template-columns: subgrid) {
+  .checkRow {
+    grid-template-columns: subgrid;
+  }
 }
 
 .checkRow + .checkRow {
@@ -462,6 +491,8 @@ button.inlineCode:focus-visible {
   align-items: center;
   justify-content: center;
   width: 16px;
+  /* 14 + 16 = 30，正好占满第一条轨道，不撑破也不内缩。 */
+  margin-left: 14px;
   color: var(--doc-ok);
 }
 
@@ -488,6 +519,7 @@ button.inlineCode:focus-visible {
 
 .checkDetail {
   min-width: 0;
+  padding-right: 14px;
   color: var(--doc-muted);
   font-size: 12.5px;
   line-height: 1.7;
@@ -496,8 +528,12 @@ button.inlineCode:focus-visible {
 
 /* 窄屏：细节换到第二行，仍与标签左对齐，不回到标记列下面。 */
 @container (max-width: 460px) {
+  .checkList {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
   .checkRow {
-    grid-template-columns: 16px minmax(0, 1fr);
+    grid-template-columns: 30px minmax(0, 1fr);
   }
 
   .checkDetail {
