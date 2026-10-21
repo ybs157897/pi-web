@@ -1,19 +1,20 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   DisclosureRow, IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
-  IconChevronUpOutlineRegular, CodeBlock, DiffBlock, IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
+  IconChevronUpOutlineRegular, IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
   IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconLoadingOutlineRegular, IconThinkOutlineRegular,
   ImageLightbox, MarkdownDelegateProvider,
-  Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, ReadBlock, StateDot, TextShimmer, Tooltip, writeClipboard,
+  Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, StateDot, TextShimmer, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, SubagentSummary } from '../shared/types.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
+import ChangedFiles from './ChangedFiles.tsx'
 import { groupSubagentRuns } from './subagent-run-model.ts'
 import ToolCard from './ToolCard.tsx'
-import { diffLabels, formatTokens, markdownLabels, readLabels, type Translate } from './render-labels.ts'
+import { formatTokens, markdownLabels, type Translate } from './render-labels.ts'
 import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
@@ -245,8 +246,7 @@ function RunTranscript({
           )}
         </div>
       )}
-      <ChangedFiles artifacts={run.artifacts} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff}
-        expandDetails={showChanges} t={t} />
+      {showChanges && <ChangedFiles artifacts={run.artifacts} onInspectDiff={onInspectDiff} t={t} />}
       {liveCompaction && <CompactionRunningRow t={t} />}
     </section>
   )
@@ -781,71 +781,6 @@ function PendingRow({ message, onOpenFile, t }: { message: PendingMessage; onOpe
           </button>)}</div>}
         <span className={css.pendingStatus} role="status">{message.status === 'sending' ? t('发送中…', 'Sending…') : t('已接收', 'Accepted')}</span>
       </div>
-    </div>
-  )
-}
-
-function ChangedFiles({ artifacts, onOpenFile, onInspectDiff, expandDetails, t }: {
-  artifacts: readonly FileArtifact[]
-  onOpenFile?: TranscriptProps['onOpenFile']
-  onInspectDiff?: TranscriptProps['onInspectDiff']
-  expandDetails: boolean
-  t: Translate
-}) {
-  const changes = artifacts.filter(artifact => (artifact.kind === 'edit' || artifact.kind === 'write' || artifact.kind === 'nativeEdit')
-    && (artifact.before !== undefined && artifact.after !== undefined || artifact.diff !== undefined || artifact.after !== undefined))
-  if (changes.length === 0) return null
-  return (
-    <div className={css.changedFiles}>
-      <div className={css.changedTitle}>{t('已改动文件', 'Changed files')}</div>
-      {changes.map((artifact, index) => (
-        <ChangedFileCard key={`${artifact.kind}:${artifact.path}:${index}`} artifact={artifact}
-          onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} expandDetails={expandDetails} t={t} />
-      ))}
-    </div>
-  )
-}
-
-/**
- * One changed file. The inline preview folds away on demand, while the row keeps
- * its own actions: the path and the diff inspection stay reachable either way.
- */
-function ChangedFileCard({ artifact, onOpenFile, onInspectDiff, expandDetails, t }: {
-  artifact: FileArtifact
-  onOpenFile?: TranscriptProps['onOpenFile']
-  onInspectDiff?: TranscriptProps['onInspectDiff']
-  expandDetails: boolean
-  t: Translate
-}) {
-  const [expanded, setExpanded] = useState(true)
-  const bodyId = useId()
-  const diff = inspectorDiff(artifact)
-  const preview = artifact.before !== undefined && artifact.after !== undefined
-    ? <DiffBlock diffs={[{ path: artifact.path, oldText: artifact.before, newText: artifact.after }]} labels={diffLabels(t)} />
-    : artifact.diff !== undefined
-      ? <CodeBlock code={artifact.diff} lang="diff" copyLabel={t('复制差异', 'Copy diff')} copiedLabel={t('已复制', 'Copied')} />
-      : artifact.after !== undefined
-        ? <ReadBlock label={artifact.path} lines={artifact.after.split(/\r?\n/u).map((text, line) => ({ number: (artifact.lineStart ?? 1) + line, text }))}
-          totalLines={artifact.after.split(/\r?\n/u).length} labels={readLabels(t)} />
-        : null
-  return (
-    <div className={css.changedFile}>
-      <div className={css.changedFileHeader}>
-        {expandDetails && (
-          <button type="button" className={css.changedToggle} aria-expanded={expanded} aria-controls={bodyId}
-            aria-label={expanded ? t('收起差异预览', 'Collapse the diff preview') : t('展开差异预览', 'Expand the diff preview')}
-            onClick={() => { setExpanded(value => !value) }}>
-            {expanded ? <IconChevronDownOutlineRegular size={12} /> : <IconChevronRightOutlineRegular size={12} />}
-          </button>
-        )}
-        <span className={css.changedKind}>{artifact.kind === 'write' ? t('写入', 'Wrote') : t('修改', 'Edited')}</span>
-        <button type="button" className={css.pathButton} onClick={() => { onOpenFile?.(artifact.path) }}
-          disabled={onOpenFile === undefined}>{artifact.path}</button>
-        {onInspectDiff !== undefined && (artifact.before !== undefined && artifact.after !== undefined || artifact.diff !== undefined || artifact.after !== undefined)
-          && <button type="button" className={css.inspectDiffButton}
-          onClick={() => { onInspectDiff(diff) }}>{t('查看差异', 'Inspect diff')}</button>}
-      </div>
-      {expandDetails && <div id={bodyId} className={css.changedDiff} hidden={!expanded}>{expanded && preview}</div>}
     </div>
   )
 }
