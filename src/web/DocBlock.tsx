@@ -275,7 +275,8 @@ function parseLoose(source: string): unknown {
   // 结构化输出的模型会在围栏里写 JSON；先按 JSON 解析，失败再走 YAML 修复链。
   const trimmed = source.trim()
   if (trimmed.startsWith('{')) {
-    try { return JSON.parse(trimmed) } catch { /* 不是合法 JSON，退回 YAML */ }
+    const json = parseJsonLoose(trimmed) ?? repairJsonObject(trimmed)
+    if (json !== undefined) return json
   }
   const preserved = preserveScalars(source)
   try {
@@ -288,6 +289,57 @@ function parseLoose(source: string): unknown {
       return undefined
     }
   }
+}
+
+/**
+ * JSON 载荷的两次修复机会：先按原样解析，再去掉结尾多出来的逗号。
+ *
+ * 模型写 JSON 时最常见的两处手误就是「结尾多一个逗号」和「结尾多一个 `}`」。
+ */
+function parseJsonLoose(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    try {
+      return JSON.parse(text.replace(/,\s*([}\]])/gu, '$1'))
+    } catch {
+      return undefined
+    }
+  }
+}
+
+/**
+ * 从写坏的 JSON 里救回「第一个配平的顶层对象」。
+ *
+ * 只接受配平的对象：截断的载荷不修（流式渐进另有路径），对象后面再来第二个
+ * 对象也不修（那说明围栏里根本不是「一个载荷」）。对象后面只允许出现多余的
+ * 收尾符号——这正是模型多写一个 `}` 时的样子。
+ */
+function repairJsonObject(text: string): unknown {
+  const stack: string[] = []
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') { inString = true; continue }
+    if (char === '{' || char === '[') {
+      stack.push(char === '{' ? '}' : ']')
+      continue
+    }
+    if (char !== '}' && char !== ']') continue
+    if (stack.pop() !== char) return undefined
+    if (stack.length > 0) continue
+    const rest = text.slice(index + 1).trim()
+    if (rest !== '' && !/^[}\],;\s]*$/u.test(rest)) return undefined
+    return parseJsonLoose(text.slice(0, index + 1))
+  }
+  return undefined
 }
 
 /**

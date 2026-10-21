@@ -447,6 +447,25 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       ].join('\n')),
     ])
   }
+  if (userText.includes('[doc-broken-fixture]')) {
+    return fauxAssistantMessage([
+      fauxThinking('故意写坏两个块，验证第三层兜底。'),
+      fauxText([
+        '## 兜底验证',
+        '',
+        '下面两块都写坏了：第一块结构不合法，第二块 JSON 被截断。',
+        '',
+        '```doc',
+        'type: cards',
+        'items: 42',
+        '```',
+        '',
+        '```doc',
+        '{"type":"cards","items":[{"icon":"text","title":"半截"',
+        '```',
+      ].join('\n')),
+    ])
+  }
   if (userText.includes('[codemode]')) {
     const codemodeResults = currentResults.filter((message) => message.toolName === 'codemode')
     if (codemodeResults.length === 0) {

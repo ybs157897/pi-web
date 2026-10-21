@@ -721,3 +721,13 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **三层兜底**：JSON → YAML（带修复链）→ 原文兜底。三个渲染层同时存在，第一层失败自动退到第二层，两层都失败才显示原文（`data-doc-block="invalid"`）。因此没有打开能力的老模型、旧会话、别的供应商的模型都不受影响。
 - **流式渐进**：JSON 载荷一行写完，YAML 那套「按行往回退」用不上；改为从写了一半的 JSON 里挑出已闭合的 `items` 条目（`completeArrayItems`），逐张出现，最后一条没写完的丢掉。`compare` / `note` 是整体结构，等写完再显示。
 - 验收（真实实例 4317，`opencode-go/deepseek-v4.1-flash` 打开 `structuredOutput`）：两条会话的 `doc` 围栏**全部是合法 JSON**（cards / compare / checks），界面 `invalid` 块 0 个、`partial` 块 0 个；流式采样 partial 卡片 1 → 2 → 3 递增后转正式块。截图 `artifacts/doc-layout-check/90-93-json-*.png`。
+
+## 全场景重跑与 JSON 修复（2026-10-21）
+
+19 条场景（8 条角色场景 + 7 条排版专项 + 4 条新增压力场景）用**历史同一批题目**在真实实例 4317 重跑，模型 `opencode-go/deepseek-v4.1-flash`（`structuredOutput` 打开，契约发 JSON 变体）：
+
+- **载荷格式**：18 条的 `doc` 围栏全是合法 JSON；1 条（`超时关单选型`）的 note 块结尾多了一个 `}`，模型手误，JSON 与 YAML 都解析不了。
+- **修复**：解析链在 JSON 层补两下——原样解析、去掉结尾多出来的逗号；仍不成就救「第一个配平的顶层对象」（对象后面只允许有多余的收尾符号）。截断的载荷不修（流式渐进另有路径），围栏里出现第二个对象也不修。
+- **渲染**：19 条全部 `data-doc-block` 正常、`invalid` 0 个、`partial` 0 个、横向溢出 0 个；390px 窄屏卡片单列无溢出；深色主题下 checks / changes / note 正常。
+- **三层兜底逐层实机验证**：JSON 层（19 条真实场景）／ YAML 层（demo 夹具 `[doc-fixture]`，3 块正常）／ 原文层（新增 demo 夹具 `[doc-broken-fixture]`，坏块显示「结构化块格式错误，已按原文显示」，原文不丢）。
+- 截图：`artifacts/doc-layout-check/scenarios/`（19 张）、`94-fallback-raw.png`、`95-narrow-390.png`、`96-dark-*.png`。

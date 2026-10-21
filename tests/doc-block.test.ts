@@ -362,4 +362,21 @@ describe('JSON payloads', () => {
     expect(blocks.length).toBeGreaterThanOrEqual(1)
     for (const block of blocks) expect(parseDocBlock(block)).toBeDefined()
   })
+
+  it('rescues a payload the model closed one brace too many', () => {
+    // 真实模型实测：结尾多写一个 `}`，整块直接退回原文兜底。
+    const source = '{"type":"note","icon":"check","title":"推荐","body":"选 DB 扫描","label":"选型"}}'
+    expect(parseDocBlock(source)).toMatchObject({ type: 'note', title: '推荐', body: '选 DB 扫描' })
+  })
+
+  it('rescues a payload with a trailing comma', () => {
+    const source = '{"type":"cards","items":[{"icon":"text","title":"字重对比",}],}'
+    expect(parseDocBlock(source)).toMatchObject({ type: 'cards', items: [{ title: '字重对比' }] })
+  })
+
+  it('does not rescue a truncated payload or a second object', () => {
+    // 截断的载荷留给流式渐进路径；两个对象说明围栏里根本不是一个载荷。
+    expect(parseDocBlock('{"type":"cards","items":[{"icon":"text"')).toBeUndefined()
+    expect(parseDocBlock('{"type":"note","title":"甲"}{"type":"note","title":"乙"}')).toBeUndefined()
+  })
 })
