@@ -370,8 +370,16 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       if (version === requestVersion.current) setCheckState(current => finishProviderCheck(current, 'testing', activityId, { tone: 'error', message: cause instanceof Error ? cause.message : t('连接失败', 'Connection failed') }))
     }
   }
-  const save = async (event: FormEvent) => {
-    event.preventDefault()
+  // 模型删除立即保存：新双栏布局里「保存」离模型列表很远，改完没点保存再切走/
+  // 重启就会从服务器读回全量，用户会当成丢改动。删除是单点操作，直接落盘。
+  const removeModel = (rowKey: string): void => {
+    if (disabled || pending || create || rows.length <= 1) return
+    const nextRows = rows.filter(row => row.key !== rowKey)
+    replaceRows(nextRows)
+    void save(undefined, nextRows)
+  }
+  const save = async (event?: FormEvent, overrideRows?: ModelDraft[]) => {
+    event?.preventDefault()
     if (disabled) return
     clearCheckFeedback()
     const trimmedId = id.trim()
@@ -389,7 +397,8 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
     if (normalizedBaseUrl !== '' && !isHttpUrl(normalizedBaseUrl)) {
       showFormError(t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')); return
     }
-    const drafts = rows.filter(row => row.id.trim() !== '')
+    const sourceRows = overrideRows ?? rows
+    const drafts = sourceRows.filter(row => row.id.trim() !== '')
     const ids = drafts.map(row => row.id.trim())
     if (new Set(ids).size !== ids.length) {
       showFormError(t('模型 ID 不能重复。', 'Each model ID may appear once.')); return
@@ -505,6 +514,29 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
           </select>
         </label>
       </>}
+      {!create && <>
+        {provider?.custom === true && <>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
+            <Input value={name} aria-label={t('显示名称', 'Display name')} disabled={disabled}
+              onChange={event => { setName(event.currentTarget.value); clearCheckFeedback() }} />
+          </label>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('接口协议', 'API protocol')}</span>
+            <select className={css.selectInput} value={protocol} aria-label={t('接口协议', 'API protocol')} disabled={disabled}
+              onChange={event => { const value = event.currentTarget.value; setProtocol(value); updateRequestDraft(baseUrl, value, rows) }}>
+              {API_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
+        </>}
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('API 地址', 'Base URL')}</span>
+          <Input value={baseUrl} aria-label={t('API 地址', 'Base URL')} disabled={disabled}
+            placeholder={config?.baseUrl ?? t('没有默认地址', 'No default address')}
+            onChange={event => { const value = event.currentTarget.value; setBaseUrl(value); updateRequestDraft(value, protocol, rows) }} />
+          {baseUrl !== '' && !isHttpUrl(baseUrl.trim()) && <span className={css.fieldError}>{t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')}</span>}
+        </label>
+      </>}
       <div className={css.field}>
         <span className={css.fieldLabel}>
           {t('API 密钥', 'API key')}
@@ -522,41 +554,11 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
         </div>
         {credentialHint !== undefined && <p className={css.credentialHint} data-tone={envConfigured.length > 0 ? 'success' : 'warning'} role="status">{credentialHint}</p>}
       </div>
-      {create ? <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
-        rows={rows} disabled={disabled} discovering={discovering} canDiscover={false}
-        onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
+      <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
+        rows={rows} disabled={disabled} discovering={discovering} canDiscover={!create && provider !== undefined}
+        onRows={replaceRows} onPatch={patchRow} onRemove={removeModel} onAdd={addRows} onDiscover={() => void discover()}
         checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
-        availableLevels={availableLevels} t={t} /> : <details className={css.customized}>
-        <summary className={css.customizedSummary}>{t('自定义设置', 'Customized settings')}</summary>
-        <div className={css.customizedBody}>
-          {provider?.custom === true && <>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
-              <Input value={name} aria-label={t('显示名称', 'Display name')} disabled={disabled}
-                onChange={event => { setName(event.currentTarget.value); clearCheckFeedback() }} />
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('接口协议', 'API protocol')}</span>
-              <select className={css.selectInput} value={protocol} aria-label={t('接口协议', 'API protocol')} disabled={disabled}
-                onChange={event => { const value = event.currentTarget.value; setProtocol(value); updateRequestDraft(baseUrl, value, rows) }}>
-                {API_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select>
-            </label>
-          </>}
-          <label className={css.field}>
-            <span className={css.fieldLabel}>{t('API 地址', 'Base URL')}</span>
-            <Input value={baseUrl} aria-label={t('API 地址', 'Base URL')} disabled={disabled}
-              placeholder={config?.baseUrl ?? t('没有默认地址', 'No default address')}
-              onChange={event => { const value = event.currentTarget.value; setBaseUrl(value); updateRequestDraft(value, protocol, rows) }} />
-            {baseUrl !== '' && !isHttpUrl(baseUrl.trim()) && <span className={css.fieldError}>{t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')}</span>}
-          </label>
-        </div>
-      </details>}
-      {create ? null : <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
-        rows={rows} disabled={disabled} discovering={discovering} canDiscover={provider !== undefined}
-        onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
-        checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
-        availableLevels={availableLevels} t={t} />}
+        availableLevels={availableLevels} t={t} />
       {checkState.feedback !== null && <p className={checkState.feedback.tone === 'error' ? css.error : css.success}
         role={checkState.feedback.tone === 'error' ? 'alert' : 'status'}>{checkState.feedback.message}</p>}
       {requestDirty && <p className={css.advancedHint} role="note">{t('保存更改后测试连接或获取模型。', 'Save changes before testing the connection or fetching models.')}</p>}
@@ -572,7 +574,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
 }
 
 /** The shared model catalog editor used by both provider families. */
-function ModelDirectory({ catalog, config, customized, defaults, rows, disabled, discovering, canDiscover, checksDisabled, onRows, onPatch, onAdd, onDiscover, onRestore, availableLevels, t }: {
+function ModelDirectory({ catalog, config, customized, defaults, rows, disabled, discovering, canDiscover, checksDisabled, onRows, onPatch, onRemove, onAdd, onDiscover, onRestore, availableLevels, t }: {
   catalog: ModelCatalog | null
   config: ProviderConfigSummary | null
   customized: boolean
@@ -584,6 +586,8 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
   checksDisabled: boolean
   onRows: (rows: ModelDraft[]) => void
   onPatch: (key: string, patch: Partial<ModelDraft>) => void
+  /** 删除即保存：保存过的提供商直接落盘，未保存的创建态退回本地删除。 */
+  onRemove?: (key: string) => void
   onAdd: (models: ProviderModelInput[]) => void
   onDiscover: () => void
   onRestore: () => void
@@ -631,9 +635,10 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
           <button type="button" className={css.rowTextButton} disabled={disabled}
             aria-label={t(`编辑模型 ${index + 1}`, `Edit model ${index + 1}`)}
             onClick={() => { setEditingKey(row.key) }}>{t('编辑', 'Edit')}</button>
-          <button type="button" className={css.modelRemoveButton} disabled={disabled} title={t('删除模型', 'Delete model')}
+          <button type="button" className={css.modelRemoveButton} disabled={disabled || rows.length <= 1}
+            title={rows.length <= 1 ? t('至少保留一个模型', 'Keep at least one model') : t('删除模型', 'Delete model')}
             aria-label={t(`删除模型 ${index + 1}`, `Delete model ${index + 1}`)}
-            onClick={() => onRows(rows.filter(item => item.key !== row.key))}><IconTrashOutlineRegular size={14} /></button>
+            onClick={() => { if (onRemove !== undefined) onRemove(row.key); else onRows(rows.filter(item => item.key !== row.key)) }}><IconTrashOutlineRegular size={14} /></button>
         </div>
       </div>)}
     </div>

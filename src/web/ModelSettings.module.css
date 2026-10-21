@@ -12,7 +12,7 @@
 .credentialDot[data-configured="true"] {background:var(--dsw-alias-state-success-primary);}
 
 /* 双栏：左侧供应商列表，右侧详情（对齐 ZCode 的模型设置页）。 */
-.modelPage {display:grid;grid-template-columns:236px minmax(0,1fr);gap:0;margin-top:12px;border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:16px;background:var(--dsw-alias-settings-card-fill);overflow:hidden;min-height:420px;}
+.modelPage {display:grid;grid-template-columns:272px minmax(0,1fr);gap:0;margin-top:12px;border:.5px solid var(--dsw-alias-settings-card-stroke);border-radius:16px;background:var(--dsw-alias-settings-card-fill);overflow:hidden;min-height:480px;}
 .providerPane {display:flex;flex-direction:column;gap:2px;min-width:0;padding:12px 10px;border-right:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-module-platform);overflow-y:auto;}
 .paneGroupTitle {margin:2px 10px 6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-weight:500;}
 .paneEmpty {margin:6px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}
@@ -96,9 +96,9 @@ select.selectInput {width:auto;max-width:240px;}
 .modelRow {display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;}
 .modelSummary {display:flex;align-items:center;gap:10px;min-width:0;padding-left:4px;}
 .modelSummaryValue {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);}
-.modelSummaryValue[data-role="id"] {font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;}
+.modelSummaryValue[data-role="id"] {flex:0 0 auto;max-width:55%;font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;}
 .modelSummaryEmpty {font-style:italic;color:var(--dsw-alias-label-tertiary);}
-.modelSummaryName {min-width:0;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap;}
+.modelSummaryName {flex:1 1 auto;min-width:56px;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;text-overflow:ellipsis;white-space:nowrap;}
 .modelChips {display:inline-flex;flex:none;align-items:center;gap:4px;}
 .modelChip {padding:0 6px;border:.5px solid var(--dsw-alias-border-l3);border-radius:6px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px;white-space:nowrap;}
 .modelRemoveButton {display:inline-flex;width:24px;height:24px;flex:none;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;}

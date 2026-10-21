@@ -9,14 +9,13 @@
 .navigation nav button[aria-current] {background:var(--dsw-specific-sidebar-nav-item-active);}
 
 .main {display:flex;flex-direction:column;min-width:0;min-height:0;}
-.pageHeader {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex:none;padding:26px 32px 16px;}
+.pageHeader {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex:none;width:100%;max-width:1120px;margin:0 auto;padding:26px 32px 16px;}
 .pageHeading {min-width:0;}
 .pageHeading h2 {margin:0;font-size:22px;line-height:30px;font-weight:600;}
 .pageHeading p {margin:6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px;overflow-wrap:anywhere;}
 .pageActions {display:flex;flex:none;align-items:center;gap:8px;}
 .close {display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;}
-.scroll {min-height:0;overflow:auto;padding:0 32px 32px;overscroll-behavior:contain;}
-.scroll > * {max-width:980px;}
+.scroll {min-height:0;overflow:auto;width:100%;max-width:1120px;margin:0 auto;padding:0 32px 32px;overscroll-behavior:contain;}
 .general {display:flex;flex-direction:column;}
 .settingRow {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:64px;padding:13px 0;border-bottom:.5px solid var(--dsw-alias-border-l2);}
 .settingRow:last-child {border-bottom:0;}
