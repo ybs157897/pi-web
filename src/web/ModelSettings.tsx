@@ -645,7 +645,7 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
     <Button type="button" size="sm" variant="outline" className={css.addModelButton} disabled={disabled}
       onClick={() => onAdd([{ id: '', name: '' }])}>{t('添加模型', 'Add model')}</Button>
     {editingRow !== undefined && <ModelEditorModal key={editingRow.key} row={editingRow} position={rows.indexOf(editingRow) + 1}
-      availableLevels={availableLevels} disabled={disabled} t={t}
+      providerId={config?.id} catalog={catalog} availableLevels={availableLevels} disabled={disabled} t={t}
       onCommit={commitDraft} onClose={() => { setEditingKey(null) }} />}
   </section>
 }
@@ -723,16 +723,12 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
 }) {
   const [editingLevel, setEditingLevel] = useState<number | null>(null)
   const [levelChoice, setLevelChoice] = useState('')
-  const [editingWire, setEditingWire] = useState<number | null>(null)
-  const [wireText, setWireText] = useState('')
   const [dragging, setDragging] = useState<number | null>(null)
   // 拖动或 Alt+方向键后把焦点交回移动后的档位，键盘用户不会丢掉操作位置。
   const [focusIndex, setFocusIndex] = useState<number | null>(null)
   const selectRef = useRef<HTMLSelectElement>(null)
-  const wireRef = useRef<HTMLInputElement>(null)
   const chipRefs = useRef<Array<HTMLButtonElement | null>>([])
   useEffect(() => { if (editingLevel !== null) selectRef.current?.focus() }, [editingLevel])
-  useEffect(() => { if (editingWire !== null) wireRef.current?.focus() }, [editingWire])
   useEffect(() => {
     if (focusIndex === null) return
     chipRefs.current[focusIndex]?.focus()
@@ -740,7 +736,6 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
   }, [focusIndex, entries])
   const used = entries.map(entry => entry.level)
   const beginLevelEdit = (index: number) => {
-    setEditingWire(null)
     setEditingLevel(index)
     setLevelChoice(entries[index]?.level ?? '')
   }
@@ -751,21 +746,6 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
     setEditingLevel(null)
     if (entry === undefined || choice === '' || choice === entry.level) return
     onChange(entries.map((item, at) => at === editingLevel ? { level: choice, value: defaultLevelValue(choice) } : item))
-  }
-  const beginWireEdit = (index: number) => {
-    setEditingLevel(null)
-    setEditingWire(index)
-    setWireText(entries[index]?.value ?? '')
-  }
-  const commitWireEdit = () => {
-    if (editingWire === null) return
-    const entry = entries[editingWire]
-    const text = wireText.trim()
-    setEditingWire(null)
-    if (entry === undefined) return
-    const value = text === '' ? defaultLevelValue(entry.level) : text
-    if (value === entry.value) return
-    onChange(entries.map((item, at) => at === editingWire ? { level: item.level, value } : item))
   }
   const move = (from: number, to: number) => {
     if (to < 0 || to >= entries.length) return
@@ -835,23 +815,6 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
             <IconCloseOutlineRegular size={11} />
           </button>
         </div>
-        {editingWire === index
-          ? <input ref={wireRef} className={css.levelChipWireInput} value={wireText} disabled={disabled}
-            aria-label={t(`${current} 的 API 参数值`, `API value for ${current}`)}
-            placeholder={t('留空时使用档位名', 'Uses the level name when blank')}
-            onChange={event => setWireText(event.currentTarget.value)}
-            onBlur={commitWireEdit}
-            onKeyDown={event => {
-              if (event.key === 'Enter') { event.preventDefault(); commitWireEdit() }
-              else if (event.key === 'Escape') { event.preventDefault(); setEditingWire(null) }
-            }} />
-          : <button type="button" className={css.levelChipWire} disabled={disabled || current === 'off'}
-            data-model-reasoning-level-value="true"
-            aria-label={t(`编辑 ${current} 的 API 参数值`, `Edit the API value for ${current}`)}
-            title={current === 'off' ? t('关闭思考时不需要参数值', 'Turning thinking off sends no value') : t('点击编辑 API 参数值', 'Click to edit the API value')}
-            onClick={() => beginWireEdit(index)}>
-            {current === 'off' ? t('关闭思考', 'Thinking off') : entry.value ?? current}
-          </button>}
       </div>
     })}
     <button type="button" className={css.levelChipAdd} data-model-reasoning-level-add="true"
@@ -862,101 +825,187 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
   </div>
 }
 
+/** The JSON map shown for reasoning wire values; levels without a value are omitted. */
+function reasoningMapText(levels: readonly ReasoningEntry[] | undefined): string {
+  if (levels === undefined) return '{}'
+  const entries = levels.filter(entry => typeof entry.value === 'string' && entry.value !== '')
+  return JSON.stringify(Object.fromEntries(entries.map(entry => [entry.level, entry.value])), null, 2)
+}
+
 /**
- * The grouped model editor behind the row's Edit button. Edits stay local
- * until Done writes them back into the directory; Cancel or a mask click
- * discards them without touching the provider form.
+ * ZCode's model dialog, mapped onto Pi's model fields: a smart-config switch,
+ * the four basic fields, then an "advanced" fold with input types, reasoning
+ * levels (chips) and their wire-value map. Edits stay local until Done writes
+ * them back into the directory; Cancel discards them.
  */
-function ModelEditorModal({ row, position, availableLevels, disabled, onCommit, onClose, t }: {
+function ModelEditorModal({ row, position, providerId, catalog, availableLevels, disabled, onCommit, onClose, t }: {
   row: ModelDraft
   position: number
+  providerId: string | undefined
+  catalog: ModelCatalog | null
   availableLevels: readonly string[]
   disabled: boolean
   onCommit: (draft: ModelDraft) => void
   onClose: () => void
   t: (chinese: string, english: string) => string
 }) {
-  const [draft, setDraft] = useState<ModelDraft>(() => ({
-    ...row,
-    input: [...row.input],
-    ...(row.levels === undefined ? {} : { levels: row.levels.map(entry => ({ ...entry })) }),
-  }))
+  const cloneRow = (value: ModelDraft): ModelDraft => ({
+    ...value,
+    input: [...value.input],
+    ...(value.levels === undefined ? {} : { levels: value.levels.map(entry => ({ ...entry })) }),
+  })
+  const [draft, setDraft] = useState<ModelDraft>(() => cloneRow(row))
+  const [smart, setSmart] = useState(true)
+  const [mapText, setMapText] = useState(() => reasoningMapText(row.levels))
+  const [mapError, setMapError] = useState('')
   const patch = (value: Partial<ModelDraft>) => setDraft(current => ({ ...current, ...value }))
-  const title = draft.id.trim() === ''
-    ? t('编辑模型 · 新模型', 'Edit model · New model')
-    : t(`编辑模型 · ${draft.id.trim()}`, `Edit model · ${draft.id.trim()}`)
-  const capacityPlaceholder = (inherited: number | undefined) => inherited === undefined
-    ? t('使用提供商默认值', "Provider's default")
-    : formatCapacity(inherited)
+  const setLevels = (levels: ReasoningEntry[] | undefined) => {
+    patch({ levels })
+    setMapText(reasoningMapText(levels))
+    setMapError('')
+  }
+  // 智能配置：按模型 ID 从内置目录带入推荐值；目录里没有这个名字时保持手填。
+  const recommended = providerId === undefined || draft.id.trim() === ''
+    ? undefined
+    : catalog?.models.find(model => model.provider === providerId && model.modelId === draft.id.trim())
+  const adoptRecommended = (): void => {
+    if (recommended === undefined) return
+    const levels = recommended.thinkingLevels !== undefined
+      ? recommended.thinkingLevels.map(level => ({ level, value: defaultLevelValue(level) }))
+      : draft.levels
+    patch({
+      ...(recommended.contextWindow === undefined ? {} : { contextWindow: formatCapacity(recommended.contextWindow) }),
+      ...(levels === undefined ? {} : { levels }),
+    })
+    if (levels !== undefined) setMapText(reasoningMapText(levels))
+  }
+  const applyMap = (text: string): void => {
+    setMapText(text)
+    if (draft.levels === undefined) return
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('object')
+      const values = new Map<string, string>(Object.entries(parsed as Record<string, unknown>)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+      patch({ levels: draft.levels.map(entry => ({ ...entry, value: values.get(entry.level) ?? entry.value })) })
+      setMapError('')
+    } catch {
+      setMapError(t('需要合法的 JSON 对象，例如 {"low": "low"}。', 'Needs a valid JSON object, e.g. {"low": "low"}.'))
+    }
+  }
+  const reset = (): void => {
+    const next = cloneRow(row)
+    setDraft(next)
+    setMapText(reasoningMapText(next.levels))
+    setMapError('')
+    setSmart(true)
+  }
+  const title = draft.id.trim() === '' ? t('添加模型', 'Add model') : t(`编辑模型 · ${draft.id.trim()}`, `Edit model · ${draft.id.trim()}`)
+  const capacityPlaceholder = (inherited: number | undefined, recommendedValue: number | undefined) => {
+    const value = smart ? (recommendedValue ?? inherited) : inherited
+    return value === undefined ? t('留空使用默认值', 'Blank uses the default') : formatCapacity(value)
+  }
   const levels = draft.levels
   return <Modal open onClose={onClose} title={title} closeLabel={t('关闭', 'Close')}
-    description={t('点「完成」写回模型目录，保存提供商后生效。', 'Done writes these values back to the directory; saving the provider applies them.')}
+    description={t('这些字段用于目录与请求；点「完成」写回目录，保存提供商后生效。', 'These fields describe the model; Done writes them to the directory, saving the provider applies them.')}
     className={css.modelEditorModal}
-    footer={<>
+    footer={<div className={css.modalFooter}>
+      <button type="button" className={css.resetForm} disabled={disabled} onClick={reset}>{t('重置表单', 'Reset form')}</button>
+      <span className={css.footerSpacer} />
       <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onClose}>{t('取消', 'Cancel')}</Button>
-      <Button type="button" variant="primary" size="sm" disabled={disabled} onClick={() => onCommit(draft)}>{t('完成', 'Done')}</Button>
-    </>}>
+      <Button type="button" variant="primary" size="sm" disabled={disabled || mapError !== ''} onClick={() => onCommit(draft)}>{t('完成', 'Done')}</Button>
+    </div>}>
     <div className={css.modelEditorBody}>
-      <ModelSettingsGroup group="basic" title={t('基本信息', 'Basic')}
-        description={t('模型在请求中使用的标识，以及选择器里显示的名称。', 'The identifier requests use, and the name the picker shows.')}>
-        <label className={css.modelField}>
-          <span className={css.fieldLabel}>{t('模型 ID', 'Model ID')}</span>
-          <Input value={draft.id} placeholder={t('模型 ID', 'Model ID')} disabled={disabled}
-            className={css.modelMonoInput} aria-label={t(`模型 ID ${position}`, `Model ID ${position}`)}
-            data-modal-autofocus
-            onChange={event => patch({ id: event.currentTarget.value })} />
-        </label>
-        <label className={css.modelField}>
-          <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
-          <Input value={draft.name} placeholder={t('留空时使用模型 ID', 'Uses the model ID when blank')} disabled={disabled}
-            aria-label={t(`显示名称 ${position}`, `Display name ${position}`)}
-            onChange={event => patch({ name: event.currentTarget.value })} />
-        </label>
-      </ModelSettingsGroup>
-      <ModelSettingsGroup group="tokens" title={t('容量', 'Capacity')}
-        description={t('留空时沿用提供商或内置目录的值。', "Blank keeps the provider's or the catalog's value.")}>
-        <div className={css.modelFieldRow}>
-          <label className={css.modelField}>
-            <span className={css.fieldLabel}>{t('上下文窗口', 'Context window')}</span>
-            <Input inputMode="numeric" value={draft.contextWindow} disabled={disabled}
-              aria-label={t(`上下文窗口 ${position}`, `Context window ${position}`)}
-              placeholder={capacityPlaceholder(draft.base?.contextWindow)}
-              onChange={event => patch({ contextWindow: event.currentTarget.value })} />
-          </label>
-          <label className={css.modelField}>
-            <span className={css.fieldLabel}>{t('最大输出 token 数', 'Max output tokens')}</span>
-            <Input inputMode="numeric" value={draft.maxTokens} disabled={disabled}
-              aria-label={t(`最大输出 token 数 ${position}`, `Max output tokens ${position}`)}
-              placeholder={capacityPlaceholder(draft.base?.maxTokens)}
-              onChange={event => patch({ maxTokens: event.currentTarget.value })} />
-          </label>
+      <div className={css.smartRow}>
+        <span className={css.smartLabel}>
+          {t('智能配置', 'Smart config')}
+          <Tooltip label={t('开启后按模型 ID 从内置目录带入上下文窗口与推理档位；目录里没有该模型时保持手填。',
+            'Fills the context window and reasoning levels from the built-in catalog by model ID; unknown models stay manual.')}
+            side="right" delayMs={0} focusDelayMs={0} portal openOnClick>
+            <button type="button" className={css.helpButton} aria-label={t('智能配置说明', 'About smart config')}>?</button>
+          </Tooltip>
+        </span>
+        <Switch checked={smart} label={t('智能配置', 'Smart config')} disabled={disabled}
+          onChange={on => { setSmart(on); if (on) adoptRecommended() }} />
+      </div>
+      <label className={css.modelField}>
+        <span className={css.fieldLabel}>{t('模型 ID', 'Model ID')}</span>
+        <Input value={draft.id} placeholder={t('模型 ID', 'Model ID')} disabled={disabled}
+          className={css.modelMonoInput} aria-label={t(`模型 ID ${position}`, `Model ID ${position}`)}
+          data-modal-autofocus
+          onChange={event => patch({ id: event.currentTarget.value })}
+          onBlur={() => { if (smart) adoptRecommended() }} />
+      </label>
+      <label className={css.modelField}>
+        <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
+        <Input value={draft.name} placeholder={t('留空时使用模型 ID', 'Uses the model ID when blank')} disabled={disabled}
+          aria-label={t(`显示名称 ${position}`, `Display name ${position}`)}
+          onChange={event => patch({ name: event.currentTarget.value })} />
+      </label>
+      <label className={css.modelField}>
+        <span className={css.fieldLabel}>{t('上下文窗口', 'Context window')}</span>
+        <Input inputMode="numeric" value={draft.contextWindow} disabled={disabled}
+          aria-label={t(`上下文窗口 ${position}`, `Context window ${position}`)}
+          placeholder={capacityPlaceholder(draft.base?.contextWindow, recommended?.contextWindow)}
+          onChange={event => patch({ contextWindow: event.currentTarget.value })} />
+      </label>
+      <label className={css.modelField}>
+        <span className={css.fieldLabel}>{t('最大输出 Token', 'Max output tokens')}</span>
+        <Input inputMode="numeric" value={draft.maxTokens} disabled={disabled}
+          aria-label={t(`最大输出 token 数 ${position}`, `Max output tokens ${position}`)}
+          placeholder={capacityPlaceholder(draft.base?.maxTokens, undefined)}
+          onChange={event => patch({ maxTokens: event.currentTarget.value })} />
+      </label>
+      <details className={css.advancedFold}>
+        <summary className={css.advancedSummary}>{t('高级配置', 'Advanced')}</summary>
+        <div className={css.advancedBody}>
+          <div className={css.modelField}>
+            <span className={css.fieldLabel}>{t('输入类型', 'Input types')}</span>
+            <div className={css.booleanOptions} role="group" aria-label={t(`输入类型 ${position}`, `Input types ${position}`)}>
+              {(['text', 'image'] as const).map(modality => {
+                const selected = draft.input.includes(modality)
+                return <BooleanModelOption key={modality}
+                  label={modality === 'text' ? t('文本', 'Text') : t('图片', 'Image')}
+                  selected={selected} disabled={disabled || draft.input.length === 1 && selected}
+                  onToggle={() => patch({ input: (['text', 'image'] as const).filter(value => value === modality ? !selected : draft.input.includes(value)) })} />
+              })}
+            </div>
+          </div>
+          <div className={css.modelField}>
+            <span className={css.fieldLabel}>
+              {t('推理等级（从低到高）', 'Reasoning levels (low to high)')}
+              <Tooltip label={t('拖动或按 Alt+左右方向键调整顺序；点击档位更换它。至少保留一个档位。',
+                'Drag or press Alt+Left/Right to reorder; click a level to replace it. Keep at least one.')}
+                side="right" delayMs={0} focusDelayMs={0} portal openOnClick>
+                <button type="button" className={css.helpButton} aria-label={t('推理等级说明', 'About reasoning levels')}>?</button>
+              </Tooltip>
+            </span>
+            {levels === undefined
+              ? <button type="button" className={css.enableReasoning} disabled={disabled}
+                onClick={() => setLevels(initialReasoningLevels(availableLevels))}>{t('启用推理', 'Enable reasoning')}</button>
+              : <>
+                <ReasoningChipEditor entries={levels} available={availableLevels} disabled={disabled} t={t}
+                  onChange={next => setLevels(next)} />
+                <button type="button" className={css.disableReasoning} disabled={disabled}
+                  onClick={() => setLevels(undefined)}>{t('关闭推理', 'Disable reasoning')}</button>
+              </>}
+          </div>
+          {levels !== undefined && <label className={css.modelField}>
+            <span className={css.fieldLabel}>
+              {t('推理参数映射', 'Reasoning parameter map')}
+              <Tooltip label={t('每个档位发送给供应商的取值，JSON 对象；留空的档位不写进映射。',
+                'The value each level sends to the provider, as a JSON object; levels left blank are omitted.')}
+                side="right" delayMs={0} focusDelayMs={0} portal openOnClick>
+                <button type="button" className={css.helpButton} aria-label={t('推理参数映射说明', 'About the reasoning map')}>?</button>
+              </Tooltip>
+            </span>
+            <textarea className={css.jsonSlot} value={mapText} disabled={disabled} spellCheck={false}
+              aria-label={t(`推理参数映射 ${position}`, `Reasoning parameter map ${position}`)}
+              onChange={event => applyMap(event.currentTarget.value)} />
+            {mapError !== '' && <span className={css.fieldError} role="alert">{mapError}</span>}
+          </label>}
         </div>
-      </ModelSettingsGroup>
-      <ModelSettingsGroup group="modalities" title={t('输入类型', 'Input types')}
-        description={t('发送给该模型的请求可以携带的内容；至少保留一种。', 'What requests to this model may carry; keep at least one.')}>
-        <div className={css.booleanOptions} role="group" aria-label={t(`输入类型 ${position}`, `Input types ${position}`)}>
-          {(['text', 'image'] as const).map(modality => {
-            const selected = draft.input.includes(modality)
-            return <BooleanModelOption key={modality}
-              label={modality === 'text' ? t('文本', 'Text') : t('图片', 'Image')}
-              selected={selected} disabled={disabled || draft.input.length === 1 && selected}
-              onToggle={() => patch({ input: (['text', 'image'] as const).filter(value => value === modality ? !selected : draft.input.includes(value)) })} />
-          })}
-        </div>
-      </ModelSettingsGroup>
-      <ModelSettingsGroup group="capabilities" title={t('能力', 'Capabilities')}
-        description={t('开启推理后，可以为该模型配置思考档位。', 'Turn reasoning on to configure thinking levels for this model.')}>
-        <div className={css.modelSwitchRow}>
-          <span className={css.modelSwitchLabel}>{t('推理', 'Reasoning')}</span>
-          <Switch checked={levels !== undefined} label={t(`推理 ${position}`, `Reasoning ${position}`)} disabled={disabled}
-            onChange={on => patch({ levels: on ? initialReasoningLevels(availableLevels) : undefined })} />
-        </div>
-      </ModelSettingsGroup>
-      {levels !== undefined && <ModelSettingsGroup group="reasoning" title={t('推理等级', 'Reasoning levels')}
-        description={t('拖动或按 Alt+左右方向键调整顺序；点击档位更换它，点击下方参数值编辑请求值。', 'Drag or press Alt+Left/Right to reorder; click a level to replace it, or its value below to edit the request value.')}>
-        <ReasoningChipEditor entries={levels} available={availableLevels} disabled={disabled} t={t}
-          onChange={next => patch({ levels: next })} />
-      </ModelSettingsGroup>}
+      </details>
     </div>
   </Modal>
 }
