@@ -120,6 +120,19 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('不要扫描项目里的 agent 状态目录')
   })
 
+  it('classifies user utterances before deciding whether to act', async () => {
+    const prompt = await renderPolicy({ tools: ['todo_write'] })
+
+    expect(prompt).toContain('用户话语解读')
+    expect(prompt).toContain('看看/分析一下')
+    expect(prompt).toContain('改/修复/实现')
+    expect(prompt).toContain('今天/昨天/前两天')
+    expect(prompt).toContain('用户粘贴的日志')
+    expect(prompt).toContain('可以/行/好的/没问题')
+    expect(prompt).toContain('先别改/只看看')
+    expect(prompt).toContain('列出候选并问')
+  })
+
   it('includes the root instruction section even when the request has no tools', async () => {
     const cwd = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-')))
     const body = '# Root project rules\nKeep this request scoped.\n'

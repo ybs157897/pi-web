@@ -115,8 +115,11 @@ export const InteractionTools: Extension = defineExtension({
       description: [
         'Ask the user one to eight questions and end this turn without waiting for the answer.',
         'Use this when a user-owned choice, missing external reference, or material ambiguity blocks progress; do not use it for facts you can inspect in the workspace.',
+        'Ask brief, direct, self-contained questions in user-facing terms; assume the user does not know background work or internal names.',
         'Each question has a stable id, the question text, optional options (label plus optional description), and multiSelect.',
+        'If you recommend one option, put it first and append "(Recommended)" to its label.',
         'The answers arrive as a follow-up user message on a later turn; continue with independent work or wrap up now.',
+        'Pending is not permission: do not perform the action a pending question depends on; a timeout or unanswered question is not consent.',
         'Do not repeat the same questions while they are pending.',
       ].join(' '),
       parameters: Type.Object({

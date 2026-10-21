@@ -146,8 +146,11 @@ describe('default policy at the actual Pi provider boundary', () => {
     expectCore(request)
     const planPolicy = request.system?.sections?.['plan-policy'] ?? ''
     expect(planPolicy).toContain('先探索')
+    expect(planPolicy).toContain('命令式语言要求实施时')
+    expect(planPolicy).toContain('不结束计划模式')
     expect(planPolicy).toContain('计划要决策完整')
     expect(planPolicy).toContain('唯一且最后一个工具调用')
+    expect(planPolicy).toContain('不要把计划当普通回复粘贴')
     expect(planPolicy).toContain('ask_user_question')
     expect(request.system?.sections?.['work-policy']).not.toContain('tools.todo_write')
     expect(request.tools).toEqual(expect.arrayContaining(['read', 'glob', 'grep']))

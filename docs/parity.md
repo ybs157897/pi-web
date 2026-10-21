@@ -425,6 +425,7 @@
 | 计划请求未开 Plan | 默认 persona 不把“停在计划”当成错误 | `runtime-core.md`；`work-policy` 的 plan-off 规则 | 用户要计划时先只读研究并给出计划，不擅自实施；提示可打开 Plan 审阅 |
 | Todo 节奏 | `tool-todo` 的 “plan multi-step work / add one per concrete step before you start” | `src/server/todo-tools.ts`；`work-policy` 的 todo 策略 | 去掉 “implementation work in progress” 的限定；计划请求把“调研→计划→等待确认”列为步骤 |
 | 主动询问 | `ask_user_question` 的 apply 边界 | `runtime-core.md` 的“澄清与提问”；`src/server/interaction-tools.ts` 描述 | 明确列出必须提问的场景；用户提“之前聊过”但本会话无历史时先问会话/文档，不扫描 `.lith`/`.kimi-code` 等 agent 状态目录 |
+| 用户话语解读 | plan-mode 的 imperative/agreement（`standard.patch.yml:55`）；time-context（`request-zone.ts:73`）；ask-user pending（`timed.ts:39`）；bash 删除/移动核对（`tool-bash/index.ts:96`） | `runtime-core.md` 新增“用户话语解读”；`plan-tools.ts`；`interaction-tools.ts`；`shell-tools.ts` | 请求类型（问句/诊断/实施/计划/确认）、指代、相对时间、多意图、粘贴内容、授权范围；Plan 命令式=计划、同意≠批准；pending≠permission；删除/移动先核对绝对目标 |
 | shell 调用方式 | bash/pwsh 的 `workdir` 与 “pass workdir instead of using cd” | `src/server/shell-tools.ts` | 保留 Pi `coding-tools` 名称与 read/write/edit；Windows 只注册 `pwsh`，其他平台只注册 `bash`；两者都增加 `workdir`、`description`，越界 workdir 拒绝 |
 
 有意保留的差异与未完成项：
@@ -434,9 +435,11 @@
 - Windows 只注册 `pwsh`、其他平台只注册 `bash`，与 DSH 的 Windows 组合一致；不再保留 Windows 上的 bash 兼容层。
 - `AGENTS.md` 仍只自动注入工作区根；子目录改为按需读取，不再要求模型递归扫描整个仓库。DSH 的 baseline + 文件触达自动 nested 加载尚未迁移。
 - 没有跨会话 `session-reference`；用户引用旧会话时仍需主动询问。
+- 相对日期目前按服务器时区解释；DSH 会读取浏览器时区，并在混合/缺失时询问用户。pi-web 尚未接入浏览器时区，跨时区用户可能把“今天/昨天”算错一天。
+- DSH 的 `auto-review` 授权审查层未移植；其“按实际效果而不是工具名/语气/声称意图分类、授权必须精确到 action/target/scope”的原则目前只以提示词规则存在，没有独立的审批模型兜底。
 - 真实模型行为验收仍待可用凭据；本批以受控请求边界、工具单元测试和行为断言覆盖接线。
 
-验证：`npm run typecheck`、`npx vitest run`（31 个文件，364 项通过、1 项仅在 Windows 执行）、`npx vite build`。新增 `tests/shell-tools.test.ts` 与 `tests/research-tools.test.ts` 的 glob/grep 用例；Windows 的 `pwsh` 执行用例按平台门控。
+验证：`npm run typecheck`、`npx vitest run`（32 个文件，371 项通过、1 项仅在 Windows 执行）、`npx vite build`。新增 `tests/shell-tools.test.ts` 与 `tests/research-tools.test.ts` 的 glob/grep 用例、用户话语解读断言，以及 ask-user pending / shell 删除移动目标核对断言；Windows 的 `pwsh` 执行用例按平台门控。
 
 ## 模型目录与推理等级（2026-10-20）
 

@@ -54,8 +54,11 @@ describe('shell tool selection', () => {
     const pwsh = windows.find(tool => tool.name === 'pwsh')
     expect(pwsh?.description).toContain('workdir')
     expect(pwsh?.description).toContain('Set-Location')
+    expect(pwsh?.description).toContain('Before any delete or move')
+    expect(pwsh?.description).toContain('resolved absolute target path')
     const properties = (pwsh?.parameters as { properties?: Record<string, unknown> }).properties ?? {}
     expect(Object.keys(properties)).toEqual(expect.arrayContaining(['command', 'description', 'workdir', 'timeout']))
+    expect(posix.find(tool => tool.name === 'bash')?.description).toContain('Before any delete or move')
   })
 })
 

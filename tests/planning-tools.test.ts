@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord/context'
 import type { Extension } from '@earendil-works/pi-durable'
 import { Goals, createGoalExtension } from '../src/server/goal-tools.ts'
+import { InteractionTools } from '../src/server/interaction-tools.ts'
 import { PlanExtension, Plans } from '../src/server/plan-tools.ts'
 import { TodoTools, Todos } from '../src/server/todo-tools.ts'
 
@@ -133,6 +134,18 @@ describe('planning tool prompt policy', () => {
     const prompt = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
     expect(prompt).toContain('Host 会拒绝写入、shell 和外部 MCP 调用')
     expect(prompt).toContain('第一行是一级标题')
+    expect(prompt).toContain('命令式语言要求实施时')
+    expect(prompt).toContain('不结束计划模式')
+    expect(prompt).toContain('不要把计划当普通回复粘贴')
+  })
+
+  it('keeps pending questions unauthorized and asks in user-facing terms', () => {
+    const description = tool(InteractionTools, 'ask_user_question').description
+
+    expect(description).toContain('Pending is not permission')
+    expect(description).toContain('timeout or unanswered question is not consent')
+    expect(description).toContain('user-facing terms')
+    expect(description).toContain('(Recommended)')
   })
 
   it('describes concrete multi-step todo use, timely status updates, and real parallel work', () => {

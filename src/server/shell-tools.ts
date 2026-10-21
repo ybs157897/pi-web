@@ -47,7 +47,7 @@ async function resolveWorkdir(cwd: string, value: unknown): Promise<string> {
  */
 const bashTool = defineTool({
   ...baseBash,
-  description: 'Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Provide `description` before `command` in the arguments. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
+  description: 'Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
   parameters: Type.Object({
     command: Type.String({ description: 'Bash command to execute' }),
     description: Type.Optional(Type.String({ description: 'Clear, concise description of what this command does in active voice, 5-10 words.' })),
@@ -70,7 +70,7 @@ const bashTool = defineTool({
 const pwshTool = defineTool({
   ...basePwsh,
   name: 'pwsh',
-  description: 'Execute a PowerShell command (`pwsh`, falling back to Windows PowerShell) and return its stdout/stderr. Each call runs in a fresh process; pass `workdir` instead of using `Set-Location`. Provide `description` before `command` in the arguments. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
+  description: 'Execute a PowerShell command (`pwsh`, falling back to Windows PowerShell) and return its stdout/stderr. Each call runs in a fresh process; pass `workdir` instead of using `Set-Location`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
   parameters: Type.Object({
     command: Type.String({ description: 'PowerShell command to execute' }),
     description: Type.Optional(Type.String({ description: 'Clear, concise description of what this command does in active voice, 5-10 words.' })),
