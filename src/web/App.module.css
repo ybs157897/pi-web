@@ -349,7 +349,10 @@
 .catalogNotice { display: flex; align-items: center; gap: 8px; width: min(100% - 32px, var(--dsh-chat-content-width)); margin: 0 auto 4px; color: var(--dsw-alias-state-error-primary); font-size: 11px; line-height: 16px; }
 .catalogNotice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .catalogNotice button { flex: none; border: 0; background: transparent; color: var(--dsw-alias-link); cursor: pointer; font: inherit; }
-.inspectorPane { z-index: 2; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base); }
+/* 检查器根节点是 flex 子项（`flex: 1 1 auto; min-height: 0`），这一层必须是
+   flex 容器：display:block 时这些属性不生效，根节点会被长文件撑到内容高度，
+   内部的内容区反而没有可滚动的高度（表现为「展开文件后无法滚动」）。 */
+.inspectorPane { z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--dsw-alias-bg-base); }
 .settingsNotice { position: absolute; z-index: 10; right: 14px; bottom: 12px; max-width: min(420px, calc(100% - 28px)); border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); padding: 8px 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
 .appLoading { display: grid; width: 100%; height: 100%; place-items: center; background: var(--dsw-alias-bg-base); }
 .appLoading .spinner { width: 18px; height: 18px; }

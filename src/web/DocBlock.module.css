@@ -598,3 +598,11 @@ button.inlineCode:focus-visible {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* 没有图标时的占位：保持 36px 圆形徽章的位置，避免标题比相邻卡片高一截。 */
+.badgeDot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}

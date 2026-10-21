@@ -296,3 +296,15 @@ describe('reserved-character repair', () => {
     expect(parseDocBlock(source)).toMatchObject({ code: '- `npm test`' })
   })
 })
+
+describe('card badges', () => {
+  it('keeps the badge slot when a card has no icon', () => {
+    const html = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - title: 没有图标\n' })!)
+    expect(html).toContain('badgeDot')
+  })
+
+  it('keeps the badge slot when the icon name is not in the map', () => {
+    const html = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - icon: no-such-icon\n    title: 表外图标\n' })!)
+    expect(html).toContain('badgeDot')
+  })
+})

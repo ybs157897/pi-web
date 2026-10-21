@@ -448,11 +448,21 @@ function readNote(document: Record<string, unknown>): ParsedDocBlock | undefined
   }
 }
 
-/** 圆形描边徽章；没有图标就整块不渲染，不留空壳。 */
-function DocBadge({ icon, className, size }: { readonly icon: DocIcon | undefined; readonly className: string; readonly size: number }) {
-  if (icon === undefined) return null
+/**
+ * 圆形描边徽章。卡片和提示块的徽章占着固定的一行高度，模型没写图标（或写了
+ * 表外名字）时不能直接消失——那样标题会比其他卡片高一截。这类位置传
+ * `placeholder`，用一个小圆点占住徽章位。
+ */
+function DocBadge({ icon, className, size, placeholder = false }: {
+  readonly icon: DocIcon | undefined
+  readonly className: string
+  readonly size: number
+  readonly placeholder?: boolean
+}) {
   const Glyph = icon
-  return <span className={className} aria-hidden="true"><Glyph size={size} /></span>
+  return <span className={className} aria-hidden="true">
+    {Glyph === undefined ? (placeholder ? <span className={css.badgeDot} /> : null) : <Glyph size={size} />}
+  </span>
 }
 
 function DocBullets({ items, onOpenFile }: {
@@ -476,7 +486,7 @@ function CardsBlock({ items, onOpenFile }: {
   return <div className={css.cardGrid} data-count={count}>
     {items.map((item, index) => (
       <section key={`${index}:${item.title}`} className={css.card}>
-        <DocBadge icon={iconOf(item.icon)} className={css.cardBadge} size={18} />
+        <DocBadge icon={iconOf(item.icon)} className={css.cardBadge} size={18} placeholder />
         <h3 className={css.cardTitle}>{item.title}</h3>
         {item.body !== undefined && <p className={css.cardBody}><DocInline text={item.body} onOpenFile={onOpenFile} /></p>}
         <DocBullets items={item.bullets} onOpenFile={onOpenFile} />
@@ -580,7 +590,7 @@ function NoteBlock({ block, onOpenFile }: {
   // 没指定图标时用灯泡，指定了但映射查不到就不画。
   const icon = block.icon === undefined ? IconLightOutlineRegular : iconOf(block.icon)
   return <div className={css.note}>
-    <DocBadge icon={icon} className={css.noteBadge} size={16} />
+    <DocBadge icon={icon} className={css.noteBadge} size={16} placeholder />
     <div className={css.noteContent}>
       {block.title !== undefined && <div className={css.noteTitleRow}>
         <h3 className={css.noteTitle}>{block.title}</h3>
