@@ -255,18 +255,26 @@ function readPanel(value: unknown): DocPanel | undefined {
 }
 
 /**
- * 先按原样解析；失败时把「以反引号开头的值」整体加引号再试一次。
+ * YAML 的保留字符：值以它们开头时，要么报错，要么把后面的内容悄悄吃掉。
+ * 反引号（行内代码）、`#`（注释）、`*`（别名）、`&`/`!`（锚点/标签）、
+ * `@`/`%`（保留）、`[`/`{`（流式集合）都在此列。
+ */
+const RESERVED_START = /^[`#&!*@%[{]/u
+
+/**
+ * 先按原样解析，不行再修两遍：保守修复 → 保守 + 激进修复。
  *
- * YAML 把反引号列为保留字符，`- \`a.md\` (12 KB)` 这种写法整块非法——而契约恰好
- * 要求模型在块内用反引号包路径和命令，所以这个错误会反复出现。这不是「这块不是
- * doc 块」，而是模型写得不够严谨，值得救一次。
+ * 保守修复每次都做（包括解析本来会成功的情况），因为有一类错误 YAML 不会报：
+ * `title: 修复 #123` 会被当成注释，解析成「修复」——不报错、不丢块，只是内容
+ * 悄悄少半句。激进修复只在解析失败后做（tab 缩进、没闭合的引号）。
  */
 function parseLoose(source: string): unknown {
+  const preserved = preserveScalars(source)
   try {
-    return parseYaml(source)
+    return parseYaml(preserved)
   } catch {
     try {
-      return parseYaml(quoteReservedStarts(source))
+      return parseYaml(repairScalars(preserved))
     } catch {
       // 修不回来才当作「这块不是 doc 块」。
       return undefined
@@ -274,15 +282,80 @@ function parseLoose(source: string): unknown {
   }
 }
 
-/** 给以反引号开头的映射值和序列项加单引号，其余行原样保留。 */
-function quoteReservedStarts(source: string): string {
+/**
+ * 保守修复：给会被 YAML 吃坏的值加单引号。
+ * - 值以保留字符开头：`- \`a.md\``、`title: **结论**`、`title: #123`；
+ * - 值里出现「空格 + #」：`修复 #123` 会被截成「修复」；
+ * - 值里出现「冒号 + 空格」：`code: create({ tab: 1 })` 整块解析失败。
+ * 已带引号的值、以及块标量（`|` / `>`）的内容原样跳过，避免二次引用或改坏代码。
+ */
+function preserveScalars(source: string): string {
+  const out: string[] = []
+  let blockIndent: number | undefined
+  for (const line of source.split('\n')) {
+    const indent = line.length - line.trimStart().length
+    if (blockIndent !== undefined && line.trim() !== '') {
+      if (indent > blockIndent) {
+        out.push(line)
+        continue
+      }
+      blockIndent = undefined
+    }
+    if (/^\s*(?:-\s+)?[\w-]+:[ \t]*[|>][+-]?\s*$/u.test(line)) {
+      blockIndent = indent
+      out.push(line)
+      continue
+    }
+    out.push(preserveValueLine(line))
+  }
+  return out.join('\n')
+}
+
+const MAPPING_LINE = /^(\s*)((?:-\s+)?[\w-]+:[ \t]+)(.*)$/u
+const ITEM_LINE = /^(\s*-[ \t]+)(.*)$/u
+
+function preserveValueLine(line: string): string {
+  const mapping = MAPPING_LINE.exec(line)
+  if (mapping !== null) return mapping[1] + mapping[2] + preserveValue(mapping[3])
+  const item = ITEM_LINE.exec(line)
+  if (item === null) return line
+  const rest = item[2]
+  // `- key: value` 是映射项，继续按值处理；`- 纯文本` 才当标量。
+  const nested = MAPPING_LINE.exec(rest)
+  if (nested !== null) return item[1] + nested[1] + nested[2] + preserveValue(nested[3])
+  return item[1] + preserveValue(rest)
+}
+
+function preserveValue(value: string): string {
+  const trimmed = value.trimEnd()
+  if (trimmed === '') return value
+  const first = trimmed[0]
+  if (first === "'" || first === '"' || first === '|' || first === '>') return value
+  if (RESERVED_START.test(trimmed) || / #/u.test(trimmed) || /: /u.test(trimmed)) return quoteScalar(trimmed)
+  return value
+}
+
+/** 激进修复：tab 缩进换成两空格；值以引号开头却没闭合时在行尾补上。 */
+function repairScalars(source: string): string {
   return source.split('\n').map((line) => {
-    const mapping = /^(\s*[\w-]+:[ \t]+)(`.*)$/u.exec(line)
-    if (mapping !== null) return mapping[1] + quoteScalar(mapping[2])
-    const item = /^(\s*-[ \t]+)(`.*)$/u.exec(line)
-    if (item !== null) return item[1] + quoteScalar(item[2])
-    return line
+    const expanded = line.replace(/^\t+/u, (tabs) => ' '.repeat(tabs.length * 2))
+    const mapping = MAPPING_LINE.exec(expanded)
+    if (mapping !== null) return mapping[1] + mapping[2] + closeQuoted(mapping[3])
+    const item = ITEM_LINE.exec(expanded)
+    if (item !== null) return item[1] + closeQuoted(item[2])
+    return expanded
   }).join('\n')
+}
+
+function closeQuoted(value: string): string {
+  const trimmed = value.trimEnd()
+  for (const quote of ["'", '"'] as const) {
+    if (!trimmed.startsWith(quote)) continue
+    // `'a''b'` 这种以成对引号结尾的也算闭合。
+    if (trimmed.length > 1 && trimmed.endsWith(quote)) return value
+    return `${trimmed}${quote}`
+  }
+  return value
 }
 
 function quoteScalar(value: string): string {
@@ -355,21 +428,24 @@ export function parseDocBlock(source: string): ParsedDocBlock | undefined {
     }
     return { type: 'changes', items: changes }
   }
-  if (document.type === 'note') {
-    const icon = optionalText(document.icon)
-    const title = optionalText(document.title)
-    const body = optionalText(document.body)
-    const code = optionalText(document.code)
-    const label = optionalText(document.label)
-    if (!icon.ok || !title.ok || !body.ok || !code.ok || !label.ok) return undefined
-    // 标题和正文都没有的话，这块没有可读内容。
-    if (title.value === undefined && body.value === undefined) return undefined
-    return {
-      type: 'note', icon: icon.value, title: title.value,
-      body: body.value, code: code.value, label: label.value,
-    }
-  }
+  if (document.type === 'note') return readNote(document)
   return undefined
+}
+
+/** 提示块的字段校验，整块解析与流式宽松解析共用。 */
+function readNote(document: Record<string, unknown>): ParsedDocBlock | undefined {
+  const icon = optionalText(document.icon)
+  const title = optionalText(document.title)
+  const body = optionalText(document.body)
+  const code = optionalText(document.code)
+  const label = optionalText(document.label)
+  if (!icon.ok || !title.ok || !body.ok || !code.ok || !label.ok) return undefined
+  // 标题和正文都没有的话，这块没有可读内容。
+  if (title.value === undefined && body.value === undefined) return undefined
+  return {
+    type: 'note', icon: icon.value, title: title.value,
+    body: body.value, code: code.value, label: label.value,
+  }
 }
 
 /** 圆形描边徽章；没有图标就整块不渲染，不留空壳。 */
@@ -520,37 +596,104 @@ function NoteBlock({ block, onOpenFile }: {
 }
 
 /**
+ * 流式期间的宽松解析：模型还没写完时，按「最长可解析前缀 + 完整条目」渲染已经
+ * 写好的部分。
+ *
+ * 先整块解析（围栏没闭合时内容也可能已经完整）；不行就按行往回退，找到能解析的
+ * 最长前缀，再丢掉末尾字段不全的条目——卡片随字数增长逐张出现，而不是先显示一坨
+ * 原始 YAML、最后再跳一下。
+ */
+export function parseDocBlockPartial(source: string): ParsedDocBlock | undefined {
+  const lines = source.split('\n')
+  for (let end = lines.length; end > 0; end -= 1) {
+    const document = parseLoose(lines.slice(0, end).join('\n'))
+    if (!isRecord(document)) continue
+    const block = lenientBlock(document)
+    if (block !== undefined) return block
+  }
+  return undefined
+}
+
+/** 只保留结构完整的条目；末尾半截的条目丢掉，整块没有完整内容时返回 undefined。 */
+function lenientBlock(document: Record<string, unknown>): ParsedDocBlock | undefined {
+  if (document.type === 'cards') {
+    const items = Array.isArray(document.items) ? document.items : []
+    const cards: DocCard[] = []
+    for (const entry of items) {
+      const card = readCard(entry)
+      if (card === undefined) break
+      cards.push(card)
+    }
+    return cards.length === 0 ? undefined : { type: 'cards', items: cards }
+  }
+  if (document.type === 'checks') {
+    const items = Array.isArray(document.items) ? document.items : []
+    const checks: DocCheck[] = []
+    for (const entry of items) {
+      const check = readCheck(entry)
+      if (check === undefined) break
+      checks.push(check)
+    }
+    return checks.length === 0 ? undefined : { type: 'checks', items: checks }
+  }
+  if (document.type === 'changes') {
+    const items = Array.isArray(document.items) ? document.items : []
+    const changes: DocChange[] = []
+    for (const entry of items) {
+      const change = readChange(entry)
+      if (change === undefined) break
+      changes.push(change)
+    }
+    return changes.length === 0 ? undefined : { type: 'changes', items: changes }
+  }
+  if (document.type === 'compare') {
+    const left = readPanel(document.left)
+    const right = readPanel(document.right)
+    return left === undefined || right === undefined ? undefined : { type: 'compare', left, right }
+  }
+  if (document.type === 'note') return readNote(document)
+  return undefined
+}
+
+/**
  * 渲染一个 doc 块。
  *
  * 解析失败时按原文显示而不是返回 null：模型偶尔会在值里写出未加引号的
  * `: `（例如 `code: const s = create(({ tab: 'x' }))`），YAML 解析器会整块
  * 拒绝。整块消失比显示得不好更糟——读者会以为这一节本来就不存在。
  */
-export function DocBlockView({ source, artifacts, onOpenFile }: {
+export function DocBlockView({ source, partial, streaming, artifacts, onOpenFile }: {
   readonly source: string
+  /** The fence is still open, so render the entries that are already complete. */
+  readonly partial?: boolean
+  /** The message is still streaming; an unformed partial block stays invisible. */
+  readonly streaming?: boolean
   /** This run's file changes; the changes block derives its diff stats from them. */
   readonly artifacts?: readonly FileArtifact[] | undefined
   /** Opens a workspace file from a path chip; absent on surfaces without an inspector. */
   readonly onOpenFile?: ((path: string) => void) | undefined
 }): ReactElement | null {
-  const block = parseDocBlock(source)
+  const block = parseDocBlock(source) ?? (partial === true ? parseDocBlockPartial(source) : undefined)
   if (block === undefined) {
+    // 还在写、又没成形：先不显示，免得闪一坨原始 YAML 再跳成卡片。
+    if (partial === true && streaming === true) return null
     return <div className={css.fallback} data-doc-block="invalid" role="note">
       <span className={css.fallbackLabel}>结构化块格式错误，已按原文显示</span>
       <pre className={css.fallbackCode}>{source.trimEnd()}</pre>
     </div>
   }
+  const partialAttr = partial === true ? '' : undefined
   if (block.type === 'cards') {
-    return <div className={css.root} data-doc-block="cards"><CardsBlock items={block.items} onOpenFile={onOpenFile} /></div>
+    return <div className={css.root} data-doc-block="cards" data-doc-partial={partialAttr}><CardsBlock items={block.items} onOpenFile={onOpenFile} /></div>
   }
   if (block.type === 'compare') {
-    return <div className={css.root} data-doc-block="compare"><CompareBlock left={block.left} right={block.right} onOpenFile={onOpenFile} /></div>
+    return <div className={css.root} data-doc-block="compare" data-doc-partial={partialAttr}><CompareBlock left={block.left} right={block.right} onOpenFile={onOpenFile} /></div>
   }
   if (block.type === 'checks') {
-    return <div className={css.root} data-doc-block="checks"><ChecksBlock items={block.items} onOpenFile={onOpenFile} /></div>
+    return <div className={css.root} data-doc-block="checks" data-doc-partial={partialAttr}><ChecksBlock items={block.items} onOpenFile={onOpenFile} /></div>
   }
   if (block.type === 'changes') {
-    return <div className={css.root} data-doc-block="changes"><ChangesBlock items={block.items} artifacts={artifacts} onOpenFile={onOpenFile} /></div>
+    return <div className={css.root} data-doc-block="changes" data-doc-partial={partialAttr}><ChangesBlock items={block.items} artifacts={artifacts} onOpenFile={onOpenFile} /></div>
   }
-  return <div className={css.root} data-doc-block="note"><NoteBlock block={block} onOpenFile={onOpenFile} /></div>
+  return <div className={css.root} data-doc-block="note" data-doc-partial={partialAttr}><NoteBlock block={block} onOpenFile={onOpenFile} /></div>
 }

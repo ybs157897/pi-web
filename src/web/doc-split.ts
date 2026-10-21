@@ -8,7 +8,8 @@
 
 export type DocSegment =
   | { readonly kind: 'markdown'; readonly text: string }
-  | { readonly kind: 'doc'; readonly text: string }
+  /** `partial` marks a doc fence the model has not closed yet. */
+  | { readonly kind: 'doc'; readonly text: string; readonly partial: boolean }
 
 interface SourceLine {
   /** The line's first character offset in the source. */
@@ -32,9 +33,10 @@ const DOC_INFO = 'doc'
 /**
  * Split assistant text into plain Markdown and doc blocks.
  *
- * An unterminated fence is left inside the Markdown segment: while the model is
- * still writing, the half-open fence is an ordinary code block, and it turns into
- * a doc block once the closing fence arrives.
+ * An unterminated `doc` fence becomes a partial doc segment: the renderer can
+ * show the cards written so far instead of a raw YAML code block. An
+ * unterminated fence of any other language stays in the Markdown segment, where
+ * it is an ordinary code block.
  */
 export function splitDocBlocks(text: string): DocSegment[] {
   if (text === '') return []
@@ -50,7 +52,12 @@ export function splitDocBlocks(text: string): DocSegment[] {
       continue
     }
     const close = closingFence(lines, index + 1, fence)
-    if (close === undefined) break
+    if (close === undefined) {
+      if (fence.info !== DOC_INFO) break
+      if (line.start > markdownStart) segments.push({ kind: 'markdown', text: text.slice(markdownStart, line.start) })
+      segments.push({ kind: 'doc', text: text.slice(line.end + 1), partial: true })
+      return segments
+    }
     if (fence.info !== DOC_INFO) {
       index = close + 1
       continue
@@ -58,7 +65,7 @@ export function splitDocBlocks(text: string): DocSegment[] {
     if (line.start > markdownStart) segments.push({ kind: 'markdown', text: text.slice(markdownStart, line.start) })
     const bodyStart = line.end + 1
     const bodyEnd = lines[close].start
-    segments.push({ kind: 'doc', text: text.slice(bodyStart, bodyEnd) })
+    segments.push({ kind: 'doc', text: text.slice(bodyStart, bodyEnd), partial: false })
     markdownStart = lines[close].end + 1
     index = close + 1
   }

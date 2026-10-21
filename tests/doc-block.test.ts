@@ -10,7 +10,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => new Proxy({}, {
 }))
 
 import { renderToStaticMarkup } from 'react-dom/server'
-import { DocBlockView, parseDocBlock } from '../src/web/DocBlock.tsx'
+import { DocBlockView, parseDocBlock, parseDocBlockPartial } from '../src/web/DocBlock.tsx'
 import { DOC_STYLE_INSTRUCTION } from '../src/server/doc-style-instruction.ts'
 
 describe('doc block parsing', () => {
@@ -156,10 +156,51 @@ describe('doc block parsing', () => {
 
   it('rejects unknown types, broken YAML, and YAML that is not a mapping', () => {
     expect(parseDocBlock('type: unknown\nitems: []\n')).toBeUndefined()
-    expect(parseDocBlock('type: cards\nitems:\n  - title: "未闭合\n')).toBeUndefined()
+    // 引号/方括号没闭合现在会被修复救回来，这里换成结构不合法、修不回来的形状。
+    expect(parseDocBlock('type: cards\nitems: 42\n')).toBeUndefined()
+    expect(parseDocBlock('type: cards\nitems:\n  - title: x\n    bullets: 7\n')).toBeUndefined()
     expect(parseDocBlock('只是一段文本')).toBeUndefined()
     expect(parseDocBlock('- 一\n- 二\n')).toBeUndefined()
     expect(parseDocBlock('')).toBeUndefined()
+  })
+})
+
+describe('partial blocks while streaming', () => {
+  it('renders the entries that are already complete', () => {
+    const source = [
+      'type: cards',
+      'items:',
+      '  - icon: api',
+      '    title: 架构',
+      '  - icon: layers',
+      '    title: 通道',
+    ].join('\n')
+    expect(parseDocBlockPartial(source)).toMatchObject({
+      type: 'cards',
+      items: [{ title: '架构' }, { title: '通道' }],
+    })
+  })
+
+  it('drops a trailing entry whose title has not arrived yet', () => {
+    const source = ['type: cards', 'items:', '  - icon: api', '    title: 架构', '  - icon: layers'].join('\n')
+    expect(parseDocBlockPartial(source)).toMatchObject({ type: 'cards', items: [{ title: '架构' }] })
+  })
+
+  it('returns nothing before the first complete entry', () => {
+    expect(parseDocBlockPartial('type: cards\nitems:\n  - icon: api')).toBeUndefined()
+    expect(parseDocBlockPartial('type: car')).toBeUndefined()
+  })
+
+  it('renders partial cards and hides a block that has not formed yet', () => {
+    // 流式中且没成形：先不显示，避免闪一坨原始 YAML。
+    expect(DocBlockView({ source: 'type: cards\nitems:\n  - icon: api', partial: true, streaming: true })).toBeNull()
+    // 已成形：带 data-doc-partial 渲染卡片。
+    const html = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - title: 架构', partial: true, streaming: true })!)
+    expect(html).toContain('data-doc-partial')
+    expect(html).toContain('架构')
+    // 流式结束、围栏始终没闭合：退回原文兜底，内容不丢。
+    const settled = renderToStaticMarkup(DocBlockView({ source: 'type: cards\nitems:\n  - icon: api', partial: true, streaming: false })!)
+    expect(settled).toContain('data-doc-block="invalid"')
   })
 })
 
@@ -185,13 +226,12 @@ describe('doc block rendering', () => {
     expect(html).toContain('注意')
   })
 
-  it('keeps the authored text when the source does not parse', () => {
-    // A model-written value with an unquoted `: ` breaks YAML; dropping the block
-    // would silently delete a section of the answer.
-    const broken = "type: note\ntitle: 落地步骤\nbody: 先建 store。\ncode: const s = create({ tab: 'x' })\n"
+  it('keeps the authored text when the source cannot be rescued', () => {
+    // 结构不合法（items 不是数组）没法靠引号修复；整块消失会悄悄删掉一节回答。
+    const broken = 'type: cards\nitems: 42\n'
     const html = renderToStaticMarkup(DocBlockView({ source: broken })!)
     expect(html).toContain('data-doc-block="invalid"')
-    expect(html).toContain('const s = create')
+    expect(html).toContain('items: 42')
   })
 })
 
@@ -217,6 +257,42 @@ describe('reserved-character repair', () => {
   })
 
   it('still rejects a block that the repair cannot rescue', () => {
-    expect(parseDocBlock('type: cards\nitems:\n  - title: [未闭合\n')).toBeUndefined()
+    expect(parseDocBlock('type: cards\nitems: 42\n')).toBeUndefined()
+    expect(parseDocBlock('type: checks\nitems:\n  - label: 构建\n')).toBeUndefined()
+  })
+
+  it('keeps a hash inside a value instead of letting YAML truncate it', () => {
+    // `title: 修复 #123` 是合法 YAML：解析成功，但值是「修复」——唯一会静默少内容的写法。
+    const parsed = parseDocBlock('type: note\ntitle: 修复 #123\nbody: 说明\n')
+    expect(parsed).toMatchObject({ type: 'note', title: '修复 #123' })
+  })
+
+  it('keeps a bullet that starts with bold or a hash', () => {
+    const parsed = parseDocBlock([
+      'type: cards',
+      'items:',
+      '  - title: 要点',
+      '    bullets:',
+      '      - **重要**：先跑测试',
+      '      - #123 已修复',
+    ].join('\n'))
+    expect(parsed).toMatchObject({ type: 'cards', items: [{ bullets: ['**重要**：先跑测试', '#123 已修复'] }] })
+  })
+
+  it('repairs a value with a colon and a tab-indented block', () => {
+    expect(parseDocBlock("type: note\ntitle: 落地\nbody: 说明\ncode: const s = create({ tab: 'x' })\n"))
+      .toMatchObject({ code: "const s = create({ tab: 'x' })" })
+
+    const tabbed = 'type: cards\nitems:\n\t- title: 制表符\n'
+    expect(parseDocBlock(tabbed)).toMatchObject({ type: 'cards', items: [{ title: '制表符' }] })
+  })
+
+  it('closes an unclosed quote at the end of a line', () => {
+    expect(parseDocBlock("type: note\ntitle: '没闭合\nbody: 说明\n")).toMatchObject({ title: '没闭合' })
+  })
+
+  it('leaves the content of a block scalar alone', () => {
+    const source = 'type: note\ntitle: 命令\nbody: 说明\ncode: |\n  - `npm test`\n'
+    expect(parseDocBlock(source)).toMatchObject({ code: '- `npm test`' })
   })
 })

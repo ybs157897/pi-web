@@ -38,7 +38,9 @@ export function DocText({ text, streaming, layout, labels, fileMentions, pathIma
   return (
     <>
       {segments.map((segment, index) => segment.kind === 'doc'
-        ? <DocBlockView key={`doc:${index}`} source={segment.text} artifacts={artifacts} onOpenFile={onOpenFile} />
+        ? <DocBlockView key={`doc:${index}`} source={segment.text} partial={segment.partial}
+          streaming={streaming === true && index === segments.length - 1}
+          artifacts={artifacts} onOpenFile={onOpenFile} />
         : (
           <div className={layout === true ? docCss.docBody : undefined} data-doc-body={layout === true ? '' : undefined}
             key={`md:${index}`}>

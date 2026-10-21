@@ -14,28 +14,33 @@ describe('splitDocBlocks', () => {
     const text = '## 标题\n\n```doc\ntype: cards\nitems:\n  - title: 甲\n```\n\n结尾'
     expect(splitDocBlocks(text)).toEqual([
       { kind: 'markdown', text: '## 标题\n\n' },
-      { kind: 'doc', text: 'type: cards\nitems:\n  - title: 甲\n' },
+      { kind: 'doc', text: 'type: cards\nitems:\n  - title: 甲\n', partial: false },
       { kind: 'markdown', text: '\n结尾' },
     ])
   })
 
   it('reads the doc body without its fences', () => {
     const segments = splitDocBlocks('```doc\ntype: note\ntitle: 提示\n```')
-    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\ntitle: 提示\n' }])
+    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\ntitle: 提示\n', partial: false }])
   })
 
   it('accepts an info string that names the block first', () => {
     const segments = splitDocBlocks('```doc yaml\ntype: note\n```')
-    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\n' }])
+    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\n', partial: false }])
   })
 
   it('accepts tilde fences', () => {
     const segments = splitDocBlocks('~~~doc\ntype: note\n~~~')
-    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\n' }])
+    expect(segments).toEqual([{ kind: 'doc', text: 'type: note\n', partial: false }])
   })
 
-  it('leaves a half-written fence to markdown while the model is still streaming', () => {
+  it('marks an unclosed doc fence as a partial block while the model is still streaming', () => {
     const text = '```doc\ntype: cards\nitems:'
+    expect(splitDocBlocks(text)).toEqual([{ kind: 'doc', text: 'type: cards\nitems:', partial: true }])
+  })
+
+  it('keeps an unclosed fence of another language in the markdown stream', () => {
+    const text = '```ts\nconst a = 1'
     expect(splitDocBlocks(text)).toEqual([{ kind: 'markdown', text }])
   })
 
@@ -52,9 +57,9 @@ describe('splitDocBlocks', () => {
   it('numbers several doc blocks in one answer', () => {
     const text = '```doc\ntype: cards\n```\n\n中间\n\n```doc\ntype: note\n```'
     expect(splitDocBlocks(text)).toEqual([
-      { kind: 'doc', text: 'type: cards\n' },
+      { kind: 'doc', text: 'type: cards\n', partial: false },
       { kind: 'markdown', text: '\n中间\n\n' },
-      { kind: 'doc', text: 'type: note\n' },
+      { kind: 'doc', text: 'type: note\n', partial: false },
     ])
   })
 
