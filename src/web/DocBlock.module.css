@@ -428,11 +428,9 @@ button.inlineCode:focus-visible {
 
 /* ---------- 验证结果 ---------- */
 
-/* 列轨道定义在列表上，每行用 subgrid 复用同一组轨道，标签和细节才能跨行对齐；
-   不支持 subgrid 的浏览器退回每行各自成表（行内仍然对齐）。 */
 .checkList {
-  display: grid;
-  grid-template-columns: 16px minmax(72px, max-content) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   container-type: inline-size;
   margin: 14px 0;
   padding: 0;
@@ -441,20 +439,16 @@ button.inlineCode:focus-visible {
   list-style: none;
 }
 
-/* 三列：标记 / 标签 / 细节。细节列只放细节，命令再长也不会折到标签下面。 */
+/* 三列：标记 / 标签 / 细节。标签列用固定宽度，所有行天然对齐；细节列只放
+   细节，命令再长也不会折到标签下面。（subgrid 在行有横向 padding 时会把轨道
+   算错，标签会压到图标上，所以这里不用它。） */
 .checkRow {
   display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: 16px minmax(72px, max-content) minmax(0, 1fr);
+  grid-template-columns: 16px 120px minmax(0, 1fr);
   align-items: baseline;
-  gap: 2px 12px;
+  column-gap: 12px;
+  row-gap: 2px;
   padding: 10px 14px;
-}
-
-@supports (grid-template-columns: subgrid) {
-  .checkRow {
-    grid-template-columns: subgrid;
-  }
 }
 
 .checkRow + .checkRow {
@@ -502,10 +496,6 @@ button.inlineCode:focus-visible {
 
 /* 窄屏：细节换到第二行，仍与标签左对齐，不回到标记列下面。 */
 @container (max-width: 460px) {
-  .checkList {
-    grid-template-columns: 16px minmax(0, 1fr);
-  }
-
   .checkRow {
     grid-template-columns: 16px minmax(0, 1fr);
   }
