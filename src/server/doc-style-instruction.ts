@@ -99,15 +99,21 @@ label: 可选
 - 一次回答最多用 2 到 3 个 doc 块，块之间的普通段落照常用 Markdown 写。
 - 结论分节时每节至少有一个 doc 块或两段以上的正文，不要出现只有标题的空节。
 - 只有结论本身值得并排、对比或提醒时才用结构化块，其余内容保持普通 Markdown。
-- 卡片图标只能从下面这份白名单里选：text、space、color、code、doc、compare、sparkle、bulb、check、cross、info、warn、plan、goal、tree、search、skill、data、layers、chart、sliders、globe、branch、archive、agent、folder、settings、think、enhance、injection、queue。
+- 卡片图标只能从下面这份白名单里选：text、doc、file、code、list、todo、edit、copy、compare、plan、goal、tree、branch、queue、api、link、injection、time、deadline、check、cross、done、failed、info、warn、question、loading、pause、stop、run、refresh、pin、add、agent、team、folder、workspace、chat、preset、settings、sliders、shield、plugin、skill、data、globe、chart、layers、space、color、sparkle、think、enhance、bulb、search、inspect、archive、restore、share、download、attach、send、expand、delete。
+- 图标按语义选：结论用 check/cross/done/failed，提醒用 info/warn/question，任务与排期用 todo/plan/deadline/time，角色与组织用 agent/team/folder/workspace，技术对象用 code/api/data/chart，方向与流程用 tree/branch/link/queue。
 - doc 块里不要放代码围栏（不要出现三个反引号），也不要写引用式链接和脚注；这些在块里无法正确渲染。
 - 每个 doc 块只表达一件事，字段不要留空字符串，确实没有内容就省略该字段。
 - YAML 值里只要出现「冒号 + 空格」（\`: \`）、\`#\`、或者以 \`{\` \`[\` 开头，整段值就用单引号包起来；\`code\` 字段一律用单引号包起来，例如 \`code: 'const s = create({ tab: 1 })'\`。值里的单引号写成两个单引号转义。`
 
 /** The icon names a `doc` block may use; the model must not invent others. */
 export const DOC_STYLE_ICONS = [
-  'text', 'space', 'color', 'code', 'doc', 'compare', 'sparkle', 'bulb', 'check', 'cross',
-  'info', 'warn', 'plan', 'goal', 'tree', 'search', 'skill', 'data', 'layers', 'chart',
-  'sliders', 'globe', 'branch', 'archive', 'agent', 'folder', 'settings', 'think',
-  'enhance', 'injection', 'queue',
+  'text', 'doc', 'file', 'code', 'list', 'todo', 'edit', 'copy', 'compare',
+  'plan', 'goal', 'tree', 'branch', 'queue', 'api', 'link', 'injection',
+  'time', 'deadline',
+  'check', 'cross', 'done', 'failed', 'info', 'warn', 'question', 'loading', 'pause', 'stop',
+  'run', 'refresh', 'pin', 'add',
+  'agent', 'team', 'folder', 'workspace', 'chat', 'preset',
+  'settings', 'sliders', 'shield', 'plugin', 'skill', 'data', 'globe', 'chart', 'layers',
+  'space', 'color', 'sparkle', 'think', 'enhance', 'bulb', 'search', 'inspect',
+  'archive', 'restore', 'share', 'download', 'attach', 'send', 'expand', 'delete',
 ] as const

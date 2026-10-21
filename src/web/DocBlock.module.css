@@ -12,9 +12,8 @@
   --doc-radius: 12px;
   box-sizing: border-box;
   width: 100%;
-  padding: 14px 16px;
-  border-radius: var(--doc-radius);
-  background: var(--dsw-alias-bg-base);
+  /* 横向不留内边距：块要和章节标题、正文左对齐，边框由各块自己画。 */
+  padding: 8px 0;
   color: var(--dsw-alias-label-primary);
   font-size: 13.5px;
   line-height: 1.75;
@@ -27,19 +26,60 @@
   --doc-ok: #74c08d;
 }
 
+/* 卡片成组出现：整行用一条细边框圈住，左右两端才有边界；
+   组内只保留卡片之间的竖细线，不再给每张卡单独加外框。 */
 .cardGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   container-type: inline-size;
+  margin: 16px 0;
+  padding: 16px 18px;
+  border: 1px solid var(--doc-hairline);
+  border-radius: var(--doc-radius);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+/* 列数按卡片数量定，避免自动换列时第二行首卡多出一根左侧竖线。 */
+.cardGrid[data-count='1'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cardGrid[data-count='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cardGrid[data-count='3'] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cardGrid[data-count='many'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cardGrid[data-count='many'] .card:nth-child(2n + 1) {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.cardGrid[data-count='many'] .card:nth-child(n + 3) {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--doc-hairline);
 }
 
 .card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 0 20px;
+  padding: 0 18px;
 }
 
 .card:first-child {
   padding-left: 0;
+  border-left: 0;
+}
+
+.card:last-child {
+  padding-right: 0;
 }
 
 .card:not(:first-child) {
@@ -58,23 +98,28 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 标题固定占两行高度：一行标题和两行标题的正文起点对齐，
+   同一行卡片读起来才是三条平行线而不是错位。 */
 .cardTitle {
   margin: 0;
+  min-height: 3em;
   color: var(--dsw-alias-label-primary);
   font-size: 14px;
   font-weight: 600;
   line-height: 1.5;
+  text-wrap: balance;
 }
 
 .cardBody {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   color: var(--doc-muted);
-  font-size: 13px;
-  line-height: 1.75;
+  font-size: 12.5px;
+  line-height: 1.7;
+  text-wrap: pretty;
 }
 
 .bullets {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -84,7 +129,8 @@
   padding-left: 14px;
   color: var(--doc-muted);
   font-size: 12.5px;
-  line-height: 1.8;
+  line-height: 1.75;
+  text-wrap: pretty;
 }
 
 .bullet::before {
@@ -251,13 +297,34 @@
 }
 
 /* 单列时卡片之间不该有竖线，否则第二张卡左边多出一条没有来由的分割线。 */
-@container (max-width: 400px) {
-  .card {
-    padding: 12px 0 0;
+/* 单列时卡片改成上下叠放：竖线换成卡片之间的横细线。 */
+@container (max-width: 460px) {
+  .cardGrid[data-count] {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px 16px;
   }
 
-  .card:not(:first-child) {
+  .card,
+  .cardGrid[data-count='many'] .card:nth-child(2n + 1) {
+    margin-top: 0;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--doc-hairline);
     border-left: 0;
+  }
+
+  .card:first-child,
+  .cardGrid[data-count='many'] .card:nth-child(1) {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .cardGrid[data-count='many'] .card:nth-child(n + 3) {
+    margin-top: 0;
+  }
+
+  /* 单列时卡片上下排，不再需要靠标题占位对齐。 */
+  .cardTitle {
+    min-height: 0;
   }
 }
 
