@@ -5,7 +5,7 @@ import {
   IconSkillOutlineRegular,
   IconSettingsOutlineRegular, IconDatabaseOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular,
-  Menu, Modal, StateDot, Toast,
+  IconChevronLeftOutlineRegular, Menu, Modal, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccessMode, AppSettings, CodemodeMode, CollapseTiming, McpServerView, McpView, ModelCatalog, ProviderInput, PerformanceUsageMode, TranscriptViewMode, UpdateAppSettingsInput } from '../shared/types.ts'
 import { api } from './api.ts'
@@ -52,13 +52,35 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   const [mcpError, setMcpError] = useState('')
   useEffect(() => { if (open) { setTab(initialTab); setError('') } }, [open, initialTab])
   const available = (catalog?.models ?? []).filter(model => model.available)
-  const tabs: Array<{ id: SettingsTab; label: string; icon: ReactNode }> = [
-    { id: 'general', label: t('通用设置', 'General'), icon: <IconSettingsOutlineRegular size={16} /> },
-    { id: 'models', label: t('模型', 'Models'), icon: <IconDatabaseOutlineRegular size={16} /> },
-    { id: 'presets', label: t('Agent 预设', 'Agent presets'), icon: <IconAgentPresetOutlineRegular size={16} /> },
-    { id: 'mcp', label: 'MCP', icon: <IconApiOutlineRegular size={16} /> },
-    { id: 'skills', label: t('技能', 'Skills'), icon: <IconSkillOutlineRegular size={16} aria-hidden="true" /> },
+  const tabs: Array<{ id: SettingsTab; label: string; icon: ReactNode; group: string; description: string }> = [
+    {
+      id: 'general', label: t('常规', 'General'), group: t('基础设置', 'Basics'),
+      description: t('外观、字号、快捷键与工作步骤的展示方式。', 'Appearance, type size, shortcuts, and how work steps are shown.'),
+      icon: <IconSettingsOutlineRegular size={16} />,
+    },
+    {
+      id: 'models', label: t('模型设置', 'Models'), group: t('模型与能力', 'Models'),
+      description: t('管理模型提供商、API 密钥与每个模型的参数。', 'Manage model providers, API keys, and each model’s parameters.'),
+      icon: <IconDatabaseOutlineRegular size={16} />,
+    },
+    {
+      id: 'presets', label: t('Agent 预设', 'Agent presets'), group: t('模型与能力', 'Models'),
+      description: t('保存一组指令、工具与模型配置，新建会话时直接套用。', 'Save instructions, tools, and model settings to reuse in new conversations.'),
+      icon: <IconAgentPresetOutlineRegular size={16} />,
+    },
+    {
+      id: 'mcp', label: 'MCP', group: t('扩展', 'Extensions'),
+      description: t('来自 Pi 用户级 mcp.json 的只读清单，修改后重启服务生效。', 'A read-only view of Pi’s user-level mcp.json; restart the service after editing it.'),
+      icon: <IconApiOutlineRegular size={16} />,
+    },
+    {
+      id: 'skills', label: t('技能', 'Skills'), group: t('扩展', 'Extensions'),
+      description: t('查看、创建与校验可复用的技能。', 'Browse, create, and validate reusable skills.'),
+      icon: <IconSkillOutlineRegular size={16} aria-hidden="true" />,
+    },
   ]
+  const currentTab = tabs.find(item => item.id === tab) ?? tabs[0]!
+  const navGroups = [...new Set(tabs.map(item => item.group))]
   const update = async (patch: UpdateAppSettingsInput) => {
     if (!props.onSettingsChange || pending) return
     setPending(true); setError('')
@@ -101,11 +123,30 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   return <>
     <Modal open={open} onClose={onClose} title={t('设置', 'Settings')} headless className={css.modal} backdropBlur={false}>
       <aside className={css.navigation}>
-        <h2>{t('设置', 'Settings')}</h2>
-        <nav aria-label={t('设置分类', 'Settings categories')}>{tabs.map(item => <button key={item.id} type="button" aria-current={tab === item.id ? 'page' : undefined} onClick={() => { setTab(item.id); setError('') }}>{item.icon}<span>{item.label}</span></button>)}</nav>
+        <button className={css.back} type="button" onClick={onClose}>
+          <IconChevronLeftOutlineRegular size={14} aria-hidden="true" />
+          <span>{t('返回工作区', 'Back to workspace')}</span>
+        </button>
+        <nav aria-label={t('设置分类', 'Settings categories')}>
+          {navGroups.map(group => <div className={css.navGroup} key={group}>
+            <p className={css.navGroupTitle}>{group}</p>
+            {tabs.filter(item => item.group === group).map(item => <button key={item.id} type="button"
+              aria-current={tab === item.id ? 'page' : undefined}
+              onClick={() => { setTab(item.id); setError('') }}>{item.icon}<span>{item.label}</span></button>)}
+          </div>)}
+        </nav>
       </aside>
       <section className={css.main}>
-        <div className={css.topbar}><Button variant="outline" size="sm" disabled={openingConfig} onClick={() => void openConfig()}>{t('打开配置文件', 'Open configuration file')}</Button><button className={css.close} type="button" aria-label={t('关闭设置', 'Close settings')} onClick={onClose}><IconCloseOutlineRegular size={18} /></button></div>
+        <header className={css.pageHeader}>
+          <div className={css.pageHeading}>
+            <h2>{currentTab.label}</h2>
+            <p>{currentTab.description}</p>
+          </div>
+          <div className={css.pageActions}>
+            <Button variant="outline" size="sm" disabled={openingConfig} onClick={() => void openConfig()}>{t('打开配置文件', 'Open configuration file')}</Button>
+            <button className={css.close} type="button" aria-label={t('关闭设置', 'Close settings')} onClick={onClose}><IconCloseOutlineRegular size={18} /></button>
+          </div>
+        </header>
         <div className={css.scroll}>
           {error && <p className={css.error} role="alert">{error}</p>}
           {tab === 'general' && <div className={css.general}>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { DragEvent, FormEvent, KeyboardEvent, ReactNode } from 'react'
 import {
-  Button, Checkbox, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
+  Button, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular,
   IconPlusOutlineRegular, IconTrashOutlineRegular, Input, Modal, SegmentedControl, Switch, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderModelInput, ProviderSummary } from '../shared/types.ts'
@@ -79,58 +79,96 @@ export function ModelsPanel({ catalog, saving, onSave, onRefresh }: {
       setDeleteFailure(cause instanceof Error ? cause.message : t('移除失败', 'Could not remove provider'))
     } finally { setDeleting(false) }
   }
+  const selectedId = editing ?? configured[0]?.id
+  const selected = configured.find(provider => provider.id === selectedId)
+  const [editorEpoch, setEditorEpoch] = useState(0)
   return <div className={css.models}>
-    <h3>{t('模型', 'Models')}</h3>
-    <p className={css.modelsIntro}>{t('填入各提供商的 API 密钥即可使用其模型。', 'Enter your API keys to use models from the following providers.')}</p>
-    {savedName !== undefined && <p className={css.savedNotice} role="status" aria-live="polite">{t(`已保存 ${savedName}。`, `Saved ${savedName}.`)}</p>}
-    <ul className={css.providerRows}>
-      {configured.map(provider => <ProviderRow key={provider.id} provider={provider} catalog={catalog} saving={saving}
-        open={!addOpen && editing === provider.id}
-        onToggle={() => { openEditor(provider.id) }}
-        onSave={onSave} onRefresh={onRefresh}
-        onSaved={name => { setEditing(null); setSavedName(name) }}
-        onDelete={() => { setDeleteFailure(''); setDeleteTarget(provider) }} />)}
-    </ul>
-    <div className={css.addBlock}>
-      {addOpen ? <div className={css.addCard}>
-        <div className={css.addModes}>
-          <SegmentedControl id="model-add-mode" label={t('添加方式', 'How to add')} value={addMode} disabled={saving}
-            options={[
-              {
-                value: 'catalog', label: t('第三方模型提供商', 'Third-party model provider'),
-                disabled: addable.length === 0,
-                ...(addable.length === 0 ? { title: t('目录中的提供商都已添加。', 'Every catalog provider is already configured.') } : {}),
-              },
-              { value: 'custom', label: t('自定义模型 API', 'Custom model API') },
-            ]}
-            onChange={next => { setAddMode(next); setVisited(previous => new Set<AddMode>([...previous, next])) }} />
-          <p className={css.advancedHint}>{addMode === 'catalog'
-            ? t('从内置目录中选择 OpenAI、Anthropic、Kimi 等提供商，填入其 API 密钥即可使用。', 'Pick OpenAI, Anthropic, Kimi, or another provider from the built-in catalog and enter its API key.')
-            : t('连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。', 'Connect a relay, a self-hosted server, or another OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models.')}</p>
-        </div>
-        {visited.has('catalog') && <div className={css.addPanel} hidden={addMode !== 'catalog'}>
-          {picked === undefined
-            ? <p className={css.advancedHint}>{t('目录中的提供商都已添加。', 'Every catalog provider is already configured.')}</p>
-            : <>
-              <label className={css.field}>
-                <span className={css.fieldLabel}>{t('提供商', 'Provider')}</span>
-                <select className={css.selectInput} value={picked.id} aria-label={t('提供商', 'Provider')} disabled={saving}
-                  onChange={event => { setChoice(event.currentTarget.value) }}>
-                  {addable.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
-                </select>
-              </label>
-              <ProviderEditor key={picked.id} provider={picked} catalog={catalog} saving={saving}
-                hideTitle onSave={onSave} onRefresh={onRefresh}
-                onCancel={() => { closeAdd() }} onSaved={name => { finish(name) }} />
-            </>}
+    <div className={css.modelsToolbar}>
+      <div className={css.modelsActions}>
+        {savedName !== undefined && <span className={css.savedNotice} role="status" aria-live="polite">{t(`已保存 ${savedName}。`, `Saved ${savedName}.`)}</span>}
+        <Button size="sm" variant="primary" disabled={saving} onClick={openAdd}>
+          <IconPlusOutlineRegular size={14} aria-hidden="true" />{t('添加供应商', 'Add provider')}
+        </Button>
+      </div>
+    </div>
+    <div className={css.modelPage}>
+      <aside className={css.providerPane} aria-label={t('模型提供商', 'Model providers')}>
+        <p className={css.paneGroupTitle}>{t('已配置', 'Configured')}</p>
+        {configured.map(provider => {
+          const active = !addOpen && provider.id === selectedId
+          return <button key={provider.id} type="button" className={css.providerTile}
+            aria-current={active ? 'true' : undefined}
+            onClick={() => { setAddOpen(false); setSavedName(undefined); setEditing(provider.id) }}>
+            <span className={css.providerLogo} aria-hidden="true">{providerInitial(provider.name)}</span>
+            <span className={css.providerTileBody}>
+              <span className={css.providerTileName}>{provider.name}</span>
+              <span className={css.providerTileMeta}>{provider.custom ? t('自定义', 'Custom') : provider.id}</span>
+            </span>
+            <span className={css.credentialDot} data-configured={provider.configured ? 'true' : undefined}
+              role="img" aria-label={provider.configured ? t('API 密钥已配置', 'API key configured') : t('API 密钥缺失', 'API key missing')}
+              title={provider.configured ? t('API 密钥已配置', 'API key configured') : t('API 密钥缺失', 'API key missing')} />
+          </button>
+        })}
+        {configured.length === 0 && <p className={css.paneEmpty}>{t('还没有配置提供商。', 'No providers configured yet.')}</p>}
+      </aside>
+      <section className={css.providerDetail} aria-label={t('提供商详情', 'Provider details')}>
+        {addOpen ? <div className={css.addCard}>
+          <div className={css.addModes}>
+            <SegmentedControl id="model-add-mode" label={t('添加方式', 'How to add')} value={addMode} disabled={saving}
+              options={[
+                {
+                  value: 'catalog', label: t('第三方模型提供商', 'Third-party model provider'),
+                  disabled: addable.length === 0,
+                  ...(addable.length === 0 ? { title: t('目录中的提供商都已添加。', 'Every catalog provider is already configured.') } : {}),
+                },
+                { value: 'custom', label: t('自定义模型 API', 'Custom model API') },
+              ]}
+              onChange={next => { setAddMode(next); setVisited(previous => new Set<AddMode>([...previous, next])) }} />
+            <p className={css.advancedHint}>{addMode === 'catalog'
+              ? t('从内置目录中选择 OpenAI、Anthropic、Kimi 等提供商，填入其 API 密钥即可使用。', 'Pick OpenAI, Anthropic, Kimi, or another provider from the built-in catalog and enter its API key.')
+              : t('连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。', 'Connect a relay, a self-hosted server, or another OpenAI- or Anthropic-compatible endpoint by its base URL, protocol, and models.')}</p>
+          </div>
+          {visited.has('catalog') && <div className={css.addPanel} hidden={addMode !== 'catalog'}>
+            {picked === undefined
+              ? <p className={css.advancedHint}>{t('目录中的提供商都已添加。', 'Every catalog provider is already configured.')}</p>
+              : <>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('提供商', 'Provider')}</span>
+                  <select className={css.selectInput} value={picked.id} aria-label={t('提供商', 'Provider')} disabled={saving}
+                    onChange={event => { setChoice(event.currentTarget.value) }}>
+                    {addable.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                  </select>
+                </label>
+                <ProviderEditor key={picked.id} provider={picked} catalog={catalog} saving={saving}
+                  hideTitle onSave={onSave} onRefresh={onRefresh}
+                  onCancel={() => { closeAdd() }} onSaved={name => { finish(name) }} />
+              </>}
+          </div>}
+          {visited.has('custom') && <div className={css.addPanel} hidden={addMode !== 'custom'}>
+            <ProviderEditor create catalog={catalog} saving={saving}
+              onSave={onSave} onCancel={() => { closeAdd() }} onSaved={name => { finish(name) }} />
+          </div>}
+        </div> : selected !== undefined ? <>
+          <header className={css.detailHeader}>
+            <span className={css.providerLogo} aria-hidden="true">{providerInitial(selected.name)}</span>
+            <div className={css.detailHeading}>
+              <h3>{selected.name}</h3>
+              <p>{selected.id}</p>
+            </div>
+            <div className={css.detailActions}>
+              {selected.source === 'project' && <button type="button" className={css.rowDangerButton} disabled={saving}
+                aria-label={t(`删除 ${selected.name}`, `Delete ${selected.name}`)}
+                onClick={() => { setDeleteFailure(''); setDeleteTarget(selected) }}>{t('删除', 'Delete')}</button>}
+            </div>
+          </header>
+          <ProviderEditor key={`${selected.id}:${editorEpoch}`} provider={selected} catalog={catalog} saving={saving}
+            hideTitle onSave={onSave} onRefresh={onRefresh}
+            onCancel={() => { setEditorEpoch(value => value + 1) }}
+            onSaved={name => { setSavedName(name) }} />
+        </> : <div className={css.detailEmpty}>
+          <p>{t('选择左侧的提供商查看并编辑配置。', 'Select a provider on the left to view and edit its configuration.')}</p>
         </div>}
-        {visited.has('custom') && <div className={css.addPanel} hidden={addMode !== 'custom'}>
-          <ProviderEditor create catalog={catalog} saving={saving}
-            onSave={onSave} onCancel={() => { closeAdd() }} onSaved={name => { finish(name) }} />
-        </div>}
-      </div> : <button className={css.addProvider} type="button" disabled={saving} onClick={openAdd}>
-        <IconPlusOutlineRegular size={14} />{t('添加模型提供商', 'Add model provider')}
-      </button>}
+      </section>
     </div>
     <Modal open={deleteTarget !== undefined} onClose={() => { if (!deleting) { setDeleteTarget(undefined); setDeleteFailure('') } }}
       title={deleteTarget === undefined ? '' : t(`删除 ${deleteTarget.name}？`, `Delete ${deleteTarget.name}?`)}
@@ -149,40 +187,6 @@ export function ModelsPanel({ catalog, saving, onSave, onRefresh }: {
   </div>
 }
 
-/** One configured provider: a collapsed row with edit/delete, one editor card below. */
-function ProviderRow({ provider, catalog, saving, open, onToggle, onSave, onSaved, onDelete, onRefresh }: {
-  provider: ProviderSummary
-  catalog: ModelCatalog | null
-  saving: boolean
-  open: boolean
-  onToggle: () => void
-  onSave: (input: ProviderInput) => Promise<void>
-  onSaved: (name: string) => void
-  onDelete: () => void
-  onRefresh?: () => Promise<void>
-}) {
-  const { t } = useUiPreferences()
-  return <li className={css.providerRow}>
-    <div className={css.providerHeader}>
-      <span className={css.providerIdentity}>
-        <span className={css.providerTitle}>{provider.name}</span>
-        {provider.custom && <span className={css.rowTag}>{t('自定义', 'Custom')}</span>}
-        {provider.configured
-          ? <span className={css.credentialDot} data-configured="true" role="img" aria-label={t('API 密钥已配置', 'API key configured')} title={t('API 密钥已配置', 'API key configured')} />
-          : <span className={css.credentialDot} role="img" aria-label={t('API 密钥缺失', 'API key missing')} title={t('API 密钥缺失', 'API key missing')} />}
-      </span>
-      <span className={css.providerRowActions}>
-        <button type="button" className={css.rowTextButton} aria-expanded={open} disabled={!open && saving}
-          aria-label={t(`编辑 ${provider.name}`, `Edit ${provider.name}`)} onClick={onToggle}>{t('编辑', 'Edit')}</button>
-        {provider.source === 'project' && <button type="button" className={css.rowDangerButton} disabled={saving}
-          aria-label={t(`删除 ${provider.name}`, `Delete ${provider.name}`)} onClick={onDelete}>{t('删除', 'Delete')}</button>}
-      </span>
-    </div>
-    {open && <ProviderEditor provider={provider} catalog={catalog} saving={saving}
-      onSave={onSave} onRefresh={onRefresh} onCancel={onToggle} onSaved={onSaved} />}
-  </li>
-}
-
 interface ModelDraft {
   key: string
   id: string
@@ -192,7 +196,6 @@ interface ModelDraft {
   input: Array<'text' | 'image'>
   /** Declared reasoning levels; undefined is how a model says it does not reason. */
   levels?: ReasoningEntry[]
-  expanded: boolean
   /** Untouched fields of the stored model, carried back on save. */
   base?: ProviderModelInput
 }
@@ -234,9 +237,13 @@ function draftFromModel(model: ProviderModelInput): ModelDraft {
     maxTokens: '',
     input: model.input !== undefined && model.input.length > 0 ? [...model.input] : ['text'],
     ...(levels === undefined ? {} : { levels }),
-    expanded: false,
     base: model,
   }
+}
+
+function providerInitial(name: string): string {
+  const trimmed = name.trim()
+  return trimmed === '' ? '?' : Array.from(trimmed)[0]!.toLocaleUpperCase()
 }
 
 function isHttpUrl(value: string): boolean {
@@ -543,13 +550,13 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
               onChange={event => { const value = event.currentTarget.value; setBaseUrl(value); updateRequestDraft(value, protocol, rows) }} />
             {baseUrl !== '' && !isHttpUrl(baseUrl.trim()) && <span className={css.fieldError}>{t('请输入有效的 HTTP 或 HTTPS 地址。', 'Enter a valid HTTP or HTTPS URL.')}</span>}
           </label>
-          <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
-            rows={rows} disabled={disabled} discovering={discovering} canDiscover={provider !== undefined}
-            onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
-            checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
-            availableLevels={availableLevels} t={t} />
         </div>
       </details>}
+      {create ? null : <ModelDirectory catalog={catalog} config={config} customized={customized} defaults={defaults}
+        rows={rows} disabled={disabled} discovering={discovering} canDiscover={provider !== undefined}
+        onRows={replaceRows} onPatch={patchRow} onAdd={addRows} onDiscover={() => void discover()}
+        checksDisabled={requestDirty} onRestore={() => { if (defaults !== undefined) replaceRows(defaults.map(draftFromModel)) }}
+        availableLevels={availableLevels} t={t} />}
       {checkState.feedback !== null && <p className={checkState.feedback.tone === 'error' ? css.error : css.success}
         role={checkState.feedback.tone === 'error' ? 'alert' : 'status'}>{checkState.feedback.message}</p>}
       {requestDirty && <p className={css.advancedHint} role="note">{t('保存更改后测试连接或获取模型。', 'Save changes before testing the connection or fetching models.')}</p>}
@@ -583,6 +590,16 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
   availableLevels: readonly string[]
   t: (chinese: string, english: string) => string
 }) {
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const editingRow = rows.find(row => row.key === editingKey)
+  // 弹窗里的“完成”只把草稿写回目录；整个提供商的保存仍由编辑器底部按钮负责。
+  const commitDraft = (draft: ModelDraft) => {
+    onPatch(draft.key, {
+      id: draft.id, name: draft.name, contextWindow: draft.contextWindow, maxTokens: draft.maxTokens,
+      input: [...draft.input], levels: draft.levels,
+    })
+    setEditingKey(null)
+  }
   return <section className={css.modelDirectory} aria-label={t('模型目录', 'Model directory')}>
     <div className={css.modelListHead}>
       <div className={css.directoryHeading}>
@@ -600,117 +617,340 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
     <div className={css.modelList}>
       {rows.map((row, index) => <div className={css.modelEntry} key={row.key}>
         <div className={css.modelRow}>
-          <Input aria-label={t(`模型 ID ${index + 1}`, `Model ID ${index + 1}`)} value={row.id} placeholder={t('模型 ID', 'Model ID')} disabled={disabled}
-            onChange={event => { onPatch(row.key, { id: event.currentTarget.value }) }} />
-          <Input aria-label={t(`显示名称 ${index + 1}`, `Display name ${index + 1}`)} value={row.name} placeholder={t('留空时使用模型 ID', 'Uses the model ID when blank')} disabled={disabled}
-            onChange={event => { onPatch(row.key, { name: event.currentTarget.value }) }} />
-          <button type="button" className={css.modelIconButton} aria-expanded={row.expanded} disabled={disabled} title={t('模型选项', 'Model options')}
-            aria-label={t(`模型选项 ${index + 1}`, `Model options ${index + 1}`)} onClick={() => { onPatch(row.key, { expanded: !row.expanded }) }}>
-            {row.expanded ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronRightOutlineRegular size={14} />}
-          </button>
+          <div className={css.modelSummary}>
+            <span className={css.modelSummaryValue} data-role="id" title={row.id}>{row.id || <span className={css.modelSummaryEmpty}>{t('未填写模型 ID', 'No model ID')}</span>}</span>
+            <span className={css.modelSummaryName} title={row.name || row.id}>{row.name || row.id || '—'}</span>
+            <span className={css.modelChips}>
+              {row.contextWindow.trim() !== '' || row.base?.contextWindow !== undefined
+                ? <span className={css.modelChip}>{row.contextWindow.trim() !== '' ? row.contextWindow.trim() : formatCapacity(row.base?.contextWindow)}</span>
+                : null}
+              {row.input.includes('image') ? <span className={css.modelChip}>{t('视觉', 'Vision')}</span> : null}
+              {row.levels !== undefined ? <span className={css.modelChip}>{t('推理', 'Reasoning')}</span> : null}
+            </span>
+          </div>
+          <button type="button" className={css.rowTextButton} disabled={disabled}
+            aria-label={t(`编辑模型 ${index + 1}`, `Edit model ${index + 1}`)}
+            onClick={() => { setEditingKey(row.key) }}>{t('编辑', 'Edit')}</button>
           <button type="button" className={css.modelRemoveButton} disabled={disabled} title={t('删除模型', 'Delete model')}
             aria-label={t(`删除模型 ${index + 1}`, `Delete model ${index + 1}`)}
             onClick={() => onRows(rows.filter(item => item.key !== row.key))}><IconTrashOutlineRegular size={14} /></button>
         </div>
-        {row.expanded && <div className={css.modelAdvanced}>
-          <label className={css.modelField}><span className={css.fieldLabel}>{t('上下文窗口', 'Context window')}</span>
-            <Input inputMode="numeric" value={row.contextWindow} disabled={disabled} aria-label={t(`上下文窗口 ${index + 1}`, `Context window ${index + 1}`)}
-              placeholder={row.base?.contextWindow === undefined ? t('使用提供商默认值', "Provider's default") : formatCapacity(row.base.contextWindow)}
-              onChange={event => { onPatch(row.key, { contextWindow: event.currentTarget.value }) }} /></label>
-          <label className={css.modelField}><span className={css.fieldLabel}>{t('最大输出 token 数', 'Max output tokens')}</span>
-            <Input inputMode="numeric" value={row.maxTokens} disabled={disabled} aria-label={t(`最大输出 token 数 ${index + 1}`, `Max output tokens ${index + 1}`)}
-              placeholder={row.base?.maxTokens === undefined ? t('使用提供商默认值', "Provider's default") : formatCapacity(row.base.maxTokens)}
-              onChange={event => { onPatch(row.key, { maxTokens: event.currentTarget.value }) }} /></label>
-          <fieldset className={css.modelInputTypes} aria-label={t(`输入类型 ${index + 1}`, `Input types ${index + 1}`)}>
-            <legend className={css.fieldLabel}>{t('输入类型', 'Input types')}</legend>
-            <div className={css.modelInputChoices}>
-              {(['text', 'image'] as const).map(modality => <Checkbox key={modality} label={modality === 'text' ? t('文本', 'Text') : t('图片', 'Image')}
-                checked={row.input.includes(modality)} disabled={disabled || row.input.length === 1 && row.input.includes(modality)}
-                onChange={checked => { onPatch(row.key, { input: (['text', 'image'] as const).filter(value => value === modality ? checked : row.input.includes(value)) }) }} />)}
-            </div>
-          </fieldset>
-          <ReasoningLevels row={row} available={availableLevels} position={index + 1} disabled={disabled}
-            onChange={patch => { onPatch(row.key, patch) }} t={t} />
-        </div>}
       </div>)}
     </div>
     <Button type="button" size="sm" variant="outline" className={css.addModelButton} disabled={disabled}
       onClick={() => onAdd([{ id: '', name: '' }])}>{t('添加模型', 'Add model')}</Button>
+    {editingRow !== undefined && <ModelEditorModal key={editingRow.key} row={editingRow} position={rows.indexOf(editingRow) + 1}
+      availableLevels={availableLevels} disabled={disabled} t={t}
+      onCommit={commitDraft} onClose={() => { setEditingKey(null) }} />}
   </section>
 }
 
-/** DSH's per-model reasoning levels: a switch, then one row pairing a level with its wire value. */
-function ReasoningLevels({ row, available, position, disabled, onChange, t }: {
-  row: ModelDraft
+/** The levels the editor starts with when the reasoning switch turns on. */
+function initialReasoningLevels(available: readonly string[]): ReasoningEntry[] {
+  return INITIAL_LEVELS.filter(level => available.includes(level))
+    .map(level => ({ level, value: defaultLevelValue(level) }))
+}
+
+/** Move one reasoning entry; out-of-range targets leave the order untouched. */
+function moveReasoningEntries(entries: readonly ReasoningEntry[], from: number, to: number): ReasoningEntry[] {
+  if (from === to || from < 0 || to < 0 || from >= entries.length || to >= entries.length) return [...entries]
+  const next = [...entries]
+  const [entry] = next.splice(from, 1)
+  next.splice(to, 0, entry!)
+  return next
+}
+
+/**
+ * The next level the add button inserts: the first unused level after the
+ * highest level already used, so a fresh chip lands at the end of the
+ * escalation order even after the user reordered the row.
+ */
+function nextReasoningLevel(used: readonly string[], available: readonly string[]): string | undefined {
+  const highest = Math.max(-1, ...used.map(level => available.indexOf(level)))
+  return available.find((level, index) => index > highest && !used.includes(level))
+    ?? available.find(level => !used.includes(level))
+}
+
+/** One grouped block inside the model dialog: heading, one-line explanation, controls. */
+function ModelSettingsGroup({ group, title, description, children }: {
+  group: 'basic' | 'tokens' | 'modalities' | 'capabilities' | 'reasoning'
+  title: string
+  description: string
+  children: ReactNode
+}) {
+  return <section className={css.modelGroup} data-model-settings-group={group} aria-label={title}>
+    <div className={css.modelGroupHead}>
+      <h3 className={css.modelGroupTitle}>{title}</h3>
+      <p className={css.modelGroupDescription}>{description}</p>
+    </div>
+    <div className={css.modelGroupBody}>{children}</div>
+  </section>
+}
+
+/** A toggle rendered as a bordered option button with its own check indicator. */
+function BooleanModelOption({ label, selected, disabled = false, onToggle }: {
+  label: string
+  selected: boolean
+  disabled?: boolean
+  onToggle: () => void
+}) {
+  return <button type="button" role="checkbox" aria-checked={selected} aria-label={label}
+    className={css.booleanOption} data-selected={selected} data-model-boolean-option="true" disabled={disabled} onClick={onToggle}>
+    {/* 勾选指示不可再嵌一个可聚焦控件：外层按钮已经承担完整点击与键盘语义。 */}
+    <span className={css.booleanCheck} data-selected={selected} aria-hidden="true">
+      {selected ? <IconCheckOutlineRegular size={11} /> : null}
+    </span>
+    <span>{label}</span>
+  </button>
+}
+
+/**
+ * The chips that order a model's reasoning levels. Each chip carries its wire
+ * value underneath: clicking the level swaps it for a select of the levels
+ * still free, clicking the value edits the parameter sent for that level.
+ */
+function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
+  entries: ReasoningEntry[]
   available: readonly string[]
-  position: number
   disabled: boolean
-  onChange: (patch: Partial<ModelDraft>) => void
+  onChange: (entries: ReasoningEntry[]) => void
   t: (chinese: string, english: string) => string
 }) {
-  const [typing, setTyping] = useState<{ level: string; text: string } | undefined>(undefined)
-  const entries = row.levels
-  const used = entries?.map(entry => entry.level) ?? []
-  const label = t(`推理等级 ${position}`, `Reasoning levels ${position}`)
-  const write = (next: ReasoningEntry[] | undefined): void => { onChange({ levels: next }) }
-  return <div className={css.modelReasoning} role="group" aria-label={label}>
-    <div className={css.modelReasoningHead}>
-      <span className={css.fieldLabel}>
-        {t('推理等级', 'Reasoning levels')}
-        <Tooltip label={t('API 参数值会写入请求的推理强度字段（如 OpenAI 的 reasoning_effort），默认与档位名相同；如有不同，以模型提供商的 API 文档为准。Off 表示关闭思考，不需要填写参数值；配置中已写入的值会保留并发送。',
-          'The API value is written to the request\'s reasoning-effort field (for example OpenAI\'s reasoning_effort). It defaults to the level name; follow the provider\'s API docs when they differ. Off turns thinking off and needs no value.')}
-          side="right" delayMs={0} focusDelayMs={0} portal openOnClick>
-          <button type="button" className={css.helpButton} aria-label={t('推理等级说明', 'About reasoning levels')}>?</button>
-        </Tooltip>
-      </span>
-      <Switch checked={entries !== undefined} label={label} disabled={disabled}
-        onChange={on => {
-          write(on ? INITIAL_LEVELS.filter(level => available.includes(level)).map(level => ({ level, value: defaultLevelValue(level) })) : undefined)
-          setTyping(undefined)
-        }} />
-    </div>
-    {entries === undefined ? null : <>
-      {entries.length > 0 && <div className={css.modelReasoningRow} aria-hidden="true">
-        <span className={css.fieldLabel}>{t('档位', 'Level')}</span>
-        <span className={css.fieldLabel}>{t('API 参数值', 'API value')}</span>
-      </div>}
-      {entries.map((entry, index) => {
-        const choices = [...(available.includes(entry.level) ? [] : [entry.level]),
-          ...available.filter(choice => choice === entry.level || !used.includes(choice))]
-        return <div className={css.modelReasoningRow} key={index}>
-          <select className={css.selectInput} value={entry.level} disabled={disabled}
-            aria-label={t(`档位 ${index + 1}`, `Level ${index + 1}`)}
-            onChange={event => {
-              const level = event.currentTarget.value
-              write(entries.map((item, at) => at === index ? { level, value: defaultLevelValue(level) } : item))
-            }}>
-            {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
-          </select>
-          <Input type="text" disabled={disabled || entry.level === 'off'}
-            aria-label={t(`${entry.level} API 参数值`, `${entry.level} API value`)}
-            placeholder={entry.level === 'off' ? t('关闭思考', 'Thinking off') : entry.level}
-            value={typing?.level === entry.level ? typing.text : entry.value ?? ''}
-            onChange={event => {
-              const text = event.currentTarget.value
-              setTyping({ level: entry.level, text })
-              const trimmed = text.trim()
-              write(entries.map((item, at) => at === index ? { level: item.level, value: trimmed === '' ? defaultLevelValue(item.level) : trimmed } : item))
-            }}
-            onBlur={() => { setTyping(undefined) }} />
-          <button type="button" className={css.modelRemoveButton} disabled={disabled}
-            aria-label={t(`删除档位 ${entry.level}`, `Delete level ${entry.level}`)} title={t('删除档位', 'Delete level')}
-            onClick={() => { write(entries.filter((_item, at) => at !== index)) }}><IconTrashOutlineRegular size={14} /></button>
+  const [editingLevel, setEditingLevel] = useState<number | null>(null)
+  const [levelChoice, setLevelChoice] = useState('')
+  const [editingWire, setEditingWire] = useState<number | null>(null)
+  const [wireText, setWireText] = useState('')
+  const [dragging, setDragging] = useState<number | null>(null)
+  // 拖动或 Alt+方向键后把焦点交回移动后的档位，键盘用户不会丢掉操作位置。
+  const [focusIndex, setFocusIndex] = useState<number | null>(null)
+  const selectRef = useRef<HTMLSelectElement>(null)
+  const wireRef = useRef<HTMLInputElement>(null)
+  const chipRefs = useRef<Array<HTMLButtonElement | null>>([])
+  useEffect(() => { if (editingLevel !== null) selectRef.current?.focus() }, [editingLevel])
+  useEffect(() => { if (editingWire !== null) wireRef.current?.focus() }, [editingWire])
+  useEffect(() => {
+    if (focusIndex === null) return
+    chipRefs.current[focusIndex]?.focus()
+    setFocusIndex(null)
+  }, [focusIndex, entries])
+  const used = entries.map(entry => entry.level)
+  const beginLevelEdit = (index: number) => {
+    setEditingWire(null)
+    setEditingLevel(index)
+    setLevelChoice(entries[index]?.level ?? '')
+  }
+  const commitLevelEdit = () => {
+    if (editingLevel === null) return
+    const entry = entries[editingLevel]
+    const choice = levelChoice
+    setEditingLevel(null)
+    if (entry === undefined || choice === '' || choice === entry.level) return
+    onChange(entries.map((item, at) => at === editingLevel ? { level: choice, value: defaultLevelValue(choice) } : item))
+  }
+  const beginWireEdit = (index: number) => {
+    setEditingLevel(null)
+    setEditingWire(index)
+    setWireText(entries[index]?.value ?? '')
+  }
+  const commitWireEdit = () => {
+    if (editingWire === null) return
+    const entry = entries[editingWire]
+    const text = wireText.trim()
+    setEditingWire(null)
+    if (entry === undefined) return
+    const value = text === '' ? defaultLevelValue(entry.level) : text
+    if (value === entry.value) return
+    onChange(entries.map((item, at) => at === editingWire ? { level: item.level, value } : item))
+  }
+  const move = (from: number, to: number) => {
+    if (to < 0 || to >= entries.length) return
+    onChange(moveReasoningEntries(entries, from, to))
+    setFocusIndex(to)
+  }
+  const handleChipKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault()
+      move(index, event.key === 'ArrowLeft' ? index - 1 : index + 1)
+      return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      beginLevelEdit(index)
+    }
+  }
+  const handleDrop = (event: DragEvent<HTMLDivElement>, target: number) => {
+    event.preventDefault()
+    if (dragging !== null) move(dragging, target)
+    setDragging(null)
+  }
+  const addLevel = () => {
+    const level = nextReasoningLevel(used, available)
+    if (level === undefined) return
+    onChange([...entries, { level, value: defaultLevelValue(level) }])
+  }
+  return <div className={css.levelChips} data-model-reasoning-level-editor="true">
+    {entries.map((entry, index) => {
+      const current = entry.level
+      // 只列没被其他 chip 占用的档位；模型自带的目录外档位仍保留在选择里。
+      const choices = [...(available.includes(current) ? [] : [current]),
+        ...available.filter(level => level === current || !used.includes(level))]
+      return <div key={`${entry.level}:${index}`} className={css.levelChip}
+        data-model-reasoning-chip="true" data-dragging={dragging === index || undefined}
+        draggable={!disabled && editingLevel !== index}
+        onDragStart={event => {
+          setDragging(index)
+          event.dataTransfer.effectAllowed = 'move'
+          event.dataTransfer.setData('text/plain', String(index))
+        }}
+        onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' }}
+        onDrop={event => handleDrop(event, index)}
+        onDragEnd={() => setDragging(null)}>
+        <div className={css.levelChipHead}>
+          {editingLevel === index
+            ? <select ref={selectRef} className={css.levelChipSelect} value={levelChoice} disabled={disabled}
+              aria-label={t('选择档位', 'Choose a level')}
+              onChange={event => setLevelChoice(event.currentTarget.value)}
+              onBlur={commitLevelEdit}
+              onKeyDown={event => {
+                if (event.key === 'Enter') { event.preventDefault(); commitLevelEdit() }
+                else if (event.key === 'Escape') { event.preventDefault(); setEditingLevel(null) }
+              }}>
+              {choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
+            </select>
+            : <button type="button" className={css.levelChipButton} disabled={disabled}
+              ref={element => { chipRefs.current[index] = element }}
+              aria-label={t(`${current} 档位；按 Enter 更换档位，Alt 加左右方向键调整顺序`, `${current} level; press Enter to change it, Alt plus Left or Right to reorder`)}
+              onClick={() => beginLevelEdit(index)}
+              onKeyDown={event => handleChipKeyDown(event, index)}>
+              {current}
+            </button>}
+          <button type="button" className={css.levelChipRemove} disabled={disabled || entries.length <= 1}
+            title={t('删除档位', 'Delete level')} aria-label={t(`删除档位 ${current}`, `Delete level ${current}`)}
+            onClick={() => onChange(entries.filter((_item, at) => at !== index))}>
+            <IconCloseOutlineRegular size={11} />
+          </button>
         </div>
-      })}
-      <Button type="button" size="sm" variant="outline" className={css.addModelButton}
-        disabled={disabled || available.every(level => used.includes(level))}
-        onClick={() => {
-          const highest = Math.max(-1, ...used.map(level => available.indexOf(level)))
-          const level = available.find((candidate, index) => index > highest && !used.includes(candidate))
-            ?? available.find(candidate => !used.includes(candidate))
-          if (level === undefined) return
-          write([...entries, { level, value: defaultLevelValue(level) }])
-        }}>{t('添加档位', 'Add level')}</Button>
-    </>}
+        {editingWire === index
+          ? <input ref={wireRef} className={css.levelChipWireInput} value={wireText} disabled={disabled}
+            aria-label={t(`${current} 的 API 参数值`, `API value for ${current}`)}
+            placeholder={t('留空时使用档位名', 'Uses the level name when blank')}
+            onChange={event => setWireText(event.currentTarget.value)}
+            onBlur={commitWireEdit}
+            onKeyDown={event => {
+              if (event.key === 'Enter') { event.preventDefault(); commitWireEdit() }
+              else if (event.key === 'Escape') { event.preventDefault(); setEditingWire(null) }
+            }} />
+          : <button type="button" className={css.levelChipWire} disabled={disabled || current === 'off'}
+            data-model-reasoning-level-value="true"
+            aria-label={t(`编辑 ${current} 的 API 参数值`, `Edit the API value for ${current}`)}
+            title={current === 'off' ? t('关闭思考时不需要参数值', 'Turning thinking off sends no value') : t('点击编辑 API 参数值', 'Click to edit the API value')}
+            onClick={() => beginWireEdit(index)}>
+            {current === 'off' ? t('关闭思考', 'Thinking off') : entry.value ?? current}
+          </button>}
+      </div>
+    })}
+    <button type="button" className={css.levelChipAdd} data-model-reasoning-level-add="true"
+      disabled={disabled || nextReasoningLevel(used, available) === undefined}
+      title={t('添加档位', 'Add level')} aria-label={t('添加档位', 'Add level')} onClick={addLevel}>
+      <IconPlusOutlineRegular size={12} />
+    </button>
   </div>
+}
+
+/**
+ * The grouped model editor behind the row's Edit button. Edits stay local
+ * until Done writes them back into the directory; Cancel or a mask click
+ * discards them without touching the provider form.
+ */
+function ModelEditorModal({ row, position, availableLevels, disabled, onCommit, onClose, t }: {
+  row: ModelDraft
+  position: number
+  availableLevels: readonly string[]
+  disabled: boolean
+  onCommit: (draft: ModelDraft) => void
+  onClose: () => void
+  t: (chinese: string, english: string) => string
+}) {
+  const [draft, setDraft] = useState<ModelDraft>(() => ({
+    ...row,
+    input: [...row.input],
+    ...(row.levels === undefined ? {} : { levels: row.levels.map(entry => ({ ...entry })) }),
+  }))
+  const patch = (value: Partial<ModelDraft>) => setDraft(current => ({ ...current, ...value }))
+  const title = draft.id.trim() === ''
+    ? t('编辑模型 · 新模型', 'Edit model · New model')
+    : t(`编辑模型 · ${draft.id.trim()}`, `Edit model · ${draft.id.trim()}`)
+  const capacityPlaceholder = (inherited: number | undefined) => inherited === undefined
+    ? t('使用提供商默认值', "Provider's default")
+    : formatCapacity(inherited)
+  const levels = draft.levels
+  return <Modal open onClose={onClose} title={title} closeLabel={t('关闭', 'Close')}
+    description={t('模型 ID', 'Model ID')} className={css.modelEditorModal}
+    footer={<>
+      <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onClose}>{t('取消', 'Cancel')}</Button>
+      <Button type="button" variant="primary" size="sm" disabled={disabled} onClick={() => onCommit(draft)}>{t('完成', 'Done')}</Button>
+    </>}>
+    <div className={css.modelEditorBody}>
+      <ModelSettingsGroup group="basic" title={t('基本信息', 'Basic')}
+        description={t('模型在请求中使用的标识，以及选择器里显示的名称。', 'The identifier requests use, and the name the picker shows.')}>
+        <label className={css.modelField}>
+          <span className={css.fieldLabel}>{t('模型 ID', 'Model ID')}</span>
+          <Input value={draft.id} placeholder={t('模型 ID', 'Model ID')} disabled={disabled}
+            className={css.modelMonoInput} aria-label={t(`模型 ID ${position}`, `Model ID ${position}`)}
+            data-modal-autofocus
+            onChange={event => patch({ id: event.currentTarget.value })} />
+        </label>
+        <label className={css.modelField}>
+          <span className={css.fieldLabel}>{t('显示名称', 'Display name')}</span>
+          <Input value={draft.name} placeholder={t('留空时使用模型 ID', 'Uses the model ID when blank')} disabled={disabled}
+            aria-label={t(`显示名称 ${position}`, `Display name ${position}`)}
+            onChange={event => patch({ name: event.currentTarget.value })} />
+        </label>
+      </ModelSettingsGroup>
+      <ModelSettingsGroup group="tokens" title={t('容量', 'Capacity')}
+        description={t('留空时沿用提供商或内置目录的值。', "Blank keeps the provider's or the catalog's value.")}>
+        <div className={css.modelFieldRow}>
+          <label className={css.modelField}>
+            <span className={css.fieldLabel}>{t('上下文窗口', 'Context window')}</span>
+            <Input inputMode="numeric" value={draft.contextWindow} disabled={disabled}
+              aria-label={t(`上下文窗口 ${position}`, `Context window ${position}`)}
+              placeholder={capacityPlaceholder(draft.base?.contextWindow)}
+              onChange={event => patch({ contextWindow: event.currentTarget.value })} />
+          </label>
+          <label className={css.modelField}>
+            <span className={css.fieldLabel}>{t('最大输出 token 数', 'Max output tokens')}</span>
+            <Input inputMode="numeric" value={draft.maxTokens} disabled={disabled}
+              aria-label={t(`最大输出 token 数 ${position}`, `Max output tokens ${position}`)}
+              placeholder={capacityPlaceholder(draft.base?.maxTokens)}
+              onChange={event => patch({ maxTokens: event.currentTarget.value })} />
+          </label>
+        </div>
+      </ModelSettingsGroup>
+      <ModelSettingsGroup group="modalities" title={t('输入类型', 'Input types')}
+        description={t('发送给该模型的请求可以携带的内容；至少保留一种。', 'What requests to this model may carry; keep at least one.')}>
+        <div className={css.booleanOptions} role="group" aria-label={t(`输入类型 ${position}`, `Input types ${position}`)}>
+          {(['text', 'image'] as const).map(modality => {
+            const selected = draft.input.includes(modality)
+            return <BooleanModelOption key={modality}
+              label={modality === 'text' ? t('文本', 'Text') : t('图片', 'Image')}
+              selected={selected} disabled={disabled || draft.input.length === 1 && selected}
+              onToggle={() => patch({ input: (['text', 'image'] as const).filter(value => value === modality ? !selected : draft.input.includes(value)) })} />
+          })}
+        </div>
+      </ModelSettingsGroup>
+      <ModelSettingsGroup group="capabilities" title={t('能力', 'Capabilities')}
+        description={t('开启推理后，可以为该模型配置思考档位。', 'Turn reasoning on to configure thinking levels for this model.')}>
+        <div className={css.modelSwitchRow}>
+          <span className={css.modelSwitchLabel}>{t('推理', 'Reasoning')}</span>
+          <Switch checked={levels !== undefined} label={t(`推理 ${position}`, `Reasoning ${position}`)} disabled={disabled}
+            onChange={on => patch({ levels: on ? initialReasoningLevels(availableLevels) : undefined })} />
+        </div>
+      </ModelSettingsGroup>
+      {levels !== undefined && <ModelSettingsGroup group="reasoning" title={t('推理等级', 'Reasoning levels')}
+        description={t('拖动或按 Alt+左右方向键调整顺序；点击档位更换它，点击下方参数值编辑请求值。', 'Drag or press Alt+Left/Right to reorder; click a level to replace it, or its value below to edit the request value.')}>
+        <ReasoningChipEditor entries={levels} available={availableLevels} disabled={disabled} t={t}
+          onChange={next => patch({ levels: next })} />
+      </ModelSettingsGroup>}
+    </div>
+  </Modal>
 }
