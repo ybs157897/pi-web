@@ -890,7 +890,8 @@ function ModelEditorModal({ row, position, availableLevels, disabled, onCommit, 
     : formatCapacity(inherited)
   const levels = draft.levels
   return <Modal open onClose={onClose} title={title} closeLabel={t('关闭', 'Close')}
-    description={t('模型 ID', 'Model ID')} className={css.modelEditorModal}
+    description={t('点「完成」写回模型目录，保存提供商后生效。', 'Done writes these values back to the directory; saving the provider applies them.')}
+    className={css.modelEditorModal}
     footer={<>
       <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onClose}>{t('取消', 'Cancel')}</Button>
       <Button type="button" variant="primary" size="sm" disabled={disabled} onClick={() => onCommit(draft)}>{t('完成', 'Done')}</Button>

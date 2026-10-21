@@ -111,8 +111,14 @@ select.selectInput {width:auto;max-width:240px;}
 
 /* The model editor dialog. The doubled class outranks the primitive's own
    min(380px, 100%) card width without depending on stylesheet order. */
+/* 高度由卡片决定而不是视口：高窗口下 `100dvh - 240px` 会大于卡片可用高度，
+   内容区保持内容高度、被卡片的 overflow:hidden 裁掉，表现为「无法下拉」。
+   把整条 flex 链的 min-height 归零，让内容区吃掉剩余空间并自己滚动。 */
 .modelEditorModal.modelEditorModal {width:min(560px,100%);max-height:min(760px,calc(100dvh - 48px));}
-.modelEditorBody {display:flex;flex-direction:column;gap:18px;max-height:calc(100dvh - 240px);margin-right:-6px;padding-right:6px;overflow-y:auto;overscroll-behavior:contain;}
+.modelEditorModal.modelEditorModal > div {min-height:0;}
+.modelEditorModal.modelEditorModal > div > div {min-height:0;}
+.modelEditorModal.modelEditorModal .modelEditorBody {flex:1 1 auto;min-height:0;max-height:none;}
+.modelEditorBody {display:flex;flex-direction:column;gap:18px;margin-right:-6px;padding-right:6px;overflow-y:auto;overscroll-behavior:contain;}
 .modelGroup {display:flex;flex-direction:column;gap:10px;}
 .modelGroup + .modelGroup {padding-top:18px;border-top:.5px solid var(--dsw-alias-border-l2);}
 .modelGroupHead {display:flex;flex-direction:column;gap:2px;}
