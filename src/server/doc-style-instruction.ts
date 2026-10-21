@@ -199,7 +199,7 @@ label: 可选
 - 图标按语义选：结论用 check/cross/done/failed，提醒用 info/warn/question，任务与排期用 todo/plan/deadline/time，角色与组织用 agent/team/folder/workspace，技术对象用 code/api/data/chart，方向与流程用 tree/branch/link/queue。
 - doc 块里不要放代码围栏（不要出现三个反引号），也不要写引用式链接和脚注；这些在块里无法正确渲染。
 - 每个 doc 块只表达一件事，字段不要留空字符串，确实没有内容就省略该字段。
-- YAML 值里只要出现「冒号 + 空格」（\`: \`）、\`#\`、或者以 \`{\` \`[\` 开头，整段值就用单引号包起来；\`code\` 字段一律用单引号包起来，例如 \`code: 'const s = create({ tab: 1 })'\`。值里的单引号写成两个单引号转义。`
+- YAML 值里只要出现「冒号 + 空格」（\`: \`）、\`#\`，或者值本身以反引号开头，整段值就用单引号包起来，例如这样写：- '\`npm test\` 通过'。YAML 把反引号当保留字符，以它开头的裸值会让整块解析失败。\`code\` 字段一律用单引号包起来，例如 \`code: 'const s = create({ tab: 1 })'\`。值里的单引号写成两个单引号转义。`
 
 /** The icon names a `doc` block may use; the model must not invent others. */
 export const DOC_STYLE_ICONS = [

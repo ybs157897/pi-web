@@ -194,3 +194,29 @@ describe('doc block rendering', () => {
     expect(html).toContain('const s = create')
   })
 })
+
+describe('reserved-character repair', () => {
+  it('reads a bullet that starts with an inline-code backtick', () => {
+    const parsed = parseDocBlock([
+      'type: cards',
+      'items:',
+      '  - icon: doc',
+      '    title: 架构',
+      '    bullets:',
+      '      - `messagepush-design.md` (12 KB, 设计评审稿)',
+    ].join('\n'))
+    expect(parsed).toEqual({
+      type: 'cards',
+      items: [{ icon: 'doc', title: '架构', body: undefined, bullets: ['`messagepush-design.md` (12 KB, 设计评审稿)'] }],
+    })
+  })
+
+  it('reads a value that starts with an inline-code backtick', () => {
+    const parsed = parseDocBlock('type: note\ntitle: 验证\nbody: `npm test` 通过\n')
+    expect(parsed).toEqual({ type: 'note', icon: undefined, title: '验证', body: '`npm test` 通过', code: undefined, label: undefined })
+  })
+
+  it('still rejects a block that the repair cannot rescue', () => {
+    expect(parseDocBlock('type: cards\nitems:\n  - title: [未闭合\n')).toBeUndefined()
+  })
+})

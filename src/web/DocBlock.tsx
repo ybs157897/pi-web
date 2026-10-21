@@ -254,6 +254,41 @@ function readPanel(value: unknown): DocPanel | undefined {
   return { badge, title, subtitle: subtitle.value, bullets, footer: footer.value }
 }
 
+/**
+ * 先按原样解析；失败时把「以反引号开头的值」整体加引号再试一次。
+ *
+ * YAML 把反引号列为保留字符，`- \`a.md\` (12 KB)` 这种写法整块非法——而契约恰好
+ * 要求模型在块内用反引号包路径和命令，所以这个错误会反复出现。这不是「这块不是
+ * doc 块」，而是模型写得不够严谨，值得救一次。
+ */
+function parseLoose(source: string): unknown {
+  try {
+    return parseYaml(source)
+  } catch {
+    try {
+      return parseYaml(quoteReservedStarts(source))
+    } catch {
+      // 修不回来才当作「这块不是 doc 块」。
+      return undefined
+    }
+  }
+}
+
+/** 给以反引号开头的映射值和序列项加单引号，其余行原样保留。 */
+function quoteReservedStarts(source: string): string {
+  return source.split('\n').map((line) => {
+    const mapping = /^(\s*[\w-]+:[ \t]+)(`.*)$/u.exec(line)
+    if (mapping !== null) return mapping[1] + quoteScalar(mapping[2])
+    const item = /^(\s*-[ \t]+)(`.*)$/u.exec(line)
+    if (item !== null) return item[1] + quoteScalar(item[2])
+    return line
+  }).join('\n')
+}
+
+function quoteScalar(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
 function readCheck(value: unknown): DocCheck | undefined {
   if (!isRecord(value)) return undefined
   const label = requiredText(value.label)
@@ -279,13 +314,7 @@ function readChange(value: unknown): DocChange | undefined {
  * 所以这里只认契约里的形状，多余字段忽略、少字段一律判非法。
  */
 export function parseDocBlock(source: string): ParsedDocBlock | undefined {
-  let document: unknown
-  try {
-    document = parseYaml(source)
-  } catch {
-    // YAML 语法错误不是异常路径，而是「这块不是 doc 块」的正常结果。
-    return undefined
-  }
+  const document = parseLoose(source)
   if (!isRecord(document)) return undefined
   if (document.type === 'cards') {
     const items = document.items
