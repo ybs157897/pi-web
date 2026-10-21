@@ -12,6 +12,7 @@ import type { Runtime } from '../src/server/contracts.ts'
 import type { ConversationDetail } from '../src/shared/types.ts'
 import { WORKFLOW_MUTANTS, WORKFLOW_ORACLE, WORKFLOW_PROMPT, prepareWorkflowFixture, workflowMutantSource } from './workflow-fixture.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const execute = promisify(execFile)
 const directory = await mkdtemp(join(tmpdir(), 'pi-web-live-workflow-'))
 const workspace = join(directory, 'workspace')
@@ -113,7 +114,7 @@ try {
   assert.ok(planningTrace.some(call => ['read', 'search_files'].includes(call.name) && call.success), 'The plan lacked source inspection')
   assert.ok(planningTrace.some(call => call.name === 'exit_plan_mode' && call.success), 'The model did not submit its plan for review')
   assert.equal(planned.plan?.active, true, 'The model left Plan without a user decision')
-  assert.ok(!planningTrace.some(call => ['write', 'edit', 'bash', 'skill_save', 'create_goal'].includes(call.name) && call.success), 'Plan performed an implementation action')
+  assert.ok(!planningTrace.some(call => ['write', 'edit', SHELL_TOOL, 'skill_save', 'create_goal'].includes(call.name) && call.success), 'Plan performed an implementation action')
   assert.equal(await readFile(join(workspace, 'calculator.mjs'), 'utf8'), before)
   assert.deepEqual((await readdir(workspace)).sort(), ['AGENTS.md', 'calculator.mjs', 'invoice.json'])
   evidence.plan = { result: 'passed', trace: planningTrace, active: planned.plan?.active }
@@ -129,7 +130,7 @@ try {
   assert.ok(tools.filter(call => call.name === 'todo_write' && call.success).length >= 2, 'The model did not create and update its task list')
   assert.ok(result.todos?.length && result.todos.every(item => item.status === 'completed'), 'The task list was not completed')
   assert.ok((evidence.progress as string[]).length > 0, 'No intermediate progress message was observed')
-  assert.ok(tools.some(call => call.name === 'bash' && call.success), 'The model did not run its verification')
+  assert.ok(tools.some(call => call.name === SHELL_TOOL && call.success), 'The model did not run its verification')
   const readme = await readFile(join(workspace, 'README.md'), 'utf8')
   assert.match(readme, /^## 本地校验\s*$/m, 'The workspace AGENTS.md instruction was not followed')
   const files = await readdir(workspace)

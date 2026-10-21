@@ -24,6 +24,12 @@ interface ResponseGate {
 let nextGate: ResponseGate | undefined
 const DEMO_MODEL: ModelRef = { provider: 'pi-web-demo', modelId: 'demo-model' }
 const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+/** Windows follows DSH: only `pwsh`; other platforms only `bash`. */
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+const SHELL_LABEL = process.platform === 'win32' ? 'PowerShell' : 'bash'
+function shellCommand(posix: string, powershell: string): string {
+  return process.platform === 'win32' ? powershell : posix
+}
 const requestObservers = new Set<(request: Parameters<FauxResponseFactory>[0]) => void>()
 
 /** Observe requests reaching the explicit demo provider, for runtime wiring acceptance. */
@@ -345,8 +351,11 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       case 2:
         return fauxAssistantMessage(fauxToolCall('read', { path: 'render-fixture.md' }, { id: `fixture-read-${runToken}` }), { stopReason: 'toolUse' })
       case 3:
-        return fauxAssistantMessage(fauxToolCall('bash', {
-          command: 'printf "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/z0sAAAAASUVORK5CYII=" | base64 -d > render-fixture.png',
+        return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, {
+          command: shellCommand(
+            'printf "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/z0sAAAAASUVORK5CYII=" | base64 -d > render-fixture.png',
+            "[IO.File]::WriteAllBytes('render-fixture.png', [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/z0sAAAAASUVORK5CYII='))",
+          ),
         }, { id: `fixture-image-${runToken}` }), { stopReason: 'toolUse' })
       case 4:
         return fauxAssistantMessage(fauxToolCall('read', { path: 'render-fixture.png' }, { id: `fixture-image-read-${runToken}` }), { stopReason: 'toolUse' })
@@ -361,7 +370,7 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
     const codemodeResults = currentResults.filter((message) => message.toolName === 'codemode')
     if (codemodeResults.length === 0) {
       return fauxAssistantMessage(fauxToolCall('codemode', {
-        code: 'const result = await tools.bash({ command: "printf codemode-ok" })\nreturn result.output',
+        code: `const result = await tools.${SHELL_TOOL}({ command: ${JSON.stringify(shellCommand('printf codemode-ok', 'Write-Output codemode-ok'))} })\nreturn result.output`,
       }, { id: `demo-codemode-${String(context.messages.length)}` }), { stopReason: 'toolUse' })
     }
     const latest = codemodeResults[codemodeResults.length - 1]
@@ -369,16 +378,16 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       ? latest.content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('\n')
       : ''
     return fauxAssistantMessage([
-      fauxThinking('脚本已在 QuickJS 沙箱里调用 bash 并取回输出。'),
+      fauxThinking(`脚本已在 QuickJS 沙箱里调用 ${SHELL_TOOL} 并取回输出。`),
       fauxText(`codemode 演示完成。脚本输出：\n\n${output.includes('codemode-ok') ? 'codemode-ok' : output}`),
     ])
   }
   if (userText.includes('[direct-tool]')) {
-    // With `codemode.mode: only` Pi offers the model just `codemode`, so a direct bash
+    // With `codemode.mode: only` Pi offers the model just `codemode`, so a direct shell
     // call is refused; with `on` it is a normal tool call. The runtime test uses both.
-    const bashResults = currentResults.filter((message) => message.toolName === 'bash')
-    if (bashResults.length === 0) {
-      return fauxAssistantMessage(fauxToolCall('bash', { command: 'printf direct-ok' },
+    const shellResults = currentResults.filter((message) => message.toolName === SHELL_TOOL)
+    if (shellResults.length === 0) {
+      return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('printf direct-ok', 'Write-Output direct-ok') },
         { id: `demo-direct-${String(context.messages.length)}` }), { stopReason: 'toolUse' })
     }
     return fauxAssistantMessage([
@@ -558,8 +567,8 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       }, { id: `demo-team-timeout-spawn-${runToken}` }), { stopReason: 'toolUse' })
     }
     // One second of real work so the freshly spawned member's turn is live before the wait starts.
-    if (teamCount('bash') === 0) {
-      return fauxAssistantMessage(fauxToolCall('bash', { command: 'sleep 1' }, { id: `demo-team-timeout-sleep-${runToken}` }), { stopReason: 'toolUse' })
+    if (teamCount(SHELL_TOOL) === 0) {
+      return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('sleep 1', 'Start-Sleep -Seconds 1') }, { id: `demo-team-timeout-sleep-${runToken}` }), { stopReason: 'toolUse' })
     }
     if (teamCount('wait_agent') === 0) {
       return fauxAssistantMessage(fauxToolCall('wait_agent', { timeout_ms: 10_000 }, { id: `demo-team-timeout-wait-${runToken}` }), { stopReason: 'toolUse' })
@@ -597,8 +606,8 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   if (userText.includes('[team-fork]')) {
     // One in-flight tool round before the spawn, so the test can prove the fork seed stops at
     // the previous completed turn instead of copying this turn's partial work.
-    if (teamCount('bash') === 0) {
-      return fauxAssistantMessage(fauxToolCall('bash', { command: 'echo inflight-turn' }, { id: `demo-team-fork-bash-${runToken}` }), { stopReason: 'toolUse' })
+    if (teamCount(SHELL_TOOL) === 0) {
+      return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('echo inflight-turn', 'Write-Output inflight-turn') }, { id: `demo-team-fork-bash-${runToken}` }), { stopReason: 'toolUse' })
     }
     if (teamCount('spawn_teammate') === 0) {
       return fauxAssistantMessage(fauxToolCall('spawn_teammate', {
@@ -716,19 +725,19 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   }
   if (!completedTools.has('write')) {
     return fauxAssistantMessage([
-      fauxThinking('先写入目标文件，再用 read 和 bash 交叉核对。'),
+      fauxThinking(`先写入目标文件，再用 read 和 ${SHELL_LABEL} 交叉核对。`),
       fauxToolCall('write', { path: 'hello.txt', content: 'Hello from Pi Durable Web.\n' }, { id: `demo-write-${runToken}` }),
     ], { stopReason: 'toolUse' })
   }
   if (!completedTools.has('read')) {
     return fauxAssistantMessage(fauxToolCall('read', { path: 'hello.txt' }, { id: `demo-read-${runToken}` }), { stopReason: 'toolUse' })
   }
-  if (!completedTools.has('bash')) {
-    return fauxAssistantMessage(fauxToolCall('bash', { command: 'cat hello.txt' }, { id: `demo-bash-${runToken}` }), { stopReason: 'toolUse' })
+  if (!completedTools.has(SHELL_TOOL)) {
+    return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('cat hello.txt', 'Get-Content hello.txt') }, { id: `demo-bash-${runToken}` }), { stopReason: 'toolUse' })
   }
   return fauxAssistantMessage([
-    fauxThinking('文件已经通过 write、read 和 bash 三种工具操作核对。'),
-    fauxText(`已完成“${userText || '演示任务'}”。\n\n| 检查方式 | 结果 |\n| --- | --- |\n| write | 文件已创建 |\n| read | 内容可读取 |\n| bash | 内容已在 shell 中核对 |\n\n文件内容：\n\n\`\`\`text\nHello from Pi Durable Web.\n\`\`\``),
+    fauxThinking(`文件已经通过 write、read 和 ${SHELL_LABEL} 三种工具操作核对。`),
+    fauxText(`已完成“${userText || '演示任务'}”。\n\n| 检查方式 | 结果 |\n| --- | --- |\n| write | 文件已创建 |\n| read | 内容可读取 |\n| ${SHELL_TOOL} | 内容已在 shell 中核对 |\n\n文件内容：\n\n\`\`\`text\nHello from Pi Durable Web.\n\`\`\``),
   ])
 }
 

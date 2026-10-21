@@ -38,11 +38,12 @@ export const TodoTools: Extension = defineExtension({
     defineTool({
       name: 'todo_write',
       description: [
-        'Use this list for multi-step work: add one concrete step per item before starting, including relevant verification; skip trivial single-step work.',
+        'Record and update a task list to plan multi-step work and show progress; skip trivial single-step work.',
+        'Add one concrete step per item before starting, including relevant verification.',
         'Replace the entire list on every call, so include every current item; anything omitted is removed.',
         'Update statuses promptly as work changes and mark an item completed as soon as it is done.',
         'Mark an item in_progress only while actively working on it; use multiple in_progress items only for work actually running in parallel.',
-        'Do not use the list for planning-mode notes; it tracks implementation work in progress.',
+        'Do not use the list as a substitute for the plan-mode plan; it tracks steps you are actually carrying out.',
       ].join(' '),
       parameters: Type.Object({
         todos: Type.Array(Type.Object({ content: Type.String(), status: TODO_STATUS })),

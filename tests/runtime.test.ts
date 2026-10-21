@@ -8,6 +8,8 @@ import { holdNextDemoResponse } from '../src/server/demo-model.ts'
 import { SUBAGENT_TOOL } from '../src/server/subagent-tools.ts'
 import type { ConversationDetail } from '../src/shared/types.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 
 async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
@@ -144,7 +146,7 @@ describe('Pi Durable runtime', () => {
     const user = completed.messages.find(message => message.role === 'user')
     expect(user?.requestId).toBe(input.requestId)
     const toolResults = completed.messages.filter(message => message.role === 'tool')
-    expect(toolResults.map(message => message.toolName)).toEqual(expect.arrayContaining(['write', 'read', 'bash']))
+    expect(toolResults.map(message => message.toolName)).toEqual(expect.arrayContaining(['write', 'read', SHELL_TOOL]))
     expect(completed.messages.some(message => message.role === 'assistant' && message.blocks.some(block => block.type === 'thinking'))).toBe(true)
     expect(completed.messages.some(message => message.role === 'assistant' && message.blocks.some(block => block.type === 'text' && block.text.includes('| 检查方式 |')))).toBe(true)
     expect(await readFile(join(workspace, 'hello.txt'), 'utf8')).toBe('Hello from Pi Durable Web.\n')
@@ -792,7 +794,7 @@ describe('Pi Durable runtime', () => {
     expect(codemode?.isError).toBeFalsy()
     // The script's output is what the model sees, and its nested bash call is in the details.
     expect(textOf(codemode)).toContain('codemode-ok')
-    expect(JSON.stringify(codemode?.details)).toContain('bash')
+    expect(JSON.stringify(codemode?.details)).toContain(SHELL_TOOL)
     expect(completed.messages.some(message => message.role === 'assistant' && textOf(message).includes('codemode-ok'))).toBe(true)
   })
 
@@ -803,13 +805,13 @@ describe('Pi Durable runtime', () => {
     // Default `on`: a direct bash call is offered to the model and runs.
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 第一次', requestId: randomUUID() })
     const on = await waitForCompletedRun(runtime, created.conversation.id)
-    expect(on.messages.find(message => message.role === 'tool' && message.toolName === 'bash')?.isError).toBeFalsy()
+    expect(on.messages.find(message => message.role === 'tool' && message.toolName === SHELL_TOOL)?.isError).toBeFalsy()
 
     // `only`: the model sees just codemode, so the same direct call is refused.
     await runtime.updateSettings({ codemodeMode: 'only' })
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 第二次', requestId: randomUUID() })
     const only = await waitForCompletedRun(runtime, created.conversation.id)
-    const refused = [...only.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'bash')
+    const refused = [...only.messages].reverse().find(message => message.role === 'tool' && message.toolName === SHELL_TOOL)
     expect(refused?.isError).toBe(true)
     expect(runtime.settings().codemodeMode).toBe('only')
 
@@ -830,7 +832,7 @@ describe('Pi Durable runtime', () => {
     // `on` restores the native tools too: a stale script-only filter would refuse them.
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 重新开启后', requestId: randomUUID() })
     const directBack = await waitForCompletedRun(runtime, created.conversation.id)
-    expect([...directBack.messages].reverse().find(message => message.role === 'tool' && message.toolName === 'bash')?.isError).toBeFalsy()
+    expect([...directBack.messages].reverse().find(message => message.role === 'tool' && message.toolName === SHELL_TOOL)?.isError).toBeFalsy()
   })
 
   it('imports the Pi MCP file read-only and keeps serving when a server cannot start', async () => {

@@ -1,32 +1,37 @@
 import { constants } from 'node:fs'
 import { lstat, open, opendir, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, posix, relative, resolve, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, type Extension, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import { RuntimeError } from './runtime-errors.ts'
 
-export const RESEARCH_TOOL_NAMES = ['list_files', 'search_files'] as const
+export const RESEARCH_TOOL_NAMES = ['list_files', 'search_files', 'glob', 'grep'] as const
 
 const MAX_PATH_LENGTH = 1_024
 const MAX_QUERY_LENGTH = 200
+const MAX_PATTERN_LENGTH = 1_024
 const MAX_SCAN_NODES = 2_000
+const MAX_GLOB_SCAN_NODES = 5_000
 const MAX_FILE_BYTES = 512 * 1_024
 const MAX_TOTAL_READ_BYTES = 4 * 1_024 * 1_024
 const MAX_LIST_ENTRIES = 100
 const MAX_SEARCH_RESULTS = 50
+const MAX_GLOB_RESULTS = 100
 const MAX_RESULT_PATH_LENGTH = 512
 const MAX_EXCERPT_LENGTH = 200
 const MAX_TOOL_OUTPUT_BYTES = 48 * 1_024
 
 const OMITTED_DIRECTORIES = new Set(['.git', 'node_modules', '.data'])
+const GLOB_OMITTED_DIRECTORIES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl', 'node_modules', 'dist', '.data'])
 const PRIVATE_FILE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.keystore'])
 const PRIVATE_FILE_NAME = /^(?:(?:credentials?|secrets?|tokens?|private[-_]?key)\.(?:json|ya?ml|toml|txt)|id_rsa|id_ed25519)$/i
 
 type ListedEntry = { path: string; type: 'file' | 'directory' }
 type SearchMatch = { path: string; line: number; excerpt: string }
+type GlobMatch = { path: string; mtimeMs: number }
 type WorkspacePath = { path: string; absolute: string; info: Awaited<ReturnType<typeof lstat>> }
-type WalkEntry = WorkspacePath & { type: 'file' | 'directory' }
+type WalkEntry = WorkspacePath & { type: 'file' | 'directory'; mtimeMs: number }
 type SearchRead =
   | { kind: 'text'; content: string; bytes: number }
   | { kind: 'oversize'; bytes: number }
@@ -52,11 +57,72 @@ function safeRelativePath(value: unknown): string {
   return segments.join('/')
 }
 
-function isRestrictedName(name: string): boolean {
-  if (name.startsWith('.') || OMITTED_DIRECTORIES.has(name.toLowerCase())) return true
-  const lower = name.toLowerCase()
-  const extension = lower.slice(lower.lastIndexOf('.'))
+function isPrivateFile(name: string): boolean {
+  const extension = name.toLowerCase().slice(name.toLowerCase().lastIndexOf('.'))
   return PRIVATE_FILE_NAME.test(name) || PRIVATE_FILE_EXTENSIONS.has(extension)
+}
+
+function isRestrictedName(name: string): boolean {
+  return name.startsWith('.') || OMITTED_DIRECTORIES.has(name.toLowerCase()) || isPrivateFile(name)
+}
+
+/** Glob discovery includes hidden paths but still refuses VCS metadata, generated trees, and credential files. */
+function isGlobExcluded(name: string): boolean {
+  return GLOB_OMITTED_DIRECTORIES.has(name.toLowerCase()) || isPrivateFile(name)
+}
+
+/**
+ * `path.matchesGlob` treats a leading dot as "not matched by *". Mask dot segments on both
+ * sides with a NUL-prefixed marker (paths cannot contain NUL) so hidden files stay discoverable.
+ */
+const GLOB_DOT = '\u0000dot\u0000'
+
+function maskGlobSegment(segment: string): string {
+  return segment.startsWith('.') ? `${GLOB_DOT}${segment.slice(1)}` : segment
+}
+
+function maskGlobPath(value: string): string {
+  return value.split('/').map(maskGlobSegment).join('/')
+}
+
+function globPattern(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_PATTERN_LENGTH
+    || value.includes('\u0000') || value.includes('\\') || isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
+    throw new RuntimeError('INVALID_INPUT', `Glob patterns must be relative, non-empty, and no longer than ${MAX_PATTERN_LENGTH} characters.`)
+  }
+  const pattern = value.trim()
+  if (pattern.split('/').some(segment => segment === '..')) {
+    throw new RuntimeError('FORBIDDEN', 'A research tool cannot match paths outside the current workspace.')
+  }
+  return pattern.includes('/') ? pattern : `**/${pattern}`
+}
+
+function globMatcher(value: unknown): (path: string) => boolean {
+  const pattern = maskGlobPath(globPattern(value))
+  return (path) => {
+    try {
+      return posix.matchesGlob(maskGlobPath(path), pattern)
+    } catch (error) {
+      throw new RuntimeError('INVALID_INPUT', `Invalid glob pattern: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+
+function includeMatcher(value: unknown): ((path: string) => boolean) | undefined {
+  if (value === undefined) return undefined
+  return globMatcher(value)
+}
+
+function grepPattern(value: unknown, caseSensitive: boolean): RegExp {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_PATTERN_LENGTH
+    || value.includes('\u0000') || /[\r\n]/.test(value)) {
+    throw new RuntimeError('INVALID_INPUT', `grep patterns must be a single-line non-empty string no longer than ${MAX_PATTERN_LENGTH} characters.`)
+  }
+  try {
+    return new RegExp(value, caseSensitive ? '' : 'i')
+  } catch (error) {
+    throw new RuntimeError('INVALID_INPUT', `grep pattern is not a valid regular expression: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 function requireWorkspace(api: ToolExecutionApi): string {
@@ -118,8 +184,10 @@ async function walkDirectory(
   recursive: boolean,
   context: Context,
   visit: (entry: WalkEntry) => Promise<boolean>,
+  filter: (name: string) => boolean = isRestrictedName,
+  maxNodes = MAX_SCAN_NODES,
 ): Promise<{ examined: number; truncated: boolean }> {
-  if (!start.info.isDirectory()) throw new RuntimeError('INVALID_INPUT', 'list_files requires a workspace directory.')
+  if (!start.info.isDirectory()) throw new RuntimeError('INVALID_INPUT', 'This tool requires a workspace directory.')
   const pending: WorkspacePath[] = [start]
   let examined = 0
   let truncated = false
@@ -137,12 +205,12 @@ async function walkDirectory(
       for await (const entry of directory) {
         abortIfRequested(context)
         examined += 1
-        if (examined > MAX_SCAN_NODES) {
+        if (examined > maxNodes) {
           truncated = true
           stop = true
           break
         }
-        if (isRestrictedName(entry.name)) continue
+        if (filter(entry.name)) continue
         const relativePath = [current.path, entry.name].filter(Boolean).join('/')
         if (relativePath.length > MAX_RESULT_PATH_LENGTH) {
           truncated = true
@@ -165,6 +233,7 @@ async function walkDirectory(
           absolute: childCanonical,
           info: childInfo,
           type,
+          mtimeMs: childInfo.mtimeMs,
         })
         if (!shouldContinue) {
           truncated = true
@@ -178,7 +247,7 @@ async function walkDirectory(
     }
     if (stop) break
   }
-  return { examined: Math.min(examined, MAX_SCAN_NODES), truncated }
+  return { examined: Math.min(examined, maxNodes), truncated }
 }
 
 function textOutput(text: string) {
@@ -192,6 +261,20 @@ function boundedListing(scope: string, recursive: boolean, examined: number, ent
       `Listed ${entries.length} workspace entries under ${JSON.stringify(scope)}${recursive ? ' recursively' : ''} (${examined} entries examined).`,
       ...lines,
       ...(truncated ? ['TRUNCATED: workspace research limits omitted additional entries.'] : []),
+    ].join('\n')
+    if (Buffer.byteLength(text) <= MAX_TOOL_OUTPUT_BYTES || entries.length === 0) return text
+    entries.pop()
+    truncated = true
+  }
+}
+
+function boundedGlob(scope: string, pattern: string, examined: number, entries: GlobMatch[], truncated: boolean): string {
+  while (true) {
+    const lines = entries.map(entry => `- ${JSON.stringify(entry.path)}`)
+    const text = [
+      `Found ${entries.length} files matching ${JSON.stringify(pattern)} under ${JSON.stringify(scope)} in modification-time order (newest first; ${examined} entries examined).`,
+      ...lines,
+      ...(truncated ? ['TRUNCATED: workspace research limits omitted additional files or reordered the complete list.'] : []),
     ].join('\n')
     if (Buffer.byteLength(text) <= MAX_TOOL_OUTPUT_BYTES || entries.length === 0) return text
     entries.pop()
@@ -289,11 +372,35 @@ async function findMatches(
   return { matches, hasMore: false }
 }
 
+async function findRegexMatches(
+  content: string,
+  regex: RegExp,
+  maxResults: number,
+  path: string,
+  context: Context,
+): Promise<{ matches: SearchMatch[]; hasMore: boolean }> {
+  const matches: SearchMatch[] = []
+  const lines = content.split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    if (index % 256 === 0) {
+      abortIfRequested(context)
+      if (index > 0) await yieldToAbort()
+    }
+    const line = lines[index] ?? ''
+    const matchIndex = line.search(regex)
+    if (matchIndex < 0) continue
+    if (matches.length >= maxResults) return { matches, hasMore: true }
+    matches.push({ path, line: index + 1, excerpt: makeExcerpt(line, matchIndex) })
+  }
+  return { matches, hasMore: false }
+}
+
 function boundedSearch(
   values: {
     scope: string
     query: string
-    caseSensitive: boolean
+    kind: 'literal' | 'regex'
+    include?: string
     scannedFiles: number
     skippedOversize: number
     skippedBinary: number
@@ -304,8 +411,9 @@ function boundedSearch(
 ): string {
   while (true) {
     const lines = values.matches.map(match => `- ${JSON.stringify(match.path)}:${match.line}: ${match.excerpt}`)
+    const noun = values.kind === 'regex' ? 'regex match' : 'literal match'
     const text = [
-      `Found ${values.matches.length} literal match${values.matches.length === 1 ? '' : 'es'} for ${JSON.stringify(values.query)} under ${JSON.stringify(values.scope)}; searched ${values.scannedFiles} files; skipped ${values.skippedUnreadable} unreadable, ${values.skippedBinary} binary, and ${values.skippedOversize} oversized files.`,
+      `Found ${values.matches.length} ${noun}${values.matches.length === 1 ? '' : 'es'} for ${JSON.stringify(values.query)} under ${JSON.stringify(values.scope)}${values.include ? ` in files matching ${JSON.stringify(values.include)}` : ''}; searched ${values.scannedFiles} files; skipped ${values.skippedUnreadable} unreadable, ${values.skippedBinary} binary, and ${values.skippedOversize} oversized files.`,
       ...lines,
       ...(values.truncated ? ['TRUNCATED: the search is incomplete or results were omitted by workspace limits.'] : []),
     ].join('\n')
@@ -406,7 +514,7 @@ const searchFilesTool = defineTool({
     }
 
     if (start.info.isFile()) {
-      const result = await searchEntry({ ...start, type: 'file' })
+      const result = await searchEntry({ ...start, type: 'file', mtimeMs: Number(start.info.mtimeMs) })
       if (!result) truncated = true
     } else if (start.info.isDirectory()) {
       if (recursive) {
@@ -423,7 +531,122 @@ const searchFilesTool = defineTool({
     const text = boundedSearch({
       scope: start.path || '.',
       query,
-      caseSensitive,
+      kind: 'literal',
+      scannedFiles,
+      skippedOversize,
+      skippedBinary,
+      skippedUnreadable,
+      matches,
+      truncated,
+    })
+    return { output: textOutput(text) }
+  },
+})
+
+const globTool = defineTool({
+  name: 'glob',
+  description: `Find files whose paths match a glob pattern. A pattern without "/" matches the basename at any depth; "**" matches any depth. Includes hidden paths; excludes VCS metadata, node_modules, dist, .data, common secret files, and symlinks. Returns up to ${MAX_GLOB_RESULTS} paths in modification-time order (newest first). Read-only; no shell. Prefer this over find or ls -R.`,
+  parameters: Type.Object({
+    pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
+    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_GLOB_RESULTS })),
+  }),
+  outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  execute: async (args, api, context) => {
+    abortIfRequested(context)
+    const matchesPattern = globMatcher(args.pattern)
+    const root = await workspaceRoot(api, context)
+    const start = await checkedPath(root, args.path, context)
+    const maxResults = args.maxResults === undefined
+      ? MAX_GLOB_RESULTS
+      : Math.max(1, Math.min(MAX_GLOB_RESULTS, Math.floor(args.maxResults)))
+    const entries: GlobMatch[] = []
+    const walked = await walkDirectory(root, start, true, context, async entry => {
+      if (entry.type === 'file' && matchesPattern(entry.path)) {
+        entries.push({ path: entry.path, mtimeMs: entry.mtimeMs })
+      }
+      return true
+    }, isGlobExcluded, MAX_GLOB_SCAN_NODES)
+    entries.sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
+    const limited = entries.slice(0, maxResults)
+    const truncated = walked.truncated || entries.length > limited.length
+    return { output: textOutput(boundedGlob(start.path || '.', args.pattern, walked.examined, limited, truncated)) }
+  },
+})
+
+const grepTool = defineTool({
+  name: 'grep',
+  description: `Search workspace text files with a regular expression (JavaScript syntax; case-insensitive by default). Returns relative paths, one-based line numbers, and excerpts. path defaults to "."; include optionally filters files by glob (for example "*.ts"); maxResults is an integer from 1 to ${MAX_SEARCH_RESULTS} (default ${MAX_SEARCH_RESULTS}). Skips hidden paths, node_modules, common secret files, binary/oversized files and symlinks. Read-only; no shell. Prefer this over shell grep or rg.`,
+  parameters: Type.Object({
+    pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
+    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    include: Type.Optional(Type.String({ maxLength: MAX_PATTERN_LENGTH })),
+    caseSensitive: Type.Optional(Type.Boolean()),
+    maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
+  }),
+  outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  execute: async (args, api, context) => {
+    abortIfRequested(context)
+    const regex = grepPattern(args.pattern, args.caseSensitive === true)
+    const include = includeMatcher(args.include)
+    const root = await workspaceRoot(api, context)
+    const start = await checkedPath(root, args.path, context)
+    const recursive = true
+    const maxResults = args.maxResults === undefined
+      ? MAX_SEARCH_RESULTS
+      : Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.floor(args.maxResults)))
+    const matches: SearchMatch[] = []
+    let scannedFiles = 0
+    let skippedOversize = 0
+    let skippedBinary = 0
+    let skippedUnreadable = 0
+    let bytesRead = 0
+    let truncated = false
+
+    const searchEntry = async (entry: WalkEntry): Promise<boolean> => {
+      if (entry.type !== 'file' || (include !== undefined && !include(entry.path))) return true
+      const read = await readSearchFile(root, entry, context, MAX_TOTAL_READ_BYTES - bytesRead)
+      bytesRead += read.bytes
+      if (read.kind === 'oversize') {
+        skippedOversize += 1
+        truncated = true
+        return true
+      }
+      if (read.kind === 'binary') {
+        skippedBinary += 1
+        truncated = true
+        return true
+      }
+      if (read.kind === 'unreadable') {
+        skippedUnreadable += 1
+        truncated = true
+        return true
+      }
+      scannedFiles += 1
+      const found = await findRegexMatches(read.content, regex, maxResults - matches.length, entry.path, context)
+      matches.push(...found.matches)
+      if (found.hasMore || matches.length >= maxResults) {
+        truncated ||= found.hasMore
+        return !found.hasMore
+      }
+      return true
+    }
+
+    if (start.info.isFile()) {
+      const result = await searchEntry({ ...start, type: 'file', mtimeMs: Number(start.info.mtimeMs) })
+      if (!result) truncated = true
+    } else if (start.info.isDirectory()) {
+      const walked = await walkDirectory(root, start, recursive, context, searchEntry)
+      truncated ||= walked.truncated
+    } else {
+      throw new RuntimeError('INVALID_INPUT', 'grep requires a regular file or workspace directory.')
+    }
+
+    const text = boundedSearch({
+      scope: start.path || '.',
+      query: args.pattern,
+      kind: 'regex',
+      include: args.include,
       scannedFiles,
       skippedOversize,
       skippedBinary,
@@ -437,5 +660,5 @@ const searchFilesTool = defineTool({
 
 export const ResearchTools: Extension = defineExtension({
   name: 'research-tools',
-  tools: [listFilesTool, searchFilesTool],
+  tools: [listFilesTool, searchFilesTool, globTool, grepTool],
 })

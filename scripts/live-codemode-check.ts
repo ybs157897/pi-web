@@ -12,6 +12,8 @@ import { piWebHome } from '../src/server/home.ts'
  * `codemode` tool, whose QuickJS script calls bash, and the script's output must reach
  * the transcript. Direct bash is refused in the prompt so the evidence stays specific.
  */
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+const SHELL_COMMAND = process.platform === 'win32' ? 'Write-Output PI_WEB_CODEMODE_READY' : 'printf PI_WEB_CODEMODE_READY'
 const directory = await mkdtemp(join(tmpdir(), 'pi-web-live-codemode-'))
 const workspace = join(directory, 'workspace')
 const runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace, piDir: piWebHome() })
@@ -22,9 +24,9 @@ try {
   await runtime.submit(conversation.conversation.id, {
     requestId: randomUUID(),
     text: [
-      '请只使用 codemode 工具完成这次验证，不要直接调用 bash 工具。',
-      '用 codemode 写一段 JavaScript 脚本：在脚本里调用 tools.bash({ command: "printf PI_WEB_CODEMODE_READY" })，',
-      '把 bash 输出的文本 return 出来。脚本执行完后简短回复即可。',
+      `请只使用 codemode 工具完成这次验证，不要直接调用 ${SHELL_TOOL} 工具。`,
+      `用 codemode 写一段 JavaScript 脚本：在脚本里调用 tools.${SHELL_TOOL}({ command: ${JSON.stringify(SHELL_COMMAND)} })，`,
+      `把 ${SHELL_TOOL} 输出的文本 return 出来。脚本执行完后简短回复即可。`,
     ].join('\n'),
   })
   const deadline = Date.now() + 150_000
@@ -41,8 +43,8 @@ try {
   assert.ok(codemode, 'The model did not produce a successful codemode tool result')
   const codemodeText = (codemode.blocks ?? []).flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
   assert.ok(codemodeText.includes('PI_WEB_CODEMODE_READY'), 'The script output did not reach the codemode result')
-  assert.ok(JSON.stringify(codemode.details).includes('bash'), 'The codemode details do not list the nested bash call')
-  assert.ok(!results.some(message => message.toolName === 'bash'), 'The model called bash directly instead of through codemode')
+  assert.ok(JSON.stringify(codemode.details).includes(SHELL_TOOL), `The codemode details do not list the nested ${SHELL_TOOL} call`)
+  assert.ok(!results.some(message => message.toolName === SHELL_TOOL), `The model called ${SHELL_TOOL} directly instead of through codemode`)
   const evidence = {
     result: 'passed',
     verifiedAt: new Date().toISOString(),

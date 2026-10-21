@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import { createApp } from '../src/server/app.ts'
 import { AppStateStore } from '../src/server/app-state.ts'
 import { RuntimeError } from '../src/server/runtime-errors.ts'
 import { validateAnswers } from '../src/server/interactions.ts'
+import { WorkspaceFiles } from '../src/server/workspace-files.ts'
 import { DEFAULT_SHORTCUTS, resolveShortcuts } from '../src/web/keyboard.ts'
 
 const NOW = 1_800_000_000_000
@@ -283,7 +284,7 @@ class FakeRuntime implements Runtime {
   async workspaceFiles(_id: string, path: string): Promise<Protocol.WorkspaceFileEntry[]> { return [{ name: 'test.txt', path: path ? path + '/test.txt' : 'test.txt', type: 'file', size: 4 }] }
   async searchWorkspace(id: string, query: string) { this.calls.push('search:' + query); return this.workspaceFiles(id, '') }
   async workspaceFile(_id: string, path: string): Promise<Protocol.WorkspaceFile> { return { path, kind: 'text', content: 'text', size: 4, modifiedAt: NOW, mimeType: 'text/plain' } }
-  async workspaceAsset(_id: string, path: string) { return { mimeType: path.endsWith('.html') ? 'text/html' : 'application/octet-stream', data: new TextEncoder().encode('<script>unsafe()</script>') } }
+  async workspaceAsset(_id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> { return { mimeType: path.endsWith('.html') ? 'text/html' : 'application/octet-stream', data: new TextEncoder().encode('<script>unsafe()</script>') } }
   async gitBranches(id: string): Promise<Protocol.GitBranchSnapshot> {
     this.calls.push('git-branches:' + id)
     return { isGitAvailable: true, isRepository: true, repoRoot: '/tmp/repo', headRefType: 'branch', currentBranchName: 'main', branches: [{ name: 'main', isCurrent: true, upstreamName: null, commitHash: 'a'.repeat(40), commitTimestampMs: NOW }] }
@@ -339,6 +340,21 @@ class PersistedShortcutsRuntime extends FakeRuntime {
     }
     return this.settings()
   }
+}
+
+/** Answers the workspace file routes from a real directory so path handling runs end to end. */
+class WorkspaceFilesRuntime extends FakeRuntime {
+  private readonly files: WorkspaceFiles
+
+  constructor(private readonly root: string) {
+    super()
+    this.files = new WorkspaceFiles(() => this.workspaces())
+  }
+
+  workspaces(): Protocol.WorkspaceSummary[] { return [{ id: 'ws-1', name: 'Workspace', path: this.root, createdAt: NOW, updatedAt: NOW }] }
+  override async workspaceFiles(id: string, path: string): Promise<Protocol.WorkspaceFileEntry[]> { return this.files.list(id, path) }
+  override async workspaceFile(id: string, path: string): Promise<Protocol.WorkspaceFile> { return this.files.read(id, path) }
+  override async workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> { return this.files.asset(id, path) }
 }
 
 const liveApps: Array<ReturnType<typeof createApp>> = []
@@ -894,6 +910,80 @@ describe('management API', () => {
     expect(html.headers.get('x-content-type-options')).toBe('nosniff')
     const binary = await app.request('/api/workspaces/ws-1/asset?path=output.bin')
     expect(binary.headers.get('content-disposition')).toContain('attachment')
+  })
+
+  it('opens workspace files addressed by absolute, backslash separated and relative paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    const outside = await mkdtemp(join(tmpdir(), 'pi-web-outside-'))
+    await mkdir(join(root, 'docs'))
+    await writeFile(join(root, 'x.txt'), 'hello\n', 'utf8')
+    await writeFile(join(root, 'docs', 'a.md'), '# doc\n', 'utf8')
+    await writeFile(join(outside, 'secret.txt'), 'secret\n', 'utf8')
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const fileUrl = (path: string) => `/api/workspaces/ws-1/file?path=${encodeURIComponent(path)}`
+
+      const relative = await app.request(fileUrl('x.txt'))
+      expect(relative.status).toBe(200)
+      expect(await relative.json()).toMatchObject({ path: 'x.txt', kind: 'text', content: 'hello\n' })
+
+      // Tool output carries the path of the machine it ran on, absolute or not.
+      const absolute = await app.request(fileUrl(join(root, 'x.txt')))
+      expect(absolute.status).toBe(200)
+      expect(await absolute.json()).toMatchObject({ path: 'x.txt', content: 'hello\n' })
+
+      const canonical = await app.request(fileUrl(join(await realpath(root), 'x.txt')))
+      expect(canonical.status).toBe(200)
+      expect(await canonical.json()).toMatchObject({ path: 'x.txt', content: 'hello\n' })
+
+      const backslash = await app.request(fileUrl('docs\\a.md'))
+      expect(backslash.status).toBe(200)
+      expect(await backslash.json()).toMatchObject({ path: 'docs/a.md', content: '# doc\n' })
+
+      const listing = await app.request(`/api/workspaces/ws-1/files?path=${encodeURIComponent(join(root, 'docs'))}`)
+      expect(listing.status).toBe(200)
+      expect((await listing.json()).entries).toEqual([{ name: 'a.md', path: 'docs/a.md', type: 'file', size: 6, modifiedAt: expect.any(Number), mimeType: 'text/markdown' }])
+
+      const asset = await app.request(`/api/workspaces/ws-1/asset?path=${encodeURIComponent(join(root, 'x.txt'))}`)
+      expect(asset.status).toBe(200)
+      expect(await asset.text()).toBe('hello\n')
+
+      // A path that leaves the workspace stays unreachable.
+      const escaped = await app.request(fileUrl(join(outside, 'secret.txt')))
+      expect(escaped.status).toBe(400)
+      expect(await escaped.json()).toMatchObject({ code: 'INVALID_INPUT', error: '工作区路径无效' })
+
+      const traversal = await app.request(fileUrl('../secret.txt'))
+      expect(traversal.status).toBe(403)
+      expect(await traversal.json()).toMatchObject({ code: 'FORBIDDEN', error: '不能访问工作区以外的路径' })
+
+      // A drive letter names a location on Windows only, elsewhere it must not resolve to a file.
+      const foreign = process.platform === 'win32' ? '\\\\server\\share\\secret.txt' : 'D:\\2026\\dolynk\\dolynk-base-device\\docs\\a.md'
+      const foreignPath = await app.request(fileUrl(foreign))
+      expect(foreignPath.status).toBe(400)
+      expect(await foreignPath.json()).toMatchObject({ code: 'INVALID_INPUT', error: '工作区路径无效' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a workspace path that leaves the workspace through a symlink', async () => {
+    // Creating symlinks needs extra privileges on Windows, where the path rules reject the link anyway.
+    if (process.platform === 'win32') return
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    const outside = await mkdtemp(join(tmpdir(), 'pi-web-outside-'))
+    await writeFile(join(outside, 'secret.txt'), 'secret\n', 'utf8')
+    try {
+      await symlink(outside, join(root, 'link'), 'dir')
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const linked = await app.request(`/api/workspaces/ws-1/file?path=${encodeURIComponent(join(root, 'link', 'secret.txt'))}`)
+      expect(linked.status).toBe(403)
+      expect(await linked.json()).toMatchObject({ code: 'FORBIDDEN', error: '工作区文件路径不能经过符号链接' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
   })
 })
 

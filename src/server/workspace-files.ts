@@ -20,6 +20,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.avif': 'image/avif',
 }
 const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'])
+const WINDOWS_DRIVE_PREFIX = /^[A-Za-z]:/
 
 function isWithin(root: string, target: string): boolean {
   const path = relative(root, target)
@@ -41,12 +42,45 @@ function safeFileName(value: string): string {
 }
 
 function safeRelativePath(path: string): string {
-  if (path.length > 2048 || path.includes('\u0000') || path.includes('\\') || isAbsolute(path) || /^[A-Za-z]:/.test(path)) {
+  if (path.length > 2048 || path.includes('\u0000') || path.includes('\\') || isAbsolute(path) || WINDOWS_DRIVE_PREFIX.test(path)) {
     throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
   }
   const segments = path.split('/').filter(segment => segment !== '' && segment !== '.')
   if (segments.some(segment => segment === '..')) throw new RuntimeError('FORBIDDEN', '不能访问工作区以外的路径')
   return segments.join('/')
+}
+
+/**
+ * Reads a requested path with the rules of the host it runs on. A drive letter only
+ * names a location on Windows, so elsewhere such a path stays an unresolvable name
+ * instead of being guessed into a file of the workspace.
+ */
+function platformAbsolutePath(path: string): string | undefined {
+  if (WINDOWS_DRIVE_PREFIX.test(path)) {
+    if (process.platform !== 'win32') return undefined
+    return resolve(path)
+  }
+  return isAbsolute(path) ? resolve(path) : undefined
+}
+
+/**
+ * Turns a requested path into a safe workspace relative path. Tools report the paths
+ * of the machine they ran on, so they arrive as absolute paths or with backslash
+ * separators; both are mapped back onto the workspace when they point inside it.
+ * A path that leaves the workspace keeps the rejection it had before.
+ */
+export function resolveWorkspacePath(root: string, requested: string, declared?: string): string {
+  const normalized = requested.replace(/\\/g, '/')
+  if (normalized.length > 2048 || normalized.includes('\u0000')) throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
+  const absolute = platformAbsolutePath(normalized)
+  if (absolute === undefined) return safeRelativePath(normalized)
+  // The workspace may be addressed by the path it was added with or by its resolved
+  // form, and tools report the former, so both are accepted as the workspace root.
+  for (const base of declared === undefined ? [root] : [root, declared]) {
+    if (!isWithin(base, absolute)) continue
+    return safeRelativePath(relative(base, absolute).split(sep).join('/'))
+  }
+  throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
 }
 
 async function checkedPath(root: string, relativePath: string, allowMissingFinal = false): Promise<string> {
@@ -109,7 +143,7 @@ export class WorkspaceFiles {
   async list(id: string, path = '', query?: string): Promise<WorkspaceFileEntry[]> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
-    const baseRelative = safeRelativePath(path)
+    const baseRelative = resolveWorkspacePath(root, path, workspace.path)
     const base = await checkedPath(root, baseRelative)
     const baseInfo = await stat(base)
     if (!baseInfo.isDirectory()) throw new RuntimeError('INVALID_INPUT', '工作区路径不是目录')
@@ -145,7 +179,7 @@ export class WorkspaceFiles {
   async read(id: string, path: string): Promise<WorkspaceFile> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
-    const relativePath = safeRelativePath(path)
+    const relativePath = resolveWorkspacePath(root, path, workspace.path)
     const canonical = await checkedPath(root, relativePath)
     const info = await stat(canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
@@ -163,7 +197,7 @@ export class WorkspaceFiles {
   async asset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
-    const relativePath = safeRelativePath(path)
+    const relativePath = resolveWorkspacePath(root, path, workspace.path)
     const canonical = await checkedPath(root, relativePath)
     const info = await stat(canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取工作区中的普通文件')

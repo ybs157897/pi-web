@@ -24,12 +24,12 @@
 
 **当前项目不是所有功能都原生支持 Windows，整体属于「有条件支持」。**
 
-- Web 界面、会话/SSE/队列/停止/分叉/恢复、`node:sqlite` 持久化、模型与 Provider、Code mode/QuickJS、MCP、Skills、子代理/团队/目标/计划/待办/问答，主体是 Node + 浏览器标准能力，静态判断可跨平台使用；但仍受下方路径、IME、ACL、Git Bash 和测试缺口影响。
-- 命令执行工具（`bash`）依赖 **Git for Windows** 提供的 bash；项目没有注册 Pi 的 PowerShell 工具作为 Windows 原生兜底。没有 bash 时会话仍可运行，但命令不会执行。
+- Web 界面、会话/SSE/队列/停止/分叉/恢复、`node:sqlite` 持久化、模型与 Provider、Code mode/QuickJS、MCP、Skills、子代理/团队/目标/计划/待办/问答，主体是 Node + 浏览器标准能力，静态判断可跨平台使用；但仍受下方路径、IME、ACL 和测试缺口影响。
+- 命令执行工具：Windows 只注册 `pwsh`（Pi 的 `createPowerShellTool()`，依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell），与 DSH 一致；`bash` 只在 macOS/Linux 注册。`pwsh` 支持 `workdir`/`description`。
 - `workspaceWrite` 访问模式仅 macOS `sandbox-exec` 可用；Windows 只提供 `readOnly` / `fullAccess`，这是设计限制。
 - Windows 原生目录选择器（koffi + COM `IFileOpenDialog`）代码已接入，但从未在 Windows 实机验证；失败时没有可用回退，当前属于高风险路径。
-- Git 分支能力要求 PATH 中同时有 `git.exe` 和兼容的 Git for Windows；它和 bash 的 `bash.exe` 是两个独立探测。
-- **测试不可移植**：即使安装 Git Bash，Windows 上仍至少有 POSIX 权限断言和 Skills 路径断言会失败；符号链接测试还取决于 Windows Developer Mode/权限。
+- Git 分支能力要求服务进程 PATH 中有 `git.exe`；它与 shell 工具相互独立。
+- **测试不可移植**：Windows 上仍有 POSIX 权限断言和 Skills 路径断言会失败；符号链接测试还取决于 Windows Developer Mode/权限。
 - 本轮围绕五项跨平台缺陷完成源码修复：长间隔自动化分段等待、拒绝删除被 Automation 引用的工作区/Agent preset、快捷键 schema 支持 10 个键、Provider 有未保存变更时要求先保存再测试/发现模型、摘要校验拒绝模板占位内容。Windows 行为仍需实机验收。
 
 ## 状态口径
@@ -60,10 +60,10 @@
 | 工作区文件浏览、@ 引用、搜索、Inspector | 有条件 | 工作区相对路径统一用 `/`，正常浏览可用；工具产生的 `C:\...`、`src\foo` 或临时绝对路径点击打开会被服务端拒绝；路径行会显示 `C:\root/sub` 混合分隔符。 |
 | 附件、拖拽、粘贴、缩略图 | 有条件 | File API 跨平台；AVIF 前端可添加但服务端拒绝；拖放可能双触发；Windows 非法文件名/ADS/保留设备名未完整过滤；附件非原子落盘。 |
 | `read`/`write`/`edit` 工具 | 支持（静态） | Pi `NodeExecutionEnv` 使用 Node fs；edit 处理 CRLF/BOM；Windows ACL/只读属性错误待实机。 |
-| `bash` 工具 | 有条件（Git for Windows） | Pi 在 win32 先查 `ProgramFiles\Git\bin\bash.exe`、`ProgramFiles(x86)\Git\bin\bash.exe`，再执行 `where bash.exe`；接受 PATH 上任意 bash，只有 legacy WSL System32 bash 走特殊 stdin 参数。没有 bash 返回 `shell_unavailable`。 |
-| PowerShell 工具 | 未接入 | Pi 1.3.0 提供 `createPowerShellTool()`，本项目只注册 `CodingTools`（read/write/edit/bash）；无 Git Bash 时没有原生 shell 兜底。 |
+| `pwsh` 工具 | 支持（静态，待实机） | Windows 只注册 `pwsh`，Pi 依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell；支持 `workdir`/`description`，`workdir` 通过 `Set-Location -LiteralPath` 应用并限制在工作区内。 |
+| `bash` 工具 | 不支持（Windows 不注册） | `bash` 只在 macOS/Linux 注册；Windows 使用 `pwsh`，与 DSH 的平台组合一致。 |
 | `workspaceWrite` 访问模式 | 不支持（设计限制） | 仅 macOS `sandbox-exec`；Windows capabilities 正确降级为 readOnly/fullAccess。旧数据中的 default/session/preset 值需迁移。 |
-| Code mode/QuickJS | 支持（静态） | QuickJS-WASI + worker_threads，无 Windows 原生扩展；脚本里的 `tools.bash` 同样依赖 Git Bash。 |
+| Code mode/QuickJS | 支持（静态） | QuickJS-WASI + worker_threads，无 Windows 原生扩展；Windows 脚本里的 `tools.pwsh` 走原生 PowerShell，`tools.bash` 不可用。 |
 | MCP（stdio / Streamable HTTP） | 有条件 | pi-mcp 的 stdio 使用 cross-spawn（支持 `.cmd`/PATHEXT），关闭时用 `taskkill /T /F`；HTTP 使用全局 fetch。代理/TLS、`npx` shim、强杀残留待实机。 |
 | 待办（todo） | 支持 | 纯进程内 doc/工具/面板，无 OS 依赖。 |
 | 计划模式（plan） | 支持 | 纯进程内 doc/section/交互卡；无 OS 依赖。 |
@@ -87,8 +87,8 @@
 | `test:live` | 支持（需真实模型） | 无 OS 假设，但需要可用凭据与网络。 |
 | `test:live:tools` / `test:live:codemode` | **不支持** | 写死 `accessMode: 'workspaceWrite'`，Windows create 即 UNSUPPORTED；只能改用 fullAccess 手动验收或平台化脚本。 |
 | `test:live:skills` | 有条件/待实机 | 使用 `fullAccess`，理论上 Windows 可跑；但仍要求真实 DeepSeek 模型、网络和凭据，且没有 Windows 实机证据。 |
-| `test:live:workflow` | 有条件/待实机 | 按平台动态选择 workspaceWrite/fullAccess，Windows 会走 fullAccess；需要真实 DeepSeek、Git Bash 和 Node `--test`，无 Windows 实机记录。 |
-| `scripts/render-fixture.ts` | 有条件 | 不是 npm script，用 `npx tsx scripts/render-fixture.ts` 运行；demo 模型依赖 bash 的 `cat`/`base64 -d`，需要 Git Bash。 |
+| `test:live:workflow` | 有条件/待实机 | 按平台动态选择 workspaceWrite/fullAccess，Windows 会走 fullAccess；需要真实 DeepSeek、`pwsh` 和 Node `--test`，无 Windows 实机记录。 |
+| `scripts/render-fixture.ts` | 有条件 | 不是 npm script，用 `npx tsx scripts/render-fixture.ts` 运行；demo 模型按平台使用 `pwsh`（PowerShell 命令）或 `bash`（POSIX 命令）。 |
 | Windows CI | 缺失 | 仓库无 CI；原生 picker、Git 分支、Skills、WAL 与脚本均无 Windows 自动门禁。 |
 
 ## 新增功能逐项补充
@@ -112,7 +112,7 @@
 
 - 服务端 `src/server/git-branches.ts` 通过 `execFile('git', ...)` 调用系统 Git，提供快照、`git switch --no-guess`、`git switch --no-guess -c`，并将阻塞原因归一为结构化 issue。
 - Windows 要求：
-  - PATH 上必须有 `git.exe`。仅安装 Git for Windows 并让 bash 工具可用，不等于 `git.exe` 一定在 Web 服务进程的 PATH；这会影响分支功能。
+  - PATH 上必须有 `git.exe`；这与 shell 工具无关，只影响分支功能。
   - `git switch` 需要 Git ≥ 2.23；测试里的 `git init -b` 需要 Git ≥ 2.28。建议使用当前 Git for Windows。
 - Windows 静态行为：
   - `execFile` 带 `windowsHide: true`，避免弹出控制台窗口。
@@ -126,11 +126,11 @@
 
 - `src/server/work-policy.ts` 在服务模块加载时用 `readFileSync(new URL('./prompts/runtime-core.md', import.meta.url))` 读取核心提示词；`node:fs` 的 file URL 读取在 Windows 上可用，无 shell 依赖。
 - `runtime-policy` 扩展本身不贡献工具；它按实际 `todo_write`/`codemode` 路由生成待办指导，并按 Plan/Goal 状态生成限制。属于进程内 section，不依赖 OS。
-- `test:live:workflow` 使用真实 DeepSeek 执行多步开发样例，并用宿主侧 Node `--test` 独立核验产物；Windows 上还需要 Git Bash，因为模型通常会调用 `bash` 运行验证。
+- `test:live:workflow` 使用真实 DeepSeek 执行多步开发样例，并用宿主侧 Node `--test` 独立核验产物；Windows 上使用 `pwsh`。
 
 ### Code mode 与 MCP
 
-- Code mode 的 QuickJS 运行在 WASI/worker 中，不依赖 Windows 原生扩展；脚本内调用 `tools.bash` 时仍受 Git Bash 限制。
+- Code mode 的 QuickJS 运行在 WASI/worker 中，不依赖 Windows 原生扩展；Windows 脚本内调用 `tools.pwsh` 时走原生 PowerShell，`tools.bash` 不可用。
 - MCP stdio 通过 cross-spawn 调取 Windows `.cmd`/PATHEXT 程序；进程树关闭使用 `taskkill /T /F`，比直接 kill 更适合 Windows。HTTP transport 使用全局 fetch。
 - 仍待实机：企业代理/自定义 CA、`npx` shim、带空格/中文的 server command、强制关闭后 MCP 子进程是否残留。需要令牌的 MCP 服务器仍用 headers/本地 stdio；OAuth 未接入。
 
@@ -171,12 +171,12 @@
 - 短路径会显示成重复的整条路径；名称超过 120 字符时服务端以「工作区名称长度」拒绝（`src/server/app.ts:120`、`src/server/workspace-files.ts:105`），直接导致添加失败。
 - 修复方向：用服务端 `basename` 或 `path.win32.basename` 统一取名，并校验尾部斜杠、UNC 和长路径。
 
-### W3（高）bash 依赖 Git for Windows，且无 PowerShell 兜底
+### W3（已修复，待实机）Windows 使用原生 pwsh，不再注册 bash
 
-- 项目只安装 `CodingTools`（`src/server/runtime.ts:505`，含 read/write/edit/bash），未注册 Pi 的 `createPowerShellTool()`。
-- Pi 在 Windows 上优先找 Program Files 下的 Git Bash，再执行 `where bash.exe`；无 bash 返回 `shell_unavailable`。
-- 没有 Git Bash 时：会话可创建、模型可回复，但 bash 及 Code mode 内 `tools.bash` 全部失败；demo、smoke、依赖 bash 的测试也失败。
-- 安装时选“Git from the command line and also from 3rd-party software”通常保证 `git.exe` 在 PATH，但不一定保证 `bash.exe` 在 PATH；只把 `C:\Program Files\Git\bin` 加 PATH 更稳妥。per-user 安装的 `%LOCALAPPDATA%\Programs\Git\bin` 不在默认候选，需要额外加入 PATH。
+- `src/server/shell-tools.ts` 的 `CodingTools` 在 win32 只注册 `pwsh`（`createPowerShellTool()`，依次尝试 `pwsh`/`powershell`），其他平台只注册 `bash`；两者都支持 `workdir`/`description`，越界 workdir 拒绝。
+- 提示词在工作区事实里声明平台与 shell；Windows 不再出现 bash 指引，也不会再因缺少 Git Bash 导致命令工具不可用。
+- demo 模型按平台切换 shell：Windows 用 `pwsh` 与 PowerShell 命令（`Get-Content`、`Write-Output`、`Start-Sleep`、`[Convert]::FromBase64String`），非 Windows 保持 bash。
+- 仍需实机验证：只有 `powershell` 没有 `pwsh`、路径含空格/中文/单引号、UNC/长路径、`Set-Location` 行为、PowerShell 执行策略与 UTF-8 输出。
 
 ### W4（中）内置目录浏览器拒绝 UNC/`\\?\`，且没有盘符入口
 
@@ -193,7 +193,7 @@
 ### W6（中）SIGTERM/关控制台不走优雅关闭
 
 - `src/server/index.ts:157-158` 只监听 SIGINT/SIGTERM。Windows 不投递 SIGTERM；关闭控制台、任务管理器结束或 `taskkill` 不会运行 `app.shutdown()`/`runtime.close()`。
-- 后果：SQLite WAL 下次启动可恢复，但 MCP/bash 子进程可能残留；automation 的 running 记录要等下次启动修复。
+- 后果：SQLite WAL 下次启动可恢复，但 MCP/shell 子进程可能残留；automation 的 running 记录要等下次启动修复。
 - `scripts/smoke-check.ts` 用 SIGTERM 验证优雅关闭；在 Windows 上该断言会假绿。Ctrl+C 是当前唯一可靠的手动优雅关闭方式。
 
 ### W7（低）Windows 隐藏属性不被识别
@@ -313,9 +313,9 @@
 2. Node.js ≥ 22.19（推荐 24；`node:sqlite` 在该版本范围可用）。
 3. `npm ci` 用默认参数，**不要 `--omit=optional`**。koffi、esbuild、Rollup 都依赖 win32 optional 预编译包；省略可能导致原生选择器回退到 CMake/MSVC 源码编译，或让 `npm run build` 直接缺少 Rollup 原生模块。正常默认安装不需要 Visual Studio/CMake/Python；若 Rollup 报 DLL 加载失败，再安装 Microsoft Visual C++ Redistributable。
 4. 使用 Node 官方安装包自带的 npm（Rollup 要求 npm ≥ 8；lockfile 为 v3）。
-5. 安装 **Git for Windows**：
-   - 给 bash 工具用：确保 `bash.exe` 存在，优先 `C:\Program Files\Git\bin\bash.exe`/`C:\Program Files (x86)\Git\bin\bash.exe`，或把 `...\Git\bin` 加入 PATH。
+5. 安装 **Git for Windows**（或独立 Git）：
    - 给 Git 分支功能用：确保 `git.exe` 在服务进程 PATH 上。仅能在 Git Bash 内运行不等于 Web 服务能 spawn 到 git。
+   - Windows 的 shell 工具使用原生 `pwsh`，不依赖 Git Bash。
 6. 以交互式桌面用户会话运行（koffi/COM picker 和打开配置文件需要窗口站）。
 7. 使用当前稳定版 Edge 或 Chrome；项目依赖较新的 CSS 特性，未承诺 IE/旧 Edge。
 8. 真实模型：准备 `%USERPROFILE%\.pi-web\{settings.json,models.json,auth.json}`，或使用 `PI_WEB_DEMO=1`。配置建议保存为无 BOM UTF-8。
@@ -340,7 +340,7 @@
    Git Bash 可用 POSIX 写法；生产模式先 `npm run build`，再 `npm start`。
 10. 访问模式只能用 `fullAccess`（默认）/`readOnly`；`workspaceWrite` 不可用。
 11. 从 macOS/Linux 迁移 `~/.pi-web` 前：停止旧服务、备份 `~/.pi-web`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId、preset 和所有 accessMode，再启动 Windows 服务。旧项目 `.data` 与 `~/.pi/agent` 会在首次启动时自动导入一次。
-12. 预期门禁：本轮 macOS `npm run check` 和 HTTP smoke 已通过；Windows 的 `npm test` 仍需按 T2 平台化后才可能全绿；`test:live:tools`/`test:live:codemode` 不可用，`test:live:skills` 与 `test:live:workflow` 需真实模型、Git Bash 与实机记录。
+12. 预期门禁：本轮 macOS `npm run check` 和 HTTP smoke 已通过；Windows 的 shell 测试已按平台切换（Windows 跑 `pwsh` 用例、跳过 `bash` 用例），仍可能有个别 POSIX/Skills 断言失败；`test:live:tools`/`test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`，`test:live:skills` 与 `test:live:workflow` 需真实模型与实机记录。
 
 ## 五、建议修复优先级
 
@@ -348,7 +348,7 @@
 
 1. 原生选择器失败时返回稳定的错误码，前端按错误码打开内置目录浏览器；同时打通手动输入工作区路径的入口，并给 Win32 picker 加总超时/取消。
 2. 工作区取名改用路径 basename（服务端或 `path.win32`），覆盖 `C:\`、UNC、`\\?\` 和尾部斜杠。
-3. 明确 Windows 支持前提为 Git for Windows，并二选一/同时接入 `createPowerShellTool()` 作为无 bash 兜底。
+3. ~~明确 Windows 支持前提为 Git for Windows，并接入 `createPowerShellTool()` 作为无 bash 兜底。~~ 已改为 Windows 只注册 `pwsh`、非 Windows 只注册 `bash`，与 DSH 一致；待 Windows 实机验收。
 4. 平台化 Windows 测试：mode 断言按平台判断，Skills 路径断言用 `path.join`，symlink 测试在权限不足时跳过并记录；移除/改写“仅 1 项失败”的文档。
 5. 补 Git 分支的 Windows 实机/Git 集成测试，并把「Git 不存在」与「目录不是仓库」拆成不同诊断。
 
@@ -376,7 +376,7 @@
 1. `npm ci`（默认）→ `npm run typecheck` → `npm test` → `npm run build`；记录基线失败并与 T1/T2 对照。
 2. demo 模式启动，确认 127.0.0.1 可访问；再用真实模型启动并确认健康检查。
 3. 新建、发送、流式、停止、排队、分叉、刷新、重启恢复；检查 SSE 断线重连。
-4. `write/read/edit/bash` 四工具逐个执行；无 Git Bash 的机器单独确认错误文案；尝试 Code mode 内嵌 `tools.bash`。
+4. `read/write/edit/pwsh` 四工具逐个执行；验证 `pwsh` 的 `workdir`（相对/绝对/中文/空格/单引号/越界），确认请求工具列表里没有 `bash`；尝试 Code mode 内嵌 `tools.pwsh`。
 5. 原生目录选择器：含中文/空格/深路径、UNC、`\\?\` 长路径、取消、ESC、关窗、DPI、多显示器、置顶、请求取消/超时；模拟 koffi/COM/worker 失败确认可回退。
 6. 内置目录浏览器：盘符、UNC（当前预计失败）、隐藏属性、新建文件夹（含 `..\x`）、搜索与超长路径。
 7. 工作区文件：正常相对路径、反斜杠/盘符/临时绝对路径、@ 引用、Inspector 打开、下载、附件拖拽/剪贴板/截图/中文名/非法字符名/201–255 字符名。
@@ -385,21 +385,21 @@
 10. 新增能力：Skills 的列表/加载/保存/校验/重启复用/只读与 plan 限制；默认任务规划的 todo/目标路由；MCP stdio（含 `.cmd`/中文路径）与 HTTP；Git 分支列表/切换/新建/非法名/未提交覆盖/冲突/detached/worktree；自动化短间隔与 >24 天分段等待（验证到期前不执行）；`test:live:workflow`。
 11. 协作：子代理、团队面板、目标、计划、待办、问答；用微软拼音在各输入框按 Enter/Escape 选词，确认不误提交。
 12. 浏览器：Edge/Chrome 各跑一遍，检查 Ctrl+K、Ctrl+B、Ctrl+Alt+N/A、AltGr/Win 键、缩放 125%/200%、高对比度。
-13. 关闭：Ctrl+C、关控制台、任务管理器结束、`taskkill` 反复验证 WAL 恢复与残留 bash/MCP 子进程。
+13. 关闭：Ctrl+C、关控制台、任务管理器结束、`taskkill` 反复验证 WAL 恢复与残留 shell/MCP 子进程。
 14. 长路径、OneDrive/Defender/网络盘、断网、企业代理/NODE_EXTRA_CA_CERTS 下的启动、模型与 MCP HTTP。
 
 ## 未实机验证清单（按影响排序）
 
 1. koffi/COM `IFileOpenDialog` 全链路：vtable 偏移、`GetDisplayName`、`CoTaskMemFree`、跨进程 `EnumThreadWindows`、Alt 前台合成、DPI。
 2. Win32 picker worker 的 `node --import tsx/esm` 启动、`abort`/kill 和 UI 请求取消。
-3. Git Bash 探测：per-user Git、空格/中文用户名、MSYS/Cygwin/WSL、`where bash.exe` 输出编码、UNC/长路径 cwd。
+3. `pwsh` 探测：PowerShell 7 与 Windows PowerShell 的 PATH 优先级、执行策略、UTF-8 输出、空格/中文用户名、UNC/长路径 cwd。
 4. `git.exe` PATH、Git for Windows 版本（`git switch`、`init -b`）、中文分支名和仅大小写不同的 branch ref。
-5. `node:sqlite` WAL 在 NTFS/Defender/OneDrive/强杀后的恢复；SQLite 文件锁与 MCP/bash 残留进程。
+5. `node:sqlite` WAL 在 NTFS/Defender/OneDrive/强杀后的恢复；SQLite 文件锁与 MCP/shell 残留进程。
 6. chmod 后的实际 ACL、用户目录继承、`providers.json`/app-state/SQLite/附件敏感数据隔离。
 7. 浏览器 Ctrl+K、Ctrl+B、AltGr/Win 键与 IME 组合态在 Edge/Chrome 的真实事件序列。
 8. 文件剪贴板/拖拽：Explorer 文件粘贴、截图、AVIF、尾部点/空格、ADS、保留设备名。
 9. 生产静态资源/Vite HMR、`process.argv[1]` 守卫、工作区大小写去重。
 10. JSON BOM、CRLF、企业代理 TLS/证书、MCP HTTP fetch 代理。
-11. `test:live:workflow` 的 Windows fullAccess、Git Bash 验证和 Node `--test` 行为。
+11. `test:live:workflow` 的 Windows fullAccess、`pwsh` 验证和 Node `--test` 行为。
 
 > 本文记录 Windows 静态审计和实机待验项；本轮五项跨平台修复已完成 macOS 验证。Windows 端结论仍须由实机记录或 Windows CI 证明，macOS 的 `npm run check` 不能替代。

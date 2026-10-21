@@ -132,16 +132,25 @@ const planSection = section('plan-policy', async (input, context) => {
   if (doc?.active !== true) return undefined
   const route = resolveToolRoute(input.agent, 'exit_plan_mode')
   const submission = toolRouteInstruction('exit_plan_mode', route, '{ plan: "<plan markdown>" }')
+  const readTools = ['read', 'glob', 'grep', 'list_files', 'search_files']
+    .filter(name => resolveToolRoute(input.agent, name) !== 'unavailable')
+    .map(name => `\`${name}\``)
   return [
-    'Plan mode is on for this conversation: produce a plan, not changes.',
-    'The host enforces read-only planning: workspace mutation, bash, and external MCP calls are unavailable. Research with available file reads and safe metadata tools; do not start implementation.',
-    `Write the plan as Markdown whose first line is a level-1 heading ("${HEADING_PREFIX}"), followed by the steps and the verification you will run.`,
+    '计划模式已开启：本阶段只产出计划，不实施改动。',
+    `先探索：用当前可用的只读工具（${readTools.length > 0 ? readTools.join('、') : '读取与检索工具'}、静态分析和检查）把计划落在真实仓库上。不要写文件、改配置、运行会改写文件的格式化或代码生成、提交，也不要执行计划。优先复用现有函数和模式，不要为新机制而新机制。`,
+    'Host 会拒绝写入、shell 和外部 MCP 调用；当前请求可能只列出只读工具。这些计划模式规则优先于后续任何建议使用写入工具的说明。',
+    submission === undefined
+      ? '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施；计划直接在最终回复里给出。'
+      : '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施，计划本身属于 `exit_plan_mode`。',
+    '能通过检查确定的事实自己去查。只有用户拥有的选择或检查无法回答的重大歧义才用 `ask_user_question`；不要问代码在哪、当前行为是什么。',
+    '计划要决策完整：写明目标与验收标准；按子系统分组改动；列出公共 API、schema 和数据流变化；覆盖边界情况、失败模式、测试、验收标准和显式假设。简洁到可审阅，详细到另一位工程师不用再做设计决策。',
+    `把计划写成 Markdown，第一行是一级标题（"${HEADING_PREFIX}<标题>"），后面是步骤和要执行的验证。`,
     ...(submission === undefined
-      ? ['No plan-submission tool is callable in this request. Put the plan in your final response; do not claim that it was submitted for review or wait for a tool result.']
+      ? ['本请求没有可调用的计划提交工具。把计划放在最终回复里并结束本轮；不要声称已提交，也不要等待工具结果。']
       : [
-          `Submit it with ${submission} and end the turn without waiting; the user reviews it in the transcript.`,
-          'While the plan is pending, do not execute it; end the turn instead.',
-          'When the user asks for changes, revise and resubmit the plan. When the user approves, plan mode turns off and their confirmation arrives as a follow-up message; execute the approved plan then.',
+          `准备好后调用 ${submission}，并让该调用成为这次回复唯一且最后一个工具调用。`,
+          '计划待审期间不要执行；结束本轮。',
+          '用户要求修改时，吸收反馈并重新提交；用户批准后计划模式关闭，按后续消息执行已批准的方案。',
         ]),
   ].join('\n')
 })
@@ -155,6 +164,7 @@ const exitPlanModeTool = defineTool({
   name: 'exit_plan_mode',
   description: [
     'Submit the plan you wrote in plan mode and end this turn without waiting for the review.',
+    'Make this the only and final tool call in that assistant response; do not start implementation in the same turn.',
     `The plan must be Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>"), followed by the steps and the verification you will run.`,
     'Only call this while plan mode is active: the user turns it on with the composer plan chip or the /plan command.',
     'The user reviews the plan in the transcript; approval turns plan mode off and their confirmation arrives as a follow-up message.',

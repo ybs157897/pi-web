@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { createRuntime } from '../src/server/runtime.ts'
 import { piWebHome } from '../src/server/home.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const directory = await mkdtemp(join(tmpdir(), 'pi-web-live-tools-'))
 const workspace = join(directory, 'workspace')
 const runtime = await createRuntime({ dataDir: join(directory, 'data'), workspace, piDir: piWebHome() })
@@ -16,7 +17,7 @@ try {
   const conversation = await runtime.create({ title: 'Real tool verification', model: catalog.defaultModel, accessMode: 'workspaceWrite' })
   await runtime.submit(conversation.conversation.id, {
     requestId: randomUUID(),
-    text: '执行一个小型工具验证，必须按顺序分别调用 write、read、edit、bash 四个工具，每一步成功后再做下一步：1. write 创建 verification.txt，内容为 alpha\\n；2. read 读取该文件；3. edit 将 alpha 替换为 PI_WEB_TOOLS_READY；4. bash 执行 cat verification.txt。不要只描述操作，不要用 bash 代替前面三个工具。完成后简短回复即可。',
+    text: `执行一个小型工具验证，必须按顺序分别调用 write、read、edit、${SHELL_TOOL} 四个工具，每一步成功后再做下一步：1. write 创建 verification.txt，内容为 alpha\\n；2. read 读取该文件；3. edit 将 alpha 替换为 PI_WEB_TOOLS_READY；4. ${SHELL_TOOL} 读取 verification.txt（bash 用 cat，PowerShell 用 Get-Content）。不要只描述操作，不要用 ${SHELL_TOOL} 代替前面三个工具。完成后简短回复即可。`,
   })
   const deadline = Date.now() + 150_000
   let detail = await runtime.detail(conversation.conversation.id)
@@ -28,12 +29,12 @@ try {
   }
   assert.equal(detail.conversation.busy, false, 'The configured model did not finish the tool sequence')
   const results = detail.messages.filter(message => message.role === 'tool')
-  for (const name of ['write', 'read', 'edit', 'bash']) {
+  for (const name of ['write', 'read', 'edit', SHELL_TOOL]) {
     assert.ok(results.some(message => message.toolName === name && !message.isError), `No successful ${name} tool result`)
   }
   const contents = await readFile(join(workspace, 'verification.txt'), 'utf8')
   assert.ok(contents.includes('PI_WEB_TOOLS_READY'))
-  assert.ok(results.some(message => message.toolName === 'bash' && message.blocks.some(block => block.type === 'text' && block.text.includes('PI_WEB_TOOLS_READY'))))
+  assert.ok(results.some(message => message.toolName === SHELL_TOOL && message.blocks.some(block => block.type === 'text' && block.text.includes('PI_WEB_TOOLS_READY'))))
   const evidence = {
     result: 'passed', verifiedAt: new Date().toISOString(), model: catalog.defaultModel,
     fileContents: contents, tools: results.map(message => ({ name: message.toolName, isError: message.isError, status: message.status })),

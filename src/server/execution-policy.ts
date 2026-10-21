@@ -15,7 +15,7 @@ export const EXECUTION_POLICY_EXTENSION_NAME = 'execution-policy'
 
 // Unknown tools, including external MCP tools, cannot establish read-only behavior by name.
 const PLAN_TOOLS = new Set([
-  'read', 'list_files', 'search_files', 'skill_list', 'skill_load', 'skill_validate',
+  'read', 'list_files', 'search_files', 'glob', 'grep', 'skill_list', 'skill_load', 'skill_validate',
   'ask_user_question', 'exit_plan_mode', 'get_goal', 'codemode',
   'subagent', 'spawn_teammate', 'list_agents', 'wait_agent', 'interrupt_agent',
   'team_task_list', 'team_task_get',

@@ -192,6 +192,7 @@
 .fileChip:focus-visible,
 .pathButton:focus-visible,
 .inspectDiffButton:focus-visible,
+.changedToggle:focus-visible,
 .processHeader:focus-visible {
   outline: 2px solid var(--dsw-alias-link);
   outline-offset: 2px;
@@ -373,6 +374,14 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+/* Rows keep their natural height and let the body scroll; without this, the
+   size-contained Think rows have a zero min-content height and flex-crush to
+   zero once the rows exceed the cap, painting over the rows below (DSH sets
+   the same rule on its group body). */
+.processBody > * {
+  flex-shrink: 0;
 }
 
 .processBody[hidden] {
@@ -574,6 +583,27 @@
 .changedKind {
   flex: none;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* The chevron that folds one changed file's preview away; the row's own actions stay reachable. */
+.changedToggle {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.changedToggle:hover {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .pathButton,

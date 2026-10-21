@@ -147,14 +147,44 @@ export function estimateMessagesTokens(messages: readonly Message[]): number {
   return messages.reduce((total, message) => total + estimateMessageTokens(message), 0)
 }
 
+/** The context size at which a compaction starts to pay off. */
+export function compactionThreshold(
+  model: { contextWindow: number },
+  policy = COMPACTION_POLICY,
+): number {
+  const budget = compactionBudget(model)
+  return Math.max(policy.keepRecentTokens + MIN_SAVINGS_TOKENS, budget - policy.reserveTokens)
+}
+
+/**
+ * Whether pi-web starts a compaction of its own, or leaves the threshold to Pi Durable.
+ *
+ * Pi Durable compacts at `contextWindow - reserveTokens` with a generation-owned,
+ * blocking compaction: the generation waits for that summary and continues on the
+ * compacted context. pi-web's compaction is conversation-owned — its summary is
+ * admitted through the inbox and lands at a later boundary, where it moves the head
+ * back and undoes the platform's cut, so the context grows instead of shrinking and
+ * the next request overflows the window, ending the run. pi-web therefore compacts
+ * only in the band the platform would not cover: below its own threshold, and below
+ * the platform's.
+ */
+export function ownsCompactionThreshold(
+  tokens: number,
+  model: { contextWindow: number },
+  policy = COMPACTION_POLICY,
+): boolean {
+  const platform = model.contextWindow - policy.reserveTokens
+  if (tokens > platform) return false
+  return compactionThreshold(model, policy) < platform
+}
+
 /** Whether the conversation has outgrown its effective budget with enough left to summarize. */
 export function shouldCompactContext(
   tokens: number,
   model: { contextWindow: number },
   policy = COMPACTION_POLICY,
 ): boolean {
-  const budget = compactionBudget(model)
-  const threshold = Math.max(policy.keepRecentTokens + MIN_SAVINGS_TOKENS, budget - policy.reserveTokens)
+  const threshold = compactionThreshold(model, policy)
   return tokens >= threshold && tokens - policy.keepRecentTokens >= MIN_SAVINGS_TOKENS
 }
 
@@ -615,7 +645,10 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
     const [view, agent] = await Promise.all([conversation.context(context), conversation.agent(context)])
     const model = agent.model === undefined ? undefined : api.models.getModel(agent.model.provider, agent.model.modelId)
     if (model === undefined) return
-    if (!shouldCompactContext(estimateContextTokens(view), model, policy)) return
+    // The platform owns the threshold it compacts at; see `ownsCompactionThreshold`.
+    const tokens = estimateContextTokens(view)
+    if (!ownsCompactionThreshold(tokens, model, policy)) return
+    if (!shouldCompactContext(tokens, model, policy)) return
     const live = await api.snapshot(LiveDoc, api.conversationId, context)
     if ((live?.compactions?.length ?? 0) > 0) return
     inflight.add(id)

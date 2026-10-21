@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/work-policy.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+
 function promptInput(options: {
   tools?: string[]
   callable?: string[]
@@ -69,6 +71,55 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('/workspace/pi-web')
   })
 
+  it('reports session facts and the actual write/shell capability', async () => {
+    const prompt = await renderPolicy({ cwd: '/workspace/pi-web', tools: ['read', 'write', SHELL_TOOL] })
+
+    expect(prompt).toContain('平台：')
+    expect(prompt).toContain('当前日期：')
+    expect(prompt).toContain('本请求模型：未提供')
+    expect(prompt).toContain('可写工作区')
+    expect(prompt).toContain(`可执行 shell（${SHELL_TOOL}）`)
+  })
+
+  it('routes file discovery and reading to the tools actually offered', async () => {
+    const prompt = await renderPolicy({ tools: ['glob', 'grep', 'read', 'write', 'edit', SHELL_TOOL] })
+
+    expect(prompt).toContain('找路径用 `glob`')
+    expect(prompt).toContain('不要用 shell `find`')
+    expect(prompt).toContain('搜内容用 `grep`')
+    expect(prompt).toContain('不要用 shell `grep`')
+    expect(prompt).toContain('读文件用 `read`')
+    expect(prompt).toContain('`workdir`')
+    expect(prompt).toContain(SHELL_TOOL === 'pwsh' ? 'Windows 命令优先用 `pwsh`' : 'shell 只用于构建')
+    expect(prompt).not.toContain('找路径用 `list_files`')
+  })
+
+  it('falls back to list_files and search_files when the DSH-named tools are unavailable', async () => {
+    const prompt = await renderPolicy({ tools: ['list_files', 'search_files', 'read'] })
+
+    expect(prompt).toContain('找路径用 `list_files`')
+    expect(prompt).toContain('搜内容用 `search_files`')
+    expect(prompt).not.toContain('找路径用 `glob`')
+    expect(prompt).not.toContain('搜内容用 `grep`')
+  })
+
+  it('tells the model to plan before implementing when plan mode is off', async () => {
+    const prompt = await renderPolicy({ tools: ['todo_write'] })
+
+    expect(prompt).toContain('即使计划模式未开启')
+    expect(prompt).toContain('先做只读研究并在回复中给出可执行计划')
+    expect(prompt).toContain('不要擅自实施')
+    expect(prompt).toContain('调研→形成计划→等待确认')
+  })
+
+  it('keeps proactive-asking rules in the stable core', async () => {
+    const prompt = await renderPolicy()
+
+    expect(prompt).toContain('用户引用本会话之外的对话、文档或决定')
+    expect(prompt).toContain('先问是哪个会话或哪份文档')
+    expect(prompt).toContain('不要扫描项目里的 agent 状态目录')
+  })
+
   it('includes the root instruction section even when the request has no tools', async () => {
     const cwd = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-')))
     const body = '# Root project rules\nKeep this request scoped.\n'
@@ -103,7 +154,7 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('计划模式已开启')
     expect(prompt).toContain('只读研究')
     expect(prompt).toContain('不启动自动续跑工作目标')
-    expect(prompt).toContain('本请求实际提供的计划提交能力')
+    expect(prompt).toContain('只读研究并提交计划')
     expect(prompt).not.toContain('todo_write')
   })
 })

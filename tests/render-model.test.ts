@@ -645,3 +645,99 @@ describe('visible transcript messages', () => {
     expect(visibleTranscriptMessages(messages, false)).toBe(messages)
   })
 })
+
+describe('system rows in the transcript', () => {
+  const system = (id: string, timestamp: number, runId?: string): ChatMessage => ({
+    id, role: 'system', systemKind: 'compaction', blocks: [{ type: 'text', text: '已完成上下文压缩' }],
+    timestamp, ...(runId === undefined ? {} : { runId }),
+  })
+
+  const turn = (id: string, runId: string, text: string, timestamp: number): ChatMessage[] => [
+    { ...user(`user-${id}`, `request-${id}`), runId, timestamp },
+    assistant(`assistant-${id}`, [{ type: 'text', text }], { runId, status: 'completed', timestamp }),
+  ]
+
+  it('files a system row inside the run that recorded it', () => {
+    const model = buildRenderModel([...turn('1', 'run-1', '一', 200), system('compaction-1', 300, 'run-1')])
+
+    expect(model.runs[0]?.systemRows.map(row => row.key)).toEqual(['system:compaction-1'])
+    expect(model.runs[0]?.systemRows[0]?.message.id).toBe('compaction-1')
+    // The row follows the answer, so the transcript renders it under the reply.
+    expect(model.runs[0]?.systemRows[0]?.beforeAnswer).toBe(false)
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['run'])
+  })
+
+  it('keeps a system row that came before the answer above that answer', () => {
+    const model = buildRenderModel([
+      { ...user('user-1', 'request-1'), runId: 'run-1', timestamp: 100 },
+      system('compaction-1', 150, 'run-1'),
+      assistant('assistant-1', [{ type: 'text', text: '一' }], { runId: 'run-1', status: 'completed', timestamp: 200 }),
+    ])
+
+    expect(model.runs[0]?.systemRows.map(row => row.beforeAnswer)).toEqual([true])
+  })
+
+  it('places a system row without a run between the runs, by its own timestamp', () => {
+    const model = buildRenderModel([
+      ...turn('1', 'run-1', '一', 200),
+      system('compaction-1', 300),
+      ...turn('2', 'run-2', '二', 400),
+    ])
+
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['run', 'system', 'run'])
+    const loose = model.timeline[1]
+    expect(loose?.kind === 'system' ? loose.row.message.id : undefined).toBe('compaction-1')
+    expect(model.runs[0]?.systemRows).toEqual([])
+    expect(model.runs[1]?.systemRows).toEqual([])
+  })
+
+  it('keeps a system row without a run before every run when it predates them', () => {
+    const model = buildRenderModel([system('reset-1', 10), ...turn('1', 'run-1', '一', 200)])
+
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['system', 'run'])
+    expect(model.timeline[0]?.kind === 'system' ? model.timeline[0].row.message.id : undefined).toBe('reset-1')
+  })
+
+  it('keeps a system row without a run after the last run when it follows them', () => {
+    const model = buildRenderModel([...turn('1', 'run-1', '一', 200), system('compaction-1', 900)])
+
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['run', 'system'])
+  })
+
+  it('keeps a row that replaced earlier history above the content that replaced it', () => {
+    // A compaction that replaced the history above the current turn sits at the head
+    // of the remaining stream, even though its summary was placed later.
+    const model = buildRenderModel([system('compaction-1', 900), ...turn('1', 'run-1', '一', 200)])
+
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['system', 'run'])
+    expect(model.timeline[0]?.kind === 'system' ? model.timeline[0].row.message.id : undefined).toBe('compaction-1')
+  })
+
+  it('renders every system row exactly once, with stable keys', () => {
+    const messages: ChatMessage[] = [
+      ...turn('1', 'run-1', '一', 200),
+      system('compaction-1', 300, 'run-1'),
+      ...turn('2', 'run-2', '二', 400),
+      system('compaction-2', 500),
+      system('compaction-3', 500),
+    ]
+    const model = buildRenderModel(messages)
+    const rows = [
+      ...model.runs.flatMap(run => run.systemRows.map(row => row.key)),
+      ...model.timeline.flatMap(entry => entry.kind === 'system' ? [entry.row.key] : []),
+    ]
+
+    expect(rows.sort()).toEqual(['system:compaction-1', 'system:compaction-2', 'system:compaction-3'])
+    expect(new Set(rows).size).toBe(rows.length)
+    // The same log always yields the same order, so a row never jumps between renders.
+    expect(buildRenderModel(messages).timeline.map(entry => entry.kind === 'system' ? entry.row.key : entry.run.key))
+      .toEqual(model.timeline.map(entry => entry.kind === 'system' ? entry.row.key : entry.run.key))
+  })
+
+  it('files a system row whose run is unknown with the rows that no run owns', () => {
+    const model = buildRenderModel([...turn('1', 'run-1', '一', 200), system('compaction-1', 300, 'run-unknown')])
+
+    expect(model.runs[0]?.systemRows).toEqual([])
+    expect(model.timeline.map(entry => entry.kind)).toEqual(['run', 'system'])
+  })
+})

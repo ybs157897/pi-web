@@ -97,23 +97,36 @@ export default function Transcript({
   const openMarkdownFile = useMemo(() => onOpenFile === undefined ? undefined
     : (path: string, options?: { line?: number }) => { onOpenFile(path, options?.line) }, [onOpenFile])
   const showChanges = settings.codingViews
+  const lastRunKey = model.runs.at(-1)?.key
   return (
     <div className={css.transcript}>
       <MarkdownDelegateProvider openFile={openMarkdownFile} fileImages={fileImages}>
-        {model.runs.map((run, index) => (
-          <RunTranscript key={run.key} run={run} latest={index === model.runs.length - 1} policy={presentation}
+        {model.timeline.map(entry => entry.kind === 'run'
+          ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey}
+            liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
             resolveFileImage={resolveFileImage} labels={labels} t={t} subagents={liveSubagents}
             showChanges={showChanges} replies={replies} interactions={interactions} />
-        ))}
-        {model.systemMessages.map(message => <div className={css.systemMessage} key={message.id}>{messageText(message)}</div>)}
-        {compactionRunning && <div className={`${css.systemMessage} ${css.compactionRunning}`} role="status" aria-live="polite">
-          <span className={css.compactionSpinner} aria-hidden="true" />
-          <span>{t('正在进行上下文压缩', 'Context compaction in progress')}</span>
-        </div>}
+          : <SystemMessageRow key={entry.row.key} message={entry.row.message} />)}
+        {compactionRunning && lastRunKey === undefined && <CompactionRunningRow t={t} />}
         {pending.map(message => <PendingRow key={message.id} message={message} onOpenFile={onOpenFile} t={t} />)}
       </MarkdownDelegateProvider>
+    </div>
+  )
+}
+
+/** One recorded system message, rendered as the transcript's own status row. */
+function SystemMessageRow({ message }: { message: ChatMessage }) {
+  return <div className={css.systemMessage}>{messageText(message)}</div>
+}
+
+/** The live compaction marker; it belongs to the turn that is compacting. */
+function CompactionRunningRow({ t }: { t: Translate }) {
+  return (
+    <div className={`${css.systemMessage} ${css.compactionRunning}`} role="status" aria-live="polite">
+      <span className={css.compactionSpinner} aria-hidden="true" />
+      <span>{t('正在进行上下文压缩', 'Context compaction in progress')}</span>
     </div>
   )
 }
@@ -139,10 +152,12 @@ function useLiveSubagents(conversationId: string | undefined, projected: readonl
 }
 
 function RunTranscript({
-  run, latest, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, replies, interactions,
+  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
+  /** The live compaction marker belongs to the turn that is compacting. */
+  liveCompaction: boolean
   policy: ChatPresentationPolicy
   onFork?: TranscriptProps['onFork']
   onRetry?: TranscriptProps['onRetry']
@@ -169,11 +184,13 @@ function RunTranscript({
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
           onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} replies={replies} interactions={interactions} />
       )}
+      {run.systemRows.filter(row => row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {run.responses.map((response, index) => (
         <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1}
           onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
           labels={labels} resolveFileImage={resolveFileImage} t={t} />
       ))}
+      {run.systemRows.filter(row => !row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {/* DSH's turn-tail plan card (`ui-plan/index.ts:79-96`) is carried by the
           `exit_plan_mode` tool row, which renders the same card in its body. */}
       {run.responses.length === 0 && (run.status === 'error' || run.status === 'cancelled') && (
@@ -194,6 +211,7 @@ function RunTranscript({
       )}
       <ChangedFiles artifacts={run.artifacts} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff}
         expandDetails={showChanges} t={t} />
+      {liveCompaction && <CompactionRunningRow t={t} />}
     </section>
   )
 }
@@ -731,31 +749,54 @@ function ChangedFiles({ artifacts, onOpenFile, onInspectDiff, expandDetails, t }
   return (
     <div className={css.changedFiles}>
       <div className={css.changedTitle}>{t('已改动文件', 'Changed files')}</div>
-      {changes.map((artifact, index) => {
-        const diff = inspectorDiff(artifact)
-        return (
-          <div className={css.changedFile} key={`${artifact.kind}:${artifact.path}:${index}`}>
-            <div className={css.changedFileHeader}>
-              <span className={css.changedKind}>{artifact.kind === 'write' ? t('写入', 'Wrote') : t('修改', 'Edited')}</span>
-              <button type="button" className={css.pathButton} onClick={() => { onOpenFile?.(artifact.path) }}
-                disabled={onOpenFile === undefined}>{artifact.path}</button>
-              {onInspectDiff !== undefined && (artifact.before !== undefined && artifact.after !== undefined || artifact.diff !== undefined || artifact.after !== undefined)
-                && <button type="button" className={css.inspectDiffButton}
-                onClick={() => { onInspectDiff(diff) }}>{t('查看差异', 'Inspect diff')}</button>}
-            </div>
-            {expandDetails && artifact.before !== undefined && artifact.after !== undefined && <div className={css.changedDiff}>
-              <DiffBlock diffs={[{ path: artifact.path, oldText: artifact.before, newText: artifact.after }]} labels={diffLabels(t)} />
-            </div>}
-            {expandDetails && artifact.diff !== undefined && !(artifact.before !== undefined && artifact.after !== undefined) && <div className={css.changedDiff}>
-              <CodeBlock code={artifact.diff} lang="diff" copyLabel={t('复制差异', 'Copy diff')} copiedLabel={t('已复制', 'Copied')} />
-            </div>}
-            {expandDetails && artifact.before === undefined && artifact.after !== undefined && artifact.diff === undefined && <div className={css.changedDiff}>
-              <ReadBlock label={artifact.path} lines={artifact.after.split(/\r?\n/u).map((text, line) => ({ number: (artifact.lineStart ?? 1) + line, text }))}
-                totalLines={artifact.after.split(/\r?\n/u).length} labels={readLabels(t)} />
-            </div>}
-          </div>
-        )
-      })}
+      {changes.map((artifact, index) => (
+        <ChangedFileCard key={`${artifact.kind}:${artifact.path}:${index}`} artifact={artifact}
+          onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} expandDetails={expandDetails} t={t} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * One changed file. The inline preview folds away on demand, while the row keeps
+ * its own actions: the path and the diff inspection stay reachable either way.
+ */
+function ChangedFileCard({ artifact, onOpenFile, onInspectDiff, expandDetails, t }: {
+  artifact: FileArtifact
+  onOpenFile?: TranscriptProps['onOpenFile']
+  onInspectDiff?: TranscriptProps['onInspectDiff']
+  expandDetails: boolean
+  t: Translate
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const bodyId = useId()
+  const diff = inspectorDiff(artifact)
+  const preview = artifact.before !== undefined && artifact.after !== undefined
+    ? <DiffBlock diffs={[{ path: artifact.path, oldText: artifact.before, newText: artifact.after }]} labels={diffLabels(t)} />
+    : artifact.diff !== undefined
+      ? <CodeBlock code={artifact.diff} lang="diff" copyLabel={t('复制差异', 'Copy diff')} copiedLabel={t('已复制', 'Copied')} />
+      : artifact.after !== undefined
+        ? <ReadBlock label={artifact.path} lines={artifact.after.split(/\r?\n/u).map((text, line) => ({ number: (artifact.lineStart ?? 1) + line, text }))}
+          totalLines={artifact.after.split(/\r?\n/u).length} labels={readLabels(t)} />
+        : null
+  return (
+    <div className={css.changedFile}>
+      <div className={css.changedFileHeader}>
+        {expandDetails && (
+          <button type="button" className={css.changedToggle} aria-expanded={expanded} aria-controls={bodyId}
+            aria-label={expanded ? t('收起差异预览', 'Collapse the diff preview') : t('展开差异预览', 'Expand the diff preview')}
+            onClick={() => { setExpanded(value => !value) }}>
+            {expanded ? <IconChevronDownOutlineRegular size={12} /> : <IconChevronRightOutlineRegular size={12} />}
+          </button>
+        )}
+        <span className={css.changedKind}>{artifact.kind === 'write' ? t('写入', 'Wrote') : t('修改', 'Edited')}</span>
+        <button type="button" className={css.pathButton} onClick={() => { onOpenFile?.(artifact.path) }}
+          disabled={onOpenFile === undefined}>{artifact.path}</button>
+        {onInspectDiff !== undefined && (artifact.before !== undefined && artifact.after !== undefined || artifact.diff !== undefined || artifact.after !== undefined)
+          && <button type="button" className={css.inspectDiffButton}
+          onClick={() => { onInspectDiff(diff) }}>{t('查看差异', 'Inspect diff')}</button>}
+      </div>
+      {expandDetails && <div id={bodyId} className={css.changedDiff} hidden={!expanded}>{expanded && preview}</div>}
     </div>
   )
 }

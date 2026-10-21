@@ -15,6 +15,8 @@ import { createDemoModelRuntime, observeDemoRequests } from '../src/server/demo-
 import { RUNTIME_CORE_PROMPT } from '../src/server/work-policy.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+
 type RequestEvidence = { user: string; system: SystemMessage | undefined; tools: string[] }
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => {
@@ -142,11 +144,16 @@ describe('default policy at the actual Pi provider boundary', () => {
     const detail = await send(f.runtime, conversation.conversation.id, '[prompt-probe] planning')
     const request = currentRequest(f.requests, '[prompt-probe] planning')
     expectCore(request)
-    expect(request.system?.sections?.['plan-policy']).toBeTruthy()
+    const planPolicy = request.system?.sections?.['plan-policy'] ?? ''
+    expect(planPolicy).toContain('先探索')
+    expect(planPolicy).toContain('计划要决策完整')
+    expect(planPolicy).toContain('唯一且最后一个工具调用')
+    expect(planPolicy).toContain('ask_user_question')
     expect(request.system?.sections?.['work-policy']).not.toContain('tools.todo_write')
-    expect(request.tools).not.toEqual(expect.arrayContaining(['write', 'edit', 'bash']))
+    expect(request.tools).toEqual(expect.arrayContaining(['read', 'glob', 'grep']))
+    expect(request.tools).not.toEqual(expect.arrayContaining(['write', 'edit', SHELL_TOOL]))
     expect(request.tools).not.toContain('send_message')
-    expect(request.system?.sections?.codemode).not.toContain('tools.bash(')
+    expect(request.system?.sections?.codemode).not.toContain(`tools.${SHELL_TOOL}(`)
     expect(detail.goal?.roundsStarted).toBe(0)
     expect(f.requests.filter(item => item.user.startsWith('[goal '))).toHaveLength(0)
     expect(await readdir(f.options.workspace)).toEqual([])
@@ -159,8 +166,8 @@ describe('default policy at the actual Pi provider boundary', () => {
     const id = conversation.conversation.id
     await f.runtime.setPlan(id, true)
     const planned = await send(f.runtime, id, '[render-fixture]')
-    const writes = planned.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
-    expect(writes.map(message => message.toolName)).toEqual(['write', 'edit', 'bash'])
+    const writes = planned.messages.filter(message => message.role === 'tool' && ['write', 'edit', SHELL_TOOL].includes(message.toolName ?? ''))
+    expect(writes.map(message => message.toolName)).toEqual(['write', 'edit', SHELL_TOOL])
     expect(writes.every(message => message.isError === true)).toBe(true)
     expect(planned.plan?.active).toBe(true)
     expect(await readdir(f.options.workspace)).toEqual([])
@@ -179,7 +186,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     await f.runtime.setPlan(conversation.conversation.id, true)
     const result = await send(f.runtime, conversation.conversation.id, '[codemode]')
     expect(result.messages.some(message => message.role === 'tool' && message.toolName === 'codemode' && message.isError)).toBe(true)
-    expect(result.messages.some(message => message.role === 'tool' && message.toolName === 'bash' && !message.isError)).toBe(false)
+    expect(result.messages.some(message => message.role === 'tool' && message.toolName === SHELL_TOOL && !message.isError)).toBe(false)
     expect(await readdir(f.options.workspace)).toEqual([])
   })
 
@@ -192,7 +199,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect((await f.runtime.detail(child.id)).plan?.active).toBe(true)
     await f.restart()
     const result = await send(f.runtime, child.id, '[render-fixture]')
-    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', SHELL_TOOL].includes(message.toolName ?? ''))
     expect(denied).toHaveLength(3)
     expect(denied.every(message => message.isError)).toBe(true)
     expect(await readdir(f.options.workspace)).toEqual([])
@@ -211,7 +218,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect((await f.runtime.detail(child.id)).plan?.active).toBe(true)
     await f.restart()
     const result = await send(f.runtime, child.id, '[render-fixture]')
-    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    const denied = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', SHELL_TOOL].includes(message.toolName ?? ''))
     expect(denied).toHaveLength(3)
     expect(denied.every(message => message.isError)).toBe(true)
     expect(await readdir(f.options.workspace)).toEqual([])
@@ -233,7 +240,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     const conversation = await f.runtime.create({ title: 'Compact tool context' })
     await send(f.runtime, conversation.conversation.id, '[prompt-probe] compact-tools')
     const request = currentRequest(f.requests, '[prompt-probe] compact-tools')
-    expect(request.tools).toEqual(expect.arrayContaining(['read', 'write', 'bash', 'codemode']))
+    expect(request.tools).toEqual(expect.arrayContaining(['read', 'write', SHELL_TOOL, 'codemode']))
     const code = request.system?.sections?.codemode ?? ''
     expect(code).toContain('describeTool')
     expect(code.length).toBeLessThan(2_000)
@@ -258,7 +265,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     expectCore(request)
     expect(request.tools).toEqual(expect.arrayContaining(['create_goal', 'get_goal', 'update_goal']))
     expect(request.tools).not.toContain('write')
-    expect(request.tools).not.toContain('bash')
+    expect(request.tools).not.toContain(SHELL_TOOL)
     expect(detail.goal?.roundsStarted).toBe(3)
     expect(detail.messages.filter(item => item.role === 'tool').some(item => item.isError)).toBe(false)
     expect(await readdir(f.options.workspace)).toEqual([])
@@ -303,7 +310,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     const f = await fixture()
     const preset = await f.runtime.createPreset({
       name: 'Legacy writer', instructions: '', extensions: ['coding-tools'],
-      tools: ['read', 'write', 'edit', 'bash'], accessMode: 'fullAccess',
+      tools: ['read', 'write', 'edit', SHELL_TOOL], accessMode: 'fullAccess',
     })
     const conversation = await f.runtime.create({ title: 'Recovered plan', presetId: preset.id })
     const id = Number(conversation.conversation.id) as ConversationId
@@ -343,7 +350,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     const request = currentRequest(f.requests, 'recovered-plan')
     expectCore(request)
     expect(request.tools).not.toContain('write')
-    const writes = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', 'bash'].includes(message.toolName ?? ''))
+    const writes = result.messages.filter(message => message.role === 'tool' && ['write', 'edit', SHELL_TOOL].includes(message.toolName ?? ''))
     expect(writes).toHaveLength(3)
     expect(writes.every(message => message.isError)).toBe(true)
     expect(await readdir(f.options.workspace)).toEqual([])

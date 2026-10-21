@@ -4,6 +4,7 @@ import { resolve, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { createRuntime } from '../src/server/runtime.ts'
 
+const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const timestamp = new Date().toISOString().replaceAll(/[:.]/gu, '-')
 const defaultRoot = resolve('artifacts', `render-fixture-${timestamp}`)
 const dataDir = resolve(option('--data-dir') ?? join(defaultRoot, 'data'))
@@ -44,7 +45,7 @@ try {
   const toolNames = detail.messages.flatMap(message => message.role === 'tool' && message.toolName !== undefined ? [message.toolName] : [])
   const toolImages = detail.messages.flatMap(message => message.role === 'tool'
     ? message.blocks.filter(block => block.type === 'image').map(block => block.mimeType) : [])
-  const expectedTools = ['write', 'edit', 'read', 'bash']
+  const expectedTools = ['write', 'edit', 'read', SHELL_TOOL]
   const missingTools = expectedTools.filter(name => !toolNames.includes(name))
   if (missingTools.length > 0) throw new Error(`Demo fixture did not execute tools: ${missingTools.join(', ')}`)
   if (toolImages.length === 0) throw new Error('Demo fixture did not render the PNG read result as an image block')

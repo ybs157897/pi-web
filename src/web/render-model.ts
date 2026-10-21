@@ -49,6 +49,23 @@ export interface ActivityCount {
   readonly count: number
 }
 
+/** A system row no run owns; the transcript renders it between the runs it separates. */
+export interface RenderSystemRow {
+  readonly key: string
+  readonly message: ChatMessage
+}
+
+/** A system row recorded inside a run; the transcript renders it inside that run. */
+export interface RenderRunSystemRow extends RenderSystemRow {
+  /** The run's answer comes after this row, so the row belongs above the answer. */
+  readonly beforeAnswer: boolean
+}
+
+/** One transcript entry: a run, or a system row that no run owns. */
+export type RenderTimelineEntry =
+  | { readonly kind: 'run'; readonly run: RenderRun }
+  | { readonly kind: 'system'; readonly row: RenderSystemRow }
+
 export interface RenderRun {
   readonly key: string
   readonly runId?: string
@@ -56,6 +73,8 @@ export interface RenderRun {
   readonly messages: readonly ChatMessage[]
   readonly process: readonly ProcessPart[]
   readonly responses: readonly ResponsePart[]
+  /** System rows recorded inside this run, in the order the log recorded them. */
+  readonly systemRows: readonly RenderRunSystemRow[]
   readonly artifacts: readonly FileArtifact[]
   /** Tool categories ranked by distinct call count, ties broken by first appearance (DSH's rule). */
   readonly activityCounts: readonly ActivityCount[]
@@ -66,7 +85,8 @@ export interface RenderRun {
 
 export interface RenderModel {
   readonly runs: readonly RenderRun[]
-  readonly systemMessages: readonly ChatMessage[]
+  /** The runs and the system rows no run owns, in transcript order. */
+  readonly timeline: readonly RenderTimelineEntry[]
 }
 
 interface MutableRun {
@@ -88,16 +108,31 @@ interface MutableToolItem {
   messageIndex: number
 }
 
+/** One recorded system message and where it sits in the durable log. */
+interface SystemEntry {
+  readonly message: ChatMessage
+  readonly index: number
+}
+
+/** A system row that no run owns, with the run it follows in the message stream. */
+interface LooseSystemRow {
+  readonly row: RenderSystemRow
+  /** The position of the run the row follows, or -1 when it precedes every run. */
+  readonly anchor: number
+}
+
 /** Group durable messages into user runs while preserving their recorded order. */
 export function buildRenderModel(messages: readonly ChatMessage[]): RenderModel {
   const mutableRuns: MutableRun[] = []
   const byRunId = new Map<string, MutableRun>()
-  const systemMessages: ChatMessage[] = []
+  const systemEntries: SystemEntry[] = []
+  const logIndex = new Map<string, number>()
   let active: MutableRun | undefined
 
   for (const [index, message] of messages.entries()) {
+    logIndex.set(message.id, index)
     if (message.role === 'system') {
-      systemMessages.push(message)
+      systemEntries.push({ message, index })
       continue
     }
     if (message.role === 'user') {
@@ -145,17 +180,62 @@ export function buildRenderModel(messages: readonly ChatMessage[]): RenderModel 
     active = run
   }
 
-  const runs = mutableRuns
-    .sort((left, right) => left.firstIndex - right.firstIndex)
-    .map(createRenderRun)
-  return { runs, systemMessages }
+  const orderedRuns = mutableRuns.sort((left, right) => left.firstIndex - right.firstIndex)
+  const runPositions = new Map<string, number>()
+  orderedRuns.forEach((run, position) => { if (run.runId !== undefined) runPositions.set(run.runId, position) })
+
+  const rowsByRun = new Map<number, RenderRunSystemRow[]>()
+  const looseRows: LooseSystemRow[] = []
+  for (const entry of systemEntries) {
+    const row: RenderSystemRow = { key: `system:${entry.message.id}`, message: entry.message }
+    const position = entry.message.runId === undefined ? undefined : runPositions.get(entry.message.runId)
+    if (position === undefined) {
+      // Without a run the row keeps its place in the message stream: it follows the
+      // last run that had already started, so a row that replaced earlier history
+      // stays above the content that replaced it.
+      let anchor = -1
+      for (const [runPosition, run] of orderedRuns.entries()) {
+        if (run.firstIndex < entry.index) anchor = runPosition
+      }
+      looseRows.push({ row, anchor })
+      continue
+    }
+    const answer = finalResponseOf(orderedRuns[position].messages)
+    const answerIndex = answer === undefined ? undefined : logIndex.get(answer.id)
+    const rows = rowsByRun.get(position) ?? []
+    rows.push({ ...row, beforeAnswer: answerIndex !== undefined && entry.index < answerIndex })
+    rowsByRun.set(position, rows)
+  }
+
+  const runs = orderedRuns.map((run, position) => createRenderRun(run, rowsByRun.get(position) ?? []))
+  return { runs, timeline: buildTimeline(runs, looseRows) }
+}
+
+/** Interleave the runs with the system rows that no run owns. */
+function buildTimeline(runs: readonly RenderRun[], looseRows: readonly LooseSystemRow[]): RenderTimelineEntry[] {
+  const anchors = new Map<number, RenderSystemRow[]>()
+  for (const loose of looseRows) {
+    const bucket = anchors.get(loose.anchor) ?? []
+    bucket.push(loose.row)
+    anchors.set(loose.anchor, bucket)
+  }
+  const timeline: RenderTimelineEntry[] = []
+  const pushRows = (anchor: number): void => {
+    for (const row of anchors.get(anchor) ?? []) timeline.push({ kind: 'system', row })
+  }
+  pushRows(-1)
+  for (const [position, run] of runs.entries()) {
+    timeline.push({ kind: 'run', run })
+    pushRows(position)
+  }
+  return timeline
 }
 
 function stableRunKey(message: ChatMessage): string {
   return `run:${message.requestId ?? message.id}`
 }
 
-function createRenderRun(run: MutableRun): RenderRun {
+function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRow[]): RenderRun {
   const callItems = new Map<string, MutableToolItem>()
   const toolResults = new Map<string, ChatMessage>()
 
@@ -228,10 +308,7 @@ function createRenderRun(run: MutableRun): RenderRun {
 
   const process: ProcessPart[] = []
   const responses: ResponsePart[] = []
-  const finalResponse = [...run.messages].reverse().find(message => message.role === 'assistant'
-    && message.parentToolCallId === undefined
-    && !message.blocks.some(block => block.type === 'toolCall')
-    && message.blocks.some(block => block.type === 'text' && block.text !== '' || block.type === 'image' || block.type === 'file'))
+  const finalResponse = finalResponseOf(run.messages)
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role === 'user' && message.id !== run.users[0]?.id) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
@@ -279,12 +356,21 @@ function createRenderRun(run: MutableRun): RenderRun {
     messages: run.messages,
     process,
     responses,
+    systemRows,
     artifacts,
     activityCounts: rankActivities(roots),
     status,
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage === undefined ? {} : { usage }),
   }
+}
+
+/** The run's settled answer: the last assistant turn that carries content and no tool call. */
+function finalResponseOf(messages: readonly ChatMessage[]): ChatMessage | undefined {
+  return [...messages].reverse().find(message => message.role === 'assistant'
+    && message.parentToolCallId === undefined
+    && !message.blocks.some(block => block.type === 'toolCall')
+    && message.blocks.some(block => block.type === 'text' && block.text !== '' || block.type === 'image' || block.type === 'file'))
 }
 
 /** Rank this run's tool categories the way DSH titles a settled process group. */

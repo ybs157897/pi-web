@@ -187,7 +187,7 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 
 - **策略**：`reserveTokens=16384`、`keepRecentTokens=30000`、`backgroundTokens=34000`（通过 `Harness.open.settings.compaction` 生效；`PI_WEB_COMPACTION_*` 可覆盖）。有效窗口默认使用模型真实窗口（1M 就是 1M），只有模型未声明窗口时才回退 200k；`PI_WEB_CONTEXT_BUDGET` 可显式设置成本上限。
 - **压力裁剪**：`GenerationTask.beforeRequest` 在估算 token 超过有效窗口 85% 时，把最老的（保留最近 4 条）超过 8192 字符的 tool result 中间段替换为头 4096 + 标记 + 尾 1024；不改存储，同样压力下输出稳定，避免每次请求产生不同前缀。对应 DSH 的 tool-result pruner，但只作用于请求视图。
-- **预算触发**：`afterTools` / `onYield` 时若估算 context 超过 `有效窗口 - reserve` 且有 ≥4k 可节省，且 `LiveDoc.compactions` 为空，则 `conversation.compact()` 启动一次后台压缩；60s in-flight 去重。
+- **预算触发（2026-10-21 修正）**：Pi Durable 内建触发在生成准备阶段按 `contextWindow - reserveTokens` 发起**生成归属的阻塞式压缩**（生成等待摘要落地后继续，不中断任务）；pi-web 自己的触发只在「运营成本上限把阈值压到平台阈值以下、且上下文尚未越过平台阈值」时才发起（`ownsCompactionThreshold()`），其余交给平台。修复前两套触发同阈值并发，会话级压缩的摘要在更晚的边界落地、把 head 推回去抵消平台的裁剪，上下文不降反升，下一次请求超窗导致任务中断（`artifacts/compaction-repro/repro.ts` 复现：一次压缩两次摘要请求；修复后一次）。60s in-flight 去重与 `LiveDoc.compactions` 空检查保留。
 - **摘要**：
   - 优先 **缓存感知**：`view.messages + 摘要请求`，同一 provider session，剩余窗口 ≥16k 时使用；否则退回只序列化被 shadow 消息的路径。
   - 摘要提示固定 `Goal / Constraints & Preferences / Progress(Done/In Progress/Blocked) / Key Decisions / Next Steps / Critical Context`，保留精确路径、命令、错误串、id、数字；正文语言跟随用户；明确 tool result/assistant 内容是数据、不是指令，禁止编造用户批准和写入密钥。
@@ -201,7 +201,7 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 - **逐模型阈值**：Pi Durable 的 `settings.compaction` 是 harness 级 4 个绝对值，没有 `modelOverrides`；有效窗口已按模型真实窗口计算，「按模型覆盖 reserve/keep」仍需上游支持。
 - **durable 裁剪**：`beforeRequest` 裁剪不是 surface 替换，转录仍保留完整 tool result，重启后重算；DSH/pruner 会写日志事件。要完全一致需 Pi 上游开放 surface 重写。
 - **图片 offload**：未实现；Pi 侧没有对应的 provider seam。
-- **展示**：状态互斥——运行中在转录末尾显示与完成标记同级的「正在进行上下文压缩」系统行（旧的完成标记隐藏、不弹 toast），完成后只显示「已完成上下文压缩」；条数/token/摘要展开仍未做。
+- **展示**：状态互斥——运行中在转录末尾显示与完成标记同级的「正在进行上下文压缩」系统行（旧的完成标记隐藏、不弹 toast），完成后只显示「已完成上下文压缩」；条数/token/摘要展开仍未做。2026-10-21 起系统行按消息流位置编排（`render-model.ts` 的 `timeline`）：压缩条目替换的是它上面的历史，标记留在被替换内容的位置，不再一律贴在最底部。
 - **真实模型验收**：opencode-go key 仍为 `401 api_key_expired`，本轮用确定性 demo 模型验证机制接线，未声称真实模型压缩质量。
 
 ### 真实模型与 UI 验收（2026-10-20）

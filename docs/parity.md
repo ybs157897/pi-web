@@ -412,6 +412,32 @@
 
 两侧真实模型采用 `scripts/workflow-fixture.ts` 的同一任务输入，prompt SHA-256 均为 `b7c64df46ef797ca51924a93d027d16e1402bde39fa191520532efba8fa380a0`：pi-web 明确选择 `opencode-go/deepseek-v4.1-flash`，返回 `401 api_key_expired`；DSH 的临时 headless profile 明确选择其标准 `deepseek-official/deepseek-flash`，返回 `MISSING_CREDENTIAL`。两者均未进入工具行为验收，不能声明真实行为已对齐。没有切换配置来绕过认证失败。记录为 `artifacts/live-workflow-check.json` 和 `artifacts/dsh-workflow-check.json`；本次改动表面为提示词与后端策略，未声称完成额外 UI 对齐。
 
+## 提示词节奏、检索工具与主动询问（2026-10-21）
+
+用户报告真实会话里模型长时间用 shell 探索、很晚才建立计划，并且偏离“帮我整理计划”的指令。对照 DSH `687f282e86` 后确认：这不是工作区索引问题——DSH 的 `file-reference-local` 索引只服务输入框的 `@` 补全，模型本身不接收仓库索引；问题来自提示词节奏、工具面和会话事实的叠加。
+
+| 项目 | DSH 依据 | pi-web 落点 | 结果 |
+| --- | --- | --- | --- |
+| 路径发现与内容检索 | `tool-fs-search` 的 `glob`/`grep` 及 “use glob, not shell find” / “use grep, not shell grep or rg” section | `src/server/research-tools.ts` 新增 `glob`、`grep`；`src/server/work-policy.ts` 动态工具引导 | `glob` 支持 `**`、隐藏路径、按 mtime 新到旧；`grep` 支持正则与 `include`；两者只读 |
+| 工具选择引导 | 每个工具自己的 prompt section | `work-policy` 的 `toolGuidance` | 按本请求实际 direct/codemode 路由生成，不再让模型猜 `list_files`/`search_files` |
+| 会话事实 | `time-context`、`working-directory`、平台/工具 section | `work-policy` 的 `sessionFacts` | 注入 cwd、平台、平台 shell、当前日期/时区、模型、可写与 shell 能力 |
+| Plan 提示词 | `standard.patch.yml` 的 Explore first / decision-complete / `exit_plan_mode` 唯一最后调用 | `src/server/plan-tools.ts` 的 `plan-policy` 与工具描述 | 计划阶段禁止实施与 todo 跟踪；能查的不问，只问用户选择/重大歧义；计划待审即结束本轮 |
+| 计划请求未开 Plan | 默认 persona 不把“停在计划”当成错误 | `runtime-core.md`；`work-policy` 的 plan-off 规则 | 用户要计划时先只读研究并给出计划，不擅自实施；提示可打开 Plan 审阅 |
+| Todo 节奏 | `tool-todo` 的 “plan multi-step work / add one per concrete step before you start” | `src/server/todo-tools.ts`；`work-policy` 的 todo 策略 | 去掉 “implementation work in progress” 的限定；计划请求把“调研→计划→等待确认”列为步骤 |
+| 主动询问 | `ask_user_question` 的 apply 边界 | `runtime-core.md` 的“澄清与提问”；`src/server/interaction-tools.ts` 描述 | 明确列出必须提问的场景；用户提“之前聊过”但本会话无历史时先问会话/文档，不扫描 `.lith`/`.kimi-code` 等 agent 状态目录 |
+| shell 调用方式 | bash/pwsh 的 `workdir` 与 “pass workdir instead of using cd” | `src/server/shell-tools.ts` | 保留 Pi `coding-tools` 名称与 read/write/edit；Windows 只注册 `pwsh`，其他平台只注册 `bash`；两者都增加 `workdir`、`description`，越界 workdir 拒绝 |
+
+有意保留的差异与未完成项：
+
+- `glob` 额外排除 `node_modules`、`dist`、`.data`（DSH 的 `--no-ignore` 会包含），避免项目发现被生成目录淹没；隐藏路径仍包含。
+- `grep` 使用 JavaScript 正则而不是 ripgrep，默认不区分大小写；没有为此引入 `rg` 依赖。
+- Windows 只注册 `pwsh`、其他平台只注册 `bash`，与 DSH 的 Windows 组合一致；不再保留 Windows 上的 bash 兼容层。
+- `AGENTS.md` 仍只自动注入工作区根；子目录改为按需读取，不再要求模型递归扫描整个仓库。DSH 的 baseline + 文件触达自动 nested 加载尚未迁移。
+- 没有跨会话 `session-reference`；用户引用旧会话时仍需主动询问。
+- 真实模型行为验收仍待可用凭据；本批以受控请求边界、工具单元测试和行为断言覆盖接线。
+
+验证：`npm run typecheck`、`npx vitest run`（31 个文件，364 项通过、1 项仅在 Windows 执行）、`npx vite build`。新增 `tests/shell-tools.test.ts` 与 `tests/research-tools.test.ts` 的 glob/grep 用例；Windows 的 `pwsh` 执行用例按平台门控。
+
 ## 模型目录与推理等级（2026-10-20）
 
 用户报告两件事：配置推理等级不生效；配置模型后输入框的模型列表不自动刷新。对照 DSH `687f282e86` 后确认是两条独立链路。
@@ -608,3 +634,35 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - 临时真实实例（`/tmp` 数据目录，4320）：自定义路由填 `demo-gateway` 保存后卡片收起、出现「已保存 Demo Gateway。」与新行（带「自定义」）；目录模式添加 DeepSeek 后出现不带标签的 DeepSeek 行；编辑行显示「留空使用已保存凭据」；删除确认后 models.json 与 auth.json 同步移除。
 - 截图 `artifacts/model-settings-parity/01-add-catalog.png` … `06-delete-modal.png`。
 - 门禁：`npm run typecheck`、`npx vitest run`（24 文件 283/283）、`npx vite build`。
+
+## 工作步骤组体不压缩行（2026-10-21）
+
+- 现象：标准模式下展开工作步骤组，行数多到超过组体高度上限时，「思考」行与相邻行内容互相重叠错乱；工具行不受影响。
+- 根因：DSH 组体（`ChatGroupSeat.module.css` 的 `.content`）在 `max-height: min(400px, 50vh)` + `overflow-y: auto` 的 flex 列上显式设置 `.content > * { flex-shrink: 0 }`，pi-web 的 `.processBody`（`src/web/Transcript.module.css`）漏抄了这条。思考行沿用 DSH ReasoningRow 的 `contain: size layout`，最小内容高度为 0；行总高超过上限时 flex 压缩全部落在思考行上（实测可压到 0px），24px 行头按 `overflow: visible` 照常绘制，盖住下一行。
+- 修复：`.processBody > * { flex-shrink: 0 }`，行保持自然高度、组体滚动，与 DSH 一致。
+- 验收（4321 临时真实实例，DeepSeek 会话，标准模式展开组）：注入 `max-height: 100px` 模拟超长组，修复前思考行布局高度 30→0、绘制仍 30px；修复后所有行保持自然高度、组体正常滚动；常态渲染不变。门禁：`npm run check`。
+
+## 工作步骤展开与压缩标记的三个修复（2026-10-21）
+
+### 1. 改动文件预览可收起 + 绝对路径可打开
+
+- 现象一：回合结束后的「已改动文件」内联预览（DiffBlock / CodeBlock / ReadBlock）在 `codingViews` 打开时永远展开，且没有任何收起入口。
+- 现象二：工具产出的绝对路径（Windows 盘符路径如 `D:\2026\dolynk\docs\a.md`、POSIX 绝对路径）点开时报「工作区路径无效」。
+- 修复：`src/web/transcript.tsx` 的 `ChangedFiles` 拆出 `ChangedFileCard`，每个文件一个箭头切换按钮（`aria-expanded` + `aria-controls`），收起后不挂载内联预览，但「写入/修改 + 路径 + 查看差异」始终保留可点。
+- 修复：`src/server/workspace-files.ts` 新增 `resolveWorkspacePath(root, requested)`，把绝对路径（落在工作区内时）与反斜杠相对路径归一化成工作区相对路径，再走原有的 `isWithin` + 逐段 symlink + `realpath` 三重校验；工作区外路径与 POSIX 上的盘符路径仍按原语义拒绝。`list` / `read` / `asset` 三个入口统一走它。
+- 验收（4321 临时真实实例 + 4323 demo 实例，ego）：文件卡片 `aria-expanded` true → false、预览高度 138px → 0，路径与「查看差异」仍可点；`GET /api/workspaces/:id/file?path=<工作区内绝对路径>` 返回 200 且 `path` 归一化为相对路径，越界路径仍返回 400「工作区路径无效」。截图 `artifacts/ego-verify/01-transcript.png`。
+
+### 2. 压缩完成后任务不再中断
+
+- 现象：上下文压缩完成后，正在进行的任务停下，不再继续。
+- 根因：pi-web 自带的压缩触发（`maybeCompact`）与 Pi Durable 内建触发（`thresholdCompaction`，阈值 `contextWindow - reserveTokens`）**落在同一个阈值**：pi-web 发起的是会话级压缩，摘要因会话忙而经 inbox 排队、在更晚的边界才落地，落地时会把 head 往前推回去，抵消平台那次「生成归属」的阻塞式压缩；两份摘要都留在上下文里，上下文不降反升，下一次请求超出窗口，生成以 model_error 结束，任务就停了。
+- 复现（`artifacts/compaction-repro/repro.ts`，脚本化 OpenAI 兼容服务端 + 真实 runtime）：一次压缩触发 **两次**摘要请求（pi-web 一次、平台一次）。
+- 修复：`src/server/compaction.ts` 新增 `compactionThreshold()` 与 `ownsCompactionThreshold()`；pi-web 只在「运营成本上限把阈值压到平台阈值以下、且上下文尚未越过平台阈值」的区间里自己发起压缩，其余一律交给平台自己的生成级压缩（生成等待摘要落地后继续，不中断任务）。pi-web 自定义的 6 节检查点摘要与文件跟踪仍由 `beforeCompact` 钩子提供。
+- 验收：同一脚本修复后一次压缩只有 **一次**摘要请求、任务继续完成；`tests/compaction-flow.test.ts` 覆盖阈值归属与「压缩后任务继续」，临时关掉守卫即失败（2 ≠ 1）。
+
+### 3. 压缩完成标记回到正文流
+
+- 现象：「已完成上下文压缩」永远贴在转录最底部，不随正文渲染浮动。
+- 根因：所有 system 消息被 `buildRenderModel` 收进 `model.systemMessages`，统一渲染在所有回合之后。
+- 修复：`src/web/render-model.ts` 改为按消息流顺序编排时间线（`timeline`），带 `runId` 的系统行进入对应回合内部（按是否在该回合回答之前区分 `beforeAnswer`），无 `runId` 的按其在消息流中的位置插在回合之间；「正在进行上下文压缩」运行态提示落在最后一个回合的末尾。锚定用消息流位置而非时间戳：压缩条目替换的是它上面的历史，标记就该留在被替换内容的位置。
+- 验收（4323 demo 实例，ego）：压缩标记在转录子节点中的序号由「最后一个」变为「第一个」（`markerIndex` 2 → 0），即回到它所替换内容的位置；`tests/render-model.test.ts` 覆盖「替换历史的标记留在其内容之上」。

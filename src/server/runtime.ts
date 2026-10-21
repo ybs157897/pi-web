@@ -19,7 +19,7 @@ import {
   type Tx,
 } from '@earendil-works/pi-durable'
 import type { ConversationView, Cursor } from '@earendil-works/pi-durable'
-import { CodingTools } from '@earendil-works/pi-durable/tools'
+import { CodingTools } from './shell-tools.ts'
 import { createRegistry } from '@earendil-works/pi-durable'
 import { type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
@@ -154,7 +154,7 @@ const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'med
 /** The Pi code mode extension's registry name (`createCodemodeExtension`). */
 const CODEMODE_EXTENSION_NAME = 'codemode'
 /** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
-const READ_ONLY_TOOLS = new Set(['read', 'list_files', 'search_files', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
+const READ_ONLY_TOOLS = new Set(['read', 'list_files', 'search_files', 'glob', 'grep', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
 
 /** Add the host's tool-free policy without changing a conversation's tools or custom instructions. */
 async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): Promise<void> {

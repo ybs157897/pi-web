@@ -31,7 +31,7 @@ Windows 10/11 属于「有条件支持」，**不是所有功能都已在 Window
 
 - Node.js 22.19+（推荐 24），使用官方安装包自带的 npm（Rollup 要求 npm ≥ 8；本仓库为 lockfile v3）。
 - **Git for Windows**，且区分两个独立要求：
-  - `bash` 工具依赖 Git Bash。Pi 优先探测 `C:\Program Files\Git\bin\bash.exe`、`C:\Program Files (x86)\Git\bin\bash.exe`，再执行 `where bash.exe`；没有 bash 时会话仍可运行，但命令执行返回 `shell_unavailable`。安装时选「Git from the command line and also from 3rd-party software」通常保证 `git.exe` 在 PATH，但不一定保证 `bash.exe` 在 PATH；可把 `C:\Program Files\Git\bin`（per-user 安装为 `%LOCALAPPDATA%\Programs\Git\bin`）加入 PATH。
+  - Windows 使用原生 `pwsh` 工具（Pi `createPowerShellTool()`，依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell），不依赖 Git Bash；`bash` 工具只在 macOS/Linux 注册。
   - Git 分支功能直接执行 `git.exe`，要求 Web 服务进程的 PATH 能找到 Git；仅在 Git Bash 内可用不够。
 - `npm ci` 使用默认参数，**不要加 `--omit=optional`**：除 Windows 原生目录选择器依赖 koffi 的预编译 optionalDependencies 外，Vite/Rollup 和 esbuild 也依赖平台 optional 包；省略时可能回退到需要 CMake/MSVC 的源码编译，或直接让 `npm run build` 报缺少 Rollup 原生模块。默认预编译方案不需要额外 Visual Studio/CMake；若 Rollup 报 DLL 加载失败，再安装 Microsoft Visual C++ Redistributable。
 - 以交互式桌面用户会话运行（原生目录选择器/打开配置文件需要窗口站）。项目、数据和 Git 仓库放本地 NTFS，避免 OneDrive/网络盘；配置建议保存为无 BOM UTF-8。
@@ -62,13 +62,13 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 ### 与 macOS/Linux 的差异
 
 - **访问模式**：`workspaceWrite`（工作区内修改）只有 macOS `sandbox-exec` 实现，Windows 上不可用；设置与输入区只提供 `readOnly` / `fullAccess`（默认），没有 OS 级写沙盒替代。
-- **命令执行**：只注册了 `bash` 工具，需要 Git for Windows；暂未接入 Pi 的 PowerShell 工具（`createPowerShellTool()`），无 Git Bash 时没有原生 shell 退路。Code mode 里的 `tools.bash` 同样受影响。
+- **命令执行**：Windows 只注册 `pwsh`（Pi 的 `createPowerShellTool()`，依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell），与 DSH 的 Windows 组合一致；`bash` 不在 Windows 注册。`pwsh` 支持 `workdir`/`description`，提示词直接给出平台/shell 事实。Code mode 里的 `tools.pwsh` 可用，`tools.bash` 只在 macOS/Linux 可用。
 - **Git 分支**：服务端/API/UI 已完成，但需要 PATH 上的 `git.exe`；Windows 实机与 Git 集成流程尚未验证。仅能在 Git Bash 内运行不等于 Web 服务能 spawn 到 git。
 - **原生目录选择器**：Windows 使用 koffi + `IFileOpenDialog`，代码已接入但无 Windows 实机验证；选择器失败时目前不会自动回退内置目录浏览器，也没有总超时/前端取消。
 - **Skills**：目录、加载、保存、校验使用跨平台路径 API，并显式拒绝反斜杠、盘符、UNC 和 Windows 保留设备名；但符号链接/ACL/原子 rename 需 Windows 实机验证，测试本身也有 `/` 和 symlink 权限假设。
-- **MCP / Code mode**：MCP stdio 通过 cross-spawn 支持 `.cmd`/PATHEXT，关闭时用 `taskkill /T /F`；QuickJS 使用 WASI/worker。企业代理、TLS、强杀残留和嵌套 bash 仍需实机。
+- **MCP / Code mode**：MCP stdio 通过 cross-spawn 支持 `.cmd`/PATHEXT，关闭时用 `taskkill /T /F`；QuickJS 使用 WASI/worker。企业代理、TLS、强杀残留和嵌套 shell 仍需实机。
 - **打开配置文件**：Windows 使用 `cmd /c start`；路径含 `%`、`&`、`^` 等 cmd 元字符时可能失败。
-- **关闭**：Ctrl+C 走正常关闭；关闭控制台窗口、任务管理器结束或 `taskkill` 不会执行优雅关闭——SQLite 数据可恢复，但正在运行的 MCP/bash 子进程可能残留。
+- **关闭**：Ctrl+C 走正常关闭；关闭控制台窗口、任务管理器结束或 `taskkill` 不会执行优雅关闭——SQLite 数据可恢复，但正在运行的 MCP/shell 子进程可能残留。
 - **旧数据迁移**：从 macOS/Linux 复制 `~/.pi-web` 前先停旧服务并备份。迁移后需重新添加工作区，修正默认工作区（`defaultWorkspaceId`）、旧会话 `workspaceId`、Agent Preset，并把默认/会话/preset 的 `accessMode` 从 `workspaceWrite` 改为 `readOnly` 或 `fullAccess`；只改默认会话设置不够。旧版项目内 `.data` 会在首次启动时自动导入一次到 `%USERPROFILE%\.pi-web`。
 
 ### 已知问题与限制
@@ -80,7 +80,7 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 - 内置目录浏览器拒绝网络共享/UNC/`\\?\` 路径、没有盘符入口，且只按 `.` 前缀判断隐藏文件（Windows 隐藏属性不生效）。
 - 内置浏览器的「新建文件夹」只过滤 `/`，输入 `..\x` 之类反斜杠路径可越出当前目录。
 - Composer 输入框聚焦时 Ctrl+K 不会进入应用搜索；快捷键标签在 Windows 上格式不统一。
-- 工具产出的反斜杠相对路径、盘符绝对路径或临时绝对路径，在 Inspector/工具卡打开时可能被服务端以「工作区路径无效」拒绝；AVIF 前端可添加但服务端会拒绝。
+- 工具产出的绝对路径（盘符路径如 `D:\2026\dolynk\docs\a.md`、POSIX 绝对路径）落在工作区内时，服务端会归一化成工作区相对路径再打开；工作区外的路径仍以「工作区路径无效」拒绝。AVIF 前端可添加但服务端会拒绝。
 - 文件拖放到 Composer 卡片可能被 document 级监听重复处理；微软拼音在重命名/目标/问答/子代理跟进等输入框按 Enter 可能误提交。
 - chmod `0600/0700` 在 Windows 不建立 ACL；凭据、app-state、SQLite 会话和附件依赖用户目录继承权限。
 
@@ -95,7 +95,7 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 - Windows 的 `npm test` **不是只有 1 项失败**：`tests/runtime.test.ts` 的 POSIX mode 断言和 `tests/skills.test.ts` 的 `/` 路径断言会失败；skills 的 symlink 测试还取决于 Developer Mode/权限，Git 相关测试依赖系统 Git。
 - `test:live:tools` 与 `test:live:codemode` 写死 `workspaceWrite`，Windows 上不可用；真实工具的 Windows 验证请改用 `fullAccess` 手动执行，或先平台化脚本。
 - `test:live:skills` 使用 `fullAccess`，理论上可运行，但仍要求真实 DeepSeek 模型、凭据、网络和 Windows 实机记录。`test:live:workflow` 会在 Windows 动态改用 `fullAccess`，但需要 Git Bash、Node `--test` 和真实 DeepSeek，同样未实机验证。
-- `test:smoke` 的硬前置是先 `npm run build`；其 demo 会话会尝试调用 bash，但脚本不把 bash 成功作为硬断言，Windows 上的 SIGTERM 优雅关闭断言则不成立。`scripts/render-fixture.ts` 由 `npx tsx scripts/render-fixture.ts` 手动运行，demo 的 `base64 -d`/图片读取需要 Git Bash。
+- `test:smoke` 的硬前置是先 `npm run build`；其 demo 会话会调用平台 shell（Windows 为 `pwsh`），但脚本不把 shell 成功作为硬断言，Windows 上的 SIGTERM 优雅关闭断言则不成立。`scripts/render-fixture.ts` 由 `npx tsx scripts/render-fixture.ts` 手动运行；demo 在 Windows 用 PowerShell 的 `[Convert]::FromBase64String` 生成图片，不依赖 Git Bash。
 - 最小 Windows 冒烟顺序见 [docs/windows-support.md](docs/windows-support.md)。
 
 ## 全局目录与独立数据
@@ -138,15 +138,15 @@ Windows 上这些变量用 `set NAME=value`（cmd）或 `$env:NAME='value'`（Po
 
 ## 默认任务规划与进度
 
-应用现在默认加载项目内的 [运行时核心提示词](src/server/prompts/runtime-core.md)，无需复制到 Agent Preset。普通多步任务会被要求先拆出具体步骤和验证，再用 `todo_write` 更新进行中与完成状态；单步小任务跳过正式清单。阶段完成、遇到阻塞或调整计划时，模型应简短汇报已完成、当前和下一步。
+应用现在默认加载项目内的 [运行时核心提示词](src/server/prompts/runtime-core.md)，无需复制到 Agent Preset。普通多步任务会在开始前拆出具体步骤和验证，再用 `todo_write` 更新进行中与完成状态；用户只要计划/方案时，步骤是“调研→形成计划→等待确认”，不擅自实施。单步小任务跳过正式清单。阶段完成、遇到阻塞或调整计划时，模型应简短汇报已完成、当前和下一步。
 
 长期目标可从用户的直接请求中识别并调用 `create_goal`，无需用户额外输入“goal”；本项目只允许顶层会话创建目标。Goal 保留有限轮次续跑、完成证据和具体阻塞原因的要求。只读模式允许管理目标这类会话元数据，不开放文件写入；自定义 Preset 仍需显式开放对应工具。
 
-Plan 模式只做只读研究和计划审阅。宿主同时收窄模型工具列表、代码模式目录，并在每次实际执行（含恢复重放）时拒绝文件写入、通用 shell、外部 MCP、执行待办与目标写入。`list_files` 和 `search_files` 提供有界的只读目录与字面文本搜索，不经过 shell。Plan、Goal、Team 指导按实际直接或嵌套路由生成；没有计划提交工具时，模型用最终文本给出计划，不假称已提交。
+Plan 模式只做只读研究和计划审阅。宿主同时收窄模型工具列表、代码模式目录，并在每次实际执行（含恢复重放）时拒绝文件写入、通用 shell、外部 MCP、执行待办与目标写入。`glob` 按路径模式找文件（包含隐藏路径，按修改时间排序），`grep` 按正则搜索内容并可用 `include` 过滤；`list_files` 和 `search_files` 保留为有界目录与字面文本搜索。它们都不经过 shell。Plan、Goal、Team 指导按实际直接或嵌套路由生成；没有计划提交工具时，模型用最终文本给出计划，不假称已提交。
 
 进入 Plan 会同时约束已有的任务子会话，新建和恢复复用的子会话也继承限制；已经开始执行的外部操作不会因此撤销。离开父会话 Plan 不会自动放宽已有子会话自己的 Plan 状态，需要在对应子会话的控件中离开。缺少目标完成工具的 Preset 不会继续空转目标；模型的 `update_goal` 只接受完成或受阻，编辑、暂停、恢复仍由用户控件处理。
 
-每次请求自动加载绑定工作区根目录的 `AGENTS.md`，附来源、作用域与内容哈希，最多 32 KiB；缺失、过大、符号链接或读取异常会明确记录，不静默截取规则。不会加载工作区上级指令，也不会递归扫描全仓库。模型操作子目录文件前仍须逐级检查相关 `AGENTS.md`。项目规则和 Preset 不能扩大用户授权或宿主权限。
+每次请求自动加载绑定工作区根目录的 `AGENTS.md`，附来源、作用域与内容哈希，最多 32 KiB；缺失、过大、符号链接或读取异常会明确记录，不静默截取规则。不会加载工作区上级指令，也不会递归扫描全仓库。模型处理子目录文件时，只在该目录及其父目录按需读取实际存在的 `AGENTS.md`，不要求递归发现全仓库规则。项目规则和 Preset 不能扩大用户授权或宿主权限。
 
 核心规则由不带工具的 `runtime-policy` 扩展提供，执行守卫由强制装配的 `execution-policy` 扩展提供，保留 Preset 自定义 instructions 和工具白名单。启动时为历史会话补齐扩展，分叉和子会话也会获得它们；核心文本在下一次请求准备时生效，执行权限在调用时重新检查。编辑运行时核心或代码后需重启服务，已有会话无需重建；工作区根 `AGENTS.md` 则每请求重读。
 
@@ -158,7 +158,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 - **代码模式**：设置 → 通用 → 代码模式，三态可选，默认「开启」。
   - 开启：模型多一个 `codemode` 工具，用 QuickJS 沙箱执行它写的 JavaScript；脚本里的工具调用是 Pi 的嵌套工具调用，运行中显示为子行，结束后从结果的 `details.calls` 展示。
-  - 仅脚本：模型只看到 `codemode`，其余工具（读写、bash、待办、团队等）都从脚本里调用，对应 Pi 的 `codemode.mode: only`。
+  - 仅脚本：模型只看到 `codemode`，其余工具（读写、平台 shell、待办、团队等）都从脚本里调用，对应 Pi 的 `codemode.mode: only`。
   - 关闭：不提供代码工具，与旧行为一致。
   - 切换立即应用到空闲会话；正在运行的会话会跳过本次重配置，在下次切换或重启服务时应用。
   - 直接工具已有 schema 时，代码模式只引用其名称与发现入口，避免重复展开；仅嵌套工具的内联说明预算为 1,200 个 SDK 估算 token，未列出的完整声明可用 `searchTools()` / `describeTool()` 查到。该预算不限制实际可调用工具。
@@ -182,7 +182,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 ## 验证
 
-自动化测试使用真实 Pi Durable/SQLite 与可控模型，验证持久化、幂等发送、队列、流式视图和恢复；HTTP 测试验证请求校验与订阅清理。可控模型验证不等于真实供应商调用通过。代码模式用真实 QuickJS 沙箱执行脚本并调用真实 bash；MCP 用内存传输与真实 stdio 子进程夹具覆盖连接、工具注册与失败隔离。
+自动化测试使用真实 Pi Durable/SQLite 与可控模型，验证持久化、幂等发送、队列、流式视图和恢复；HTTP 测试验证请求校验与订阅清理。可控模型验证不等于真实供应商调用通过。代码模式用真实 QuickJS 沙箱执行脚本并调用真实平台 shell；MCP 用内存传输与真实 stdio 子进程夹具覆盖连接、工具注册与失败隔离。
 
 ```sh
 PI_WEB_DEMO=1 PI_WEB_PORT=4318 PI_WEB_DATA_DIR="${TMPDIR:-/tmp}/pi-web-demo" npm run dev
@@ -194,9 +194,9 @@ npm run test:live:workflow
 npx tsx scripts/render-fixture.ts
 ```
 
-`test:live` 使用临时数据库、当前配置的默认真实模型和一个最小文本请求；`test:live:tools` 与 `test:live:codemode` 分别验证真实模型的直接工具调用和 `codemode` 脚本调用；`test:live:skills` 验证 Skills 的创建、校验、重启后发现与使用；`test:live:workflow` 验证默认任务规划与多步开发闭环，并由宿主独立运行产物测试。它们都不会修改已有会话或静默更换模型。最后的 `render-fixture.ts` 不是 npm script，会写入 `artifacts/render-fixture-*`，用于确定性 Markdown/工具渲染 fixture，Windows 上需要 Git Bash。供应商授权失败单独报告（本轮 opencode-go key 过期时的 401 已按该规则保留）。
+`test:live` 使用临时数据库、当前配置的默认真实模型和一个最小文本请求；`test:live:tools` 与 `test:live:codemode` 分别验证真实模型的直接工具调用和 `codemode` 脚本调用；`test:live:skills` 验证 Skills 的创建、校验、重启后发现与使用；`test:live:workflow` 验证默认任务规划与多步开发闭环，并由宿主独立运行产物测试。它们都不会修改已有会话或静默更换模型。最后的 `render-fixture.ts` 不是 npm script，会写入 `artifacts/render-fixture-*`，用于确定性 Markdown/工具渲染 fixture，Windows 上使用 `pwsh`。供应商授权失败单独报告（本轮 opencode-go key 过期时的 401 已按该规则保留）。
 
-Windows 上跑验证前先看 [Windows](#windows)：bash 相关验证需要 Git for Windows；`npm test` 有 POSIX mode、Skills 路径分隔符及可能的 symlink/Git 条件性失败；`test:live:tools` 与 `test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`；`test:live:skills` 与 `test:live:workflow` 需真实模型、Git Bash 与 Windows 实机记录。
+Windows 上跑验证前先看 [Windows](#windows)：shell 相关验证走 `pwsh`；`npm test` 仍有 POSIX mode、Skills 路径分隔符及可能的 symlink 条件性失败；`test:live:tools` 与 `test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`；`test:live:skills` 与 `test:live:workflow` 需真实模型与 Windows 实机记录。
 
 ## UI 来源
 

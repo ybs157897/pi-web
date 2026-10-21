@@ -124,15 +124,15 @@ describe('planning tool prompt policy', () => {
     expect(codemode).toContain('Through `codemode`, call `await tools.exit_plan_mode({ plan: "<plan markdown>" })` inside the script.')
 
     const unavailable = await renderPlanPolicy()
-    expect(unavailable).toContain('Put the plan in your final response')
+    expect(unavailable).toContain('把计划放在最终回复里')
     expect(unavailable).not.toContain('exit_plan_mode')
     expect(unavailable).not.toContain('pending')
   })
 
   it('states the host-enforced read-only Plan boundary and plan format', async () => {
     const prompt = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
-    expect(prompt).toContain('workspace mutation, bash, and external MCP calls are unavailable')
-    expect(prompt).toContain('first line is a level-1 heading')
+    expect(prompt).toContain('Host 会拒绝写入、shell 和外部 MCP 调用')
+    expect(prompt).toContain('第一行是一级标题')
   })
 
   it('describes concrete multi-step todo use, timely status updates, and real parallel work', () => {
@@ -143,7 +143,7 @@ describe('planning tool prompt policy', () => {
     expect(description).toContain('Update statuses promptly')
     expect(description).toContain('actually running in parallel')
     expect(description).toContain('Replace the entire list')
-    expect(description).toContain('Do not use the list for planning-mode notes')
+    expect(description).toContain('Do not use the list as a substitute for the plan-mode plan')
   })
 
   it('renders a policy before any goal exists and names only directly callable tools', async () => {
