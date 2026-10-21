@@ -41,6 +41,7 @@
 | CH-6 | 智能体团队面板缺失 | 成员 + 共享任务 + 打开成员会话 | `dsh-16-team.png` / `pi-97-team-01-trigger.png` … `pi-97-team-05-back-to-lead.png`、`pi-97-team-06-real-panel.png` / `dsh-97-team-01-panel.png` | 已修（2026-10-19：`TeamPanel` 会话头触发器 + 成员区/共享任务区；空态与 DSH 同文案，见「团队对比」） |
 | CH-7 | 计划/目标/待办/问答交互缺失 | 计划 chip、待审卡、todo 清单、目标栏、问答卡 | 代码核对 | 不做（待后端工具） |
 | CH-8 | 偶发「连接已恢复」Toast | 无 | `pi-17-queue.png` | 已修（根因：任何 SSE `open` 都被当成 recovered；改为仅在曾断开后提示，生产构建双向实测通过） |
+| CH-9 | 改动文件默认逐文件展开成卡片，整块很长 | 回合末尾一张卡：填充卡头（文件磁贴 + 已编辑 N 个文件 + 总增删）、每行一个路径 + 增删数、超过 4 行折叠、点行在右侧看 diff、悬停 500ms 出预览（`ui-deliverables/ChangedFiles.tsx`，折叠常量 `COLLAPSED_ROWS = 4`，行按 display 路径排序） | 本机 DSH 源码 `687f282e86` + `artifacts/doc-layout-check/50-53-*.png` | 已修（按 DSH 结构移植：单卡、默认折叠、折叠开关、悬停预览、点行开 Inspector；行数据由本轮产物推导，排序对齐 `compareDisplay`） |
 
 ## 设置与页面
 
