@@ -1032,6 +1032,25 @@ describe('management API', () => {
     }
   })
 
+  it('lists a directory the answer pointed at', async () => {
+    // 回答里的路径有时是目录：给出目录内容，让检查器直接列出它。
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    await mkdir(join(root, 'src', 'server'), { recursive: true })
+    await writeFile(join(root, 'src', 'server', 'runtime.ts'), 'export {}\n', 'utf8')
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const directory = await app.request('/api/workspaces/ws-1/file?path=src/server')
+      expect(directory.status).toBe(200)
+      expect(await directory.json()).toMatchObject({
+        path: 'src/server',
+        kind: 'directory',
+        entries: [{ name: 'runtime.ts', path: 'src/server/runtime.ts', type: 'file' }],
+      })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a workspace path that leaves the workspace through a symlink', async () => {
     // Creating symlinks needs extra privileges on Windows, where the path rules reject the link anyway.
     if (process.platform === 'win32') return

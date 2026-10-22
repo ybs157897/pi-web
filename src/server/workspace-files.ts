@@ -166,7 +166,9 @@ async function findBySuffix(root: string, requested: string): Promise<string[]> 
       if (entry.isSymbolicLink()) continue
       const relativePath = directory === '' ? entry.name : `${directory}/${entry.name}`
       if (entry.isDirectory()) {
-        if (!SKIPPED_DIRECTORIES.has(entry.name)) pending.push(relativePath)
+        if (SKIPPED_DIRECTORIES.has(entry.name)) continue
+        if (`/${relativePath.toLocaleLowerCase()}`.endsWith(needle)) matches.push(relativePath)
+        pending.push(relativePath)
         continue
       }
       if (entry.isFile() && `/${relativePath.toLocaleLowerCase()}`.endsWith(needle)) matches.push(relativePath)
@@ -241,8 +243,15 @@ export class WorkspaceFiles {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const requested = resolveWorkspacePath(root, path, workspace.path)
-    const resolved = await this.resolveFile(root, requested)
+    const resolved = await this.resolveEntry(root, requested)
     const info = await stat(resolved.canonical)
+    // 回答里的路径有时指向一个目录；给出目录内容，让检查器直接列出它。
+    if (info.isDirectory()) {
+      return {
+        path: resolved.path, kind: 'directory', mimeType: 'inode/directory', size: 0, modifiedAt: info.mtimeMs,
+        entries: await this.listDirectory(resolved.canonical, resolved.path),
+      }
+    }
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法在浏览器预览')
     const type = mimeType(resolved.canonical)
@@ -256,14 +265,14 @@ export class WorkspaceFiles {
   }
 
   /**
-   * 把一个请求路径落到工作区里真实存在的文件上。
+   * 把一个请求路径落到工作区里真实存在的文件或目录上。
    *
    * 模型在回答里常常只写文件名（`webpush-protocol.html`），而文件其实躺在
    * `docs/` 下面；按工作区根目录去找必然落空。所以先按原路径找，找不到就按
    * **路径后缀**在工作区里找同名文件：唯一命中就打开它，多个命中说明路径写得
    * 不够具体，把候选列出来而不是替用户猜一个。
    */
-  private async resolveFile(root: string, requested: string): Promise<{ path: string; canonical: string }> {
+  private async resolveEntry(root: string, requested: string): Promise<{ path: string; canonical: string }> {
     try {
       return { path: requested, canonical: await checkedPath(root, requested) }
     } catch (error) {
@@ -283,7 +292,7 @@ export class WorkspaceFiles {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const requested = resolveWorkspacePath(root, path, workspace.path)
-    const resolved = await this.resolveFile(root, requested)
+    const resolved = await this.resolveEntry(root, requested)
     const info = await stat(resolved.canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取工作区中的普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法内联读取')

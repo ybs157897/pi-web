@@ -120,6 +120,13 @@ describe('doc block parsing', () => {
     })
   })
 
+  it('unwraps a path the model wrapped in backticks', () => {
+    // 契约要求路径用反引号包起来；path 字段本身已经是一个路径，
+    // 带着反引号去显示和点击就都点不开。
+    const parsed = parseDocBlock('type: changes\nitems:\n  - path: `docs/cookbook`\n    summary: 文档目录\n')
+    expect(parsed).toMatchObject({ type: 'changes', items: [{ path: 'docs/cookbook' }] })
+  })
+
   it('defaults the bullets to an empty list and the badge to none', () => {
     const cards = parseDocBlock('type: cards\nitems:\n  - title: 只有标题\n')
     expect(cards).toEqual({ type: 'cards', items: [{ icon: undefined, title: '只有标题', body: undefined, bullets: [] }] })

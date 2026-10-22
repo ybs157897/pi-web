@@ -170,12 +170,14 @@ export interface WorkspaceSummary { id: string; name: string; path: string; crea
 export interface WorkspaceFileEntry { name: string; path: string; type: 'file' | 'directory'; size?: number; modifiedAt?: number; mimeType?: string }
 export interface WorkspaceFile {
   path: string
-  kind: 'text' | 'image' | 'binary'
+  kind: 'text' | 'image' | 'binary' | 'directory'
   mimeType: string
   size: number
   modifiedAt: number
   content?: string
   data?: string
+  /** The entries of a directory, when the requested path is one. */
+  entries?: WorkspaceFileEntry[]
 }
 export interface AddWorkspaceInput { path: string; name?: string }
 export interface RenameWorkspaceInput { name: string }

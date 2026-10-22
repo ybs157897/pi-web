@@ -8,21 +8,33 @@ import css from './WorkspaceBrowserPage.module.css'
 interface WorkspaceBrowserPageProps {
   workspace: WorkspaceSummary
   onOpenFile: (path: string) => void
+  /** The directory to open at; empty means the workspace root. */
+  path?: string
   /** Fit the inspector sidebar instead of the full main column. */
   compact?: boolean
 }
 
 /** Browse one registered workspace using server-validated relative paths. */
-export default function WorkspaceBrowserPage({ workspace, onOpenFile, compact = false }: WorkspaceBrowserPageProps) {
+export default function WorkspaceBrowserPage({ workspace, onOpenFile, path: initialPath = '', compact = false }: WorkspaceBrowserPageProps) {
   const { t } = useUiPreferences()
-  const [path, setPath] = useState('')
+  const [path, setPath] = useState(initialPath)
   const [entries, setEntries] = useState<WorkspaceFileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => { setPath('') }, [workspace.id])
+  // A different starting directory (a directory the answer pointed at) moves the
+  // browser there; the same one keeps the folder the reader walked into.
+  useEffect(() => { setPath(current => current === initialPath ? current : initialPath) }, [initialPath])
+  // Another workspace starts at its own root, but the first render keeps the
+  // directory it was told to open at.
+  const previousWorkspace = useRef(workspace.id)
+  useEffect(() => {
+    if (previousWorkspace.current === workspace.id) return
+    previousWorkspace.current = workspace.id
+    setPath(initialPath)
+  }, [initialPath, workspace.id])
   // A new folder starts at its first entry instead of inheriting the previous
   // folder's scroll offset.
   useEffect(() => { if (listRef.current !== null) listRef.current.scrollTop = 0 }, [path])

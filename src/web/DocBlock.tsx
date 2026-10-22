@@ -434,12 +434,23 @@ function readCheck(value: unknown): DocCheck | undefined {
 
 function readChange(value: unknown): DocChange | undefined {
   if (!isRecord(value)) return undefined
-  const path = requiredText(value.path)
-  if (path === undefined) return undefined
+  const raw = requiredText(value.path)
+  if (raw === undefined) return undefined
+  // 契约要求路径用反引号包起来，模型照做就会把反引号一起写进 path；
+  // 路径字段本身已经是一个路径，去掉包裹的反引号再拿去显示和点击。
+  const path = unwrapCode(raw)
   const summary = optionalText(value.summary)
   const stats = optionalText(value.stats)
   if (!summary.ok || !stats.ok) return undefined
   return { path, summary: summary.value, stats: stats.value }
+}
+
+/** 去掉包裹整段文本的反引号（`` `src/app.ts` `` → `src/app.ts`）。 */
+function unwrapCode(value: string): string {
+  const trimmed = value.trim()
+  return trimmed.length > 1 && trimmed.startsWith('`') && trimmed.endsWith('`')
+    ? trimmed.slice(1, -1).trim()
+    : trimmed
 }
 
 /**

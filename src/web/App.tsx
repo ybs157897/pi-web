@@ -187,6 +187,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [page, setPage] = useState<MainPage>('chat')
   const [browseWorkspaceId, setBrowseWorkspaceId] = useState<string | null>(null)
+  /** The directory the inspector's file browser opens at. */
+  const [browsePath, setBrowsePath] = useState('')
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
   const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
@@ -1010,9 +1012,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setSelectedId(id)
   }, [conversations, refreshList])
 
-  const openWorkspaceBrowser = useCallback((workspaceId: string): void => {
+  const openWorkspaceBrowser = useCallback((workspaceId: string, path = ''): void => {
     inspectorRequestId.current += 1
     setBrowseWorkspaceId(workspaceId)
+    setBrowsePath(path)
     setInspectorOpen(true)
     setInspectorView('browse')
     setInspectorError('')
@@ -1036,6 +1039,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorLoading(true)
     try {
       const file = await api.getWorkspaceFile(workspaceId, path)
+      if (file.kind === 'directory') {
+        // 回答里的路径有时指向一个目录：直接在文件浏览器里列出它。
+        if (requestId === inspectorRequestId.current) openWorkspaceBrowser(workspaceId, file.path)
+        return
+      }
       const assetUrl = file.kind !== 'text'
         ? `/api/workspaces/${encodeURIComponent(workspaceId)}/asset?${new URLSearchParams({ path: file.path }).toString()}`
         : undefined
@@ -1045,7 +1053,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) {
       if (requestId === inspectorRequestId.current) setInspectorError(errorText(cause, t('无法打开此文件', 'Could not open this file')))
     } finally { if (requestId === inspectorRequestId.current) setInspectorLoading(false) }
-  }, [announce, currentWorkspaceId, t])
+  }, [announce, currentWorkspaceId, openWorkspaceBrowser, t])
 
   const searchWorkspaceFiles = useCallback(async (needle: string): Promise<WorkspaceFileEntry[]> => {    const workspaceId = currentWorkspaceId
     if (workspaceId === undefined) return []
@@ -1745,6 +1753,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
                 browse={browseWorkspace === undefined ? null : {
                   workspace: browseWorkspace,
+                  path: browsePath,
                   onOpenFile: path => { void openWorkspaceFile(path, browseWorkspace.id) },
                 }}
                 view={inspectorView} onView={setInspectorView}

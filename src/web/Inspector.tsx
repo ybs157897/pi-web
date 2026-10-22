@@ -31,6 +31,8 @@ export type InspectorView = 'file' | 'diff' | 'plan' | 'browse'
 
 export interface InspectorBrowse {
   workspace: WorkspaceSummary
+  /** The directory the browser opens at; empty means the workspace root. */
+  path?: string
   onOpenFile: (path: string) => void
 }
 
@@ -79,7 +81,7 @@ export default function Inspector({ file = null, diff = null, plan = null, brows
         </button>
       </header>
       {browse !== null && <div className={css.browseSurface} hidden={!browseView}>
-        <WorkspaceBrowserPage workspace={browse.workspace} onOpenFile={browse.onOpenFile} compact />
+        <WorkspaceBrowserPage workspace={browse.workspace} path={browse.path ?? ''} onOpenFile={browse.onOpenFile} compact />
       </div>}
       {!browseView && (planView
         ? <PlanPreview plan={plan} loading={loading} error={error} />
