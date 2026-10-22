@@ -31,6 +31,21 @@ function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
 
+/**
+ * 把「文件不存在」从底层的 ENOENT 变成 404。
+ *
+ * 模型写进回答里的路径常常指向另一个项目，文件被删掉也是常事；这两种都不该
+ * 变成服务器故障（500 internal server error），而该告诉用户文件不在工作区里。
+ */
+async function existing<T>(operation: () => Promise<T>, path: string): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    if (isMissing(error)) throw new RuntimeError('NOT_FOUND', `文件不存在或已被删除：${path}`)
+    throw error
+  }
+}
+
 function safeFileName(value: string): string {
   const name = basename(value.split('/').join('_').split(String.fromCharCode(92)).join('_'))
     .split('')
@@ -144,7 +159,7 @@ export class WorkspaceFiles {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const baseRelative = resolveWorkspacePath(root, path, workspace.path)
-    const base = await checkedPath(root, baseRelative)
+    const base = await existing(() => checkedPath(root, baseRelative), baseRelative)
     const baseInfo = await stat(base)
     if (!baseInfo.isDirectory()) throw new RuntimeError('INVALID_INPUT', '工作区路径不是目录')
     const needle = query?.trim().toLocaleLowerCase()
@@ -180,8 +195,8 @@ export class WorkspaceFiles {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const relativePath = resolveWorkspacePath(root, path, workspace.path)
-    const canonical = await checkedPath(root, relativePath)
-    const info = await stat(canonical)
+    const canonical = await existing(() => checkedPath(root, relativePath), relativePath)
+    const info = await existing(() => stat(canonical), relativePath)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法在浏览器预览')
     const type = mimeType(canonical)
@@ -198,8 +213,8 @@ export class WorkspaceFiles {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const relativePath = resolveWorkspacePath(root, path, workspace.path)
-    const canonical = await checkedPath(root, relativePath)
-    const info = await stat(canonical)
+    const canonical = await existing(() => checkedPath(root, relativePath), relativePath)
+    const info = await existing(() => stat(canonical), relativePath)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取工作区中的普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法内联读取')
     return { mimeType: mimeType(canonical), data: await readFile(canonical) }

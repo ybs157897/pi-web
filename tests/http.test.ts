@@ -968,6 +968,26 @@ describe('management API', () => {
     }
   })
 
+  it('answers a missing workspace file with 404 instead of a server failure', async () => {
+    // 模型写的路径常常指向另一个项目，文件被删掉也是常事：这两种都不是服务器故障。
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    await writeFile(join(root, 'x.txt'), 'hello\n', 'utf8')
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const missing = await app.request('/api/workspaces/ws-1/file?path=missing.md')
+      expect(missing.status).toBe(404)
+      expect(await missing.json()).toMatchObject({ code: 'NOT_FOUND', error: '文件不存在或已被删除：missing.md' })
+
+      const missingAsset = await app.request('/api/workspaces/ws-1/asset?path=missing.md')
+      expect(missingAsset.status).toBe(404)
+
+      const missingDirectory = await app.request('/api/workspaces/ws-1/files?path=nope')
+      expect(missingDirectory.status).toBe(404)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a workspace path that leaves the workspace through a symlink', async () => {
     // Creating symlinks needs extra privileges on Windows, where the path rules reject the link anyway.
     if (process.platform === 'win32') return
