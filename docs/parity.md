@@ -731,3 +731,12 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **渲染**：19 条全部 `data-doc-block` 正常、`invalid` 0 个、`partial` 0 个、横向溢出 0 个；390px 窄屏卡片单列无溢出；深色主题下 checks / changes / note 正常。
 - **三层兜底逐层实机验证**：JSON 层（19 条真实场景）／ YAML 层（demo 夹具 `[doc-fixture]`，3 块正常）／ 原文层（新增 demo 夹具 `[doc-broken-fixture]`，坏块显示「结构化块格式错误，已按原文显示」，原文不丢）。
 - 截图：`artifacts/doc-layout-check/scenarios/`（19 张）、`94-fallback-raw.png`、`95-narrow-390.png`、`96-dark-*.png`。
+
+## 路径 chip 的解析（2026-10-21）
+
+对照 DSH `packages/util/workspace-path/src/index.ts` 的 `resolveWorkspacePath`：DSH 把相对路径直接拼到工作区根目录后面，**不做同名匹配**——模型只写文件名时，DSH 同样点不开。pi-web 在此之上多做一级兜底：
+
+- **原路径优先**：路径就是工作区相对路径时直接命中（`docs/config-catalog.md`）。
+- **按路径后缀兜底**：找不到就按整段路径后缀在工作区里找（请求 `config-catalog.md` 命中 `docs/config-catalog.md`），唯一命中就打开；多个命中时列出候选，不替用户猜；一个都没有才 404。跳过 `node_modules`、`.git`、`dist`、`.generated` 等目录。
+- **契约要求写全路径**：模型侧新增一条规则「路径写工作区里的相对路径，带上目录」，让模型少制造需要兜底的路径。
+- 这是 pi-web 相对 DSH 的**有意增强**：DSH 的行为在 DSH 里没有对应实现，pi-web 记为 DF-3 同类的有意差异。

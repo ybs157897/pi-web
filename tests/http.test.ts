@@ -988,6 +988,50 @@ describe('management API', () => {
     }
   })
 
+  it('opens a file the answer named without its directory', async () => {
+    // 模型在回答里常只写文件名，文件其实在子目录里：按路径后缀找回来。
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    await mkdir(join(root, 'docs', 'push'), { recursive: true })
+    await writeFile(join(root, 'docs', 'webpush-protocol.html'), '<h1>protocol</h1>\n', 'utf8')
+    await writeFile(join(root, 'docs', 'push', 'design.md'), '# design\n', 'utf8')
+    await writeFile(join(root, 'ba.md'), 'wrong\n', 'utf8')
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const bare = await app.request('/api/workspaces/ws-1/file?path=webpush-protocol.html')
+      expect(bare.status).toBe(200)
+      expect(await bare.json()).toMatchObject({ path: 'docs/webpush-protocol.html', content: '<h1>protocol</h1>\n' })
+
+      const suffix = await app.request('/api/workspaces/ws-1/file?path=push/design.md')
+      expect(suffix.status).toBe(200)
+      expect(await suffix.json()).toMatchObject({ path: 'docs/push/design.md', content: '# design\n' })
+
+      // 名字相同但不是同一段路径，不能误配。
+      const partial = await app.request('/api/workspaces/ws-1/file?path=a.md')
+      expect(partial.status).toBe(404)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('lists the candidates when a bare name matches several files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    await mkdir(join(root, 'apps'), { recursive: true })
+    await mkdir(join(root, 'libs'), { recursive: true })
+    await writeFile(join(root, 'apps', 'index.ts'), 'app\n', 'utf8')
+    await writeFile(join(root, 'libs', 'index.ts'), 'lib\n', 'utf8')
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const ambiguous = await app.request('/api/workspaces/ws-1/file?path=index.ts')
+      expect(ambiguous.status).toBe(404)
+      const body = await ambiguous.json() as { error: string }
+      expect(body.error).toContain('多个同名文件')
+      expect(body.error).toContain('apps/index.ts')
+      expect(body.error).toContain('libs/index.ts')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('refuses a workspace path that leaves the workspace through a symlink', async () => {
     // Creating symlinks needs extra privileges on Windows, where the path rules reject the link anyway.
     if (process.platform === 'win32') return

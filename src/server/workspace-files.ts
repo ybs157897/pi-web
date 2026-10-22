@@ -129,6 +129,52 @@ function mimeType(path: string): string {
   return MIME_BY_EXTENSION[extname(path).toLowerCase()] ?? 'application/octet-stream'
 }
 
+/** Directories that never hold a file a reader would click on. */
+const SKIPPED_DIRECTORIES = new Set([
+  'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'coverage',
+  '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.cache', '.turbo', 'target',
+  '.dist', '.generated', '.output', '.vercel', '.parcel-cache', '.svelte-kit',
+])
+const MAX_SUFFIX_SCAN = 20_000
+const MAX_SUFFIX_CANDIDATES = 200
+
+/**
+ * Finds the workspace files whose path ends with the requested one.
+ *
+ * The request is a relative path such as `webpush-protocol.html`; a file at
+ * `docs/webpush-protocol.html` ends with it. The comparison is on whole path
+ * segments, so `a.md` never matches `ba.md`.
+ */
+async function findBySuffix(root: string, requested: string): Promise<string[]> {
+  if (requested === '') return []
+  const needle = `/${requested.toLocaleLowerCase()}`
+  const matches: string[] = []
+  const pending: string[] = ['']
+  let examined = 0
+  while (pending.length > 0 && examined < MAX_SUFFIX_SCAN && matches.length < MAX_SUFFIX_CANDIDATES) {
+    const directory = pending.shift()!
+    const absolute = directory === '' ? root : join(root, directory)
+    let entries
+    try {
+      entries = await readdir(absolute, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      examined += 1
+      if (examined > MAX_SUFFIX_SCAN) break
+      if (entry.isSymbolicLink()) continue
+      const relativePath = directory === '' ? entry.name : `${directory}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (!SKIPPED_DIRECTORIES.has(entry.name)) pending.push(relativePath)
+        continue
+      }
+      if (entry.isFile() && `/${relativePath.toLocaleLowerCase()}`.endsWith(needle)) matches.push(relativePath)
+    }
+  }
+  return matches.sort((left, right) => left.localeCompare(right))
+}
+
 function isTextType(type: string): boolean {
   return type.startsWith('text/') || type === 'application/json' || type === 'application/xml' || type === 'application/sql'
 }
@@ -194,14 +240,14 @@ export class WorkspaceFiles {
   async read(id: string, path: string): Promise<WorkspaceFile> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
-    const relativePath = resolveWorkspacePath(root, path, workspace.path)
-    const canonical = await existing(() => checkedPath(root, relativePath), relativePath)
-    const info = await existing(() => stat(canonical), relativePath)
+    const requested = resolveWorkspacePath(root, path, workspace.path)
+    const resolved = await this.resolveFile(root, requested)
+    const info = await stat(resolved.canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法在浏览器预览')
-    const type = mimeType(canonical)
-    const buffer = await readFile(canonical)
-    const common = { path: relativePath, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
+    const type = mimeType(resolved.canonical)
+    const buffer = await readFile(resolved.canonical)
+    const common = { path: resolved.path, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
     if (INLINE_IMAGE_TYPES.has(type)) return { ...common, kind: 'image', data: buffer.toString('base64') }
     if (isTextType(type) && info.size <= MAX_FILE_TEXT_BYTES && !buffer.includes(0)) {
       return { ...common, kind: 'text', content: buffer.toString('utf8') }
@@ -209,15 +255,39 @@ export class WorkspaceFiles {
     return { ...common, kind: 'binary', data: buffer.toString('base64') }
   }
 
+  /**
+   * 把一个请求路径落到工作区里真实存在的文件上。
+   *
+   * 模型在回答里常常只写文件名（`webpush-protocol.html`），而文件其实躺在
+   * `docs/` 下面；按工作区根目录去找必然落空。所以先按原路径找，找不到就按
+   * **路径后缀**在工作区里找同名文件：唯一命中就打开它，多个命中说明路径写得
+   * 不够具体，把候选列出来而不是替用户猜一个。
+   */
+  private async resolveFile(root: string, requested: string): Promise<{ path: string; canonical: string }> {
+    try {
+      return { path: requested, canonical: await checkedPath(root, requested) }
+    } catch (error) {
+      if (!isMissing(error)) throw error
+    }
+    const candidates = await findBySuffix(root, requested)
+    if (candidates.length === 0) throw new RuntimeError('NOT_FOUND', `文件不存在或已被删除：${requested}`)
+    if (candidates.length > 1) {
+      const shown = candidates.slice(0, 5).join('、')
+      throw new RuntimeError('NOT_FOUND', `工作区里有多个同名文件（例如 ${shown}），请在回答里写完整路径`)
+    }
+    const path = candidates[0]!
+    return { path, canonical: await checkedPath(root, path) }
+  }
+
   async asset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
-    const relativePath = resolveWorkspacePath(root, path, workspace.path)
-    const canonical = await existing(() => checkedPath(root, relativePath), relativePath)
-    const info = await existing(() => stat(canonical), relativePath)
+    const requested = resolveWorkspacePath(root, path, workspace.path)
+    const resolved = await this.resolveFile(root, requested)
+    const info = await stat(resolved.canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取工作区中的普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法内联读取')
-    return { mimeType: mimeType(canonical), data: await readFile(canonical) }
+    return { mimeType: mimeType(resolved.canonical), data: await readFile(resolved.canonical) }
   }
 
   async saveAttachments(id: string, conversationId: string, requestId: string, files: readonly AttachmentInput[]): Promise<AttachmentReference[]> {
