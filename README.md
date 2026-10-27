@@ -107,7 +107,7 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
 | `settings.json` | 默认 Provider/模型、思考等级等 Pi 全局设置 |
 | `models.json` | Provider 与模型目录；设置页保存时直接修改此文件 |
 | `auth.json` | Provider 凭据；设置页填写 API key 时直接修改此文件 |
-| `mcp.json` | MCP 服务器配置（只读导入，修改后重启生效） |
+| `mcp.json` | MCP 服务器配置（只读导入，修改后重启生效；已安装插件的 MCP server 会热重载） |
 | `app-state.json` | 界面偏好、工作区、Preset、自动化任务 |
 | `pi-durable.sqlite` | Pi Durable 的会话、消息和工具执行记录 |
 
@@ -164,9 +164,9 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
   - 关闭：不提供代码工具，与旧行为一致。
   - 切换立即应用到空闲会话；正在运行的会话会跳过本次重配置，在下次切换或重启服务时应用。
   - 直接工具已有 schema 时，代码模式只引用其名称与发现入口，避免重复展开；仅嵌套工具的内联说明预算为 1,200 个 SDK 估算 token，未列出的完整声明可用 `searchTools()` / `describeTool()` 查到。该预算不限制实际可调用工具。
-- **MCP**：只读导入全局 `~/.pi-web/mcp.json`（demo 模式读 `<数据目录>/mcp.json`，可用 `PI_WEB_MCP_CONFIG` 覆盖），支持 stdio 与 Streamable HTTP。
+- **MCP**：只读导入全局 `~/.pi-web/mcp.json`（demo 模式读 `<数据目录>/mcp.json`，可用 `PI_WEB_MCP_CONFIG` 覆盖），支持 stdio 与 Streamable HTTP；已安装插件的 `mcpServers` 会合并进同一目录并在安装/启停/更新/卸载后热重载。
   - 工具名 `mcp__<server>__<tool>`；`exposure` 支持 `codemode`（默认，脚本可调）、`deferred`（`tool_search` 加载给模型）、`direct`（直接给模型）与 `hidden`，`toolExposure` 支持精确名与 `*` 模式。
-  - 设置 → MCP 显示每个服务器的连接状态、工具清单和错误，不会返回 `env`/`headers`。修改 `mcp.json` 后重启服务生效；OAuth 流程暂未接入，需要令牌的服务器请用 `headers` 或本地 stdio。
+  - 设置 → MCP 显示每个服务器的连接状态、工具清单和错误（插件来源带 `pluginId`），不会返回 `env`/`headers`。修改 `mcp.json` 后重启服务生效；插件 MCP 不需要重启。OAuth 流程暂未接入，需要令牌的服务器请用 `headers` 或本地 stdio。
 
 ## Skills 与内置创建器
 
@@ -181,6 +181,37 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 - 无 Preset 的会话默认包含 `skills` 扩展；自定义 Preset 需显式加入扩展 `skills` 和需要的上述工具。只读会话保留列举、读取和校验，禁止保存；计划模式也禁止 `skill_save`。Code mode 嵌套调用遵守相同检查。
 
 可在演示模式发送 `[skills-create]` 验证实际文件/工具链，再用 `[skills-use]` 读取产物；它们是脚本化验收，不是真实模型证明。`npm run test:live:skills` 使用当前配置的 DeepSeek 模型，在临时工作区验证内置创建器加载、保存/校验、重启后新只读会话发现并使用技能，结果保存在 `artifacts/live-skills-check.json`。
+
+## 工作区记忆
+
+设置 → 通用 → 工作区记忆，默认关闭。开启后每个工作区在 `<数据目录>/memories/projects/<slug>-<hash16>/memory/` 保存一份纯文件记忆：`MEMORY.md` 是每请求注入的短索引（一行一条指针），事实文件是带 `name` / `description` / `metadata.type` 的独立 `.md`。关闭开关不会删除已写入的文件，再次开启继续使用；记忆按工作区规范化绝对路径隔离。
+
+- 每次模型请求重新读取索引，后台提取写入的新条目下一请求即可见；索引超过 200 行 / 25,000 字符时截断并附警告。
+- 成功回合后后台自动提取：独立模型请求（最多 5 轮、不写入会话转录），使用 `read` / `list_files` / `search_files` / `write` / `edit` 白名单；失败不推进游标、下个回合重试。提取会增加模型请求与 Token 用量。
+- 主会话可直接写记忆，写入自动补 `originSessionId` 与 `metadata.node_type`；本回合已直接写过记忆、或用户正文不足 3 个词时跳过提取。
+- 只读会话只注入索引，不提供记忆写入与后台提取；`workspaceWrite` 额外放行记忆目录内的写入；计划模式在工具面上仍只提供计划工具，执行边界对安全记忆 `.md` 的写入例外放行、其他工作区修改一律拒绝。
+- 演示模式发送 `[memory-demo] I prefer Chinese replies for every answer.` 可触发脚本化提取；`[memory-write]` 验证主会话直写后跳过提取。它们是脚本化验收，不是真实模型证明。
+
+## 插件市场
+
+设置 → 扩展 → 插件市场，添加一个包含 `marketplace.json` 的本地目录，或一个 HTTPS 地址（本机回环可用 HTTP）。市场目录示例：
+
+```json
+{
+  "name": "my-market",
+  "featured": ["excalidraw"],
+  "plugins": [
+    { "name": "excalidraw", "version": "0.3.0", "source": "./excalidraw", "listing": { "displayName": "Excalidraw" } }
+  ]
+}
+```
+
+插件包在 `.pi-plugin/plugin.json`（也接受 `.zcode-plugin` / `.claude-plugin`），支持 `name` / `version` / `description` / `author` / `homepage` / `skills` / `mcpServers` / `ui` / `dependencies`；`commands` / `agents` / `hooks` 等不会执行，只在卡片上标为「不支持」。
+
+- 来源：本地市场里的相对目录、带 `sha256` 的 zip URL、GitHub 仓库（`{ "source": "github", "repo": "owner/name", "ref": "main", "path": "packages/x" }`）或 git URL（仅 HTTPS）。zip 会校验 sha256，拒绝 zip-slip、符号链接、加密与 ZIP64；GitHub 走 `codeload` zipball，git 走 `git clone --depth 1`。
+- 安装/更新：后台执行，状态经 `GET /api/plugins/events` 推送（设置页同时保留轮询兜底）；失败不会留下半装记录。安装或更新前会展示将运行的 MCP 命令（只列 env 键名，不显示值）、技能与 UI surface，二次确认后才落盘。安装记录、市场缓存与插件包都在 `<数据目录>/plugins/`，与应用设置分开，便于备份或清理。
+- 能力：插件技能以「插件」来源进入技能目录，ID 为 `<插件ID>:<技能名>`，只读；插件的 MCP server 以 `plugin_<插件>_<server>` 合并进 MCP 目录（`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 自动展开，默认 `codemode` 暴露），安装、启停、更新、卸载后无需重启即可生效，重启保留。
+- 边界：P1 已接入插件技能与 MCP 工具；插件 UI surface 会解析并展示，但正文内联卡与右侧插件面板属 P2。`readOnly` 会话看不到插件工具，Plan 模式执行会被拒绝。安装插件等于信任其声明的 MCP 子进程以当前用户权限运行。
 
 ## 验证
 

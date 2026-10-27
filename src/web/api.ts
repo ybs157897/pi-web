@@ -6,6 +6,7 @@ import type {
   UpdateAppSettingsInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
+import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
 
 export class ApiFailure extends Error {
   readonly code: string | undefined
@@ -180,6 +181,34 @@ export const api = {
       method: 'POST', body: JSON.stringify({ skillId }),
     })
   },
+  getPluginOverview(): Promise<PluginOverview> {
+    return request('/api/plugins/overview')
+  },
+  addPluginMarketplace(source: string): Promise<PluginOverview> {
+    return request('/api/plugins/marketplaces', { method: 'POST', body: JSON.stringify({ source }) })
+  },
+  removePluginMarketplace(id: string): Promise<PluginOverview> {
+    return request(`/api/plugins/marketplaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+  refreshPluginMarketplace(id: string): Promise<PluginOverview> {
+    return request(`/api/plugins/marketplaces/${encodeURIComponent(id)}/refresh`, { method: 'POST' })
+  },
+  installPlugin(input: InstallPluginInput): Promise<{ operationId: string }> {
+    return request('/api/plugins/install', { method: 'POST', body: JSON.stringify(input) })
+  },
+  updatePlugin(pluginId: string): Promise<{ operationId: string }> {
+    return request('/api/plugins/update', { method: 'POST', body: JSON.stringify({ pluginId }) })
+  },
+  describePlugin(pluginId: string): Promise<PluginDescription> {
+    return request(`/api/plugins/${encodeURIComponent(pluginId)}/describe`)
+  },
+  uninstallPlugin(pluginId: string, keepData = false): Promise<PluginOverview> {
+    const query = keepData ? '?keepData=1' : ''
+    return request(`/api/plugins/${encodeURIComponent(pluginId)}${query}`, { method: 'DELETE' })
+  },
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginOverview> {
+    return request(`/api/plugins/${encodeURIComponent(pluginId)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
+  },
   createWorkspace(input: AddWorkspaceInput): Promise<{ workspace: WorkspaceSummary }> {
     return request('/api/workspaces', { method: 'POST', body: JSON.stringify(input) })
   },
@@ -284,6 +313,15 @@ export const api = {
   watchModels(listener: () => void): EventSource {
     const source = new EventSource('/api/models/events')
     source.addEventListener('changed', () => { listener() })
+    return source
+  },
+  /** The plugin store changed (install progress, enable/disable, market refresh). */
+  watchPlugins(listener: (overview: PluginOverview) => void): EventSource {
+    const source = new EventSource('/api/plugins/events')
+    source.addEventListener('overview', (event) => {
+      try { listener(JSON.parse((event as MessageEvent<string>).data) as PluginOverview) }
+      catch { /* a malformed frame is ignored; the next mutation sends a fresh one */ }
+    })
     return source
   },
 }

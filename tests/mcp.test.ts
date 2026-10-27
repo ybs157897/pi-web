@@ -12,11 +12,12 @@ import { createInMemoryTransportPair } from '@earendil-works/pi-mcp/testing'
 import type { Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from '@earendil-works/pi-durable'
-import { McpManager } from '../src/server/mcp.ts'
+import { McpRegistry } from '../src/server/mcp.ts'
 import type { McpServerConfig } from '../src/server/mcp-config.ts'
+import type { PluginMcpServerConfig } from '../src/server/plugin-types.ts'
 
 const temporaryDirectories: string[] = []
-const openManagers: McpManager[] = []
+const openManagers: McpRegistry[] = []
 const liveFakeServers: Array<{ close(): Promise<void> }> = []
 
 const EMPTY_CONTEXT: Context = {
@@ -48,26 +49,26 @@ async function writeConfig(value: unknown): Promise<string> {
 function openManager(
   configPath: string,
   transportFactory?: (server: McpServerConfig) => McpTransport,
-): Promise<McpManager> {
-  return McpManager.open({ configPath, ...(transportFactory ? { transportFactory } : {}) }).then(manager => {
+): Promise<McpRegistry> {
+  return McpRegistry.open({ configPath, ...(transportFactory ? { transportFactory } : {}) }).then(manager => {
     openManagers.push(manager)
     return manager
   })
 }
 
-function extensionTools(manager: McpManager): readonly ToolRegistration[] {
+function extensionTools(manager: McpRegistry): readonly ToolRegistration[] {
   const extension = manager.extension()
   expect(extension?.name).toBe('mcp')
   return extension?.tools ?? []
 }
 
-function registeredTool(manager: McpManager, name: string) {
+function registeredTool(manager: McpRegistry, name: string) {
   const tool = extensionTools(manager).find(candidate => candidate.name === name)
   if (!tool) throw new Error(`tool is not registered: ${name}`)
   return tool
 }
 
-async function runTool(manager: McpManager, name: string, args: Record<string, unknown>): Promise<ToolExecutionResult<JsonValue>> {
+async function runTool(manager: McpRegistry, name: string, args: Record<string, unknown>): Promise<ToolExecutionResult<JsonValue>> {
   return registeredTool(manager, name).execute(args, {} as ToolExecutionApi, EMPTY_CONTEXT)
 }
 
@@ -232,7 +233,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 
 // ---------------------------------------------------------------------------------------------
 
-describe('McpManager configuration', () => {
+describe('McpRegistry configuration', () => {
   it('reports a missing config file as an empty catalog without an error', async () => {
     const directory = await temporaryDirectory()
     const configPath = join(directory, 'mcp.json')
@@ -317,7 +318,7 @@ describe('McpManager configuration', () => {
   })
 })
 
-describe('McpManager catalog', () => {
+describe('McpRegistry catalog', () => {
   it('builds the view, sanitizes tool names, resolves exposure, and registers deferred tools', async () => {
     process.env.MCP_TEST_TOKEN = 'super-secret-token'
     const demo = startFakeServer({
@@ -484,7 +485,7 @@ describe('McpManager catalog', () => {
   })
 })
 
-describe('McpManager real stdio transport', () => {
+describe('McpRegistry real stdio transport', () => {
   it('spawns a stdio server, lists its tools, and runs one', async () => {
     const directory = await temporaryDirectory()
     const fixturePath = join(directory, 'mcp-server.mjs')
@@ -505,7 +506,7 @@ describe('McpManager real stdio transport', () => {
   })
 })
 
-describe('McpManager tool execution', () => {
+describe('McpRegistry tool execution', () => {
   it('maps successful, MCP-error, thrown, and structured-only results without throwing', async () => {
     const fake = startFakeServer({
       tools: [
@@ -572,5 +573,69 @@ describe('McpManager tool execution', () => {
     expect(first.closed).toBe(true)
     expect(second.closed).toBe(true)
     await expect(manager.close()).resolves.toBeUndefined()
+  })
+})
+
+describe('McpRegistry plugin servers', () => {
+  it('merges plugin-declared servers and reloads the connection set without a restart', async () => {
+    const echoServer = startFakeServer({ tools: [{ name: 'echo', description: 'Echo back' }] })
+    const drawServer = startFakeServer({ tools: [{ name: 'draw' }] })
+    const configPath = await writeConfig({ mcpServers: {} })
+    const projection: PluginMcpServerConfig[] = [{
+      pluginId: 'demo@market',
+      pluginName: 'demo',
+      serverKey: 'echo',
+      serverName: 'plugin_demo_echo',
+      command: 'node',
+      args: ['server.js'],
+      env: { SECRET_TOKEN: 'hidden' },
+      cwd: '/tmp/demo',
+      dataPath: '/tmp/demo-data',
+      exposure: 'codemode',
+    }]
+    const transports = new Map<string, McpTransport>([
+      ['plugin_demo_echo', echoServer.transport],
+      ['plugin_demo_draw', drawServer.transport],
+    ])
+    const registry = await McpRegistry.open({
+      configPath,
+      pluginServers: () => projection,
+      transportFactory: server => transports.get(server.name)!,
+    })
+    openManagers.push(registry)
+
+    expect(registry.view().servers).toEqual([
+      expect.objectContaining({ name: 'plugin_demo_echo', pluginId: 'demo@market', status: 'connected' }),
+    ])
+    expect(registry.namespaces().map(namespace => namespace.name)).toEqual(['mcp__plugin_demo_echo'])
+    const echo = extensionTools(registry).find(tool => tool.name === 'mcp__plugin_demo_echo__echo')
+    expect(echo?.deferred).toBe(true)
+    await echo!.execute({ text: 'hi' }, {} as ToolExecutionApi, EMPTY_CONTEXT)
+    expect(echoServer.calls).toEqual([{ name: 'echo', args: { text: 'hi' } }])
+
+    projection.splice(0, projection.length, {
+      pluginId: 'painter@market',
+      pluginName: 'painter',
+      serverKey: 'draw',
+      serverName: 'plugin_demo_draw',
+      command: 'node',
+      args: ['server.js'],
+      env: {},
+      cwd: '/tmp/painter',
+      dataPath: '/tmp/painter-data',
+      exposure: 'direct',
+    })
+    await registry.reload()
+
+    expect(registry.view().servers).toEqual([
+      expect.objectContaining({ name: 'plugin_demo_draw', status: 'connected', exposure: 'direct' }),
+    ])
+    expect(registry.namespaces().map(namespace => namespace.name)).toEqual(['mcp__plugin_demo_draw'])
+    expect(extensionTools(registry).some(tool => tool.name.includes('plugin_demo_echo'))).toBe(false)
+    expect(extensionTools(registry).find(tool => tool.name === 'mcp__plugin_demo_draw__draw')?.deferred).toBeUndefined()
+
+    await registry.close()
+    expect(echoServer.closed).toBe(true)
+    expect(drawServer.closed).toBe(true)
   })
 })

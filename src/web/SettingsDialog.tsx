@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   Button, IconAgentPresetOutlineRegular, IconApiOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular,
-  IconSkillOutlineRegular,
+  IconSkillOutlineRegular, IconPluginPinwheelOutlineRegular,
   IconSettingsOutlineRegular, IconDatabaseOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular,
   IconChevronLeftOutlineRegular, Menu, Modal, StateDot, Toast,
@@ -13,9 +13,10 @@ import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
 import { ModelsPanel } from './ModelSettings.tsx'
 import SkillsPanel from './SkillsPanel.tsx'
+import PluginsPanel from './PluginsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
-export type SettingsTab = 'general' | 'models' | 'presets' | 'mcp' | 'skills'
+export type SettingsTab = 'general' | 'models' | 'presets' | 'mcp' | 'skills' | 'plugins'
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
@@ -69,8 +70,13 @@ export default function SettingsDialog(props: SettingsDialogProps) {
       icon: <IconAgentPresetOutlineRegular size={16} />,
     },
     {
+      id: 'plugins', label: t('插件市场', 'Plugins'), group: t('扩展', 'Extensions'),
+      description: t('从本地目录或 HTTPS 市场安装插件，查看已安装插件与其提供的能力。', 'Install plugins from a local directory or an HTTPS marketplace and inspect their capabilities.'),
+      icon: <IconPluginPinwheelOutlineRegular size={16} aria-hidden="true" />,
+    },
+    {
       id: 'mcp', label: 'MCP', group: t('扩展', 'Extensions'),
-      description: t('来自 Pi 用户级 mcp.json 的只读清单，修改后重启服务生效。', 'A read-only view of Pi’s user-level mcp.json; restart the service after editing it.'),
+      description: t('Pi 用户级 mcp.json 与已启用插件的 MCP 服务器；插件来源热重载，mcp.json 修改后重启。', 'Pi’s user-level mcp.json plus enabled plugin MCP servers; plugin changes reload live, mcp.json edits need a restart.'),
       icon: <IconApiOutlineRegular size={16} />,
     },
     {
@@ -160,6 +166,9 @@ export default function SettingsDialog(props: SettingsDialogProps) {
                 { value: 'only', label: t('仅脚本', 'Script only') },
               ]} onChange={value => void update({ codemodeMode: value as CodemodeMode })} />
             </SettingRow>
+            <SettingRow title={t('工作区记忆', 'Workspace memory')} description={t('开启后，系统会自动提取和注入长期记忆，可能产生额外的模型请求与 Token 用量。', 'Extract and inject long-term memory automatically; this adds model requests and token usage.')}>
+              <Toggle label={t('工作区记忆', 'Workspace memory')} checked={settings.memoryEnabled} disabled={pending} onChange={memoryEnabled => void update({ memoryEnabled })} />
+            </SettingRow>
             <SettingRow title={t('语言', 'Language')}><Choice label={t('语言', 'Language')} value={settings.locale} disabled={pending} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => void update({ locale: value as AppSettings['locale'] })} /></SettingRow>
             <SettingRow stacked title={t('外观', 'Appearance')}><div className={css.themeCards}>{themes.map(option => <button key={option.value} className={css.themeCard} type="button" aria-pressed={settings.theme === option.value} disabled={pending} onClick={() => void update({ theme: option.value })}>{option.icon}<span>{option.label}</span></button>)}</div></SettingRow>
             <SettingRow title={t('字号大小', 'Font size')} description={t('仅影响会话内容的字号', 'Applies to conversation content')}><div className={css.fontControls}><SizeSelect value={settings.fontSize} min={12} max={20} label={t('正文字号', 'Text size')} disabled={pending} onChange={fontSize => void update({ fontSize })} /><button className={css.moreButton} type="button" aria-label={t('更多字体设置', 'More font settings')} aria-expanded={moreFonts} onClick={() => setMoreFonts(value => !value)}><IconSettingsOutlineRegular size={14} /></button></div></SettingRow>
@@ -175,19 +184,19 @@ export default function SettingsDialog(props: SettingsDialogProps) {
               { value: 'compact', label: t('简洁', 'Compact') }, { value: 'detailed', label: t('详细', 'Detailed') },
             ]} onChange={value => void update({ performanceUsage: value as PerformanceUsageMode })} /></SettingRow>
             <SettingRow title={t('显示代码工作视图', 'Show coding views')} description={t('显示轨迹、文件预览与代码差异', 'Show trajectory, files and code changes')}><Toggle label={t('显示代码工作视图', 'Show coding views')} checked={settings.codingViews} disabled={pending} onChange={codingViews => void update({ codingViews })} /></SettingRow>
-            <SettingRow title={t('结论文档排版', 'Document layout for final answers')} description={t('结论按设计文档版式输出（编号章节、卡片、提示块）；只影响新建会话，已有会话保持原来的格式', 'Render conclusions as a document (sections, cards, callouts); applies to new conversations only')}><Toggle label={t('结论文档排版', 'Document layout for final answers')} checked={settings.docStyle} disabled={pending} onChange={docStyle => void update({ docStyle })} /></SettingRow>
             <SettingRow title={t('快捷键', 'Keyboard shortcuts')} description={t('查看和编辑可用的快捷键与输入操作', 'View and edit shortcuts and input actions')}><Button size="sm" variant="outline" onClick={() => { setRecording(null); setShortcutsOpen(true) }}>{t('编辑快捷键', 'Edit shortcuts')}</Button></SettingRow>
             <SettingRow title={t('繁忙时的发送行为', 'Send while running')} description={t('Enter 和发送按钮的行为；另一快捷键使用相反方式', 'Behavior of Enter and Send; the alternate shortcut uses the other mode')}><Choice label={t('繁忙时的发送行为', 'Send while running')} value={settings.busySendMode} disabled={pending} options={[{ value: 'followUp', label: t('排队发送', 'Queue message') }, { value: 'steer', label: t('立即插入', 'Steer now') }]} onChange={value => void update({ busySendMode: value as AppSettings['busySendMode'] })} /></SettingRow>
             <SettingRow title={t('默认模型', 'Default model')} description={t('用于新建会话，不改变正在运行的请求', 'Used for new conversations; active requests stay unchanged')}><select className={css.nativeSelect} aria-label={t('默认模型', 'Default model')} disabled={pending} value={settings.defaultModel ? JSON.stringify(settings.defaultModel) : '__inherit'} onChange={event => void update({ defaultModel: event.currentTarget.value === '__inherit' ? null : JSON.parse(event.currentTarget.value) })}><option value="__inherit">{t('使用 Pi 默认配置', 'Use Pi defaults')}</option>{available.map(model => <option key={`${model.provider}/${model.modelId}`} value={JSON.stringify({ provider: model.provider, modelId: model.modelId })}>{model.name} · {model.provider}</option>)}</select></SettingRow>
           </div>}
           {tab === 'models' && <ModelsPanel catalog={catalog} saving={saving} onSave={onSave} onRefresh={onRefreshCatalog} />}
           {tab === 'presets' && (presetsPanel ?? <p role="status">{t('正在加载预设…', 'Loading presets…')}</p>)}
+          {tab === 'plugins' && <PluginsPanel />}
           {tab === 'mcp' && <div className={css.mcp}>
             <div className={css.mcpHead}>
               <h3>{t('MCP 服务器', 'MCP servers')}</h3>
               <Button size="sm" variant="outline" disabled={mcpLoading} onClick={() => void loadMcp()}>{mcpLoading ? t('刷新中…', 'Refreshing…') : t('刷新', 'Refresh')}</Button>
             </div>
-            <p className={css.description}>{t('来自 Pi 用户级 mcp.json 的只读清单；修改配置后重启服务生效。', 'A read-only view of Pi’s user-level mcp.json. Restart the service after editing it.')}</p>
+            <p className={css.description}>{t('来自 Pi 用户级 mcp.json 与已启用插件的 MCP 服务器；插件来源随安装/启停/更新/卸载热重载，mcp.json 修改后需重启。', 'Pi’s user-level mcp.json plus MCP servers from enabled plugins. Plugin changes reload live; mcp.json edits need a restart.')}</p>
             {mcpError !== '' && <p className={css.error} role="alert">{mcpError}</p>}
             {mcpLoading && mcp === null && <p className={css.description} role="status">{t('正在读取 MCP 配置…', 'Loading the MCP configuration…')}</p>}
             {mcp !== null && <>

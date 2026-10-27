@@ -29,14 +29,14 @@ const settingsSchema = z.object({
   performanceUsage: z.enum(PERFORMANCE_USAGE_MODES),
   codingViews: z.boolean(),
   busySendMode: z.enum(['followUp', 'steer']),
-  /** 结论文档排版默认开启；该字段出现之前写入的状态文件按开启处理。 */
-  docStyle: z.boolean().default(true),
   defaultModel: modelRef.optional(),
   modelAllowlist,
   defaultThinkingLevel: thinking,
   defaultAccessMode: accessMode,
   /** Pi code mode; absent files written before this setting read as `on`. */
   codemodeMode: z.enum(CODEMODE_MODES).default('on'),
+  /** Cross-conversation memory; absent files written before this setting read as off. */
+  memoryEnabled: z.boolean().default(false),
   defaultPresetId: z.string().min(1).optional(),
   defaultWorkspaceId: z.string().min(1).optional(),
   shortcuts: z.partialRecord(z.enum(SHORTCUT_COMMANDS), z.string().min(1).max(80)).optional(),
@@ -174,11 +174,11 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     performanceUsage: 'detailed',
     codingViews: true,
     busySendMode: 'followUp',
-    docStyle: true,
     modelAllowlist: [],
     defaultThinkingLevel: defaultThinkingLevel ?? 'medium',
     defaultAccessMode: DEFAULT_ACCESS,
     codemodeMode: 'on',
+    memoryEnabled: false,
     defaultWorkspaceId: workspaceId,
   }
 }

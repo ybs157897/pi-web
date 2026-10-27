@@ -4,7 +4,10 @@ export interface SkillSummary {
   id: string
   name: string
   description: string
-  source: 'builtin' | 'agents' | 'pi'
+  source: 'builtin' | 'agents' | 'pi' | 'plugin'
+  /** Marketplace-qualified plugin id for `source: 'plugin'`. */
+  pluginId?: string
+  pluginName?: string
   /** Absolute path to the skill's SKILL.md. */
   path: string
   /** SHA-256 of the exact SKILL.md bytes, used for optimistic updates. */

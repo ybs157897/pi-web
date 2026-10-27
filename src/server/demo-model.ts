@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import {
   createModels,
   fauxAssistantMessage,
@@ -257,6 +258,76 @@ const DEMO_SUBAGENT_ANSWER = [
   '3. UI 通过 `GET /api/conversations/:id/children` 读取子会话摘要，在会话头的计数触发器里展开、打开或停止。',
 ].join('\n')
 
+/** The deterministic extraction script: one fact file, one index update, then a plain stop. */
+const DEMO_MEMORY_FACT_NAME = 'user-prefers-zh.md'
+const DEMO_MEMORY_FACT = [
+  '---',
+  'name: user-prefers-zh',
+  'description: 用户要求所有回答使用中文',
+  'metadata:',
+  '  type: feedback',
+  '---',
+  '',
+  '用户要求所有回答使用中文。',
+  '',
+  '**Why:** 用户在演示对话中明确说明了偏好。',
+  '**How to apply:** 直接用中文回答，不要先问语言。',
+  '',
+].join('\n')
+const DEMO_MEMORY_DIRECT_FACT = [
+  '---',
+  'name: direct-write',
+  'description: 主会话直接写入的记忆文件',
+  'metadata:',
+  '  type: project',
+  '---',
+  '',
+  '主会话直接写入本条记忆，用来验证后台提取会被跳过。',
+  '',
+].join('\n')
+
+function systemTextOf(context: Parameters<FauxResponseFactory>[0]): string {
+  return context.messages
+    .filter(message => message.role === 'system')
+    .flatMap((message) => {
+      const sections = (message as { sections?: Record<string, string> }).sections
+      return [
+        typeof message.content === 'string' ? message.content : '',
+        ...Object.values(sections ?? {}),
+      ]
+    })
+    .join('\n')
+}
+
+/** The memory root is declared by the memory section; the demo scripts read it rather than guess. */
+function demoMemoryRoot(context: Parameters<FauxResponseFactory>[0]): string | undefined {
+  const match = /你在 `([^`]+)` 有一个基于文件的持久记忆/u.exec(systemTextOf(context))
+  return match?.[1]
+}
+
+function demoMemoryExtractionResponse(context: Parameters<FauxResponseFactory>[0]) {
+  if (!latestUserText(context).includes('记忆提取子代理')) return undefined
+  const root = demoMemoryRoot(context)
+  if (root === undefined) return fauxAssistantMessage(fauxText('Nothing to save.'))
+  const last = context.messages.at(-1)
+  if (last?.role !== 'toolResult') {
+    return fauxAssistantMessage(
+      fauxToolCall('write', { path: join(root, DEMO_MEMORY_FACT_NAME), content: DEMO_MEMORY_FACT }, { id: `demo-memory-fact-${context.messages.length}` }),
+      { stopReason: 'toolUse' },
+    )
+  }
+  if (toolResultText(last).includes(DEMO_MEMORY_FACT_NAME)) {
+    return fauxAssistantMessage(
+      fauxToolCall('write', {
+        path: join(root, 'MEMORY.md'),
+        content: `- [用户偏好中文](${DEMO_MEMORY_FACT_NAME}) — 所有回答使用中文\n`,
+      }, { id: `demo-memory-index-${context.messages.length}` }),
+      { stopReason: 'toolUse' },
+    )
+  }
+  return fauxAssistantMessage(fauxText('已保存。'))
+}
+
 const scriptedResponse: FauxResponseFactory = async (context, options) => {
   for (const observer of requestObservers) observer(context)
   await waitAtGate(options?.signal)
@@ -264,6 +335,8 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   if (skillResponse) return skillResponse
   const compactionResponse = demoCompactionResponse(context)
   if (compactionResponse) return compactionResponse
+  const memoryExtractionResponse = demoMemoryExtractionResponse(context)
+  if (memoryExtractionResponse) return memoryExtractionResponse
   let lastUserIndex = -1
   for (let index = context.messages.length - 1; index >= 0; index--) {
     if (context.messages[index].role === 'user') {
@@ -274,6 +347,31 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   const currentResults = context.messages.slice(lastUserIndex + 1).filter((message) => message.role === 'toolResult')
   const userText = latestUserText(context).trim()
   if (userText.includes('[prompt-probe]')) return fauxAssistantMessage(fauxText('PROMPT_PROBE_OK'))
+  if (userText.includes('[memory-write]')) {
+    const root = currentResults.length === 0 ? demoMemoryRoot(context) : undefined
+    if (root !== undefined) {
+      return fauxAssistantMessage(
+        fauxToolCall('write', { path: join(root, 'nested', 'direct-write.md'), content: DEMO_MEMORY_DIRECT_FACT }, { id: `demo-memory-direct-${context.messages.length}` }),
+        { stopReason: 'toolUse' },
+      )
+    }
+    return fauxAssistantMessage(fauxText('已直接写入记忆。'))
+  }
+  if (userText.includes('[memory-demo]')) {
+    return fauxAssistantMessage(fauxText('好，后续都用中文回答。'))
+  }
+  // Live-tool acceptance without a real model: `[plugin-tool:<tool name>]` calls one registered tool
+  // and reports its text, so a plugin MCP tool can be proven reachable end to end.
+  const pluginTool = /\[plugin-tool:([A-Za-z0-9_]+)\]/u.exec(userText)?.[1]
+  if (pluginTool !== undefined) {
+    if (currentResults.length === 0) {
+      return fauxAssistantMessage(
+        fauxToolCall(pluginTool, { text: 'hello' }, { id: `demo-plugin-tool-${context.messages.length}` }),
+        { stopReason: 'toolUse' },
+      )
+    }
+    return fauxAssistantMessage(fauxText(`插件工具返回：${toolResultText(currentResults.at(-1)!).trim()}`))
+  }
   const planReply = parsePlanReviewReply(userText)
   const answerReply = planReply === undefined ? parseAnswerReply(userText) : undefined
   if (planReply?.approved) {
@@ -853,7 +951,6 @@ export function createDemoModelRuntime(): RuntimeModels {
   models.setProvider(faux.provider)
   return {
     models,
-    structuredOutput: () => false,
     defaultModel: DEMO_MODEL,
     defaultThinkingLevel: 'medium',
     async saveProvider(_input: ProviderInput) {

@@ -1,5 +1,6 @@
 import type { GoalUpdateRequest } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
+import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
 import type {
   AddWorkspaceInput,
   AccessMode,
@@ -101,6 +102,21 @@ export interface Runtime {
   skills(workspaceId: string): Promise<SkillCatalog>
   skill(workspaceId: string, skillId: string, resource?: string): Promise<SkillContent>
   validateSkill(workspaceId: string, skillId: string): Promise<SkillValidation>
+  /** Plugin marketplace, install records, operations and diagnostics. */
+  plugins(): Promise<PluginOverview>
+  addPluginMarketplace(source: string): Promise<PluginOverview>
+  removePluginMarketplace(id: string): Promise<PluginOverview>
+  refreshPluginMarketplace(id: string): Promise<PluginOverview>
+  /** Start an install in the background; the returned operation is visible in `plugins()`. */
+  installPlugin(input: InstallPluginInput): Promise<{ operationId: string }>
+  /** Start updating an installed plugin to the catalog version; the operation is visible in `plugins()`. */
+  updatePlugin(pluginId: string): Promise<{ operationId: string }>
+  /** Components of a candidate or installed plugin, for the install confirmation. */
+  describePlugin(pluginId: string): Promise<PluginDescription>
+  uninstallPlugin(pluginId: string, keepData?: boolean): Promise<PluginOverview>
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginOverview>
+  /** Wake on every plugin store mutation so an open settings panel can refetch immediately. */
+  watchPlugins(listener: () => void): () => void
   presets(): AgentPreset[]
   createPreset(input: CreateAgentPresetInput): Promise<AgentPreset>
   updatePreset(id: string, input: UpdateAgentPresetInput): Promise<AgentPreset>

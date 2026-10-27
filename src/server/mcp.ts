@@ -1,13 +1,14 @@
 /**
  * Pi MCP servers imported into a pi-web conversation.
  *
- * `McpManager.open()` reads the user-level `mcp.json`, connects every enabled server concurrently, lists
- * its tools, and turns them into a synthetic `mcp` extension plus code-mode namespaces. The manager is
- * the single owner of the live `McpClient` connections: the runtime keeps it alive for its own lifetime
- * and calls `close()` on shutdown.
+ * `McpRegistry.open()` reads the user-level `mcp.json`, merges the MCP servers declared by enabled
+ * plugins, connects every server concurrently, lists its tools, and turns them into a synthetic
+ * `mcp` extension plus code-mode namespaces. The registry is the single owner of the live
+ * `McpClient` connections and can reload them in place when plugins are installed, disabled, or
+ * removed.
  *
- * One server failing never fails startup: it is recorded as `status: 'error'` in `view()` and the other
- * servers keep working.
+ * One server failing never fails startup: it is recorded as `status: 'error'` in `view()` and the
+ * other servers keep working.
  */
 import { createHash } from 'node:crypto'
 import {
@@ -15,7 +16,10 @@ import {
   StdioTransport,
   StreamableHttpTransport,
   toLlmContent,
+  type CallToolResult,
   type McpTransport,
+  type ReadResourceResult,
+  type Resource,
   type Tool as McpTool,
 } from '@earendil-works/pi-mcp'
 import type { JsonValue } from '@earendil-works/chord'
@@ -25,6 +29,7 @@ import { Type, type TSchema } from 'typebox'
 import packageJson from '../../package.json' with { type: 'json' }
 import type { McpExposure, McpServerView, McpToolView, McpView } from '../shared/types.ts'
 import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from './mcp-config.ts'
+import type { PluginMcpServerConfig } from './plugin-types.ts'
 
 export type { McpServerConfig, McpToolExposureRule } from './mcp-config.ts'
 
@@ -34,9 +39,18 @@ export const MCP_EXTENSION_NAME = 'mcp'
 const CLIENT_NAME = 'pi-web'
 const CLIENT_VERSION: string = packageJson.version
 const MAX_OUTPUT_BYTES = 100_000
+/** Plugin servers get a longer request budget: their package runners start on first call. */
+const PLUGIN_REQUEST_TIMEOUT_MS = 60_000
+/**
+ * Old clients stay open briefly after a reload so an in-flight tool call can finish on the
+ * connection it started with. `close()` forces them shut immediately.
+ */
+const RELOAD_CLOSE_GRACE_MS = 10_000
 
-export interface McpManagerOptions {
+export interface McpRegistryOptions {
   configPath: string
+  /** Live projection of enabled plugin servers; `reload()` reads it again. */
+  pluginServers?: () => readonly PluginMcpServerConfig[]
   /** Test injection: build the transport for one server instead of spawning a process or opening HTTP. */
   transportFactory?: (server: McpServerConfig) => McpTransport
 }
@@ -53,6 +67,8 @@ interface ServerState {
   readonly error?: string
   /** The initialize result's `instructions`, kept for the code-mode namespace description. */
   readonly instructions?: string
+  /** Set for plugin-declared servers. */
+  readonly pluginId?: string
 }
 
 /** `details` a tool result carries for the browser: which server/tool ran and how long it took. */
@@ -64,31 +80,37 @@ type McpToolDetails = {
   structuredContent?: JsonValue
 }
 
+interface RetiredClient {
+  readonly client: McpClient
+  readonly timer: NodeJS.Timeout
+}
+
 /**
  * Owns the imported MCP catalog. `view()`, `extension()`, and `namespaces()` are synchronous once
- * `open()` resolves: everything the Harness needs is resolved up front.
+ * `open()` or `reload()` resolves: everything the Harness needs is resolved up front.
  */
-export class McpManager {
-  private readonly servers: readonly ServerState[]
-  private readonly viewValue: McpView
-  private readonly extensionValue: Extension | undefined
-  private readonly namespaceList: readonly CodemodeNamespace[]
+export class McpRegistry {
+  private servers: readonly ServerState[]
+  private viewValue: McpView
+  private extensionValue: Extension | undefined
+  private namespaceList: readonly CodemodeNamespace[]
+  private readonly retired: RetiredClient[] = []
+  private reloadTail: Promise<void> = Promise.resolve()
   private closed = false
+  private readonly options: McpRegistryOptions
 
-  private constructor(loaded: LoadedMcpConfig, servers: readonly ServerState[]) {
+  private constructor(options: McpRegistryOptions, loaded: LoadedMcpConfig, servers: readonly ServerState[]) {
+    this.options = options
     this.servers = servers
-    this.viewValue = buildView(loaded, servers)
-    const { registrations, namespaces } = buildRegistrations(servers)
-    this.extensionValue = registrations.length > 0 ? { name: MCP_EXTENSION_NAME, tools: registrations } : undefined
+    const { view, extension, namespaces } = buildPublished(loaded, servers)
+    this.viewValue = view
+    this.extensionValue = extension
     this.namespaceList = namespaces
   }
 
-  static async open(options: McpManagerOptions): Promise<McpManager> {
-    const loaded = await loadMcpConfig(options.configPath)
-    const servers = await Promise.all(
-      loaded.servers.map(server => connectServer(server, options.transportFactory)),
-    )
-    return new McpManager(loaded, servers)
+  static async open(options: McpRegistryOptions): Promise<McpRegistry> {
+    const { loaded, servers } = await connectAll(options)
+    return new McpRegistry(options, loaded, servers)
   }
 
   /** The browser-facing catalog: connection state and tool exposure, never credentials. */
@@ -106,20 +128,139 @@ export class McpManager {
     return this.namespaceList
   }
 
+  /**
+   * Re-read `mcp.json` and the plugin projection, connect the new server set, and publish it. Old
+   * connections stay open for a short grace period so calls already in flight can finish.
+   */
+  reload(): Promise<void> {
+    if (this.closed) return Promise.resolve()
+    const run = this.reloadTail.then(() => this.reloadNow(), () => this.reloadNow())
+    this.reloadTail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  private async reloadNow(): Promise<void> {
+    if (this.closed) return
+    const { loaded, servers } = await connectAll(this.options)
+    if (this.closed) {
+      await closeStates(servers)
+      return
+    }
+    const previous = this.servers
+    const { view, extension, namespaces } = buildPublished(loaded, servers)
+    this.servers = servers
+    this.viewValue = view
+    this.extensionValue = extension
+    this.namespaceList = namespaces
+    this.retire(previous)
+  }
+
+  private retire(states: readonly ServerState[]): void {
+    for (const state of states) {
+      if (state.client === undefined) continue
+      const client = state.client
+      const entry: RetiredClient = {
+        client,
+        timer: setTimeout(() => {
+          void client.close().catch(() => undefined)
+          const index = this.retired.indexOf(entry)
+          if (index >= 0) this.retired.splice(index, 1)
+        }, RELOAD_CLOSE_GRACE_MS),
+      }
+      entry.timer.unref?.()
+      this.retired.push(entry)
+    }
+  }
+
+  /** Resources of one connected server, for the plugin UI host (P2). */
+  async listResources(serverName: string): Promise<Resource[]> {
+    return await this.requireClient(serverName).listResources()
+  }
+
+  /** One MCP resource of a connected server, for the plugin UI host (P2). */
+  async readResource(serverName: string, uri: string): Promise<ReadResourceResult> {
+    return await this.requireClient(serverName).readResource(uri)
+  }
+
+  /** A direct MCP call outside the model tool path; the caller applies Plan/read-only policy. */
+  async callTool(serverName: string, tool: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
+    return await this.requireClient(serverName).callTool(tool, toolArguments(args), signal ? { signal } : undefined)
+  }
+
+  private requireClient(serverName: string): McpClient {
+    const state = this.servers.find(candidate => candidate.config.name === serverName)
+    if (state === undefined) throw new Error(`MCP server "${serverName}" is not configured`)
+    if (state.status !== 'connected' || state.client === undefined) {
+      throw new Error(`MCP server "${serverName}" is ${state.status}${state.error === undefined ? '' : `: ${state.error}`}`)
+    }
+    return state.client
+  }
+
   /** Close every connection. Idempotent; failures on one server do not block the others. */
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
-    await Promise.allSettled(this.servers.map(state => state.client ? state.client.close() : Promise.resolve()))
+    await this.reloadTail.catch(() => undefined)
+    const retired = this.retired.splice(0)
+    for (const entry of retired) clearTimeout(entry.timer)
+    const current = this.servers
+    this.servers = []
+    await Promise.allSettled([
+      ...current.map(state => state.client ? state.client.close() : Promise.resolve()),
+      ...retired.map(entry => entry.client.close()),
+    ])
   }
+}
+
+async function connectAll(options: McpRegistryOptions): Promise<{ loaded: LoadedMcpConfig; servers: ServerState[] }> {
+  const loaded = await loadMcpConfig(options.configPath)
+  const configured = effectiveServers(loaded, options.pluginServers?.() ?? [])
+  const servers = await Promise.all(configured.map(server =>
+    connectServer(server.config, options.transportFactory, server.pluginId)))
+  return { loaded: { ...loaded, servers: configured.map(server => server.config) }, servers }
+}
+
+/** Config servers plus plugin servers; a plugin name that collides with a config name gets a suffix. */
+function effectiveServers(
+  loaded: LoadedMcpConfig,
+  pluginServers: readonly PluginMcpServerConfig[],
+): Array<{ config: McpServerConfig; pluginId?: string }> {
+  const used = new Set(loaded.servers.map(server => server.name))
+  const result: Array<{ config: McpServerConfig; pluginId?: string }> = loaded.servers.map(config => ({ config }))
+  for (const plugin of pluginServers) {
+    let name = plugin.serverName
+    if (used.has(name)) {
+      const suffix = createHash('sha256').update(`${plugin.pluginId}\u0000${plugin.serverKey}`).digest('hex').slice(0, 8)
+      name = `${name}_${suffix}`
+    }
+    used.add(name)
+    result.push({
+      config: {
+        name,
+        transport: 'stdio',
+        enabled: true,
+        exposure: plugin.exposure,
+        timeoutMs: PLUGIN_REQUEST_TIMEOUT_MS,
+        command: plugin.command,
+        args: plugin.args,
+        env: plugin.env,
+        cwd: plugin.cwd,
+        toolExposure: [],
+        ...(plugin.description === undefined ? {} : { description: plugin.description }),
+      },
+      pluginId: plugin.pluginId,
+    })
+  }
+  return result
 }
 
 /** Connect one enabled server and list its tools; any failure becomes a recorded error state. */
 async function connectServer(
   config: McpServerConfig,
   transportFactory: ((server: McpServerConfig) => McpTransport) | undefined,
+  pluginId: string | undefined,
 ): Promise<ServerState> {
-  if (!config.enabled) return { config, status: 'disabled', tools: [] }
+  if (!config.enabled) return { config, status: 'disabled', tools: [], ...(pluginId === undefined ? {} : { pluginId }) }
   const client = new McpClient({ name: CLIENT_NAME, version: CLIENT_VERSION, requestTimeoutMs: config.timeoutMs })
   try {
     const transport = transportFactory ? transportFactory(config) : createTransport(config)
@@ -131,11 +272,22 @@ async function connectServer(
       tools,
       client,
       ...(client.instructions !== undefined ? { instructions: client.instructions } : {}),
+      ...(pluginId === undefined ? {} : { pluginId }),
     }
   } catch (error) {
     await client.close().catch(() => {})
-    return { config, status: 'error', tools: [], error: describeError(error) }
+    return {
+      config,
+      status: 'error',
+      tools: [],
+      error: describeError(error),
+      ...(pluginId === undefined ? {} : { pluginId }),
+    }
   }
+}
+
+async function closeStates(states: readonly ServerState[]): Promise<void> {
+  await Promise.allSettled(states.map(state => state.client ? state.client.close() : Promise.resolve()))
 }
 
 function createTransport(config: McpServerConfig): McpTransport {
@@ -151,6 +303,19 @@ function createTransport(config: McpServerConfig): McpTransport {
     url: config.url!,
     ...(config.headers !== undefined ? { headers: { ...config.headers } } : {}),
   })
+}
+
+function buildPublished(loaded: LoadedMcpConfig, servers: readonly ServerState[]): {
+  view: McpView
+  extension: Extension | undefined
+  namespaces: readonly CodemodeNamespace[]
+} {
+  const { registrations, namespaces } = buildRegistrations(servers)
+  return {
+    view: buildView(loaded, servers),
+    extension: registrations.length > 0 ? { name: MCP_EXTENSION_NAME, tools: registrations } : undefined,
+    namespaces,
+  }
 }
 
 /** Build the `mcp` extension's tools and the code-mode namespaces, resolving names and exposure once. */
@@ -279,6 +444,7 @@ function buildView(loaded: LoadedMcpConfig, servers: readonly ServerState[]): Mc
       status: state.status,
       tools,
       ...(state.error !== undefined ? { error: state.error } : {}),
+      ...(state.pluginId !== undefined ? { pluginId: state.pluginId } : {}),
     }
   })
   return {

@@ -194,8 +194,6 @@ interface ModelDraft {
   contextWindow: string
   maxTokens: string
   input: Array<'text' | 'image'>
-  /** The model can return provider-enforced structured (JSON) output. */
-  structuredOutput: boolean
   /** Declared reasoning levels; undefined is how a model says it does not reason. */
   levels?: ReasoningEntry[]
   /** Untouched fields of the stored model, carried back on save. */
@@ -238,7 +236,6 @@ function draftFromModel(model: ProviderModelInput): ModelDraft {
     contextWindow: '',
     maxTokens: '',
     input: model.input !== undefined && model.input.length > 0 ? [...model.input] : ['text'],
-    structuredOutput: model.structuredOutput === true,
     ...(levels === undefined ? {} : { levels }),
     base: model,
   }
@@ -430,7 +427,6 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
         id: modelId,
         name: row.name.trim() || modelId,
         input: [...row.input],
-        ...(row.structuredOutput === (row.base?.structuredOutput === true) ? {} : { structuredOutput: row.structuredOutput }),
         ...(contextWindow === undefined ? {} : { contextWindow }),
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(row.levels === undefined
@@ -634,7 +630,6 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
                 : null}
               {row.input.includes('image') ? <span className={css.modelChip}>{t('视觉', 'Vision')}</span> : null}
               {row.levels !== undefined ? <span className={css.modelChip}>{t('推理', 'Reasoning')}</span> : null}
-              {row.structuredOutput ? <span className={css.modelChip}>{t('结构化', 'Structured')}</span> : null}
             </span>
           </div>
           <button type="button" className={css.rowTextButton} disabled={disabled}
@@ -964,22 +959,6 @@ function ModelEditorModal({ row, position, providerId, catalog, availableLevels,
       <details className={css.advancedFold}>
         <summary className={css.advancedSummary}>{t('高级配置', 'Advanced')}</summary>
         <div className={css.advancedBody}>
-          <div className={css.modelField}>
-            <span className={css.fieldLabel}>
-              {t('模型能力', 'Capabilities')}
-              <Tooltip label={t('开启结构化输出后，结论文档排版会要求该模型在 doc 围栏里直接写 JSON；关闭时仍用 YAML。',
-                'With structured output on, the document contract asks this model to emit JSON inside the doc fence; off keeps YAML.')}
-                side="right" delayMs={0} focusDelayMs={0} portal openOnClick>
-                <button type="button" className={css.helpButton} aria-label={t('模型能力说明', 'About capabilities')}>?</button>
-              </Tooltip>
-            </span>
-            <div className={css.booleanOptions} role="group" aria-label={t(`模型能力 ${position}`, `Capabilities ${position}`)}>
-              <BooleanModelOption label={t('结构化输出', 'Structured output')} selected={draft.structuredOutput} disabled={disabled}
-                onToggle={() => patch({ structuredOutput: !draft.structuredOutput })} />
-            </div>
-            <span className={css.modelFieldHint}>{t('开启后，结论文档排版要求模型在围栏内直接输出 JSON。',
-              'When on, the document contract asks the model to emit JSON inside the fence.')}</span>
-          </div>
           <div className={css.modelField}>
             <span className={css.fieldLabel}>{t('输入类型', 'Input types')}</span>
             <div className={css.booleanOptions} role="group" aria-label={t(`输入类型 ${position}`, `Input types ${position}`)}>

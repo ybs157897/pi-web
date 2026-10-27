@@ -256,8 +256,8 @@ class FakeRuntime implements Runtime {
 
   settingsValue: Protocol.AppSettings = {
     theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
-    transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp', docStyle: true,
-    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on',
+    transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp',
+    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false,
   }
   settings() { return this.settingsValue }
   mcp(): Protocol.McpView {
@@ -302,6 +302,25 @@ class FakeRuntime implements Runtime {
   async skills() { return { skills: [], diagnostics: [] } }
   async skill(): Promise<import('../src/shared/skills.ts').SkillContent> { throw new RuntimeError('NOT_FOUND', 'Skill not found') }
   async validateSkill() { return { valid: false, errors: ['Skill not found'], warnings: [] } }
+  async plugins(): Promise<import('../src/shared/plugins.ts').PluginOverview> {
+    return { marketplaces: [], plugins: [], operations: [], diagnostics: [] }
+  }
+  async addPluginMarketplace(source: string) { this.calls.push('add-marketplace:' + source); return this.plugins() }
+  async removePluginMarketplace(id: string) { this.calls.push('remove-marketplace:' + id); return this.plugins() }
+  async refreshPluginMarketplace(id: string) { this.calls.push('refresh-marketplace:' + id); return this.plugins() }
+  async installPlugin(input: { marketplace: string; name: string }) { this.calls.push(`install-plugin:${input.marketplace}/${input.name}`); return { operationId: 'operation-1' } }
+  async updatePlugin(pluginId: string) { this.calls.push('update-plugin:' + pluginId); return { operationId: 'operation-2' } }
+  async describePlugin(pluginId: string): Promise<import('../src/shared/plugins.ts').PluginDescription> {
+    this.calls.push('describe-plugin:' + pluginId)
+    const [name, marketplace] = pluginId.split('@')
+    return {
+      id: pluginId, name: name ?? '', marketplace: marketplace ?? '', version: '1.0.0', sourceType: 'directory',
+      skills: [], mcpServers: [], uiSurfaces: [], unsupported: [], dependencies: [], installed: false,
+    }
+  }
+  async uninstallPlugin(pluginId: string) { this.calls.push('uninstall-plugin:' + pluginId); return this.plugins() }
+  async setPluginEnabled(pluginId: string, enabled: boolean) { this.calls.push(`enable-plugin:${pluginId}:${enabled}`); return this.plugins() }
+  watchPlugins(): () => void { return () => undefined }
   presets(): Protocol.AgentPreset[] { return [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: ['coding'], tools: ['read'], accessMode: 'readOnly' }] }
   async createPreset(input: Protocol.CreateAgentPresetInput) { return { ...input, id: input.id ?? 'preset-new' } }
   async updatePreset(id: string, input: Protocol.UpdateAgentPresetInput) { return { ...this.presets()[0]!, ...input, id } }
@@ -811,6 +830,9 @@ describe('management API', () => {
     expect((await app.request('/api/settings', json('PATCH', { codemodeMode: 'only' }))).status).toBe(200)
     expect(runtime.settings().codemodeMode).toBe('only')
     expect((await app.request('/api/settings', json('PATCH', { codemodeMode: 'sometimes' }))).status).toBe(400)
+    expect((await app.request('/api/settings', json('PATCH', { memoryEnabled: true }))).status).toBe(200)
+    expect(runtime.settings().memoryEnabled).toBe(true)
+    expect((await app.request('/api/settings', json('PATCH', { memoryEnabled: 'yes' }))).status).toBe(400)
     const mcp = await app.request('/api/mcp')
     expect(mcp.status).toBe(200)
     expect(await mcp.json()).toEqual({ configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] })
@@ -819,9 +841,29 @@ describe('management API', () => {
     expect((await workspace.json()).workspace.name).toBe('Project')
     expect((await (await app.request('/api/workspaces/ws-1/files?path=src')).json()).entries[0].path).toBe('src/test.txt')
     expect((await (await app.request('/api/workspaces/ws-1/search?q=test')).json()).entries).toHaveLength(1)
-    // Plugin management was removed by product decision, so the routes are gone.
-    expect((await app.request('/api/plugins')).status).toBe(404)
-    expect((await app.request('/api/plugins/coding', json('PATCH', { tools: { read: false } }))).status).toBe(404)
+    // Plugin management now means the marketplace, not the retired per-plugin switches.
+    const plugins = await app.request('/api/plugins/overview')
+    expect(plugins.status).toBe(200)
+    expect(await plugins.json()).toMatchObject({ marketplaces: [], plugins: [], operations: [], diagnostics: [] })
+    expect((await app.request('/api/plugins/marketplaces', json('POST', { source: '/tmp/pi-web-market' }))).status).toBe(201)
+    expect((await app.request('/api/plugins/marketplaces', json('POST', { source: '' }))).status).toBe(400)
+    expect((await app.request('/api/plugins/marketplaces/market', { method: 'DELETE' })).status).toBe(200)
+    expect((await app.request('/api/plugins/marketplaces/market/refresh', { method: 'POST' })).status).toBe(200)
+    expect((await app.request('/api/plugins/install', json('POST', { marketplace: 'market', name: 'demo' }))).status).toBe(202)
+    expect((await app.request('/api/plugins/update', json('POST', { pluginId: 'demo@market' }))).status).toBe(202)
+    expect((await app.request('/api/plugins/update', json('POST', { pluginId: 'not-an-id' }))).status).toBe(400)
+    const described = await app.request('/api/plugins/demo@market/describe')
+    expect(described.status).toBe(200)
+    expect(await described.json()).toMatchObject({ id: 'demo@market', name: 'demo', marketplace: 'market', installed: false })
+    const events = await app.request('/api/plugins/events')
+    expect(events.headers.get('content-type')).toContain('text/event-stream')
+    const reader = events.body!.getReader()
+    const frames = new TextDecoder().decode((await reader.read()).value)
+    expect(frames).toContain('event: ready')
+    await reader.cancel()
+    expect((await app.request('/api/plugins/demo@market', json('PATCH', { enabled: false }))).status).toBe(200)
+    expect((await app.request('/api/plugins/demo@market', { method: 'DELETE' })).status).toBe(200)
+    expect((await app.request('/api/plugins/not-an-id', json('PATCH', { enabled: false }))).status).toBe(400)
     expect((await app.request('/api/presets', json('POST', { name: 'Review', instructions: 'Review', tools: ['read'], extensions: ['coding'], accessMode: 'readOnly' }))).status).toBe(201)
     expect((await app.request('/api/presets/preset-1', { method: 'DELETE' })).status).toBe(200)
   })

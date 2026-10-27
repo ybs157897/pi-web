@@ -57,7 +57,9 @@ const skillSummarySchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
   description: Type.String(),
-  source: Type.Union([Type.Literal('builtin'), Type.Literal('agents'), Type.Literal('pi')]),
+  source: Type.Union([Type.Literal('builtin'), Type.Literal('agents'), Type.Literal('pi'), Type.Literal('plugin')]),
+  pluginId: Type.Optional(Type.String()),
+  pluginName: Type.Optional(Type.String()),
   version: Type.String(),
   writable: Type.Boolean(),
 })
@@ -98,6 +100,8 @@ function safeSummary(skill: SkillSummary): Omit<SkillSummary, 'path'> {
     name: skill.name,
     description: cleanMessage(skill.description),
     source: skill.source,
+    ...(skill.pluginId === undefined ? {} : { pluginId: skill.pluginId }),
+    ...(skill.pluginName === undefined ? {} : { pluginName: skill.pluginName }),
     version: skill.version,
     writable: skill.writable,
   }
@@ -195,6 +199,7 @@ function renderCatalog(catalog: SkillCatalog): string {
       name: cleanMessage(skill.name, 128),
       description: cleanMessage(skill.description),
       source: skill.source,
+      ...(skill.pluginId === undefined ? {} : { pluginId: cleanMessage(skill.pluginId, 160) }),
       writable: skill.writable,
     }
     return `- ${JSON.stringify(entry)}`

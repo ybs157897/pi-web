@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { execFile } from 'node:child_process'
 import { mkdir, realpath } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import type { Draft, JsonValue } from '@earendil-works/chord'
 import {
@@ -27,7 +27,7 @@ import { createToolSearchExtension } from '@earendil-works/pi-durable/tool-searc
 import { CodemodeSandbox } from '@earendil-works/pi-codemode'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { AgentChange, UserInput } from '@earendil-works/pi-durable'
-import type { UserMessage } from '@earendil-works/pi-ai'
+import type { Usage, UserMessage } from '@earendil-works/pi-ai'
 import type { Runtime, RuntimeOptions } from './contracts.ts'
 import type { GoalUpdateRequest } from '../shared/types.ts'
 import type {
@@ -88,7 +88,7 @@ import {
 } from './team-tools.ts'
 import { validateAnswers } from './interactions.ts'
 import { createDirectory as createHostDirectory, listDirectories as listHostDirectories, pickNativeDirectory } from './directory-picker.ts'
-import { McpManager } from './mcp.ts'
+import { MCP_EXTENSION_NAME, McpRegistry } from './mcp.ts'
 import { SkillStore } from './skills.ts'
 import { createSkillTools, SKILL_READ_TOOLS } from './skill-tools.ts'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from './work-policy.ts'
@@ -96,9 +96,12 @@ import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME, inheri
 import { createRuntimeCodemodeExtension } from './codemode-policy.ts'
 import { ResearchTools } from './research-tools.ts'
 import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
-import { docStyleContract } from './doc-style-instruction.ts'
+import { MEMORY_EXTRACTION_DRAIN_MS, createMemoryExtraction } from './memory-extraction.ts'
+import { MEMORY_EXTENSION_NAME, createMemoryExtension } from './memory-policy.ts'
+import { argumentPath, ensureMemoryDirectory, resolveMemoryRoot, resolveSafeMemoryPath } from './memory.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
+import { PluginStore, type PluginChangeEvent } from './plugin-store.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
 import { GitBranches } from './git-branches.ts'
 import { createExecutionEnv, workspaceWriteSupported } from './execution-env.ts'
@@ -162,7 +165,7 @@ async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): Promise<
   const conversationId = record.id
   const agent = await tx.doc(AgentDoc, conversationId)
   const extensions = agent.extensions
-  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME]
+  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME]
   if (Array.isArray(extensions)) {
     for (const name of required) if (!extensions.includes(name)) extensions.unshift(name)
   } else if (extensions !== undefined) {
@@ -240,6 +243,22 @@ function safeTitle(value: string | undefined): string | undefined {
   const title = value.trim()
   if (!title || title.length > 200) throw new RuntimeError('INVALID_INPUT', '标题长度必须在 1 到 200 个字符之间')
   return title
+}
+
+/** Sum one background generation's usage into a stored total. */
+function accumulateUsage(total: Usage, usage: Usage): void {
+  total.input += usage.input
+  total.output += usage.output
+  total.cacheRead += usage.cacheRead
+  total.cacheWrite += usage.cacheWrite
+  total.totalTokens += usage.totalTokens
+  if (usage.cacheWrite1h !== undefined) total.cacheWrite1h = (total.cacheWrite1h ?? 0) + usage.cacheWrite1h
+  if (usage.reasoning !== undefined) total.reasoning = (total.reasoning ?? 0) + usage.reasoning
+  total.cost.input += usage.cost.input
+  total.cost.output += usage.cost.output
+  total.cost.cacheRead += usage.cost.cacheRead
+  total.cost.cacheWrite += usage.cost.cacheWrite
+  total.cost.total += usage.cost.total
 }
 
 function safeFailure(value: unknown): string {
@@ -400,7 +419,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
   const gitBranches = new GitBranches(() => appState.snapshot().workspaces)
-  const skillStore = new SkillStore()
+  let onPluginChange: (event: PluginChangeEvent) => void = () => undefined
+  const pluginStore = await PluginStore.open({ dataDir, onChange: event => onPluginChange(event) })
+  const skillStore = new SkillStore({ pluginRoots: () => pluginStore.skillRoots() })
   const workspaceWriteAvailable = await workspaceWriteSupported(defaultWorkspace.path)
   const storage = await openNodeSqliteStorage(resolve(dataDir, 'pi-durable.sqlite'))
   // Declared before the extensions so their closures can read the harness at call time.
@@ -532,11 +553,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
    */
   const mcpConfigPath = options.mcpConfigPath ??
     (options.demo ? join(dataDir, 'mcp.json') : join(options.piDir ?? dataDir, 'mcp.json'))
-  const mcp = await McpManager.open({ configPath: mcpConfigPath })
+  const mcp = await McpRegistry.open({
+    configPath: mcpConfigPath,
+    pluginServers: () => pluginStore.mcpServers(),
+  })
   const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
   registry.install(createWorkPolicyExtension())
   registry.install(createCompactionExtension({ harness: () => harness }))
+  // Installed before the execution policy so its sections are covered by the plan-mode filter and
+  // its write/edit wraps sit inside the plan guard.
+  registry.install(createMemoryExtension({
+    dataDir,
+    memoryEnabled: () => appState.snapshot().settings.memoryEnabled,
+  }))
   registry.install(CodingTools)
   registry.install(ResearchTools)
   registry.install(TodoTools)
@@ -571,17 +601,77 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     watchMembers: watchTeamMembers,
     memberSession,
   }))
-  registry.install(createRuntimeCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
-  const mcpExtension = mcp.extension()
-  if (mcpExtension !== undefined) registry.install(mcpExtension)
-  // `tool_search` loads deferred MCP tools into the model's next request. Tools behind
-  // either `codemode` or `deferred` exposure are registered deferred (scripts can call
-  // them directly); install the loader whenever such a tool exists.
-  if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
-    registry.install(createToolSearchExtension())
+  /** Pi's deferred-tool loader; reinstalled whenever the MCP tool set changes. */
+  const TOOL_SEARCH_EXTENSION_NAME = 'tool-search'
+  /**
+   * Keep the MCP surface (code mode namespaces, `mcp` tools, `tool_search`) and the execution policy
+   * in sync with the current connections. The policy must stay last: it captures the installed tool
+   * snapshot, so every change reinstalls it after the MCP group.
+   */
+  const refreshMcpExtensions = (): void => {
+    const current = registry.snapshot()
+    const policy = current.extension(EXECUTION_POLICY_EXTENSION_NAME)
+    if (policy !== undefined) registry.uninstall(policy)
+    const search = current.extension(TOOL_SEARCH_EXTENSION_NAME)
+    if (search !== undefined) registry.uninstall(search)
+    const previousMcp = current.extension(MCP_EXTENSION_NAME)
+    if (previousMcp !== undefined) registry.uninstall(previousMcp)
+    const previousCodemode = current.extension(CODEMODE_EXTENSION_NAME)
+    if (previousCodemode !== undefined) registry.uninstall(previousCodemode)
+
+    registry.install(createRuntimeCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
+    const mcpExtension = mcp.extension()
+    if (mcpExtension !== undefined) registry.install(mcpExtension)
+    // `tool_search` loads deferred MCP tools into the model's next request. Tools behind either
+    // `codemode` or `deferred` exposure are registered deferred (scripts can call them directly);
+    // install the loader whenever such a tool exists.
+    if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
+      registry.install(createToolSearchExtension())
+    }
+    registry.install(createExecutionPolicyExtension(registry.snapshot().installed(), {
+      isPlanException: async (toolName, args, env) => {
+        if (toolName !== 'write' && toolName !== 'edit') return false
+        if (!appState.snapshot().settings.memoryEnabled) return false
+        const cwd = env?.cwd
+        if (typeof cwd !== 'string' || cwd.trim() === '') return false
+        const path = argumentPath(args)
+        if (path === undefined) return false
+        const target = isAbsolute(path) ? path : resolve(cwd, path)
+        return resolveSafeMemoryPath(target, resolveMemoryRoot({ dataDir, workspacePath: cwd })) !== undefined
+      },
+    }))
   }
-  registry.install(createExecutionPolicyExtension(registry.snapshot().installed()))
+  refreshMcpExtensions()
+
+  const pluginListeners = new Set<() => void>()
+  const notifyPluginListeners = (): void => {
+    for (const listener of [...pluginListeners]) {
+      try { listener() } catch { /* a dropped event stream must not stop the reload */ }
+    }
+  }
+  /** Serialized plugin-driven reloads: install/uninstall/enable can arrive back to back. */
+  let pluginRefreshTail: Promise<void> = Promise.resolve()
   let runtimeClosed = false
+  /** Skill-only plugin changes must not reconnect the user's own MCP servers. */
+  let lastMcpProjection = JSON.stringify(pluginStore.mcpServers())
+  onPluginChange = (event) => {
+    notifyPluginListeners()
+    if (event.reason === 'operation' || event.reason === 'marketplace') return
+    pluginRefreshTail = pluginRefreshTail.then(async () => {
+      if (runtimeClosed) return
+      const projection = JSON.stringify(pluginStore.mcpServers())
+      if (projection !== lastMcpProjection) {
+        try {
+          await mcp.reload()
+          refreshMcpExtensions()
+          lastMcpProjection = projection
+        } catch {
+          // A failed reload keeps the previous connections; each server's state is in the MCP view.
+        }
+      }
+      notifyPluginListeners()
+    }, () => undefined)
+  }
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
   const automationTasks = new Set<Promise<void>>()
@@ -613,7 +703,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       const metadata = await harness.snapshot(META, target.conversationId, CTX)
       const selectedWorkspace = workspaceFiles.workspace(metadata?.workspaceId ?? defaultWorkspace.id)
       const selectedMode = metadata?.accessMode ?? appState.snapshot().settings.defaultAccessMode
-      return createExecutionEnv(selectedWorkspace.path, selectedMode)
+      const memoryRoot = appState.snapshot().settings.memoryEnabled
+        ? resolveMemoryRoot({ dataDir, workspacePath: selectedWorkspace.path })
+        : undefined
+      if (memoryRoot !== undefined && selectedMode !== 'readOnly') void ensureMemoryDirectory(memoryRoot)
+      const extraWriteRoots = memoryRoot !== undefined && selectedMode === 'workspaceWrite' ? [memoryRoot] : []
+      return createExecutionEnv(selectedWorkspace.path, selectedMode, extraWriteRoots)
     },
     conversationCreated: async (tx, conversation) => {
       await ensureRuntimePolicy(tx, conversation)
@@ -649,6 +744,24 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
     onReport: () => undefined,
   }, CTX)
+  const memoryExtraction = createMemoryExtraction({
+    harness: () => harness,
+    models: () => modelRuntime.models,
+    dataDir,
+    memoryEnabled: () => appState.snapshot().settings.memoryEnabled,
+    defaultModel: () => modelRuntime.defaultModel,
+    accessMode: async (conversationId) => (await harness.snapshot(META, conversationId, CTX))?.accessMode,
+    thinkingLevels: (provider, modelId) => modelRuntime.supportedThinkingLevels(provider, modelId),
+    recordUsage: async (conversationId, model, usage) => {
+      const key = `${model.provider}/${model.modelId}`
+      await harness.commit(async tx => {
+        const record = await tx.doc(UsageDoc, conversationId)
+        const total = record.models[key]
+        if (total === undefined) record.models[key] = structuredClone(usage) as unknown as typeof total
+        else accumulateUsage(total as unknown as Usage, usage)
+      }, CTX)
+    },
+  })
   const assertOpen = () => {
     if (runtimeClosed) throw new RuntimeError('CONFLICT', '运行时已关闭')
   }
@@ -918,7 +1031,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
     // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
@@ -971,14 +1084,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
     const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
-    // Document layout is a contract with the browser, so it travels as an instruction:
-    // a preset's own instructions come first, the block format after them. A model
-    // declared able to return structured output gets the JSON payload variant.
-    const structuredOutput = model !== undefined && modelRuntime.structuredOutput(model.provider, model.modelId)
-    const docContract = docStyleContract(state.settings.docStyle, structuredOutput)
-    const instructions = [preset?.instructions, docContract]
-      .filter((part): part is string => typeof part === 'string' && part !== '')
-      .join('\n\n')
+    const instructions = preset?.instructions
     // Store what the model will actually send. A configured level list can
     // narrow after the conversation last chose one; keeping the unsupported
     // value in `pi.agent` makes the composer label disagree with the request.
@@ -1186,6 +1292,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }
     }, CTX)
     if (input.text.trim()) scheduleTitleRevision(conversation.id, input.text)
+    memoryExtraction.scheduleAfterSubmission(conversation, request)
     return { submissionId: String(request.id) }
   }
 
@@ -1737,11 +1844,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (input.performanceUsage !== undefined) state.settings.performanceUsage = input.performanceUsage
       if (input.codingViews !== undefined) state.settings.codingViews = input.codingViews
       if (input.busySendMode !== undefined) state.settings.busySendMode = input.busySendMode
-      if (input.docStyle !== undefined) state.settings.docStyle = input.docStyle
       if (nextAllowlist !== undefined) state.settings.modelAllowlist = nextAllowlist
       if (input.defaultThinkingLevel !== undefined) state.settings.defaultThinkingLevel = input.defaultThinkingLevel
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
       if (input.codemodeMode !== undefined) state.settings.codemodeMode = input.codemodeMode
+      if (input.memoryEnabled !== undefined) state.settings.memoryEnabled = input.memoryEnabled
       if (input.defaultModel === null) delete state.settings.defaultModel
       else if (input.defaultModel !== undefined) state.settings.defaultModel = { ...input.defaultModel }
       if (input.defaultPresetId === null) delete state.settings.defaultPresetId
@@ -2365,6 +2472,27 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     skills: async (workspaceId) => skillStore.list(workspaceFiles.workspace(workspaceId).path),
     skill: async (workspaceId, skillId, resource) => skillStore.load(workspaceFiles.workspace(workspaceId).path, skillId, resource),
     validateSkill: async (workspaceId, skillId) => skillStore.validate(workspaceFiles.workspace(workspaceId).path, skillId),
+    plugins: async () => pluginStore.overview(),
+    addPluginMarketplace: async (source) => pluginStore.addMarketplace(source),
+    removePluginMarketplace: async (id) => pluginStore.removeMarketplace(id),
+    refreshPluginMarketplace: async (id) => pluginStore.refreshMarketplace(id),
+    installPlugin: async (input) => ({ operationId: pluginStore.startInstall(input).id }),
+    updatePlugin: async (pluginId) => ({ operationId: pluginStore.startUpdate({ pluginId }).id }),
+    describePlugin: async (pluginId) => pluginStore.describe(pluginId),
+    uninstallPlugin: async (pluginId, keepData) => {
+      const overview = await pluginStore.uninstall(pluginId, keepData)
+      await pluginRefreshTail.catch(() => undefined)
+      return overview
+    },
+    setPluginEnabled: async (pluginId, enabled) => {
+      const overview = await pluginStore.setEnabled(pluginId, enabled)
+      await pluginRefreshTail.catch(() => undefined)
+      return overview
+    },
+    watchPlugins: (listener) => {
+      pluginListeners.add(listener)
+      return () => { pluginListeners.delete(listener) }
+    },
     presets,
     createPreset,
     updatePreset,
@@ -2380,6 +2508,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (!closePromise) {
         runtimeClosed = true
         automationScheduler.close()
+        memoryExtraction.shutdown()
         unsubscribeModels()
         modelListeners.clear()
         modelRuntime.close()
@@ -2388,9 +2517,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
             await Promise.all([...activeWatchStops].map((unsubscribe) => unsubscribe()))
           } finally {
             try {
+              await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
               await harness.close(CTX)
               await Promise.allSettled([...automationTasks])
             } finally {
+              await pluginRefreshTail.catch(() => undefined)
               await Promise.allSettled([codemodeSandbox.close(), mcp.close()])
             }
           }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -13,6 +13,7 @@ import type { SystemMessage } from '@earendil-works/pi-ai'
 import { createRuntime, type ConversationMetadata } from '../src/server/runtime.ts'
 import { createDemoModelRuntime, observeDemoRequests } from '../src/server/demo-model.ts'
 import { RUNTIME_CORE_PROMPT } from '../src/server/work-policy.ts'
+import { resolveMemoryRoot } from '../src/server/memory.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
@@ -358,4 +359,49 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(writes.every(message => message.isError)).toBe(true)
     expect(await readdir(f.options.workspace)).toEqual([])
   })
+})
+
+describe('workspace memory sections at the provider boundary', () => {
+  it('injects the rules and the index only while the setting is on, and keeps them across a restart', async () => {
+    const f = await fixture()
+    const root = resolveMemoryRoot({ dataDir: f.options.dataDir, workspacePath: await realpath(f.options.workspace) })
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'MEMORY.md'), '- [Pref](prefs.md) — prefers Chinese\n', 'utf8')
+    await f.runtime.updateSettings({ memoryEnabled: true })
+
+    const conversation = await f.runtime.create({ title: 'Memory on' })
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] memory-on')
+    const on = currentRequest(f.requests, '[prompt-probe] memory-on')
+    expect(on.system?.sections?.memory).toContain(`\`${root}/\``)
+    expect(on.system?.sections?.['memory-index']).toContain('- [Pref](prefs.md) — prefers Chinese')
+    expect(on.system?.sections?.['memory-index']).toContain(join(root, 'MEMORY.md'))
+
+    await f.runtime.updateSettings({ memoryEnabled: false })
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] memory-off')
+    const off = currentRequest(f.requests, '[prompt-probe] memory-off')
+    expect(off.system?.sections?.memory).toBeUndefined()
+    expect(off.system?.sections?.['memory-index']).toBeUndefined()
+
+    await f.runtime.updateSettings({ memoryEnabled: true })
+    await f.restart()
+    const restarted = await f.runtime.create({ title: 'Memory restarted' })
+    await send(f.runtime, restarted.conversation.id, '[prompt-probe] memory-restart')
+    const after = currentRequest(f.requests, '[prompt-probe] memory-restart')
+    expect(after.system?.sections?.memory).toContain(`\`${root}/\``)
+    expect(after.system?.sections?.['memory-index']).toContain('- [Pref](prefs.md) — prefers Chinese')
+  }, 30_000)
+
+  it('omits the save rules for a read-only session but still offers an existing index', async () => {
+    const f = await fixture()
+    const root = resolveMemoryRoot({ dataDir: f.options.dataDir, workspacePath: await realpath(f.options.workspace) })
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'MEMORY.md'), '- [Pref](prefs.md) — prefers Chinese\n', 'utf8')
+    await f.runtime.updateSettings({ memoryEnabled: true })
+
+    const conversation = await f.runtime.create({ title: 'Read-only memory', accessMode: 'readOnly' })
+    await send(f.runtime, conversation.conversation.id, '[prompt-probe] memory-readonly')
+    const request = currentRequest(f.requests, '[prompt-probe] memory-readonly')
+    expect(request.system?.sections?.memory).toBeUndefined()
+    expect(request.system?.sections?.['memory-index']).toContain('- [Pref](prefs.md) — prefers Chinese')
+  }, 20_000)
 })

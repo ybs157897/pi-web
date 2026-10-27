@@ -9,9 +9,9 @@
 
 | ID | 差异 | 说明 | 状态 |
 |---|---|---|---|
-| DF-1 | pi-web 不展示插件管理界面，所有扩展工具恒开启 | 侧栏「插件」入口与设置「内置插件」tab 均已移除，`/api/plugins` 不再提供；工具启用判定不再读取历史 `plugins` 开关，仅保留 schema 解析兼容。DSH 有插件面板/市场。 | 有意不做（用户要求） |
-| DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 只读导入 Pi 用户级 `mcp.json`（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`）。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
-| DF-3 | 回答的最终结论按「设计文档」版式渲染 | 结论正文走文档排版层（红色两位章节号、空心描边序号、提示块、只留横细线的表格，`src/web/DocBody.module.css`）与结构块（模型用三反引号 + `doc` 的 YAML 围栏输出卡片组 / 对比面板 / 提示块，`src/web/DocBlock.tsx`）。过程区、推理区、Inspector 文档预览不变。DSH 无此版式，正文外观与 DSH 不一致。设置项 `docStyle`（默认开）可关，关掉后回到 DSH 正文观感。分支 `feat/doc-style-conclusion`。 | 有意差异（用户要求） |
+| DF-1 | 插件市场按 ZCode 数据模型原生实现（2026-10-27 起取代原「不展示插件管理界面」决策） | 设置 → 扩展 → 插件市场：本地目录 / HTTPS / GitHub / git 来源、安装 / 更新 / 卸载 / 启停、安装确认（展示 MCP 命令与能力）、插件技能接入技能目录、插件 MCP 工具热重载；插件 UI（内联卡 / 右侧面板）属 P2。原「所有内置扩展工具恒开启」仍成立，不做逐插件工具开关。 | 已实现（P0+P1） |
+| DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 由用户级 `mcp.json` 与已启用插件的 `mcpServers` 合并而成（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`），插件能力变化时热重载。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
+| DF-3 | ~~回答的最终结论按「设计文档」版式渲染~~（差异已随功能移除，2026-10-26） | 「结论文档排版」整体下线：前端渲染层（`DocText` / `DocBlock` / `DocInline` / `doc-split` / `doc-inline`、`DocBody.module.css` / `DocBlock.module.css`）、设置项 `docStyle`、模型契约 `doc-style-instruction.ts`，以及为 doc 块 JSON 载荷引入的「结构化输出」模型能力开关（b3093f6）一并删除；结论与过程回答一样走库的 `MarkdownText`。历史会话里已有的 ```` ```doc ```` 围栏按普通代码块显示。详见 `docs/spec.md` 2026-10-26。 | 已移除（用户要求） |
 
 ## 输入区
 
@@ -49,7 +49,7 @@
 |---|---|---|---|---|
 | ST-1 | 设置弹窗 mask 无背景模糊 | 毛玻璃遮罩 | `dsh-12-settings.png` / `pi-12-settings.png` | 不做（默认主题 `--dsw-mask-blur: none`，两边同源；截图差异疑为本机 DSH 主题覆盖/JPEG 压缩） |
 | ST-2 | 外观是紧凑分段按钮；字号是数字输入+齿轮 | 外观三张带图标大卡；字号下拉式控件 | `dsh-17-settings-general.png` / `pi-16-settings-general.png` | 已修（外观三卡实测 180×82/gap10，DSH 181×83；字号 `N px` 下拉） |
-| ST-3 | 插件页是工具开关清单、字母「C」占位图标、英文工具描述 | 插件配置中心（内置/实验性/已安装 + 彩色图标 + 添加插件） | `dsh-13-plugins.png` / `pi-13-plugins.png` | 不做（插件界面已按用户要求整体移除，见 DF-1） |
+| ST-3 | 插件页是工具开关清单、字母「C」占位图标、英文工具描述 | 插件配置中心（内置/实验性/已安装 + 彩色图标 + 添加插件） | `dsh-13-plugins.png` / `pi-13-plugins.png` | 已修（P0+P1：市场来源、搜索/筛选、安装确认、安装/更新/卸载/启停、能力标签与诊断、SSE 进度；按钮式启停而非 DSH 的插件开关清单。内联插件 UI 属 P2） |
 | ST-4 | 自动化页无筛选 tab、无搜索框、空态无按钮 | 全部/已开启/已结束 + 搜索 + 空态「新建自动化任务」 | `dsh-14-automations.png` / `pi-14-automations.png` | 已修（已启用/已结束映射 enabled 布尔；ego 1440×900 复核通过） |
 | ST-5 | 账号与余额设置区缺失 | 账号/余额/充值 | `dsh-12-settings.png` | 不做（无云端账号） |
 
@@ -372,7 +372,7 @@
 
 - 2026-10-19：收尾批次三。**计划预览**：Inspector 新增「计划」视图（最新 `plan-review` 的 markdown，空态「计划预览不可用」），`ToolCard` 计划卡加「打开」并首次自动打开、手动关闭后不自动重开（`pi-99-plan-01..05`）；**子会话面包屑**（父标题 ← 当前、同级切换、当前 tag）；**子会话 metrics**（`tokens`/`durationMs` 投影 + 面板 `{tok} · {时长}` 运行中每秒刷新）；**团队健壮性**：`spawn_teammate` replay-safe + 按名字幂等复用、`reconcileProvisioning` 把无子会话的 `provisioning` 行对账为 `failed`（对齐 DSH `roster.ts:375-417`）；fork 继承语义沿用既有测试（父级未完成轮次不进入 fork 前缀）。门禁：typecheck / **144/144 测试**（+9）/ build 全绿。
 
-- 2026-10-19：开启 Pi 1.3.0 code mode 与 MCP（DF-2）。服务端 `createCodemodeExtension` + `CodemodeSandbox` 常驻注册，`codemodeMode` 三态应用到空闲会话（含 `modelTools` 的 only 过滤与清除）；`McpManager` 只读导入 `mcp.json`、注册 `mcp__` 工具并保留连接诊断。前端：代码模式三选、MCP 只读状态页、`codemode` 脚本/输出/子调用卡、MCP 行标题。门禁：typecheck / **166 测试**（+22：mcp 9、runtime 3、render-model 8、http 1 等）/ build 全绿；demo HTTP 验收 codemodeMode 与 `/api/mcp`，真实脚本调用 bash 返回 `codemode-ok`。真实模型复核因 opencode-go key 过期（401 `api_key_expired`）暂缓，脚本 `npm run test:live:codemode` 已就绪。
+- 2026-10-19：开启 Pi 1.3.0 code mode 与 MCP（DF-2）。服务端 `createCodemodeExtension` + `CodemodeSandbox` 常驻注册，`codemodeMode` 三态应用到空闲会话（含 `modelTools` 的 only 过滤与清除）；`McpRegistry` 只读导入 `mcp.json`、注册 `mcp__` 工具并保留连接诊断。前端：代码模式三选、MCP 只读状态页、`codemode` 脚本/输出/子调用卡、MCP 行标题。门禁：typecheck / **166 测试**（+22：mcp 9、runtime 3、render-model 8、http 1 等）/ build 全绿；demo HTTP 验收 codemodeMode 与 `/api/mcp`，真实脚本调用 bash 返回 `codemode-ok`。真实模型复核因 opencode-go key 过期（401 `api_key_expired`）暂缓，脚本 `npm run test:live:codemode` 已就绪。
 
 - 2026-10-19：子智能体转录内一行条（`SubagentRunStrip`，用户选定的「彩色胶囊」形态）。模型 `src/web/subagent-run-model.ts`：同一回合连续的 `subagent` 调用折成一组；**`codemode` 脚本里的嵌套 `tools.subagent` 调用**也提成一组放在脚本卡前（运行中读实时 nested tool 消息，结束后读 `details.calls`；投影会把长 `args` 截断，label/task 用字段前缀还原），脚本卡与 nested 列表不再重复这些行。状态：未匹配子会话且调用未返回 → `creating`（「创建中」/「正在创建子智能体」），失败 > 运行中 > 已完成；tokens/时长来自 `ConversationDetail.subagents`，颜色按父会话子列表顺序分配（缺行时按 id 哈希）。`tool-render-model.ts` 的 `subagentRowModel` 新增 `label`，并识别运行中投影把扩展 details 嵌在 `result` 下的形状。组件：转圈环/✓/×、运行中每秒推进时长（无 settled 时长时回退 live tokens）、`{已结束}/{总数}`、strip 自身容器查询在窄宽度先隐藏完成态 tokens 再隐藏标签、暗色专用配色、`prefers-reduced-motion`。接线：`transcript.tsx` 在 `ProcessGroup` 内分组渲染，新增 `conversationId`/`subagents` 入参与「有子会话运行才轮询」的 1.5s 刷新；`App.tsx` 传 `activeDetail`；点胶囊复用 `onOpenSubagent` → `selectConversation` 打开子会话的「对话」界面（执行过程在转录里可见），父标题面包屑返回父会话。已完成但 label 对不上的胶囊先按 label 前缀、再按最新子会话顺序兜底匹配，避免完成态被禁用。demo 新增 `[subagents]`（同一 assistant 消息三次并行委派，子任务带 child marker）。门禁：typecheck / **183/183 测试**（+16：`tests/subagent-run-model.test.ts`；render-model +2）/ build 全绿。ego 真实浏览器（4317 真实模型会话 827 / 982）：真实 codemode 5 子 agent 的完成态显示 5 个彩色胶囊（essay-1…5，labels 完整，脚本卡不再列 nested 行）、点 essay-1 进入子会话的「对话」、面包屑返回父会话并恢复 strip；2 子 agent 短任务同样成组。CDP demo（4331）覆盖运行态/暗色/窄窗口；截图 `artifacts/subagent-strip-check/pi-100-subagent-strip-01..06`（gitignored）。失败胶囊由单测覆盖。另：4317 进程在真实 5 子 agent 运行后出现过 `/api/conversations` 500（同一数据目录新进程可正常列举），重启进程恢复，待单独复现定位。
 

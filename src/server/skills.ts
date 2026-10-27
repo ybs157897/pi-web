@@ -27,7 +27,7 @@ const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 type SkillSource = SkillSummary['source']
-interface SkillRoot { source: SkillSource; path: string }
+export interface SkillRoot { source: SkillSource; path: string; pluginId?: string; pluginName?: string }
 interface SkillDirectory extends SkillRoot { name: string; directory: string; skillPath: string }
 interface SkillDocument {
   name?: string
@@ -40,6 +40,8 @@ interface SkillDocument {
 export interface SkillStoreOptions {
   /** Bundled, read-only skills. Defaults to the repository's top-level `skills/` directory. */
   builtinRoot?: string
+  /** Enabled plugin skill roots, read on every catalog/list operation. */
+  pluginRoots?: () => readonly SkillRoot[]
 }
 
 function isWithin(root: string, target: string): boolean {
@@ -139,14 +141,19 @@ function parseSkillDocument(content: string, expectedName: string): SkillDocumen
 }
 
 function summary(directory: SkillDirectory, name: string, description: string, version: string): SkillSummary {
+  const id = directory.source === 'plugin' && directory.pluginId !== undefined
+    ? `${directory.pluginId}:${directory.name}`
+    : `${directory.source}:${directory.name}`
   return {
-    id: `${directory.source}:${directory.name}`,
+    id,
     name,
     description,
     source: directory.source,
     path: directory.skillPath,
     version,
     writable: directory.source === 'agents',
+    ...(directory.pluginId === undefined ? {} : { pluginId: directory.pluginId }),
+    ...(directory.pluginName === undefined ? {} : { pluginName: directory.pluginName }),
   }
 }
 
@@ -300,10 +307,12 @@ async function* boundedNames(directory: string, limit: number): AsyncGenerator<s
 
 export class SkillStore {
   private readonly builtinRoot: string
+  private readonly pluginRoots: () => readonly SkillRoot[]
   private readonly writeTails = new Map<string, Promise<void>>()
 
   constructor(options: SkillStoreOptions = {}) {
     this.builtinRoot = resolve(options.builtinRoot ?? join(dirname(fileURLToPath(import.meta.url)), '../../skills'))
+    this.pluginRoots = options.pluginRoots ?? (() => [])
   }
 
   async list(workspace: string): Promise<SkillCatalog> {
@@ -482,6 +491,7 @@ export class SkillStore {
       { source: 'builtin', path: this.builtinRoot },
       { source: 'agents', path: join(workspaceRoot, '.agents', 'skills') },
       { source: 'pi', path: join(workspaceRoot, '.pi-web', 'skills') },
+      ...this.pluginRoots(),
     ]
   }
 
@@ -513,33 +523,37 @@ export class SkillStore {
 
   private async resolveSkill(workspace: string, id: string): Promise<SkillDirectory> {
     const workspaceRoot = await this.workspaceRoot(workspace)
-    const delimiter = id.indexOf(':')
-    let requestedSource: SkillSource | undefined
-    let name = id
-    if (delimiter >= 0) {
-      const source = id.slice(0, delimiter)
-      name = id.slice(delimiter + 1)
-      if (source !== 'builtin' && source !== 'agents' && source !== 'pi') throw new RuntimeError('INVALID_INPUT', 'Skill ID source is invalid')
-      requestedSource = source
-    }
-    const nameErrors = validateSkillName(name)
-    if (nameErrors.length > 0) throw new RuntimeError('INVALID_INPUT', nameErrors.join('; '))
-
     const directories: SkillDirectory[] = []
+    let matchedPrefix = false
     for (const root of this.roots(workspaceRoot)) {
-      if (requestedSource !== undefined && root.source !== requestedSource) continue
-      const rootPath = root.source === 'agents'
-        ? await checkedDirectory(workspaceRoot, ['.agents', 'skills'], false)
-        : root.source === 'pi'
-          ? await checkedDirectory(workspaceRoot, ['.pi-web', 'skills'], false)
-          : await this.optionalBuiltinRoot()
+      const prefix = root.source === 'plugin' && root.pluginId !== undefined ? `${root.pluginId}:` : `${root.source}:`
+      let name: string | undefined
+      if (id.startsWith(prefix)) {
+        matchedPrefix = true
+        name = id.slice(prefix.length)
+      } else if (!id.includes(':')) {
+        name = id
+      }
+      if (name === undefined) continue
+      const nameErrors = validateSkillName(name)
+      if (nameErrors.length > 0) throw new RuntimeError('INVALID_INPUT', nameErrors.join('; '))
+      const rootPath = await this.rootPath(root, workspaceRoot, [])
       if (!rootPath) continue
       const directory = await checkedDirectory(rootPath, [name], false)
       if (!directory) continue
       directories.push({ ...root, path: rootPath, directory, name, skillPath: join(directory, 'SKILL.md') })
     }
-    if (directories.length === 0) throw new RuntimeError('NOT_FOUND', `Skill "${id}" was not found`)
-    if (directories.length > 1) throw new RuntimeError('CONFLICT', `Skill name "${name}" is ambiguous; use a source-qualified ID`)
+    if (directories.length === 0) {
+      if (!matchedPrefix && id.includes(':')) {
+        const pluginId = id.slice(0, id.lastIndexOf(':'))
+        if (/^[a-z0-9][a-z0-9._-]{0,127}@[a-z0-9][a-z0-9._-]{0,63}$/u.test(pluginId)) {
+          throw new RuntimeError('NOT_FOUND', `Skill "${id}" was not found`)
+        }
+        throw new RuntimeError('INVALID_INPUT', 'Skill ID source is invalid')
+      }
+      throw new RuntimeError('NOT_FOUND', `Skill "${id}" was not found`)
+    }
+    if (directories.length > 1) throw new RuntimeError('CONFLICT', `Skill name "${id}" is ambiguous; use a source-qualified ID`)
     return directories[0]!
   }
 

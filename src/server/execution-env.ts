@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { lstat, realpath } from 'node:fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
 import { FileError, err, type ExecutionEnv, type Result, type ShellExecOptions, type ShellExecResult } from '@earendil-works/pi-durable/env'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
@@ -14,14 +14,34 @@ function within(root: string, target: string): boolean {
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
-function profile(root: string): string {
+/**
+ * Canonicalize a write root whose tail may not exist yet. A data directory such as macOS's
+ * `/var/...` is reached through a symlink, so comparing a canonical child against the lexical
+ * root would reject legitimate nested writes under the memory directory.
+ */
+async function canonicalRoot(path: string): Promise<string> {
+  const missing: string[] = []
+  let current = resolve(path)
+  for (;;) {
+    try {
+      return join(await realpath(current), ...missing.reverse())
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return resolve(path)
+      missing.push(basename(current))
+      current = parent
+    }
+  }
+}
+
+function profile(roots: readonly string[]): string {
   return [
     '(version 1)',
     '(deny default)',
     '(allow process*)',
     '(allow sysctl-read)',
     '(allow file-read*)',
-    `(allow file-write* (subpath ${JSON.stringify(root)}))`,
+    ...roots.map(root => `(allow file-write* (subpath ${JSON.stringify(root)}))`),
   ].join('\n')
 }
 
@@ -30,7 +50,7 @@ export async function workspaceWriteSupported(workspace: string): Promise<boolea
   if (process.platform !== 'darwin') return false
   try {
     const root = await realpath(workspace)
-    const result = spawnSync(SANDBOX_EXEC, ['-p', profile(root), '/usr/bin/true'], { encoding: 'utf8', timeout: 3000 })
+    const result = spawnSync(SANDBOX_EXEC, ['-p', profile([root]), '/usr/bin/true'], { encoding: 'utf8', timeout: 3000 })
     return result.error === undefined && result.status === 0
   } catch {
     return false
@@ -38,13 +58,14 @@ export async function workspaceWriteSupported(workspace: string): Promise<boolea
 }
 
 class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
-  #root: string
+  #roots: readonly string[]
   #profile: string
 
-  constructor(cwd: string) {
+  constructor(cwd: string, extraWriteRoots: readonly string[] = []) {
     super({ cwd })
-    this.#root = resolve(cwd)
-    this.#profile = profile(this.#root)
+    const workspaceRoot = resolve(cwd)
+    this.#roots = [workspaceRoot, ...extraWriteRoots.map(root => resolve(root)).filter(root => root !== workspaceRoot)]
+    this.#profile = profile(this.#roots)
   }
 
   override async exec(command: string | readonly string[], options: ShellExecOptions | undefined, context: Context): Promise<Result<ShellExecResult, import('@earendil-works/pi-durable/env').ExecutionError>> {
@@ -90,16 +111,18 @@ class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
     const absolute = await this.absolutePath(path, context)
     if (!absolute.ok) return err(absolute.error)
     const candidate = resolve(absolute.value)
-    if (!within(this.#root, candidate)) return err(new FileError('permission_denied', 'workspaceWrite allows changes only inside the selected workspace', candidate))
-    const pathParts = relative(this.#root, candidate).split(sep).filter(Boolean)
-    let current = this.#root
+    const root = this.#roots.find(item => within(item, candidate))
+    if (root === undefined) return err(new FileError('permission_denied', 'workspaceWrite allows changes only inside the selected workspace or its memory directory', candidate))
+    const resolvedRoot = await canonicalRoot(root)
+    const pathParts = relative(root, candidate).split(sep).filter(Boolean)
+    let current = root
     for (const part of pathParts) {
       current = resolve(current, part)
       try {
         const item = await lstat(current)
         if (item.isSymbolicLink()) return err(new FileError('permission_denied', 'workspaceWrite does not follow symbolic links', current))
         const canonical = await realpath(current)
-        if (!within(this.#root, canonical)) return err(new FileError('permission_denied', 'workspaceWrite allows changes only inside the selected workspace', current))
+        if (!within(resolvedRoot, canonical)) return err(new FileError('permission_denied', 'workspaceWrite allows changes only inside the selected workspace or its memory directory', current))
       } catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') break
         return err(new FileError('unknown', error instanceof Error ? error.message : 'Cannot inspect workspace path', current))
@@ -110,13 +133,13 @@ class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
 }
 
 /** Creates the execution environment selected for a conversation. */
-export async function createExecutionEnv(cwd: string, mode: AccessMode): Promise<ExecutionEnv> {
+export async function createExecutionEnv(cwd: string, mode: AccessMode, extraWriteRoots: readonly string[] = []): Promise<ExecutionEnv> {
   const canonical = await realpath(cwd).catch(() => {
     throw new RuntimeError('NOT_FOUND', '会话工作目录不可用')
   })
   if (mode === 'workspaceWrite') {
     if (!await workspaceWriteSupported(canonical)) throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
-    return new WorkspaceWriteExecutionEnv(canonical)
+    return new WorkspaceWriteExecutionEnv(canonical, extraWriteRoots)
   }
   return new NodeExecutionEnv({ cwd: canonical })
 }

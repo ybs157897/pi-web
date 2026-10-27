@@ -12,8 +12,6 @@ export type ShortcutCommand = typeof SHORTCUT_COMMANDS[number]
 export interface ModelRef { provider: string; modelId: string }
 export interface ModelOption extends ModelRef {
   name: string; reasoning: boolean; available: boolean; contextWindow?: number; thinkingLevels?: ThinkingLevel[]
-  /** The model is declared able to return structured (JSON) output; the doc contract then asks for JSON payloads. */
-  structuredOutput?: boolean
 }
 export interface ProviderSummary {
   id: string
@@ -44,8 +42,6 @@ export interface ProviderModelInput {
   cost?: Record<string, unknown>
   inputLimits?: Record<string, unknown>
   thinkingLevelMap?: Record<string, unknown>
-  /** Declared structured-output capability; the doc contract asks for JSON when set. */
-  structuredOutput?: boolean
   promptCache?: Record<string, unknown>
   samplingParams?: Record<string, unknown>
   samplingParamsByThinkingLevel?: Record<string, unknown>
@@ -108,12 +104,6 @@ export interface AppSettings {
   performanceUsage: PerformanceUsageMode
   codingViews: boolean
   busySendMode: 'followUp' | 'steer'
-  /**
-   * Document layout for the final answer: numbered sections, cards and callouts.
-   * While it is on, the runtime adds a format contract to the agent's instructions
-   * so the model emits the matching `doc` blocks.
-   */
-  docStyle: boolean
   defaultModel?: ModelRef
   /**
    * Models this project may use: `provider/modelId` entries, or `provider/prefix*`
@@ -125,6 +115,8 @@ export interface AppSettings {
   defaultAccessMode: AccessMode
   /** Pi code mode for agents built from these settings; `only` hides the native tools from the model. */
   codemodeMode: CodemodeMode
+  /** Cross-conversation project memory: index injection, memory writes, and background extraction. */
+  memoryEnabled: boolean
   defaultPresetId?: string
   defaultWorkspaceId?: string
   shortcuts?: Partial<Record<ShortcutCommand, string>>
@@ -154,6 +146,8 @@ export interface McpServerView {
   status: 'connected' | 'error' | 'disabled'
   tools: McpToolView[]
   error?: string
+  /** Set when the server comes from an installed plugin instead of the user-level `mcp.json`. */
+  pluginId?: string
 }
 /** The Pi MCP configuration as the browser sees it. */
 export interface McpView {

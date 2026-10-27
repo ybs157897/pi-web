@@ -19,6 +19,8 @@ const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max
 const accessModes = ['readOnly', 'workspaceWrite', 'fullAccess'] as const
 
 const identifier = z.string().min(1).max(160).regex(/^[a-zA-Z0-9._~-]+$/)
+const pluginNameSchema = z.string().min(1).max(128)
+const pluginIdParam = z.string().min(3).max(200)
 const modelRef = z.object({
   provider: z.string().min(1).max(100),
   modelId: z.string().min(1).max(256),
@@ -111,10 +113,11 @@ const settingsSchema = z.object({
   fontSize: z.number().int().min(12).max(20).optional(), codeFontSize: z.number().int().min(10).max(16).optional(), terminalFontSize: z.number().int().min(10).max(20).optional(),
   transcriptView: z.enum(TRANSCRIPT_VIEW_MODES).optional(), collapseTiming: z.enum(COLLAPSE_TIMINGS).optional(),
   performanceUsage: z.enum(PERFORMANCE_USAGE_MODES).optional(),
-  codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), docStyle: z.boolean().optional(), defaultModel: modelRef.nullable().optional(),
+  codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), defaultModel: modelRef.nullable().optional(),
   modelAllowlist: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
   codemodeMode: z.enum(CODEMODE_MODES).optional(),
+  memoryEnabled: z.boolean().optional(),
   defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 const workspaceSchema = z.object({ path: z.string().min(1).max(4096).refine(value => !value.includes('\0')), name: z.string().trim().min(1).max(120).optional() }).strict()
@@ -129,8 +132,13 @@ const automationSchema = z.object({
   model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
 }).strict()
 const automationPatchSchema = automationSchema.partial().extend({ intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional() }).refine(value => Object.keys(value).length > 0)
-const interactionAnswerSchema = z.object({
-  answers: z.array(z.object({
+const pluginMarketplaceSchema = z.object({ source: z.string().trim().min(1).max(4_096) }).strict()
+const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginNameSchema, requestId: z.string().min(1).max(256).optional() }).strict()
+const pluginEnabledSchema = z.object({ enabled: z.boolean() }).strict()
+const pluginUpdateSchema = z.object({ pluginId: pluginIdParam }).strict()
+const pluginIdSchema = pluginIdParam.regex(/^[a-z0-9][a-z0-9._-]{0,127}@[a-z0-9][a-z0-9._-]{0,63}$/u)
+
+const interactionAnswerSchema = z.object({  answers: z.array(z.object({
     id: z.string().min(1).max(160),
     selected: z.array(z.string().min(1).max(200)).max(64),
     custom: z.string().max(4_000).optional(),
@@ -167,7 +175,11 @@ function publicFailure(error: unknown): PublicFailure {
   }
 
   if (error instanceof RuntimeError) {
-    const statuses = { NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422, PROVIDER_ERROR: 502 } as const
+    const statuses = {
+      NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422, PROVIDER_ERROR: 502,
+      MARKETPLACE_NOT_FOUND: 404, PLUGIN_NOT_FOUND: 404, PLUGIN_ALREADY_INSTALLED: 409, PLUGIN_SOURCE_INVALID: 400,
+      PLUGIN_CHECKSUM_MISMATCH: 422, PLUGIN_UNSUPPORTED_SOURCE: 422, PLUGIN_DEPENDENCY_MISSING: 422, PLUGIN_UI_UNAVAILABLE: 422,
+    } as const
     const message = error.message.replace(/[\r\n\t]+/g, ' ').replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]').replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]').trim().slice(0, 240)
     return { status: statuses[error.code], code: error.code, message: message || 'The operation could not be completed' }
   }
@@ -236,6 +248,11 @@ async function readJson<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
 function pathId(value: string): string {
   const result = identifier.safeParse(value)
   if (!result.success) throw new ApiFault(400, 'invalid_id', 'Resource id is invalid')
+  return result.data
+}
+function pluginId(value: string): string {
+  const result = pluginIdSchema.safeParse(value)
+  if (!result.success) throw new ApiFault(400, 'PLUGIN_NOT_FOUND', 'Plugin id is invalid')
   return result.data
 }
 function filePath(value: string | undefined): string {
@@ -594,6 +611,82 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const input = await readJson(c.req.raw, z.object({ skillId: z.string().min(1).max(160) }).strict())
     return c.json(await runtime.validateSkill(pathId(c.req.param('id')), input.skillId))
   })
+  app.get('/api/plugins/overview', async c => c.json(await runtime.plugins()))
+  /**
+   * Install/update run in the background; every store mutation pushes a fresh overview so the
+   * settings panel never has to poll. The panel still refetches on reconnect.
+   */
+  app.get('/api/plugins/events', c => {
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+    let onAbort: (() => void) | undefined
+    let tail: Promise<void> = Promise.resolve()
+    const cleanup = (): void => {
+      if (cancelled) return
+      cancelled = true
+      unsubscribe?.()
+      unsubscribe = undefined
+      if (onAbort) {
+        shutdown.signal.removeEventListener('abort', onAbort)
+        c.req.raw.signal.removeEventListener('abort', onAbort)
+      }
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const push = (): void => {
+          tail = tail.then(async () => {
+            if (cancelled) return
+            try {
+              const overview = await runtime.plugins()
+              if (!cancelled) controller.enqueue(new TextEncoder().encode(`event: overview\ndata: ${JSON.stringify(overview)}\n\n`))
+            } catch {
+              cleanup()
+            }
+          }, () => undefined)
+        }
+        unsubscribe = runtime.watchPlugins(push)
+        onAbort = () => {
+          cleanup()
+          try { controller.close() }
+          catch { /* the client has already closed the stream */ }
+        }
+        shutdown.signal.addEventListener('abort', onAbort, { once: true })
+        c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
+        if (shutdown.signal.aborted || c.req.raw.signal.aborted) {
+          onAbort()
+          return
+        }
+        controller.enqueue(sseEvent('ready'))
+        push()
+      },
+      cancel() { cleanup() },
+    })
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    })
+  })
+  app.post('/api/plugins/marketplaces', async c => {
+    const input = await readJson(c.req.raw, pluginMarketplaceSchema)
+    return c.json(await runtime.addPluginMarketplace(input.source), 201)
+  })
+  app.delete('/api/plugins/marketplaces/:id', async c => c.json(await runtime.removePluginMarketplace(pathId(c.req.param('id')))))
+  app.post('/api/plugins/marketplaces/:id/refresh', async c => c.json(await runtime.refreshPluginMarketplace(pathId(c.req.param('id')))))
+  app.post('/api/plugins/install', async c => c.json(await runtime.installPlugin(await readJson(c.req.raw, pluginInstallSchema)), 202))
+  app.post('/api/plugins/update', async c => {
+    const input = await readJson(c.req.raw, pluginUpdateSchema)
+    return c.json(await runtime.updatePlugin(pluginId(input.pluginId)), 202)
+  })
+  app.get('/api/plugins/:pluginId/describe', async c => c.json(await runtime.describePlugin(pluginId(c.req.param('pluginId')))))
+  app.patch('/api/plugins/:pluginId', async c => {
+    const input = await readJson(c.req.raw, pluginEnabledSchema)
+    return c.json(await runtime.setPluginEnabled(pluginId(c.req.param('pluginId')), input.enabled))
+  })
+  app.delete('/api/plugins/:pluginId', async c => c.json(await runtime.uninstallPlugin(pluginId(c.req.param('pluginId')), c.req.query('keepData') === '1')))
   app.get('/api/workspaces/:id/search', async c => {
     const query = c.req.query('q') ?? ''
     if (query.length > 256) throw new ApiFault(400, 'invalid_query', 'Search query is too long')
