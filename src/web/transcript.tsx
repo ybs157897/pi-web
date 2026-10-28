@@ -21,7 +21,7 @@ import { dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerR
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
 import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
-import { PluginUiConversationContext } from './plugin-ui-bridge.ts'
+import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-bridge.ts'
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
@@ -126,7 +126,7 @@ export default function Transcript({
       <ProcessExpansionProvider key={conversationId}>
       <MarkdownDelegateProvider openFile={openMarkdownFile} fileImages={fileImages}>
         {model.timeline.map(entry => entry.kind === 'run'
-          ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey}
+          ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey} live={running && entry.run.key === lastRunKey}
             liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
@@ -178,11 +178,13 @@ function CompactionRunningRow({ t }: { t: Translate }) {
 
 
 function RunTranscript({
-  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  run, latest, live, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
+  /** The conversation is still running this latest turn. */
+  live: boolean
   /** The live compaction marker belongs to the turn that is compacting. */
   liveCompaction: boolean
   policy: ChatPresentationPolicy
@@ -210,7 +212,7 @@ function RunTranscript({
       {run.users[0] !== undefined && <UserEntryRow key={run.users[0].id} message={run.users[0]}
         onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />}
       {(run.process.length > 0 || run.status === 'error' || run.status === 'cancelled') && (
-        <ProcessGroup run={run} latest={latest} policy={policy} t={t}
+        <ProcessGroup run={run} latest={latest} live={live} policy={policy} t={t}
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
           onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
           onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
@@ -218,7 +220,7 @@ function RunTranscript({
       )}
       {run.systemRows.filter(row => row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {run.responses.map((response, index) => (
-        <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1}
+        <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1} live={live}
           showChanges={showChanges} onInspectDiff={onInspectDiff}
           onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
           labels={labels} resolveFileImage={resolveFileImage} t={t} />
@@ -432,10 +434,12 @@ function QuestionReplyRow({ message, data, t }: {
   )
 }
 
-function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
+  /** The conversation is still running this latest turn. */
+  live: boolean
   policy: ChatPresentationPolicy
   t: Translate
   onOpenFile?: TranscriptProps['onOpenFile']
@@ -452,7 +456,6 @@ function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpe
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
-  const live = run.status === 'running'
   const hasInterleavedUser = run.process.some(part => part.kind === 'user')
   // Keep a work header while preserving each display mode's default expansion.
   // Verbose mode remains flat and interleaved user messages stay visible.
@@ -461,17 +464,26 @@ function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpe
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
   const open = hasInterleavedUser ? true : manualOpen ?? defaultOpen
   const bodyId = useId()
-  const title = workGroupTitle(run, t)
-  // Every tool keeps its own row; subagent rows open a read-only child tab instead of
-  // folding into a separate strip.
-  const body = run.process.map(part => <ProcessPartView key={part.key} part={part} runRunning={live}
+  const title = workGroupTitle(run, t, live)
+  // ZCode keeps a successful tool row with an inline plugin page outside the folded
+  // history region. Otherwise the page would disappear when the work group collapses
+  // and the final answer would take its place.
+  type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
+  const pinned = grouped
+    ? run.process.filter((part): part is ToolPart => part.kind === 'tool'
+      && showsInlinePluginUi(part.item.result?.details, part.item.result))
+    : []
+  const inline = pinned.length === 0 ? run.process : run.process.filter(part => !pinned.includes(part as ToolPart))
+  const renderPart = (part: ProcessPart): JSX.Element => <ProcessPartView key={part.key} part={part} runRunning={live}
     policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
     onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
     onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
-    resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />)
+    resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />
+  const body = inline.map(renderPart)
+  const pinnedBody = pinned.map(renderPart)
   if (!grouped) {
     return (
-      <div className={css.processGroup} data-state={run.status} data-latest={latest || undefined} data-flat data-run-id={run.runId}>
+      <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-flat data-run-id={run.runId}>
         <div className={css.processFlatStatus} data-state={run.status}>
           <span className={css.processTitle} data-running={live || undefined}>{title}</span>
         </div>
@@ -479,8 +491,8 @@ function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpe
       </div>
     )
   }
-  return (
-    <div className={css.processGroup} data-state={run.status} data-latest={latest || undefined} data-run-id={run.runId}>
+  return <>
+    {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? defaultOpen)) }}>
@@ -488,8 +500,9 @@ function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpe
         <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
       </button>
       <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
-    </div>
-  )
+    </div>}
+    {pinnedBody.length > 0 && <div className={css.pinnedProcess} data-pinned-plugin-ui>{pinnedBody}</div>}
+  </>
 }
 
 function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
@@ -528,10 +541,12 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
   return <ReasoningBlock id={part.key} text={part.text} streaming={part.streaming} redacted={part.redacted} preview={policy.liveReasoningPreview} t={t} />
 }
 
-function AssistantResponse({ response, run, last, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
+function AssistantResponse({ response, run, last, live, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
   response: ResponsePart
   run: RenderRun
   last: boolean
+  /** The conversation is still running this latest turn. */
+  live: boolean
   /** Whether the coding views (including the changed-files card) are on. */
   showChanges?: boolean
   onInspectDiff?: TranscriptProps['onInspectDiff']
@@ -548,7 +563,9 @@ function AssistantResponse({ response, run, last, showChanges, onInspectDiff, on
   const [copied, setCopied] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const text = responseText(response)
-  const streaming = message.streaming === true || run.status === 'running'
+  // The run status drops to completed between tool rounds; the conversation-level
+  // live flag keeps end-state actions, usage and changed files hidden until it settles.
+  const streaming = message.streaming === true || run.status === 'running' || live
   const entryId = message.entryId
   const mentionPaths = useMemo(() => [...new Set(run.artifacts
     .filter(artifact => artifact.kind !== 'read')
@@ -591,8 +608,8 @@ function AssistantResponse({ response, run, last, showChanges, onInspectDiff, on
           {t('回答失败', 'Response failed')}
         </div>}
         {/* DSH 的回合尾顺序：改动文件卡在操作栏之前，操作栏留在最后。 */}
-        {last && showChanges === true && <ChangedFiles artifacts={run.artifacts} onInspectDiff={onInspectDiff} t={t} />}
-        <div className={css.actionRow}>
+        {last && !streaming && showChanges === true && <ChangedFiles artifacts={run.artifacts} onInspectDiff={onInspectDiff} t={t} />}
+        {!streaming && <div className={css.actionRow}>
           <Tooltip label={copied ? t('已复制', 'Copied') : t('复制', 'Copy')} side="bottom" portal>
             <button type="button" className={css.iconAction} aria-label={t('复制回答', 'Copy response')} onClick={() => { void copy() }}>
               <IconCopyOutlineRegular size={15} />
@@ -639,7 +656,7 @@ function AssistantResponse({ response, run, last, showChanges, onInspectDiff, on
           </Menu>}
           <time className={css.messageTime} dateTime={safeIsoTime(message.timestamp)}>{formatClock(message.timestamp, settings.locale)}</time>
           <span className={css.visuallyHidden} aria-live="polite">{copied ? t('已复制', 'Copied') : ''}</span>
-        </div>
+        </div>}
       </div>
     </div>
   )

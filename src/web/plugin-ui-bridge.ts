@@ -278,6 +278,14 @@ export function sendToolResult(frame: HTMLIFrameElement, page: PluginUiPage): vo
  * missing `pluginId`/`serverName`/`resourceUri` rejects the whole descriptor, so the row falls
  * back to its generic presentation instead of mounting a broken page.
  */
+/** Whether one settled tool result renders an inline page rather than only a side-pane surface. */
+export function showsInlinePluginUi(details: unknown, state: { streaming?: boolean; status?: string; isError?: boolean } | undefined): boolean {
+  if (state === undefined || state.streaming === true || state.status === 'running'
+    || state.status === 'error' || state.status === 'cancelled' || state.isError === true) return false
+  const ui = pluginUiDescriptor(details)
+  return ui !== undefined && ui.preferredDisplayMode !== 'fullscreen' && ui.showInline !== false
+}
+
 export function pluginUiDescriptor(details: unknown): PluginUiDescriptor | undefined {
   const record = isRecord(details) ? details : typeof details === 'string' ? parseJsonRecord(details) : undefined
   if (record === undefined || !isRecord(record.ui)) return undefined

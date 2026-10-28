@@ -868,3 +868,9 @@ P2  [ ] 8. plugin-reference + beforeRequest
 - 预填依赖内置技能 `skills/plugin-creator/`。技能按 pi-web 格式生成 `plugins/<slug>/.pi-plugin/plugin.json`、可选 `skills/`、MCP server 和 `plugins/marketplace.json`，再检查名称/版本一致、技能路径、UI server 引用、绝对路径与符号链接。
 - 交付边界与 ZCode 一致：只写源码和 dev 清单，市场由用户在 Settings → Plugins 手动添加，插件由用户手动 Install/Update；技能明确要求“未操作前不得声称已安装或已试用”。
 - 验证：`tests/skills-runtime.test.ts` 检查 `builtin:plugin-creator` 与资源可读；`tests/plugin-creator-entry.test.tsx` 检查入口出现/回调；真实模型端到端在临时工作区生成 `standup-digest`（manifest、SKILL.md、marketplace.json，版本一致），产物已清理。
+
+## 内联插件页不被工作区折叠吞掉（2026-10-28）
+
+ZCode 用 `isPluginUiPinnedToolRow` 把带插件 UI 的成功工具行留在「已工作」折叠区之外；否则页面会随工作区折叠消失，后续正文替代它的位置。
+
+pi-web 采用同一默认：`transcript.tsx` 在分组展示模式（standard/detailed/compact）下，把已结算且渲染 inline 页面的顶层工具行从 `ProcessGroup` 中拆出，放在组外 `data-pinned-plugin-ui` 容器中；失败、取消、仍在运行或 fullscreen 的行不固定。verbose 模式本来就平铺，不额外搬动。页面仍在最终回答之前，正文不再把它挤进折叠区。验证：`tests/plugin-ui-pinning.test.tsx`（工作区折叠后卡片仍可见、卡片在回答之前、运行中不固定），以及真实 kanban 插件会话。

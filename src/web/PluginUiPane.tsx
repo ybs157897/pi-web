@@ -41,6 +41,13 @@ export function PluginUiPane({ page, hidden = false, onContext, onMessage, onOpe
     window.addEventListener('message', listener)
     return () => { window.removeEventListener('message', listener) }
   }, [handlers, page])
+  // A stable page id (for example one plugin board reused by several tools) gets new
+  // structured data without remounting; deliver it to the already loaded frame.
+  useEffect(() => {
+    const element = frame.current
+    if (element === null) return
+    sendToolResult(element, page)
+  }, [page.id, page.content, page.structuredContent])
   const loaded = (): void => {
     const element = frame.current
     if (element === null) return

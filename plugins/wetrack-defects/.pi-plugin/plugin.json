@@ -1,0 +1,24 @@
+{
+  "name": "wetrack-defects",
+  "version": "1.0.0",
+  "description": "查看 WeTrack 待办缺陷、阅读详情、结合代码分析并渲染层级报告。",
+  "author": { "name": "pi-web" },
+  "skills": ["skills"],
+  "mcpServers": {
+    "wetrack": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.mjs"],
+      "exposure": "direct"
+    }
+  },
+  "ui": {
+    "surfaces": [
+      {
+        "id": "board",
+        "title": "WeTrack 缺陷",
+        "server": "wetrack",
+        "resourceUri": "ui://wetrack/board"
+      }
+    ]
+  }
+}

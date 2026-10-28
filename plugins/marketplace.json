@@ -1,0 +1,21 @@
+{
+  "name": "pi-web-wetrack",
+  "description": "Local WeTrack defect viewer for pi-web.",
+  "owner": { "name": "pi-web" },
+  "plugins": [
+    {
+      "name": "wetrack-defects",
+      "version": "1.0.0",
+      "description": "查看 WeTrack 待办缺陷、阅读详情、结合代码分析并渲染层级报告。",
+      "category": "workflow",
+      "source": "./wetrack-defects",
+      "listing": {
+        "displayName": "WeTrack Defects",
+        "displayName_i18n": { "zh-CN": "WeTrack 缺陷" },
+        "examplePrompts": [
+          "看一下我的 WeTrack 待办，挑一个严重缺陷分析根因并给出修复建议"
+        ]
+      }
+    }
+  ]
+}

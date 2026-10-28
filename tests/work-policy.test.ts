@@ -43,6 +43,21 @@ describe('default runtime work policy', () => {
     expect(extension.tools).toBeUndefined()
   })
 
+  it('teaches plugin creation through the bundled skill and keeps installation manual', async () => {
+    const prompt = await renderPolicy()
+
+    expect(prompt).toContain('builtin:plugin-creator')
+    expect(prompt).toContain('plugins/<slug>/')
+    expect(prompt).toContain('设置 → 插件市场 → 创建插件')
+    expect(prompt).toContain('不得声称已安装')
+    expect(prompt).toContain('Plugin 是打包 skills/MCP/UI 的可安装目录')
+    expect(prompt).toContain('安装/更新/卸载不要用 npm/git')
+    expect(prompt).toContain('只会被标为不支持')
+    expect(prompt).toContain('代码定位与检索')
+    expect(prompt).toContain('git log --oneline --grep')
+    expect(prompt).toContain('不要用“工具调用过程复盘”代替缺陷分析')
+  })
+
   it('guides concrete multi-step todo tracking only when the direct tool is available', async () => {
     const prompt = await renderPolicy({ tools: ['todo_write'] })
 

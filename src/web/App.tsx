@@ -1502,7 +1502,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     // A card names its own page; the `+` menu has no page yet, so its id comes from the conversation.
     const id = 'id' in input ? input.id : `${selectedId ?? 'new'}:${input.pluginId}:${input.toolCallId ?? input.resourceUri}`
     const stored: PluginUiPage = { ...input, id, ...(selectedId === null ? {} : { conversationId: selectedId }) }
-    setPluginPages(current => current.some(item => item.id === id) ? current : [...current, stored])
+    setPluginPages(current => current.some(item => item.id === id)
+      ? current.map(item => item.id === id ? stored : item)
+      : [...current, stored])
     if (host !== undefined) {
       setPluginPageHosts(current => current[id] === host ? current : { ...current, [id]: host })
     }

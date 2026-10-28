@@ -210,6 +210,8 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 创建插件：插件市场顶部点「创建插件」会新开一个任务并预填 `$plugin-creator`，不会自动发送或安装。内置的 `builtin:plugin-creator` 技能会按 pi-web 的格式生成 `plugins/<slug>/.pi-plugin/plugin.json`、可选的 `skills/`、MCP server 和 `plugins/marketplace.json`，并做结构校验；完成后由用户手动添加市场、安装、启用和试用。详细格式见 [skills/plugin-creator/references/plugin-format.md](skills/plugin-creator/references/plugin-format.md)。
 
+仓库里的 `plugins/wetrack-defects` 是一个完整示例：读取 WeTrack 待办与详情，结合代码分析后渲染可折叠的层级报告；安装和 `WETRACK_CLI_JSON` / `WETRACK_FIXTURE` 配置见 [plugins/wetrack-defects/README.md](plugins/wetrack-defects/README.md)。
+
 - 来源：本地市场里的相对目录、带 `sha256` 的 zip URL、GitHub 仓库（`{ "source": "github", "repo": "owner/name", "ref": "main", "path": "packages/x" }`）或 git URL（仅 HTTPS）。zip 会校验 sha256，拒绝 zip-slip、符号链接、加密与 ZIP64；GitHub 走 `codeload` zipball，git 走 `git clone --depth 1`。
 - 安装/更新：后台执行，状态经 `GET /api/plugins/events` 推送（设置页同时保留轮询兜底）；失败不会留下半装记录。安装或更新前会展示将运行的 MCP 命令（只列 env 键名，不显示值）、技能与 UI surface，二次确认后才落盘。安装记录、市场缓存与插件包都在 `<数据目录>/plugins/`，与应用设置分开，便于备份或清理。
 - 能力：插件技能以「插件」来源进入技能目录，ID 为 `<插件ID>:<技能名>`，只读；插件的 MCP server 以 `plugin_<插件>_<server>` 合并进 MCP 目录（`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 自动展开，默认 `codemode` 暴露），安装、启停、更新、卸载后无需重启即可生效，重启保留。

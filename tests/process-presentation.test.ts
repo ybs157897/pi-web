@@ -13,6 +13,7 @@ describe('work and thought presentation', () => {
   it('shows recorded duration and retains error and stop states', () => {
     expect(workGroupTitle({ status: 'completed', durationMs: 63_100 }, zh)).toBe('已工作 1 分 3 秒')
     expect(workGroupTitle({ status: 'running' }, zh)).toBe('工作中')
+    expect(workGroupTitle({ status: 'completed', durationMs: 63_100 }, zh, true)).toBe('工作中')
     expect(workGroupTitle({ status: 'completed' }, zh)).toBe('已工作')
     expect(workGroupTitle({ status: 'error', durationMs: 1000 }, zh)).toBe('处理失败')
     expect(workGroupTitle({ status: 'cancelled' }, zh)).toBe('已停止')

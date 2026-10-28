@@ -1,0 +1,61 @@
+{
+  "pending": {
+    "items": [
+      {
+        "defectNumber": "DTS006749813",
+        "defectStep": "105",
+        "defectStatusName": "待开发解决问题",
+        "severityName": "一般",
+        "projectNumber": "DH3.RDA000897",
+        "simpleDesc": "【DMSS_V3.0.0_第四轮_1023】【Android/IOS】设备处于申请安保待同意状态时，删除设备，安保账号拒绝安保申请，安保账号没有提示消息失效/设备不存在"
+      },
+      {
+        "defectNumber": "DTS006744740",
+        "defectStep": "106",
+        "defectStatusName": "待开发自验",
+        "severityName": "严重",
+        "projectNumber": "DH3.RDA000902",
+        "projectName": "Pro 融合 V2.0.0",
+        "simpleDesc": "【安保服务】在convert上解除安保服务，无法同步至care上",
+        "submitTime": "2026-10-27 16:04:22",
+        "updateTime": "2026-10-28 09:12:03"
+      }
+    ]
+  },
+  "details": {
+    "DTS006744740": {
+      "defectNumber": "DTS006744740",
+      "defectStatusName": "待开发解决问题",
+      "severityName": "严重",
+      "categoryName": "功能问题",
+      "testTypeName": "系统测试",
+      "probabilityName": "必现",
+      "fieldName": "软件",
+      "moduleName": "安保服务",
+      "projectName": "Pro 融合 V2.0.0",
+      "projectNumber": "DH3.RDA000902",
+      "projectLineName": "Pro 系列",
+      "issueVerName": "Pro融合V2.0.0_系统三_1017",
+      "wermId": "WERM000123456",
+      "testNumberName": "系统三测试任务",
+      "useCaseNum": "TC0001234",
+      "automaticUseCaseNum": "",
+      "creatorName": "张三(340188)",
+      "createTime": "2026-10-27 15:52:10",
+      "submitTime": "2026-10-27 16:04:22",
+      "simpleDesc": "【安保服务】在convert上解除安保服务，无法同步至care上",
+      "description": "<p>步骤：</p><p>1. convert 上解除安保</p><p>2. care 端未同步状态</p>",
+      "modifyContent": "",
+      "threeLevelCause": "",
+      "attachments": [
+        { "fileName": "log.txt", "fileSize": 20480 }
+      ],
+      "images": [
+        "C:\\Users\\340188\\AppData\\Local\\Temp\\wetrack\\DTS006744740\\images\\1.jpg"
+      ],
+      "attachmentFiles": [
+        { "fileName": "log.txt", "path": "C:\\Users\\340188\\AppData\\Local\\Temp\\wetrack\\DTS006744740\\attachments\\log.txt", "size": 20480 }
+      ]
+    }
+  }
+}

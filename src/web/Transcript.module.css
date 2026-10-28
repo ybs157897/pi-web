@@ -305,6 +305,7 @@
 .processClip { overflow: hidden; min-height: 0; }
 .processBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
 .processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; color: var(--message-muted); }
+.pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .processOutput { min-width: 0; color: var(--message-fg); }
 @keyframes work-sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .processCollapse, .processChevron { transition: none; } .processTitle[data-running] { animation: none; background: none; color: var(--message-subtle); } }

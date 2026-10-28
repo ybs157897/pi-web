@@ -72,6 +72,9 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A plugin MCP tool may carry `details.ui`: its sandboxed page replaces the generic
   // arguments/details dump, and a fullscreen surface opens in the inspector once instead.
   const pluginUi = useMemo(() => pluginUiDescriptor(model.details), [model.details])
+  const structuredContent = model.details !== null && typeof model.details === 'object' && !Array.isArray(model.details)
+    ? (model.details as Record<string, unknown>).structuredContent
+    : undefined
   const pluginConversationId = useContext(PluginUiConversationContext)
   const pluginPage = useMemo<PluginUiPage | undefined>(() => {
     if (pluginUi === undefined) return undefined
@@ -83,12 +86,14 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
       ...(item.result === undefined ? {} : {
         content: item.result.blocks.flatMap(block => block.type === 'text' ? [{ type: 'text' as const, text: block.text }] : []),
       }),
+      ...(structuredContent === undefined ? {} : { structuredContent }),
     }
   }, [pluginUi, pluginConversationId, callId, item.result])
   const pluginUiSettled = item.result !== undefined && !model.running && !model.failed && !model.cancelled
   const pluginUiFullscreen = pluginUiSettled && pluginPage !== undefined && pluginUi?.preferredDisplayMode === 'fullscreen'
   const pluginUiInline = pluginUiSettled && pluginUi !== undefined && pluginPage !== undefined
     && pluginUi.preferredDisplayMode !== 'fullscreen' && pluginUi.showInline !== false
+  const pluginUiPresented = pluginUiInline || pluginUiFullscreen
   const openedPluginUi = useRef<string | undefined>(undefined)
   const autoOpenedPluginInline = useRef(false)
   // A tool result that carries an inline plugin page is content, not hidden detail: open the
@@ -188,7 +193,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A recorded question pair replaces the row's own I/O card the way DSH's
   // transcript card does; the raw arguments and details stay available below.
   const record = ask?.record ?? null
-  const resultText = !hasOutputCard && record === null && subagent === null && codemode === null && !pluginUiInline && model.output !== '' ? model.output : ''
+  const resultText = !hasOutputCard && record === null && subagent === null && codemode === null && !pluginUiPresented && model.output !== '' ? model.output : ''
   const sourceMessage = item.call === undefined ? item.result ?? item.message : item.message
   const toolImages = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image') ?? []
   const toolFiles = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'file' }> => block.type === 'file') ?? []
@@ -196,7 +201,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A plan call's arguments hold the whole plan, which the row already summarizes by its heading.
   // A subagent call's arguments hold the whole delegated task, shown by the receipt instead.
   // A code-mode call's argument is the script, shown by its own card instead of raw JSON.
-  const argsPayload = hasArgs && unknownPayload && plan === undefined && subagent === null && codemode === null && !pluginUiInline
+  const argsPayload = hasArgs && unknownPayload && plan === undefined && subagent === null && codemode === null && !pluginUiPresented
     ? model.args : undefined
   // DSH's plan card is one button: icon, plan title, "计划 · Markdown", and "打开"
   // (`ui-plan/src/client/PlanCard.tsx:48-57`, copy `locales.ts:7-11`).
@@ -271,11 +276,11 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
           ))}
           {!hasResult && model.running && <div className={css.inProgress}><StateDot state="ongoing" size={10} />{t('等待工具结果', 'Waiting for tool result')}</div>}
           {!hasResult && !model.running && <div className={css.empty}>{t('没有可显示的工具结果', 'No tool result was recorded')}</div>}
-          {hasResult && model.output === '' && !hasOutputCard && codemode === null && !pluginUiInline && toolImages.length === 0 && toolFiles.length === 0
+          {hasResult && model.output === '' && !hasOutputCard && codemode === null && !pluginUiPresented && toolImages.length === 0 && toolFiles.length === 0
             && <div className={css.empty}>{t('工具没有返回可显示的内容', 'The tool returned no displayable content')}</div>}
           {argsPayload !== undefined && <JsonBlock label={t('调用参数', 'Call arguments')} payload={argsPayload}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
-          {hasDetails && !hasOutputCard && subagent === null && codemode === null && !pluginUiInline && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
+          {hasDetails && !hasOutputCard && subagent === null && codemode === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
           {model.failed && <div className={css.errorLabel} role="alert">{t('工具执行失败', 'Tool failed')}</div>}
           {model.cancelled && <div className={css.stoppedLabel} role="status">{t('工具已停止', 'Tool stopped')}</div>}

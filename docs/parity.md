@@ -754,3 +754,19 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **布局**：卡片在会话右上角，宽 320px；会话列宽度不足或打开右侧 Inspector 时自动隐藏，并在可见时向左让出 336px。Git 状态每 5 秒刷新，会话更新时也会重读。
 - **有意不实现：终端（后台 Bash）与工作流分区**。pi-web 的协议没有 `backgroundWorks` / `workflowRuns` 投影：Pi Durable 的 shell 工具是前台调用，`harness.inspect()` 只给任务记录而不区分可展示的终端/工作流；pi-web 也没有 CreateWorkflow 协议。没有真实数据源时不画空分区或伪造状态。因此这两项**从后续清单移除**，不算待办；若未来 Pi 增加后台 shell / workflow 投影，再按 ZCode 结构接入。
 - **验证**：`tests/git-worktree.test.ts`（临时仓库真实 commit/push）、`tests/git-commit-message.test.ts`（消息清洗与上下文）、`tests/status-panel.test.tsx`（进程窗口、智能体折叠、窄宽隐藏）、`tests/http.test.ts`（新路由）。实机截图：`artifacts/status-panel/panel-git-wide2.png`、`panel-git-changes.png`、`commit-modal-2.png`、`commit-ai-generated.png`、`ended-agents.png`、`process-live.png`。
+
+## 运行中不再提前显示结束态（2026-10-28）
+
+Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，但会话仍在执行。此前 `AssistantResponse` 只读消息/run 状态，导致工具轮之间短暂显示「已工作 N 秒」、用量、时间和改动文件卡，`ProcessGroup` 也随之在展开/折叠之间切换。
+
+- 以会话级 `running` 为准：只有最新 run 且会话仍在执行时标记 live；live 期间工作头显示「工作中」，不显示结束态用量、时间、操作栏和改动文件卡。
+- live 期间工作组保持展开；结束或用户手动操作后才按展示策略折叠。
+- 新增 `tests/transcript-live-state.test.tsx` 与标题单测；实机用 `sleep 60` 会话确认最新 run 无用量/操作栏/改动卡、头部为「工作中」，前一条已完成 run 的历史信息仍正常保留。
+
+## 缺陷分析检索策略与 WeTrack 侧栏（2026-10-28）
+
+一次单点 DTS 分析实际用了约 79 次工具调用、22 分钟，大部分消耗在错误作用域、重复 grep 和大文件分段重读。补了两层：
+
+- **提示词**：`runtime-core.md` 新增「代码定位与检索」：从缺陷的项目/模块/版本定位子仓库，先查 `git log --grep` / `git log -S` / `git log -- <path>` 作为变更索引，再从入口沿调用链、用方法签名拿行号、精读 2–3 个片段；同一检索最多两次，证据足够即停止；明确禁止用「工具调用过程复盘」代替缺陷分析。
+- **WeTrack 插件**：`wetrack_detail` 的 tool content 现在包含完整详情 JSON（描述、转派备注、附件），不再只回一行摘要；Skill 增加约 15 次工具调用预算和相同的 git-log/子仓库/窄读策略。页面改为 `preferredDisplayMode: fullscreen` + 稳定 `toolCallId`，默认在右侧面板打开并由 pending/detail/report 原地更新；正文只显示分析，不会覆盖页面。
+- **验证**：`tests/work-policy.test.ts`（提示词断言）、`tests/wetrack-plugin.test.ts`（完整 content、fullscreen meta、报告层级）、`tests/plugin-ui-pinning.test.tsx`（折叠时页面仍可见）；真实模型在右侧面板验证 pending → report 同 tab 更新，截图 `artifacts/wetrack-plugin/side-pane-list.png`、`side-pane-report.png`。
