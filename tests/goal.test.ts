@@ -5,6 +5,7 @@ import {
   applyGoalCreate,
   applyGoalRound,
   applyGoalUpdate,
+  awaitingUser,
   cleanMaxGoalRounds,
   cleanObjective,
   goalContinuation,
@@ -61,6 +62,17 @@ describe('goal continuation budget', () => {
     expect(continuation?.continue).toContain('[goal 1/3]')
     expect(continuation?.continue).toContain('完成迁移并跑通验证')
     expect(goalContinuation({ goal: goal({ roundsStarted: 2, maxGoalRounds: 3 }) }, 2)?.continue).toContain('[goal 3/3]')
+  })
+
+  it('tells a continued turn to stop while it waits on the user', () => {
+    expect(goalContinuation({ goal: goal() }, 0)?.continue).toContain('waiting for the user\'s answer or approval, end this turn')
+  })
+
+  it('treats a pending question or plan review as waiting on the user', () => {
+    expect(awaitingUser(undefined)).toBe(false)
+    expect(awaitingUser({ a: { status: 'answered' }, b: { status: 'cancelled' }, c: { kind: 'plan-review', status: 'superseded' } })).toBe(false)
+    expect(awaitingUser({ a: { status: 'answered' }, b: { questions: [], status: 'pending' } })).toBe(true)
+    expect(awaitingUser({ review: { kind: 'plan-review', status: 'pending' } })).toBe(true)
   })
 
   it('stops at the round limit', () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
 import { Plans } from './plan-tools.ts'
+import { Interactions } from './interaction-tools.ts'
 import {
   defineDoc,
   defineExtension,
@@ -233,9 +234,17 @@ export function goalContinuation(docValue: GoalDocValue | undefined, roundsStart
   return {
     continue: [
       `[goal ${round}/${goal.maxGoalRounds}] Continue the user's objective: "${goal.objective}".`,
-      'After the objective is achieved and its requested verification passes, report completion through the callable goal-tool route. If a concrete blocker makes further progress impossible, report that condition through the supported blocked action.',
+      'Treat the current workspace, tool results and goal state as authoritative; inspect them instead of assuming earlier narration is still current, and make concrete, verified progress.',
+      'After the whole objective is achieved and its requested verification passes, report completion through the callable goal-tool route. If a concrete blocker makes further progress impossible, report that condition through the supported blocked action.',
+      'If you are waiting for the user\'s answer or approval, end this turn without further changes.',
     ].join('\n'),
   }
+}
+
+/** A question or plan review still waiting for the user, in the shared interactions table. */
+export function awaitingUser(table: Record<string, unknown> | undefined): boolean {
+  return Object.values(table ?? {}).some(record =>
+    typeof record === 'object' && record !== null && (record as { status?: unknown }).status === 'pending')
 }
 
 function goalToolRoutes(agent: ToolCatalog): Record<(typeof GOAL_TOOL_NAMES)[number], ToolRoute> {
@@ -304,6 +313,9 @@ function createGoalSection(options: Required<GoalToolOptions>) {
         lines.push('This goal remains active, but do not change its state or advance implementation while plan mode is active.')
       } else {
         lines.push('Work toward this goal within the current request and keep changes scoped to it.')
+        if (resolveToolRoute(input.agent, 'ask_user_question') !== 'unavailable') {
+          lines.push('When a decision belongs to the user, ask with ask_user_question; automatic continuation waits until it is answered.')
+        }
       }
       if (updateCallable) {
         lines.push(
@@ -342,6 +354,9 @@ function createGoalHook(canContinue: GoalToolOptions['canContinue']) {
     onYield: async (_answer, api, context) => {
       const plan = await api.snapshot(Plans, api.conversationId, context)
       if (plan?.active === true || !await allowed(canContinue, api.conversationId, context)) return undefined
+      // DSH's ask_user_question blocks, so its driver never sees an idle agent with an open question.
+      // Here the question ends the turn instead; continuing now would push past the user's answer.
+      if (awaitingUser(await api.snapshot(Interactions, api.conversationId, context))) return undefined
       // Cheap committed read first: most final answers end the run and never commit.
       const snapshot = await api.snapshot(Goals, api.conversationId, context)
       if (goalContinuation(snapshot, snapshot?.goal?.roundsStarted ?? 0) === undefined) return undefined
@@ -349,6 +364,7 @@ function createGoalHook(canContinue: GoalToolOptions['canContinue']) {
       await (api as CommittingHookApi).commit(async (tx) => {
         const planDoc = await tx.doc(Plans, api.conversationId)
         if (planDoc.active) return
+        if (awaitingUser(await tx.doc(Interactions, api.conversationId))) return
         const doc = await tx.doc(Goals, api.conversationId)
         const fresh = goalContinuation(doc, doc.goal?.roundsStarted ?? 0)
         if (fresh === undefined) return

@@ -406,6 +406,7 @@
 | --- | --- | --- | --- |
 | 多步任务主动建清单、及时更新、简单任务跳过 | `packages/todo/tool-todo/src/index.ts:45`；`packages/bundle/base/cordis.patch.yml:437` | `src/server/todo-tools.ts:35`；`src/server/work-policy.ts:27` | 已接入描述与动态路由；真实模型行为待认证恢复后验证 |
 | 从用户长期请求识别 Goal，无需出现 goal 一词 | `packages/goal/tool-goal/src/index.ts:51`、`:115` | `src/server/goal-tools.ts:275`、`:401` | 目标不存在时也注入指导；按真实可调用工具生成，顶层会话可创建 |
+| 有待答问题时不续跑目标 | `packages/goal/goal-round-driver/src/index.ts:111`（只在 agent idle 且无排队输入时续跑）；`packages/interaction/tool-ask-user` 默认阻塞等待回答 | `src/server/goal-tools.ts` 的 `createGoalHook` 与 `awaitingUser` | pi-web 专属守卫（2026-10-28）：pi-web 的 `ask_user_question` 不阻塞、立即结束本轮，续跑前显式检查待答的提问与计划审阅；续跑提示参照 `goal-round-driver/src/prompt.ts`，并要求等待用户时直接结束本轮 |
 | 阶段文字进度汇报 | 默认 persona 未发现统一汇报节奏，Todo 工具负责状态回执 | `src/server/prompts/runtime-core.md` | 有意增强：简短汇报阶段成果、阻塞和下一步，不承诺固定计时播报 |
 | Plan 只研究、提交方案后等待 | `packages/bundle/web-app/presets/standard.patch.yml:54` | `src/server/work-policy.ts:57`；Todo/Goal 执行与续跑 guard | 已保留；不把自主执行策略当作默认开启 Plan 模式 |
 | 默认加载及历史会话 | DSH profile 组合 persona/tool sections | `src/server/runtime.ts` 的 `ensureRuntimePolicy`、`conversationCreated`、启动迁移 | 工具为空的核心扩展覆盖 Preset、分叉、子会话和历史选择；工具范围与自定义 instructions 保留 |

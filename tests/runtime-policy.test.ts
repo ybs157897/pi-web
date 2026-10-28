@@ -261,6 +261,31 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(detail.goal?.roundsStarted).toBe(0)
   })
 
+  it('holds automatic goal rounds while a question waits for the user, then resumes after the answer', async () => {
+    const f = await fixture()
+    const conversation = await f.runtime.create({ title: 'Goal with a question' })
+    const id = conversation.conversation.id
+    await f.runtime.goal(id, { action: 'create', objective: 'Ship the demo', maxGoalRounds: 3 })
+    const asked = await send(f.runtime, id, '[ask] goal question')
+    const pending = asked.interactions?.find(interaction => interaction.status === 'pending')
+    expect(pending?.kind).toBe('question')
+    expect(asked.goal?.roundsStarted).toBe(0)
+    expect(f.requests.filter(item => item.user.startsWith('[goal '))).toHaveLength(0)
+    expect(currentRequest(f.requests, '[ask] goal question').system?.sections?.['goal-policy']).toContain('automatic continuation waits until it is answered')
+
+    await f.runtime.answerInteraction(id, pending!.id, [
+      { id: 'scope', selected: ['前端交互 (Recommended)'] },
+      { id: 'notes', selected: [] },
+    ])
+    const deadline = Date.now() + 15_000
+    let resumed = await f.runtime.detail(id)
+    while ((resumed.conversation.busy || (resumed.goal?.roundsStarted ?? 0) === 0) && Date.now() < deadline) {
+      await delay(20)
+      resumed = await f.runtime.detail(id)
+    }
+    expect(resumed.goal?.roundsStarted).toBeGreaterThan(0)
+  })
+
   it('allows goal tracking in a read-only conversation without filesystem write tools', async () => {
     const f = await fixture()
     const conversation = await f.runtime.create({ title: 'Read-only objective', accessMode: 'readOnly' })
