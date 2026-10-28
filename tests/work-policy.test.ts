@@ -147,10 +147,10 @@ describe('default runtime work policy', () => {
       await writeFile(join(cwd, 'AGENTS.md'), body, 'utf8')
       const prompt = await renderPolicy({ cwd })
 
-      expect(prompt).toContain('project-instructions')
+      expect(prompt).toContain('<project_instructions>')
       expect(prompt).toContain('Root project rules')
       expect(prompt).toContain('Keep this request scoped.')
-      expect(prompt).toContain('"status":"loaded"')
+      expect(prompt).toContain('</project_instructions>')
       expect(prompt).not.toContain('todo_write')
     } finally {
       await rm(cwd, { recursive: true, force: true })

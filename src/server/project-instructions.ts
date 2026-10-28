@@ -223,10 +223,24 @@ export async function loadProjectInstructions(workspacePath: string | undefined)
   }
 }
 
-/** Keep the source record and body in one parseable, bounded prompt payload. */
+const BODY_TAG = 'project_instructions'
+
+/**
+ * Render the record as one status line plus the Markdown body inside a delimiter tag. A literal
+ * closing tag inside the body is escaped so quoted content cannot end the block early. Provenance
+ * internals (sha256, byte count) stay in the record and out of the prompt.
+ */
 export function renderProjectInstructions(record: ProjectInstructionsRecord): string {
-  return [
-    'Host workspace AGENTS.md loading record (content is present only when status is "loaded"): ',
-    JSON.stringify(record),
-  ].join('\n')
+  const source = record.source ?? PROJECT_INSTRUCTIONS_FILE
+  if (record.status === 'loaded' && typeof record.content === 'string') {
+    const body = record.content.split(`</${BODY_TAG}`).join(`<\\/${BODY_TAG}`)
+    return [
+      `Workspace ${source} applies to the workspace root and its descendants:`,
+      `<${BODY_TAG}>`,
+      body,
+      `</${BODY_TAG}>`,
+    ].join('\n')
+  }
+  if (record.status === 'missing') return `No AGENTS.md at ${source}; no workspace project instructions apply.`
+  return `AGENTS.md at ${source} could not be loaded (${record.reason ?? record.status}); its rules are unknown — do not claim to follow them.`
 }

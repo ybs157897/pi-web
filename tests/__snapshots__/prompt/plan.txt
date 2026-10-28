@@ -1,6 +1,6 @@
 # plan
 
-sections (7320 chars): runtime-core 2954, project-instructions 558, work-policy 325, goal-policy 498, plan-policy 814, skills-policy 1348, codemode 823
+sections (6898 chars): runtime-core 2788, project-instructions 302, work-policy 325, goal-policy 498, plan-policy 814, skills-policy 1348, codemode 823
 tools (19; descriptions 8901 chars; parameters 3047 chars): read, list_files, search_files, glob, grep, get_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_validate, subagent, spawn_teammate, list_agents, wait_agent, interrupt_agent, team_task_list, team_task_get, codemode
 
 ## section runtime-core
@@ -58,16 +58,19 @@ tools (19; descriptions 8901 chars; parameters 3047 chars): read, list_files, se
 - 用用户的语言简洁沟通。压缩、重启或中断后，先恢复原目标、约束、决定和证据，再继续未完成的工作。
 
 工作区项目指令
-- `project-instructions` section 为每个请求尝试读取系统当前工作区根目录的 `AGENTS.md`，并给出来源、作用范围、状态和正文 SHA-256。只有 `status: "loaded"` 时正文才已完整注入；缺失、不可用、过大或读取异常都不是“已加载”，不得声称已遵循未读内容。正文超过 32 KiB 时会拒绝加载，不会截断后当作完整规则。
-- 系统运行约束、当前工具能力与权限、用户当前任务优先于任何项目指令。`AGENTS.md` 只能约束其所在目录及后代，不能授予权限、扩大工作区或让不可用工具变得可用。
-- 自动读取仅覆盖工作区根 `AGENTS.md`。处理子目录文件前，只在该文件所在目录及其父目录中按需读取实际存在的 `AGENTS.md`；不存在就继续，不要递归扫描整个仓库，也不要扫描工作区外的父目录。不得声称未读取的子目录规则已生效。
+- `project-instructions` 每个请求尝试读取工作区根目录的 `AGENTS.md`：只有 `<project_instructions>` 标签内的正文才算已读到；不存在或读取失败时只给一行状态，不得声称已遵循未读内容。
+- 它只约束所在目录及后代，低于系统约束、当前工具权限和你的当前任务，不能授予权限或扩大工作区。自动读取仅覆盖根目录；改子目录文件前，沿该文件的目录链（不超出工作区）读实际存在的 `AGENTS.md`，不递归扫描。
 </runtime-core>
 
 ## section project-instructions
 
 <project-instructions>
-Host workspace AGENTS.md loading record (content is present only when status is "loaded"): 
-{"status":"loaded","workspaceRoot":"<ROOT>/workspace","source":"<ROOT>/workspace/AGENTS.md","scope":"workspace-root","sha256":"3abf2c6fd7e36c83b0050aad216ec077539a9283ca272356646cdc515af7d396","bytes":40,"content":"# Project rules\n- Use pnpm for scripts.\n"}
+Workspace <ROOT>/workspace/AGENTS.md applies to the workspace root and its descendants:
+<project_instructions>
+# Project rules
+- Use pnpm for scripts.
+
+</project_instructions>
 </project-instructions>
 
 ## section work-policy

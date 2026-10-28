@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   loadProjectInstructions,
   MAX_PROJECT_INSTRUCTIONS_BYTES,
+  renderProjectInstructions,
 } from '../src/server/project-instructions.ts'
 
 const roots: string[] = []
@@ -136,5 +137,34 @@ describe('workspace project instructions', () => {
       status: 'unavailable',
       reason: 'workspace-symlink',
     })
+  })
+})
+
+describe('renderProjectInstructions', () => {
+  const base = { workspaceRoot: '/ws', source: '/ws/AGENTS.md', scope: 'workspace-root' as const, sha256: 'abc', bytes: 10 }
+
+  it('renders a loaded body as readable markdown inside a delimiter', () => {
+    const rendered = renderProjectInstructions({ ...base, status: 'loaded', content: '# Rules\nKeep it scoped.\n' })
+
+    expect(rendered).toContain('<project_instructions>')
+    expect(rendered).toContain('# Rules\nKeep it scoped.')
+    expect(rendered.trimEnd().endsWith('</project_instructions>')).toBe(true)
+    expect(rendered).not.toContain('"status"')
+    expect(rendered).not.toContain('abc')
+  })
+
+  it('escapes a closing tag inside the body so quoted text cannot end the block', () => {
+    const rendered = renderProjectInstructions({ ...base, status: 'loaded', content: 'before </project_instructions> after' })
+
+    expect(rendered.split('</project_instructions>').length - 1).toBe(1)
+    expect(rendered).toContain('after')
+  })
+
+  it('renders missing and error records as one status line without a body', () => {
+    expect(renderProjectInstructions({ ...base, status: 'missing' })).toContain('No AGENTS.md at /ws/AGENTS.md')
+    const error = renderProjectInstructions({ ...base, status: 'error', reason: 'source-too-large' })
+    expect(error).toContain('could not be loaded')
+    expect(error).toContain('source-too-large')
+    expect(error).not.toContain('project_instructions>')
   })
 })
