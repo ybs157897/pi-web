@@ -859,3 +859,12 @@ P2  [ ] 8. plugin-reference + beforeRequest
     [ ] 10. Inspector tab + PluginUiPane + bridge
     [ ] 验收：@ 引用注入；工具结果内联；右侧页面可交互
 ```
+
+## 创建插件入口（2026-10-28）
+
+按 ZCode `docs/plugin-creator.md` 的产品合同实现，但不引入桌面端 Root/attachment 机制：
+
+- 插件市场顶部新增「创建插件」。点击后关闭设置、新开一个任务，草稿预填 `$plugin-creator ` 并聚焦输入框；**不自动发送、不切换模型、不安装**。
+- 预填依赖内置技能 `skills/plugin-creator/`。技能按 pi-web 格式生成 `plugins/<slug>/.pi-plugin/plugin.json`、可选 `skills/`、MCP server 和 `plugins/marketplace.json`，再检查名称/版本一致、技能路径、UI server 引用、绝对路径与符号链接。
+- 交付边界与 ZCode 一致：只写源码和 dev 清单，市场由用户在 Settings → Plugins 手动添加，插件由用户手动 Install/Update；技能明确要求“未操作前不得声称已安装或已试用”。
+- 验证：`tests/skills-runtime.test.ts` 检查 `builtin:plugin-creator` 与资源可读；`tests/plugin-creator-entry.test.tsx` 检查入口出现/回调；真实模型端到端在临时工作区生成 `standup-digest`（manifest、SKILL.md、marketplace.json，版本一致），产物已清理。

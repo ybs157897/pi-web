@@ -170,7 +170,7 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 ## Skills 与内置创建器
 
-设置 → 技能可以选择工作区、刷新目录、查看正文和资源，以及校验格式与本地引用。随项目提供的 `builtin:skill-creator` 适配了 ZCode 的技能创作流程，来源说明见 [skills/skill-creator/ORIGIN.md](skills/skill-creator/ORIGIN.md)。
+设置 → 技能可以选择工作区、刷新目录、查看正文和资源，以及校验格式与本地引用。随项目提供的 `builtin:skill-creator` 适配了 ZCode 的技能创作流程，`builtin:plugin-creator` 适配了 ZCode 的插件创建流程；来源说明见 [skills/skill-creator/ORIGIN.md](skills/skill-creator/ORIGIN.md) 与 [skills/plugin-creator/ORIGIN.md](skills/plugin-creator/ORIGIN.md)。
 
 在普通会话中输入“帮我创建一个用于……的技能”，Agent 可通过 `skill_list`、`skill_load`、`skill_save`、`skill_validate` 完成创建与检查。创建器正文按需加载，不常驻整段系统提示词。
 
@@ -207,6 +207,8 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 ```
 
 插件包在 `.pi-plugin/plugin.json`（也接受 `.zcode-plugin` / `.claude-plugin`），支持 `name` / `version` / `description` / `author` / `homepage` / `skills` / `mcpServers` / `ui` / `dependencies`；`commands` / `agents` / `hooks` 等不会执行，只在卡片上标为「不支持」。
+
+创建插件：插件市场顶部点「创建插件」会新开一个任务并预填 `$plugin-creator`，不会自动发送或安装。内置的 `builtin:plugin-creator` 技能会按 pi-web 的格式生成 `plugins/<slug>/.pi-plugin/plugin.json`、可选的 `skills/`、MCP server 和 `plugins/marketplace.json`，并做结构校验；完成后由用户手动添加市场、安装、启用和试用。详细格式见 [skills/plugin-creator/references/plugin-format.md](skills/plugin-creator/references/plugin-format.md)。
 
 - 来源：本地市场里的相对目录、带 `sha256` 的 zip URL、GitHub 仓库（`{ "source": "github", "repo": "owner/name", "ref": "main", "path": "packages/x" }`）或 git URL（仅 HTTPS）。zip 会校验 sha256，拒绝 zip-slip、符号链接、加密与 ZIP64；GitHub 走 `codeload` zipball，git 走 `git clone --depth 1`。
 - 安装/更新：后台执行，状态经 `GET /api/plugins/events` 推送（设置页同时保留轮询兜底）；失败不会留下半装记录。安装或更新前会展示将运行的 MCP 命令（只列 env 键名，不显示值）、技能与 UI surface，二次确认后才落盘。安装记录、市场缓存与插件包都在 `<数据目录>/plugins/`，与应用设置分开，便于备份或清理。

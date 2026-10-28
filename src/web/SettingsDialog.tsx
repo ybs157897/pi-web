@@ -27,6 +27,8 @@ export interface SettingsDialogProps {
   activeProvider?: string
   /** Current project workspace, used to preselect the Skills catalog. */
   workspaceId?: string
+  /** Start a new task with the plugin-creator Skill preloaded. */
+  onCreatePlugin?: () => void
 }
 const API_OPTIONS = [
   { id: 'openai-completions', label: 'OpenAI Chat Completions' }, { id: 'openai-responses', label: 'OpenAI Responses' },
@@ -190,7 +192,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
           </div>}
           {tab === 'models' && <ModelsPanel catalog={catalog} saving={saving} onSave={onSave} onRefresh={onRefreshCatalog} />}
           {tab === 'presets' && (presetsPanel ?? <p role="status">{t('正在加载预设…', 'Loading presets…')}</p>)}
-          {tab === 'plugins' && <PluginsPanel />}
+          {tab === 'plugins' && <PluginsPanel onCreatePlugin={props.onCreatePlugin} />}
           {tab === 'mcp' && <div className={css.mcp}>
             <div className={css.mcpHead}>
               <h3>{t('MCP 服务器', 'MCP servers')}</h3>

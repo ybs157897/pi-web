@@ -40,7 +40,7 @@ function timestamp(value: number, locale: string): string {
   }
 }
 
-export default function PluginsPanel() {
+export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () => void }) {
   const { settings } = useUiPreferences()
   const t = useCallback((zh: string, en: string) => settings.locale === 'en' ? en : zh, [settings.locale])
   const [overview, setOverview] = useState<PluginOverview | null>(null)
@@ -167,6 +167,8 @@ export default function PluginsPanel() {
       </div>
       <div className={css.actions}>
         <Button size="sm" variant="outline" disabled={loading} icon={<IconRefreshOutlineRegular size={14} />} onClick={() => void load()}>{t('刷新', 'Refresh')}</Button>
+        {onCreatePlugin !== undefined && <Button size="sm" variant="primary" data-create-plugin
+          icon={<IconPluginPinwheelOutlineRegular size={14} />} onClick={onCreatePlugin}>{t('创建插件', 'Create plugin')}</Button>}
         <Button size="sm" variant="outline" icon={<IconPlusOutlineRegular size={14} />} onClick={() => setSourceOpen(value => !value)}>{t('添加市场', 'Add marketplace')}</Button>
       </div>
     </header>

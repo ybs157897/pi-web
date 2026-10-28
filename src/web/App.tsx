@@ -1356,6 +1356,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
   }, [mobile, settings.defaultAccessMode, settings.defaultPresetId, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
+  /** The plugin creator is a new task with the bundled Skill already in the draft. */
+  const startPluginCreation = useCallback((): void => {
+    const text = '$plugin-creator '
+    writeStorage(`${DRAFT_PREFIX}__new__`, text)
+    startNewConversation()
+    setSettingsOpen(false)
+    setDraftState({ scope: '__new__', text })
+    requestAnimationFrame(() => requestAnimationFrame(focusComposer))
+  }, [focusComposer, startNewConversation])
+
   /** DSH's workspace row action: start a session that already belongs to that workspace. */
   const startNewConversationIn = useCallback((workspaceId: string): void => {
     if (selectedId === null) { setNewWorkspaceId(workspaceId); return }
@@ -2030,7 +2040,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         presetsPanel={<PresetsPanel presets={presets} models={catalog?.models ?? []} defaultPresetId={settings.defaultPresetId}
           loading={presetsLoading} error={presetLoadError} onRefresh={() => { void refreshPresets() }}
           onChange={setPresets} onSetDefault={id => { void onSettingsChange({ defaultPresetId: id ?? null }).catch(cause => { announce(errorText(cause, t('无法保存默认预设', 'Could not save the default preset'))) }) }} />}
-        onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider} />
+        onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider}
+        onCreatePlugin={startPluginCreation} />
       <WorkspaceDialog open={workspaceDialogOpen} workspaces={workspaces} currentWorkspaceId={currentWorkspaceId}
         busy={false} onClose={() => { setWorkspaceDialogOpen(false) }} onSelect={id => {
           void selectWorkspace(id)
