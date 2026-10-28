@@ -1,0 +1,188 @@
+/* The transcript's inline subagent strip: one row of colored delegation chips under a
+   status headline. Colors identify children, never state; the ring/check/cross carries
+   the state. The container queries below measure the strip itself, not the main column. */
+
+.strip {
+  --sa-tint: 16%;
+  --sa-1: #4c7d2c;
+  --sa-2: #8a5a00;
+  --sa-3: #1656a8;
+  --sa-4: #7c2f8e;
+  --sa-5: #a63d3d;
+  --sa-6: #26686b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  padding: 8px 10px;
+  overflow: hidden;
+  border-radius: var(--dsw-radius-lg);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
+  container-type: inline-size;
+}
+
+.headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.headlineMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.headlineMark[data-tone='running'],
+.headlineMark[data-tone='creating'] {
+  color: var(--dsw-alias-state-business-primary);
+  animation: strip-spin 1s linear infinite;
+}
+
+.headlineMark[data-tone='failed'] {
+  color: var(--dsw-alias-state-danger-primary);
+}
+
+.headlineTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headlineCount {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chip {
+  --sa-agent: var(--sa-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sa-agent) var(--sa-tint), transparent);
+  color: var(--sa-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.chip[data-color='0'] { --sa-agent: var(--sa-1); }
+.chip[data-color='1'] { --sa-agent: var(--sa-2); }
+.chip[data-color='2'] { --sa-agent: var(--sa-3); }
+.chip[data-color='3'] { --sa-agent: var(--sa-4); }
+.chip[data-color='4'] { --sa-agent: var(--sa-5); }
+.chip[data-color='5'] { --sa-agent: var(--sa-6); }
+
+.chip[data-status='done'] { --sa-ink: color-mix(in srgb, var(--sa-agent) 82%, var(--dsw-alias-label-primary)); }
+.chip[data-status='running'],
+.chip[data-status='creating'] { --sa-ink: var(--sa-agent); }
+.chip[data-status='failed'] {
+  --sa-ink: var(--dsw-alias-state-danger-primary);
+  --sa-agent: var(--dsw-alias-state-danger-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-danger-primary) 45%, transparent);
+}
+
+.chip:hover:not(:disabled),
+.chip:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--sa-agent) 26%, transparent);
+}
+
+.chip:disabled {
+  cursor: default;
+}
+
+.chipMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  color: var(--sa-ink);
+}
+
+.chip[data-status='done'] .chipMark {
+  background: color-mix(in srgb, var(--sa-agent) 88%, transparent);
+  color: #fff;
+}
+
+.chip[data-status='failed'] .chipMark {
+  background: color-mix(in srgb, var(--dsw-alias-state-danger-primary) 16%, transparent);
+}
+
+.chip[data-status='running'] .chipMark,
+.chip[data-status='creating'] .chipMark {
+  animation: strip-spin 1s linear infinite;
+}
+
+.chipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chipMeta {
+  flex: none;
+  color: color-mix(in srgb, var(--sa-ink) 72%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The strip measures itself: tokens give way first, then labels, then every caption,
+   leaving just the colored state rings. Never squeeze a label into `es…`. */
+@container (max-width: 740px) {
+  .chip[data-status='done'] .chipMeta { display: none; }
+}
+
+@container (max-width: 620px) {
+  .chipLabel, .headlineCount { display: none; }
+}
+
+@container (max-width: 430px) {
+  .chipMeta, .headlineTitle { display: none; }
+}
+
+@keyframes strip-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* The dark theme reads a brighter six so each chip still separates on the dark material. */
+body[data-ds-dark-theme] .strip {
+  --sa-tint: 22%;
+  --sa-1: #8fd06a;
+  --sa-2: #e8b04a;
+  --sa-3: #6ea8f0;
+  --sa-4: #c98ade;
+  --sa-5: #ef8a8a;
+  --sa-6: #6ec3c8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .headlineMark, .chipMark { animation: none; }
+  .chip { transition: none; }
+}

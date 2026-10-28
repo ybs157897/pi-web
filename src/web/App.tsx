@@ -1937,6 +1937,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     <div className={css.messagesViewport} ref={messagesViewport} tabIndex={-1} onScroll={event => { syncViewportScroll(event.currentTarget) }}>
                       <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
                         pending={selectedPending} interactions={activeDetail.interactions}
+                        subagents={activeDetail.subagents}
                         running={activeDetail.conversation.busy === true}
                         onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                         onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}

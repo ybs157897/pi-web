@@ -6,7 +6,7 @@ import {
   Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest } from '../shared/types.ts'
+import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, SubagentSummary } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
@@ -26,6 +26,8 @@ import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
 import { defaultProcessOpen, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
+import SubagentRunStrip from './SubagentRunStrip.tsx'
+import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
 
 export interface PendingMessage {
@@ -56,6 +58,8 @@ export interface TranscriptProps {
   running?: boolean
   /** Projected interactions, so question rows read their call's DSH state. */
   interactions?: readonly InteractionRequest[]
+  /** The conversation's direct subagent projection; the strip's first paint, refreshed by its own polling. */
+  subagents?: readonly SubagentSummary[]
   /** Work-details presentation policy; absent uses the saved settings. */
   policy?: ChatPresentationPolicy
   onFork?: (entryId: string) => void
@@ -80,7 +84,7 @@ export interface TranscriptProps {
 
 /** Render host-owned conversation state with the ZCode-aligned message and work components. */
 export default function Transcript({
-  messages, conversationId, pending = [], compactionRunning = false, running = false, interactions, policy, onFork, onRetry, onFeedback,
+  messages, conversationId, pending = [], compactionRunning = false, running = false, interactions, policy, subagents, onFork, onRetry, onFeedback,
   onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
@@ -113,6 +117,10 @@ export default function Transcript({
   const showChanges = settings.codingViews
   const lastRun = model.runs.at(-1)
   const lastRunKey = lastRun?.key
+  // The subagent strip's live children: the projection seeds it and a 1.5s poll refreshes
+  // it while any child still runs, so chips keep their status without re-projecting the
+  // whole conversation.
+  const liveSubagents = useLiveSubagents(conversationId, subagents)
   // DSH mounts its running status at the end of the flow; ZCode decides whether the
   // turn-tail spinner may show at all. Both point at the same place: the transcript tail.
   const tailLoading = turnChatLoadingVisible({
@@ -128,6 +136,7 @@ export default function Transcript({
         {model.timeline.map(entry => entry.kind === 'run'
           ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey} live={running && entry.run.key === lastRunKey}
             liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation}
+            subagents={liveSubagents}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
             onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext} onPluginMessage={onPluginMessage}
@@ -143,6 +152,26 @@ export default function Transcript({
       </PluginUiConversationContext.Provider>
     </div>
   )
+}
+
+/**
+ * The conversation's live subagent list. The parent projection seeds it; while any child
+ * still runs, a 1.5-second poll keeps the strip's chips fresh without waiting for the
+ * parent's next full projection. A settled list stops polling.
+ */
+function useLiveSubagents(conversationId: string | undefined, projected: readonly SubagentSummary[] | undefined) {
+  const [rows, setRows] = useState<readonly SubagentSummary[]>(() => projected ?? [])
+  useEffect(() => { setRows(projected ?? []) }, [projected])
+  const running = rows.some(row => row.status === 'running')
+  useEffect(() => {
+    if (conversationId === undefined || !running) return
+    let active = true
+    const timer = window.setInterval(() => {
+      api.listChildren(conversationId).then(next => { if (active) setRows(next) }).catch(() => undefined)
+    }, 1_500)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [conversationId, running])
+  return rows
 }
 
 /**
@@ -178,7 +207,7 @@ function CompactionRunningRow({ t }: { t: Translate }) {
 
 
 function RunTranscript({
-  run, latest, live, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  run, latest, live, liveCompaction, policy, subagents, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, showChanges, replies, interactions,
 }: {
   run: RenderRun
@@ -188,6 +217,7 @@ function RunTranscript({
   /** The live compaction marker belongs to the turn that is compacting. */
   liveCompaction: boolean
   policy: ChatPresentationPolicy
+  subagents?: readonly SubagentSummary[]
   onFork?: TranscriptProps['onFork']
   onRetry?: TranscriptProps['onRetry']
   onFeedback?: TranscriptProps['onFeedback']
@@ -212,7 +242,7 @@ function RunTranscript({
       {run.users[0] !== undefined && <UserEntryRow key={run.users[0].id} message={run.users[0]}
         onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />}
       {(run.process.length > 0 || run.status === 'error' || run.status === 'cancelled') && (
-        <ProcessGroup run={run} latest={latest} live={live} policy={policy} t={t}
+        <ProcessGroup run={run} latest={latest} live={live} policy={policy} t={t} subagents={subagents}
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
           onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
           onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
@@ -434,7 +464,7 @@ function QuestionReplyRow({ message, data, t }: {
   )
 }
 
-function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
@@ -442,6 +472,8 @@ function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff,
   live: boolean
   policy: ChatPresentationPolicy
   t: Translate
+  /** The conversation's live subagent projection, for the inline strips. */
+  subagents?: readonly SubagentSummary[]
   onOpenFile?: TranscriptProps['onOpenFile']
   onInspectDiff?: TranscriptProps['onInspectDiff']
   onOpenTool?: TranscriptProps['onOpenTool']
@@ -485,12 +517,20 @@ function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff,
       && showsInlinePluginUi(part.item.result?.details, part.item.result))
     : []
   const inline = pinned.length === 0 ? run.process : run.process.filter(part => !pinned.includes(part as ToolPart))
-  const renderPart = (part: ProcessPart): JSX.Element => <ProcessPartView key={part.key} part={part} runRunning={live}
-    policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
-    onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
-    onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
-    resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />
-  const body = inline.map(renderPart)
+  // Consecutive subagent calls fold into inline strips here (a codemode call lifts its
+  // nested subagents into a strip of its own); every other part passes through.
+  const parts = useMemo(
+    () => groupSubagentRuns(inline, t, live, subagents),
+    [inline, t, live, subagents],
+  )
+  const renderPart = (part: TranscriptPart): JSX.Element => part.kind === 'subagentRun'
+    ? <SubagentRunStrip key={part.key} group={part} summaries={subagents} t={t} onOpen={onOpenSubagent} />
+    : <ProcessPartView key={part.key} part={part} runRunning={live}
+      policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
+      onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
+      onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
+      resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />
+  const body = parts.map(renderPart)
   const pinnedBody = pinned.map(renderPart)
   if (!grouped) {
     return (
