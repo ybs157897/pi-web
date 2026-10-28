@@ -255,7 +255,7 @@ function renderSkillSection(store: SkillStore) {
     const active = renderReferences(currentReferences, available.has('skill_load'))
     const skillInstructions = [
       ...(available.has('skill_list') ? ['Call skill_list when you need to refresh or search the workspace Skill catalog.'] : []),
-      ...(available.has('skill_load') ? ['Load a relevant Skill with skill_load before relying on its workflow.'] : ['Skill bodies cannot be loaded in this request; do not claim to have read one.']),
+      ...(available.has('skill_load') ? ['When the user names a Skill (by name, id or `$name`) or the task clearly matches a Skill description, load it with skill_load before acting and follow it. Do not load Skills on loose keyword overlap.'] : ['Skill bodies cannot be loaded in this request; do not claim to have read one.']),
       ...(available.has('skill_load') && available.has('skill_save')
         ? ['For creation or updates, first load `builtin:skill-creator` when that id is in the catalog, then follow its project-specific steps. skill_save may still reject if workspace writing is disabled or plan mode is active.']
         : available.has('skill_save')

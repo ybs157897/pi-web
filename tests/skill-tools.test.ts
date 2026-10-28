@@ -230,6 +230,7 @@ describe('Skills prompt routing', () => {
     expect(prompt).toContain('Through `codemode`')
     expect(prompt).toContain('`skill_list`, `skill_load`, `skill_save`, `skill_validate`')
     expect(prompt).toContain('load `builtin:skill-creator`')
+    expect(prompt).toContain('clearly matches a Skill description, load it with skill_load before acting')
   })
 
   it('omits the section when the current preset exposes no Skill tool', async () => {
