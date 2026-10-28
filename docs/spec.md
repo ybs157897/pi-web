@@ -141,3 +141,10 @@
 
 - 定了（AI 输出修订）：回答、代码、表格/图表/图片、思考、常见工具过程和文件变更摘要按 ZCode 的源码与实际效果对齐；宿主执行/权限/会话语义保留。具体合同、例外和证据见 `docs/zcode-markdown-rendering-plan.md`，取代当前正文必须使用 DSH Markdown/CodeBlock 的描述。
 - 判据：`npm run check` 47文件、517通过、1跳过，typecheck/build与diff check通过；真实 DeepSeek 正文会话2248、终端会话2268，加上 Ego 固定场景和浅深色/窄屏截图；不把未移植的宿主特有能力或 Windows/长会话压测写成已完成。
+
+## 2026-10-28
+
+- 定了：按 `docs/prompts/refactor-plan.md` 实施提示词改造刀 1–8（快照测试、plugin-reference 三类能力全空才跳过、goal 续跑待答守卫、shell 默认超时 300s、去重瘦身、代码修改规范/可点击引用、记忆来源规则与计划模式解耦、AGENTS.md 分隔渲染），参考实现 `devin/prompt-refactor` 逐刀 cherry-pick，提交映射见该文档「实施状态」。runtime-core 4,202 → 2,758 字符，7 份提示词快照成为改动评审门。刀 9（commit message 历史）未实施（P2 可选）。
+- 判据：`npm run check` 66 文件 651 通过 + 1 平台跳过；刀 10 真实验收（`opencode-go/deepseek-v4.1-flash`）S1/S2/S5/S6 通过，且拦下一处真实回归——刀 6 示例「修一下→直接修」与 workflow fixture 的「直接实施」叠加导致模型跳过待办协议（基线 2/2 过、改造后 0/2），已改为「→ 修复它」（`844cd79`）后双模式通过。S3 `bounded`（模型不自愿限时前台命令）与 S4 `notInjected`（提取模型无视来源规则）记为模型顺从度边界；S4 需要提取产物侧硬过滤，另立任务。记录见 `docs/prompts/sources-and-integration.md`「2026-10-28 验收记录」。
+- 定了：恢复正文子智能体条带 `SubagentRunStrip`（修订同日「子智能体执行渲染」旧决策）：单行 `ToolCard` 保留给单个调用；≥2 个连续顶层调用折 `source:'calls'` 条带，codemode 嵌套调用 1 个也折（`source:'codemode'`，置于脚本卡前）；chip 开右侧只读 tab 不替换主列。`ToolCard`/`CodemodeBody` 的 nested 过滤保留互补。实现 `src/web/subagent-run-model.ts` + `SubagentRunStrip.tsx`，`useLiveSubagents` 1.5s 轮询；条带接在 `ProcessGroup` inline 分组上，与同日的粘性开合状态机（live/latest 边界才变开合）叠加。
+- 判据：全量 vitest 651 通过；新增 `tests/subagent-run-model.test.ts` 14 项；真实模型 codemode 并行 5 子 agent ego 验收：5 chip 颜色互异、「子智能体运行中 0/5 结束」→「5 个子智能体已完成」、嵌套行 0、chip 开只读 tab 主列不变，截图 `artifacts/subagent-strip-check/`；窄主列按容器查询降级纯色点。

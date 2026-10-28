@@ -719,4 +719,4 @@ npm run build
 - [x] `docs/spec.md` 修订旧决策
 - [ ] `docs/parity.md` 补变更记录（由主智能体合并时统一补）
 - [x] typecheck / 测试全绿（build 与 demo / 真实模型验收由主智能体负责）
-- [ ] demo `[subagents]` + 真实 codemode 5 子 agent + ego 截图（由主智能体负责）
+- [x] 真实 codemode 5 子 agent + ego 截图（demo 分支按用户要求跳过）：`opencode-go/deepseek-v4.1-flash`，codemode 并行 5 个 `tools.subagent`（essay-1…5）——正文一行条带 5 个 chip、颜色 0–4 互异、抬头「子智能体运行中 0/5 结束」→「5 个子智能体已完成」、tokens（14.1K…）结算后可见；codemode 卡内嵌套 subagent 行 0 条；点 essay-1 → 右侧只读 tab（标题 essay-1，内容为子会话原文），主列与 strip 保持不变；主列变窄时 chip 按容器查询降级为纯色点。截图 `artifacts/subagent-strip-check/{live-early,settled,inspector-tab}.png`。「创建中」瞬态真实运行过快未捕获，由单测锁定状态文案。

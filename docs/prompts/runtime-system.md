@@ -2,7 +2,7 @@
 
 用途：应用内 Agent 的默认行为核心与按需能力片段。稳定核心由默认 `runtime-policy` Extension 的 `runtime-core` section 注入所有 Preset；核心文件在服务模块加载时读取一次，不依赖 Preset instructions。扩展不注册工具，待办指导按当前请求的真实可调用工具动态生成；计划模式遵循独立的 `plan-policy`。编辑 Preset 只影响后续使用它的新会话，不自动更新已有会话。
 
-下方“稳定核心”只引用运行时规范源，避免文档副本与实际注入内容漂移。后续片段由 Host 按真实能力和角色选择注入，不要全部无条件拼接。Skill 的能力路由已由实际 `skills-policy` section 提供，使用本文件时注意去重；问题单和环境管理片段仍是待接入模板。详细依据见 [来源与集成说明](sources-and-integration.md)。
+下方“稳定核心”只引用运行时规范源，避免文档副本与实际注入内容漂移。后续片段由 Host 按真实能力和角色选择注入，不要全部无条件拼接。Skill 的能力路由已由实际 `skills-policy` section 提供，使用本文件时注意去重；问题单和环境管理片段仍是待接入模板。任何提示词改动以 `tests/prompt-snapshot.test.ts` 的 7 份快照 diff 为评审门（`npx vitest run tests/prompt-snapshot.test.ts -u` 刷新），并以真实模型行为验收为准——2026-10-28 的刀 10 验收正是靠快照外的行为对照（workflow todo 断言 × 基线对比）拦下一处文案回归，详见 [来源与集成说明](sources-and-integration.md)。
 
 ## 稳定核心
 

@@ -771,3 +771,9 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 - **提示词**：`runtime-core.md` 新增「代码定位与检索」：从缺陷的项目/模块/版本定位子仓库，先查 `git log --grep` / `git log -S` / `git log -- <path>` 作为变更索引，再从入口沿调用链、用方法签名拿行号、精读 2–3 个片段；同一检索最多两次，证据足够即停止；明确禁止用「工具调用过程复盘」代替缺陷分析。
 - **WeTrack 插件**：`wetrack_detail` 的 tool content 现在包含完整详情 JSON（描述、转派备注、附件），不再只回一行摘要；Skill 增加约 15 次工具调用预算和相同的 git-log/子仓库/窄读策略。页面改为 `preferredDisplayMode: fullscreen` + 稳定 `toolCallId`，默认在右侧面板打开并由 pending/detail/report 原地更新；正文只显示分析，不会覆盖页面。
 - **验证**：`tests/work-policy.test.ts`（提示词断言）、`tests/wetrack-plugin.test.ts`（完整 content、fullscreen meta、报告层级）、`tests/plugin-ui-pinning.test.tsx`（折叠时页面仍可见）；真实模型在右侧面板验证 pending → report 同 tab 更新，截图 `artifacts/wetrack-plugin/side-pane-list.png`、`side-pane-report.png`。
+
+## 子智能体正文条带 SubagentRunStrip（2026-10-28）
+
+修订同日 spec.md「子智能体执行渲染」里「彩色 SubagentRunStrip 不再用于主转录」的旧决策：单行 `ToolCard` 摘要保留给**单个** `subagent` 调用（已验收形态不退）；同一回合 ≥2 个连续顶层调用折成一条 `source:'calls'` 条带，`codemode` 脚本内的嵌套调用即使 1 个也折（`source:'codemode'`，条带在脚本卡之前）——`ToolCard`/`CodemodeBody` 对 nested 行的既有过滤保留，与条带互补。chip 点击开右侧只读 `SubagentPane` tab，不替换主列；颜色 6 色循环按子会话下标（未匹配时哈希兜底），创建中/运行中转圈、完成 ✓+tokens、失败红 ×。实现 `src/web/subagent-run-model.ts` + `SubagentRunStrip.tsx`，分组接在 `ProcessGroup` 的 inline 上，`useLiveSubagents` 1.5s 轮询补父流不含子会话的缝隙。
+
+**验证**：`tests/subagent-run-model.test.ts` 14 项（分组/状态/兜底/截断 args 前缀还原/抬头/时长/颜色）+ 全量 vitest 66 文件 651 通过；真实模型 `deepseek-v4.1-flash` codemode 并行 5 个 `tools.subagent`：5 chip 颜色互异、抬头「子智能体运行中 0/5 结束」→「5 个子智能体已完成」、嵌套行 0、点 chip 开只读 tab 且主列不变，截图 `artifacts/subagent-strip-check/`。计划与验收细节见 `docs/subagent-inline-strip-plan.md`。
