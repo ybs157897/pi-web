@@ -129,8 +129,11 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const subagentOpen = subagent?.childId !== undefined && onOpenSubagent !== undefined
     ? () => { onOpenSubagent(subagent.childId as string, subagent.label) }
     : undefined
+  // The row's receipt carries the parent's delegated task; the 「任务：」 prefix keeps it
+  // distinguishable from the child's own answer, which the subagent panel preview shows.
   const subagentPrimary = subagent === null ? undefined
-    : [subagent.label, subagent.task].filter((part): part is string => part !== undefined && part !== '').join(' · ') || subagent.summary
+    : [subagent.label, subagent.task === undefined || subagent.task === '' ? undefined : t('任务：', 'Task: ') + subagent.task]
+      .filter((part): part is string => part !== undefined && part !== '').join(' · ') || subagent.summary
   const subagentStatus = subagent === null ? undefined
     : model.failed ? t('失败', 'Failed') : model.cancelled ? t('已停止', 'Stopped') : model.running ? t('运行中', 'Running') : t('已完成', 'Finished')
   // A code-mode result carries its script's nested calls, so the row shows the script,

@@ -271,10 +271,18 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
   }
 
   const allTools: MutableToolItem[] = [...callItems.values()]
+  const claimedCallIds = new Set<string>()
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role !== 'tool' || message.toolCallId !== undefined && callItems.has(message.toolCallId)) continue
+    // A live tool row precedes its durable call block. Key it by the call id it already
+    // carries so the row keeps its DOM when the settled call block pairs with that id;
+    // a message id would change at exactly that boundary and remount the row.
+    const key = message.toolCallId !== undefined && !claimedCallIds.has(message.toolCallId)
+      ? `tool:${message.toolCallId}`
+      : `tool-result:${message.id}`
+    if (message.toolCallId !== undefined) claimedCallIds.add(message.toolCallId)
     allTools.push({
-      key: `tool-result:${message.id}`,
+      key,
       message,
       result: message,
       children: [],

@@ -128,3 +128,30 @@ describe('plan reviews', () => {
       .toEqual({ approved: true, feedback: '开始吧' })
   })
 })
+
+describe('interaction folding matrix', () => {
+  /** The full tool-result × late-reply cross product: the wire status the card reads. */
+  const matrix = [
+    { result: undefined, reply: false, status: 'pending' },
+    { result: undefined, reply: true, status: 'answered' },
+    { result: 'pending', reply: false, status: 'pending' },
+    { result: 'pending', reply: true, status: 'answered' },
+    { result: 'answered', reply: false, status: 'answered' },
+    { result: 'answered', reply: true, status: 'answered' },
+    { result: 'cancelled', reply: false, status: 'cancelled' },
+    { result: 'cancelled', reply: true, status: 'answered' },
+    { result: 'errored', reply: false, status: 'expired' },
+    { result: 'errored', reply: true, status: 'answered' },
+  ] as const
+
+  it('folds every result and reply combination to exactly one status', () => {
+    for (const cell of matrix) {
+      const calls: QuestionCall[] = [{ callId: 'call-1', questions, askedAt: 10, ...(cell.result === undefined ? {} : { result: cell.result }) }]
+      const replies: QuestionReply[] = cell.reply ? [{ callId: 'call-1', answers: [], repliedAt: 30 }] : []
+      const [item] = foldInteractions(calls, replies)
+      // The floating card renders pending interactions only; every folded status here
+      // except `pending` must therefore leave the composer.
+      expect(item?.status, `${cell.result ?? 'none'}/${cell.reply ? 'reply' : 'no-reply'}`).toBe(cell.status)
+    }
+  })
+})

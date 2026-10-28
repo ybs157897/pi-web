@@ -30,32 +30,18 @@ function planReviewInteraction(interaction: InteractionRequest | undefined): int
 }
 
 function renderable(interaction: InteractionRequest): boolean {
-  // A cancelled question set left the answerable state for good: DSH settles it as
-  // ASK_CANCELLED and only the tool row keeps its record, so the composer drops it.
-  if (interaction.status === 'cancelled') return false
   return questionInteraction(interaction) || planReviewInteraction(interaction)
 }
 
-/** The newest interaction matching `status`, so a fresh request always wins over an older record. */
-function newest(interactions: readonly InteractionRequest[] | undefined, status: 'pending' | 'settled'): InteractionRequest | undefined {
-  const candidates = (interactions ?? []).filter(interaction => renderable(interaction)
-    && (status === 'pending' ? interaction.status === 'pending' : interaction.status !== 'pending'))
-  return candidates.sort((left, right) => right.createdAt - left.createdAt)[0]
+/** The newest pending interaction, so a fresh request always wins over an older one. */
+function newest(interactions: readonly InteractionRequest[] | undefined): InteractionRequest | undefined {
+  return (interactions ?? []).filter(interaction => interaction.status === 'pending' && renderable(interaction))
+    .sort((left, right) => right.createdAt - left.createdAt)[0]
 }
 
 function splitRecommended(label: string): { text: string; recommended: boolean } {
   const match = RECOMMENDED_SUFFIX.exec(label)
   return match ? { text: label.slice(0, match.index).trimEnd(), recommended: true } : { text: label, recommended: false }
-}
-
-function statusText(status: InteractionStatus, t: (chinese: string, english: string) => string): string {
-  switch (status) {
-    case 'pending': return t('待回答', 'Waiting for your answer')
-    case 'answered': return t('已回答', 'Answered')
-    case 'expired': return t('已过期', 'Expired')
-    case 'continued': return t('已继续', 'Continued')
-    case 'cancelled': return t('已取消', 'Cancelled')
-  }
 }
 
 /** The plan review's own status wording: `approved` separates an approval from a change request. */
@@ -66,18 +52,12 @@ function planStatusText(status: InteractionStatus, approved: boolean | undefined
   return t('已批准', 'Approved')
 }
 
-function answerSummary(answer: AskUserQuestionAnswerItem | undefined, t: (chinese: string, english: string) => string): { text: string; skipped: boolean } {
-  if (!answer) return { text: t('已跳过', 'Skipped'), skipped: true }
-  const custom = answer.custom?.trim() ?? ''
-  const parts = [...answer.selected, ...(custom ? [custom] : [])]
-  return parts.length ? { text: parts.join(t('、', ', ')), skipped: false } : { text: t('已跳过', 'Skipped'), skipped: true }
-}
-
 /**
  * DSH's interaction card above the composer: the newest pending question or plan review, one at a
  * time. Questions keep per-question navigation and option/custom answers; a plan review renders the
  * submitted plan and offers "request changes" (dismiss and hand focus back to the composer) or the
- * server-provided approve label. Once settled, either kind falls back to a read-only record.
+ * server-provided approve label. A settled interaction leaves the card for good — the transcript's
+ * tool row keeps the read-only record.
  */
 export default function QuestionComposer({ conversationId, interactions, onAnswered, onDismiss, onOpenPlan }: {
   conversationId: string
@@ -89,7 +69,7 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
   onOpenPlan?: (plan: { markdown: string; title?: string }) => void
 }) {
   const { t } = useUiPreferences()
-  const interaction = useMemo(() => newest(interactions, 'pending') ?? newest(interactions, 'settled'), [interactions])
+  const interaction = useMemo(() => newest(interactions), [interactions])
   const planReview = planReviewInteraction(interaction) ? interaction : undefined
   const questions = planReview === undefined ? interaction?.questions ?? [] : []
   const interactionId = interaction?.id ?? ''
@@ -118,9 +98,9 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
   }
   if (!interaction || questions.length === 0) return null
 
-  const readOnly = interaction.status !== 'pending' || answeredLocally !== null
-  const status = answeredLocally !== null ? 'answered' : interaction.status
-  const shownAnswers = answeredLocally?.answers ?? interaction.answer?.answers
+  // A submitted answer hides the card immediately; the SSE snapshot settles the record in
+  // the transcript's tool row.
+  const readOnly = answeredLocally !== null
   const question = questions[Math.min(index, questions.length - 1)]!
   const draft = drafts[question.id] ?? { selected: [], custom: '' }
 
@@ -191,27 +171,7 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
     else void submit(next)
   }
 
-  if (readOnly) {
-    const entries = questions.map(item => {
-      const answer = shownAnswers?.find(candidate => candidate.id === item.id)
-      return { question: item, answer }
-    })
-    return <section className={css.card} data-question-card data-status={status} aria-label={t('问答记录', 'Question record')}>
-      <header className={css.header}>
-        <span className={css.eyebrow}>{t('问答', 'Questions')}</span>
-        <span className={css.status} data-question-status={status}>{statusText(status as InteractionStatus, t)}</span>
-      </header>
-      <ol className={css.summaryList} data-question-summary>
-        {entries.map(({ question: item, answer }) => {
-          const summary = answerSummary(answer, t)
-          return <li key={item.id} className={css.summaryRow}>
-            <span className={css.summaryQuestion}>{item.question}</span>
-            <span className={css.summaryAnswer} data-skipped={summary.skipped || undefined}>{summary.text}</span>
-          </li>
-        })}
-      </ol>
-    </section>
-  }
+  if (readOnly) return null
 
   if (collapsed) {
     return <section className={css.card} data-question-card data-status="pending">
@@ -335,16 +295,10 @@ function PlanReviewCard({ conversationId, review, onAnswered, onDismiss, onOpenP
     }
   }
 
-  if (readOnly && !expanded) {
-    return <section className={css.card} data-plan-card data-status={status} aria-label={t('计划记录', 'Plan record')}>
-      <button type="button" className={css.collapsedBar} onClick={() => setExpanded(true)}>
-        <span className={css.eyebrow}>{t('计划', 'Plan')}</span>
-        <span className={css.status} data-plan-status={status}>{planStatusText(status, approved, t)}</span>
-        <span className={css.collapsedText}>{t('查看计划内容', 'View the plan')}</span>
-        <span className={css.expand}>{t('展开', 'Open')}</span>
-      </button>
-    </section>
-  }
+  // A decided plan leaves the composer like an answered question; the transcript's
+  // plan tool row keeps the record. The collapsed bar only bridges the brief
+  // decided-but-not-settled window, where hiding the card reads better than a residue.
+  if (readOnly && !expanded) return null
 
   return <section className={css.card} data-plan-card data-status={status} aria-label={t('计划待审', 'Plan review')}>
     <header className={css.header}>

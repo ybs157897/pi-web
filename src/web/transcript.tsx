@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
   IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
@@ -25,7 +25,7 @@ import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-br
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, workGroupTitle } from './process-presentation.ts'
+import { defaultProcessOpen, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
 import css from './Transcript.module.css'
 
 export interface PendingMessage {
@@ -460,9 +460,20 @@ function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff,
   // Keep a work header while preserving each display mode's default expansion.
   // Verbose mode remains flat and interleaved user messages stay visible.
   const grouped = policy.stepGrouping !== 'none'
-  const defaultOpen = defaultProcessOpen(policy, latest, live, hasInterleavedUser)
+  // The auto open state moves only on a live/latest boundary (a run taking over, settling,
+  // or being superseded); ordinary re-projected frames keep it, so the group never flaps.
+  const [autoOpen, setAutoOpen] = useState(() => defaultProcessOpen(policy, latest, live, hasInterleavedUser))
+  const previousFrame = useRef({ live, latest })
+  useEffect(() => {
+    const was = previousFrame.current
+    if (was.live === live && was.latest === latest) return
+    previousFrame.current = { live, latest }
+    const boundary = processGroupBoundary(was, { live, latest })
+    const settledOpen = defaultProcessOpen(policy, latest, false, hasInterleavedUser)
+    setAutoOpen(current => processGroupAutoOpen(current, boundary, settledOpen))
+  }, [live, latest, policy, hasInterleavedUser])
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
-  const open = hasInterleavedUser ? true : manualOpen ?? defaultOpen
+  const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
   // ZCode keeps a successful tool row with an inline plugin page outside the folded
@@ -495,7 +506,7 @@ function ProcessGroup({ run, latest, live, policy, t, onOpenFile, onInspectDiff,
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
         disabled={hasInterleavedUser}
-        onClick={() => { setManualOpen(value => !(value ?? defaultOpen)) }}>
+        onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
         <span className={css.processTitle} data-running={live || undefined}>{title}</span>
         <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
       </button>

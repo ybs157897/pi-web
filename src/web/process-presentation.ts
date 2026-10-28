@@ -8,6 +8,31 @@ export function defaultProcessOpen(policy: ChatPresentationPolicy, latest: boole
   return hasInterleavedUser || live || !folds || policy.stepGrouping === 'history' && latest
 }
 
+/** Why a work group's auto-open state may change: only these boundaries, never an ordinary frame. */
+export type ProcessGroupBoundary = 'live-start' | 'live-end' | 'demote' | 'none'
+
+/**
+ * Derive the boundary between two rendered frames. Live and latest are the only facts that
+ * may fold or unfold a group the user never touched, and each may fire once: `live-start`
+ * when the run takes over, `live-end` when it settles, `demote` when a newer run appears.
+ */
+export function processGroupBoundary(was: { live: boolean; latest: boolean }, now: { live: boolean; latest: boolean }): ProcessGroupBoundary {
+  if (!was.live && now.live) return 'live-start'
+  if (was.live && !now.live) return 'live-end'
+  if (!now.live && was.latest && !now.latest) return 'demote'
+  return 'none'
+}
+
+/**
+ * The auto open state across one boundary. Everything else keeps the previous value, so a
+ * stream of re-projected frames cannot make a group flap open and folded on its own.
+ */
+export function processGroupAutoOpen(previousOpen: boolean, boundary: ProcessGroupBoundary, defaultOpen: boolean): boolean {
+  if (boundary === 'live-start') return true
+  if (boundary === 'live-end' || boundary === 'demote') return defaultOpen
+  return previousOpen
+}
+
 /** The live summary follows the latest non-empty line of the thought stream. */
 export function latestReasoningLine(text: string): string {
   return text.replace(/\r\n?/gu, '\n').split('\n').findLast(line => line.trim() !== '')?.trim() ?? ''

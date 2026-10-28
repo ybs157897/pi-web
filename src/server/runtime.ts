@@ -20,6 +20,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { ConversationView, Cursor } from '@earendil-works/pi-durable'
 import { CodingTools } from './shell-tools.ts'
+import { latestOwnAnswer } from './subagent-answer.ts'
 import { createRegistry } from '@earendil-works/pi-durable'
 import { type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
@@ -938,7 +939,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         label: identity?.record?.label ?? detail.conversation.title,
         title: detail.conversation.title,
         status: detail.conversation.busy ? 'running' : 'inactive',
-        answer: latestAnswer(detail.messages),
+        answer: latestOwnAnswer(detail.messages, SUBAGENT_ANSWER_CHARS),
         ...(tokens === undefined ? {} : { tokens }),
         ...(durationMs === undefined ? {} : { durationMs }),
         metricsAt,
@@ -948,16 +949,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     } finally {
       await viewWatch.stop()
     }
-  }
-
-  /** The row's answer summary: the child's last assistant text, collapsed to one bounded line. */
-  const latestAnswer = (messages: readonly ChatMessage[]): string => {
-    for (const message of [...messages].reverse()) {
-      if (message.role !== 'assistant') continue
-      const text = message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join(' ').replace(/\s+/g, ' ').trim()
-      if (text !== '') return text.length > SUBAGENT_ANSWER_CHARS ? `${text.slice(0, SUBAGENT_ANSWER_CHARS - 1)}…` : text
-    }
-    return ''
   }
 
   const children = async (value: string): Promise<SubagentSummary[]> => {

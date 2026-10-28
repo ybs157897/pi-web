@@ -879,3 +879,53 @@ describe('streaming turn layout', () => {
     expect(run?.responses[0]?.blocks).toEqual([{ type: 'text', text: 'Hello', slot: 1 }])
   })
 })
+
+/** Every tool row key in the model, including nested children and grouped rows. */
+function toolKeys(model: ReturnType<typeof buildRenderModel>): string[] {
+  const keys: string[] = []
+  const visit = (item: ToolItem): void => {
+    keys.push(item.key)
+    for (const child of item.children) visit(child)
+  }
+  for (const run of model.runs) {
+    for (const part of run.process) {
+      if (part.kind === 'tool') visit(part.item)
+      if (part.kind === 'toolGroup') for (const item of part.items) visit(item)
+    }
+  }
+  return keys
+}
+
+describe('tool row identity across the live to settled boundary', () => {
+  const user: ChatMessage = { id: 'user-1', requestId: 'request-1', role: 'user', blocks: [{ type: 'text', text: 'delegate' }], timestamp: 100 }
+  const liveTool: ChatMessage = {
+    id: 'live-tool:call-9', role: 'tool', blocks: [], timestamp: 120, runId: 'run-1',
+    toolCallId: 'call-9', toolName: 'subagent', streaming: true, status: 'running',
+  }
+
+  it('keys a live tool row and its settled pair by the same call id', () => {
+    const liveModel = buildRenderModel([user, liveTool])
+    expect(toolKeys(liveModel)).toEqual(['tool:call-9'])
+
+    const settled: ChatMessage[] = [
+      user,
+      { id: 'assistant-1', role: 'assistant', runId: 'run-1', timestamp: 110, status: 'completed',
+        blocks: [{ type: 'toolCall', id: 'call-9', name: 'subagent', arguments: { task: 'x' } }] },
+      { id: 'tool-9', role: 'tool', blocks: [{ type: 'text', text: 'answer' }], timestamp: 130,
+        runId: 'run-1', toolCallId: 'call-9', toolName: 'subagent', status: 'completed' },
+    ]
+    expect(toolKeys(buildRenderModel(settled))).toEqual(['tool:call-9'])
+  })
+
+  it('keeps message-id keys for results without a call id, and falls back on duplicates', () => {
+    const orphan: ChatMessage = { id: 'tool-orphan', role: 'tool', blocks: [{ type: 'text', text: 'x' }], timestamp: 120, runId: 'run-1' }
+    expect(toolKeys(buildRenderModel([user, orphan]))).toEqual(['tool-result:tool-orphan'])
+
+    const duplicated: ChatMessage[] = [
+      user,
+      { ...liveTool, id: 'live-a' },
+      { ...liveTool, id: 'live-b' },
+    ]
+    expect(toolKeys(buildRenderModel(duplicated))).toEqual(['tool:call-9', 'tool-result:live-b'])
+  })
+})
