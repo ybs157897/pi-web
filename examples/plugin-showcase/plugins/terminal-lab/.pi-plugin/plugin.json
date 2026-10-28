@@ -1,0 +1,13 @@
+{
+  "name": "terminal-lab",
+  "version": "1.0.0",
+  "description": "MCP-only showcase plugin. Disable it in Settings to see the disabled state.",
+  "author": { "name": "pi-web showcase" },
+  "mcpServers": {
+    "probe": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.mjs"],
+      "exposure": "direct"
+    }
+  }
+}

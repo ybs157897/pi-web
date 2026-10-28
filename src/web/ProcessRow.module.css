@@ -1,0 +1,19 @@
+.root { min-width: 0; color: var(--message-muted); font-size: var(--message-font); line-height: 1.5; }
+.header { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; }
+.toggle, .static { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 8px; color: inherit; font: inherit; text-align: left; }
+.toggle { padding: 0; border: 0; background: transparent; cursor: pointer; }
+.toggle:focus-visible, .arrowButton:focus-visible { outline: 2px solid var(--message-link); outline-offset: 3px; border-radius: 3px; }
+.icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; color: var(--message-muted); }
+.icon > svg { width: 16px; height: 16px; }
+.title { flex: none; white-space: nowrap; font-weight: 500; }
+.chevron { flex: none; opacity: 0; transition: transform .2s ease-out, opacity .2s ease-out; }
+.header:hover .chevron, .header:focus-within .chevron, .root[data-open] > .header .chevron { opacity: 1; }
+.root[data-open] > .header .chevron { transform: rotate(90deg); }
+.arrowButton { display: inline-flex; flex: none; align-items: center; width: 16px; height: 20px; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; }
+.details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; opacity: 0; }
+.details[data-open] { grid-template-rows: 1fr; opacity: 1; }
+.clip { min-height: 0; overflow: hidden; }
+.spacing { padding-top: 8px; }
+.title[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: message-work-shimmer 4s linear infinite; }
+@keyframes message-work-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .details, .chevron { transition: none; } .title[data-running] { animation: none; background: none; color: var(--message-subtle); } }

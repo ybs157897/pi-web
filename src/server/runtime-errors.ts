@@ -14,6 +14,8 @@ export type RuntimeErrorCode =
   | 'PLUGIN_UNSUPPORTED_SOURCE'
   | 'PLUGIN_DEPENDENCY_MISSING'
   | 'PLUGIN_UI_UNAVAILABLE'
+  | 'ACCESS_DENIED'
+  | 'PLAN_BLOCKED'
 
 /** Runtime failure with an HTTP-safe discriminant. */
 export class RuntimeError extends Error {

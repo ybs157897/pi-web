@@ -40,6 +40,12 @@
 .suggestionDesc {margin-left:auto;padding-left:16px;color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .suggestionChevron {margin-left:auto;flex:none;color:var(--dsw-alias-label-caption);}
 .suggestionEmpty {padding:12px;color:var(--dsw-alias-label-tertiary);font-size:13px;}
+.pluginContexts {display:flex;flex-wrap:wrap;gap:6px;padding:2px 12px 0;}
+.pluginContextChip {display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:2px 5px 2px 9px;border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;corner-shape:round;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;}
+.pluginContextId {flex:none;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-weight:500;}
+.pluginContextText {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pluginContextRemove {display:grid;place-items:center;width:16px;height:16px;flex:none;padding:0;border:0;border-radius:999px;corner-shape:round;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;}
+.pluginContextRemove:focus-visible {outline:2px solid var(--dsw-alias-link);outline-offset:1px;}
 .attachments {display:flex;gap:10px;overflow-x:auto;padding:4px 12px 0;scrollbar-width:none;}
 .attachments::-webkit-scrollbar {display:none;}
 .attachment {position:relative;flex:0 0 auto;height:64px;}
@@ -96,7 +102,7 @@
 .stat {display:inline-flex;align-items:center;gap:4px;}
 .statRow {display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px;font-variant-numeric:tabular-nums;}
 .contextRing {flex:none;}
-@media(hover:hover){.contextButton:hover,.select:hover,.queueAction:hover{background:var(--dsw-alias-interactive-bg-hover);}.add:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}.send:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}}
+@media(hover:hover){.contextButton:hover,.select:hover,.queueAction:hover,.pluginContextRemove:hover{background:var(--dsw-alias-interactive-bg-hover);}.add:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}.send:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}}
 @media(pointer:coarse){.attachmentRemove{opacity:1;}}
 @media(prefers-reduced-motion:reduce){.spinner{animation:none;}}
 @container(max-width:560px){.tools,.trailing{gap:8px;}.accessText{display:none;}}

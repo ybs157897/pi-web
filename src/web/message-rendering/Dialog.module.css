@@ -1,0 +1,10 @@
+.dialog { width: max-content; min-width: min(640px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); margin: auto; padding: 16px; border: 1px solid var(--message-border); border-radius: 16px; background: var(--message-card); color: var(--message-fg); box-shadow: 0 16px 50px rgb(0 0 0 / 20%); font-size: var(--message-font); font-family: inherit; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.dialog::backdrop { background: rgb(0 0 0 / 50%); backdrop-filter: blur(3px); }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; flex: none; }
+.header h2 { margin: 0; font-size: var(--message-font); line-height: 1.5; font-weight: 500; }
+.header p { margin: 6px 0 0; color: var(--message-subtle); font-size: var(--message-font); line-height: 1.5; }
+.header button { display: flex; width: 28px; height: 28px; flex: none; padding: 0; border: 0; align-items: center; justify-content: center; border-radius: 6px; color: var(--message-subtle); background: transparent; cursor: pointer; }
+.header button:hover { color: var(--message-fg); background: var(--message-hover); }
+.header button:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
+.dialog[data-wide] { width: min(1080px, calc(100vw - 32px)); }
+@media (min-width: 1024px) { .dialog { min-width: 720px; max-width: calc(100vw - 128px); max-height: calc(100dvh - 128px); } }

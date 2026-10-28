@@ -239,9 +239,12 @@ export default function PluginsPanel() {
           <div className={css.cardFooter}>
             <span className={css.state} data-state={state}>
               {state === 'installed'
-                ? updateAvailable(plugin)
-                  ? t(`已安装 v${plugin.installedVersion ?? plugin.version} · 可更新到 v${plugin.version}`, `Installed v${plugin.installedVersion ?? plugin.version} · v${plugin.version} available`)
-                  : t(`已安装 v${plugin.installedVersion ?? plugin.version}`, `Installed v${plugin.installedVersion ?? plugin.version}`)
+                ? [
+                  t(`已安装 v${plugin.installedVersion ?? plugin.version}`, `Installed v${plugin.installedVersion ?? plugin.version}`),
+                  plugin.enabled ? '' : t('已停用', 'Disabled'),
+                  plugin.available ? '' : t('市场来源已移除', 'Marketplace removed'),
+                  updateAvailable(plugin) ? t(`可更新到 v${plugin.version}`, `v${plugin.version} available`) : '',
+                ].filter(label => label !== '').join(' · ')
                 : state === 'unsupported'
                   ? t('来源暂不支持', 'Source not supported yet')
                   : state === 'unavailable'
@@ -326,7 +329,7 @@ export default function PluginsPanel() {
     </div>}
 
     <p className={css.footnote}><IconPluginPinwheelOutlineRegular size={13} aria-hidden="true" />
-      {t('插件提供的技能会出现在技能目录中，来源标记为「插件」。插件声明的 MCP 工具在安装后即可使用，不需要重启；插件界面在后续阶段接入。', 'Plugin skills appear in the skill catalog with a Plugin source. Plugin MCP tools become available right after install without a restart; plugin UI arrives in a later phase.')}
+      {t('插件提供的技能会出现在技能目录中，来源标记为「插件」。插件声明的 MCP 工具在安装后即可使用，不需要重启；插件界面会出现在工具结果的内联卡和右侧面板中。', 'Plugin skills appear in the skill catalog with a Plugin source. Plugin MCP tools become available right after install without a restart; plugin UI appears inline on tool results and in the right-side panel.')}
     </p>
   </section>
 }

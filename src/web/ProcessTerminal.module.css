@@ -1,0 +1,18 @@
+.card { min-width: 0; padding: 12px 16px; margin-bottom: 8px; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); color: var(--message-fg); font-family: var(--message-mono); font-size: var(--dsh-terminal-font-size, 14px); line-height: 20px; letter-spacing: normal; }
+.commandSection { min-width: 0; }
+.commandViewport { min-width: 0; max-height: 60px; overflow: hidden; margin-right: -12px; padding-right: 12px; }
+.commandViewport[data-expanded] { max-height: 200px; overflow-y: auto; }
+.commandLine { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+.prompt { flex: none; color: var(--message-subtle); }
+.commandLine pre { min-width: 0; flex: 1; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: inherit; }
+.commandToggle { display: flex; align-items: center; gap: 4px; margin: 4px 0 0 calc(1ch + 8px); padding: 0; border: 0; font-family: system-ui, sans-serif; font-size: calc(var(--message-font) - 2px); line-height: 20px; color: var(--message-subtle); background: transparent; cursor: pointer; }
+.commandToggle svg[data-expanded] { transform: rotate(180deg); }
+.commandToggle:hover { text-decoration: underline; }
+.outputViewport { max-height: 100px; min-width: 0; max-width: 100%; overflow: auto; margin-top: 12px; color: var(--message-subtle); overscroll-behavior: contain; }
+.outputViewport[data-edges="top"] { mask-image: linear-gradient(to bottom, transparent 0, black 24px, black 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 24px, black 100%); }
+.outputViewport[data-edges="bottom"] { mask-image: linear-gradient(to bottom, black 0, black calc(100% - 24px), transparent 100%); -webkit-mask-image: linear-gradient(to bottom, black 0, black calc(100% - 24px), transparent 100%); }
+.outputViewport[data-edges="both"] { mask-image: linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 24px), transparent 100%); -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 24px, black calc(100% - 24px), transparent 100%); }
+.outputViewport pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: inherit; }
+.empty { margin-top: 12px; color: var(--message-subtle); }
+.failure { margin-top: 8px; color: var(--message-danger); font: 12px/1.5 system-ui, sans-serif; }
+.commandToggle:focus-visible, .commandViewport:focus-visible, .outputViewport:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; border-radius: 2px; }

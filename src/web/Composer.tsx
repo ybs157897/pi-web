@@ -9,6 +9,8 @@ import {
   Tooltip, observeComposition,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccessMode, AgentPreset, ModelCatalog, ModelOption, QueueActionInput, QueueItem, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
+import type { PluginContextEntry } from '../shared/plugin-ui.ts'
+import type { SkillSummary } from '../shared/skills.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import { cacheHitPercent, formatTokens } from './render-labels.ts'
 import ModelSelect from './ModelSelect.tsx'
@@ -36,7 +38,12 @@ export interface ComposerProps {
   /** Plan mode as the server projects it; the chip closes it through `onPlan`. */
   plan?: boolean; onPlan?: (active: boolean) => void
   files?: WorkspaceFileEntry[]; onSearchFiles?: (query: string) => Promise<WorkspaceFileEntry[]>; onPreviewFile?: (path: string) => void
+  /** `$` skill picker; returns the workspace catalog (plugin skills included). */
+  onSearchSkills?: (query: string) => Promise<readonly SkillSummary[]>
   stats?: ConversationStats
+  /** `ui/update-model-context` chips; App appends them to the submitted message. */
+  pluginContexts?: readonly PluginContextEntry[]
+  onRemovePluginContext?: (key: string) => void
 }
 const LEVEL_NAMES: Record<ThinkingLevel, string> = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
@@ -52,12 +59,19 @@ function fileExtension(name: string): string {
   return index > 0 && index < name.length - 1 ? name.slice(index + 1).toUpperCase().slice(0, 8) : 'FILE'
 }
 
+/** One-line chip preview; the whole text stays in the title attribute and the submission. */
+function pluginContextPreview(text: string, max = 80): string {
+  const line = text.replace(/\s+/gu, ' ').trim()
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
 /** DSH's shared hero/docked composer, connected to Pi conversation operations. */
 export default function Composer(props: ComposerProps) {
   const { value, images, catalog, model, thinkingLevel, busy, disabled = false, queue, sendMode, sending,
     onChange, onAddImages, onRemoveImage, onSend, onStop, onRemoveQueue, onSelectModel, onThinkingLevel,
     hero = false, workspace, workspaces = [], presets = [], presetId, accessMode = 'fullAccess',
-    accessModes = ['readOnly', 'fullAccess'], onUpdateQueue, onSearchFiles, plan = false, onPlan } = props
+    accessModes = ['readOnly', 'fullAccess'], onUpdateQueue, onSearchFiles, onSearchSkills, plan = false, onPlan,
+    pluginContexts = [], onRemovePluginContext } = props
   const { t, settings } = useUiPreferences()
   const textarea = useRef<HTMLTextAreaElement>(null)
   const card = useRef<HTMLDivElement>(null)
@@ -71,8 +85,9 @@ export default function Composer(props: ComposerProps) {
   const [queueText, setQueueText] = useState('')
   const [queueSaving, setQueueSaving] = useState<string | null>(null)
   const [queueError, setQueueError] = useState('')
-  const [trigger, setTrigger] = useState<{ type: 'command' | 'file'; query: string; from: number; to: number } | null>(null)
+  const [trigger, setTrigger] = useState<{ type: 'command' | 'file' | 'skill'; query: string; from: number; to: number } | null>(null)
   const [matches, setMatches] = useState<WorkspaceFileEntry[]>([])
+  const [skillMatches, setSkillMatches] = useState<SkillSummary[]>([])
   const [fileError, setFileError] = useState('')
   const [selectedSuggestion, setSelectedSuggestion] = useState(0)
   const [dragActive, setDragActive] = useState(false)
@@ -198,6 +213,17 @@ export default function Composer(props: ComposerProps) {
     return () => { active = false; clearTimeout(timer) }
   }, [trigger, onSearchFiles, t])
 
+  useEffect(() => {
+    if (trigger?.type !== 'skill' || onSearchSkills === undefined) return
+    let active = true
+    setFileError('')
+    const timer = window.setTimeout(() => {
+      void onSearchSkills(trigger.query).then(items => { if (active) setSkillMatches([...items].slice(0, 12)) })
+        .catch(() => { if (active) { setSkillMatches([]); setFileError(t('无法读取技能列表', 'Could not list skills')) } })
+    }, 100)
+    return () => { active = false; clearTimeout(timer) }
+  }, [trigger, onSearchSkills, t])
+
   const commands: Array<{ id: string; group: 'add' | 'command'; label: string; description: string; icon: ReactNode; run: () => void }> = [
     { id: 'file', group: 'add', label: t('文件', 'File'), description: t('选择图片或文件作为附件', 'Attach images or files'), icon: <IconPlusOutlineRegular size={16} />, run: () => fileInput.current?.click() },
     ...(props.onCompact ? [{ id: 'compact', group: 'command' as const, label: t('压缩', 'Compact'), description: t('压缩以上对话内容', 'Compact the conversation above'), icon: <IconDatabaseOutlineRegular size={16} />, run: props.onCompact }] : []),
@@ -209,7 +235,7 @@ export default function Composer(props: ComposerProps) {
     ...(busy ? [{ id: 'stop', group: 'command' as const, label: t('停止', 'Stop'), description: t('停止当前回答', 'Stop the current response'), icon: <IconStopFillRegular size={16} />, run: onStop }] : []),
   ]
   const commandMatches = trigger?.type === 'command' ? commands.filter(item => item.id.startsWith(trigger.query.toLowerCase())) : []
-  const suggestionCount = trigger?.type === 'command' ? commandMatches.length : matches.length
+  const suggestionCount = trigger?.type === 'command' ? commandMatches.length : trigger?.type === 'skill' ? skillMatches.length : matches.length
   const chooseSuggestion = (index: number) => {
     if (!trigger) return
     if (trigger.type === 'command') {
@@ -218,6 +244,19 @@ export default function Composer(props: ComposerProps) {
       onChange(value.slice(0, trigger.from) + value.slice(trigger.to))
       setTrigger(null)
       command.run()
+      return
+    }
+    if (trigger.type === 'skill') {
+      const skill = skillMatches[index]
+      if (!skill) return
+      const insertion = `$${skill.name} `
+      onChange(value.slice(0, trigger.from) + insertion + value.slice(trigger.to))
+      setTrigger(null)
+      requestAnimationFrame(() => {
+        textarea.current?.focus()
+        const caret = trigger.from + insertion.length
+        textarea.current?.setSelectionRange(caret, caret)
+      })
       return
     }
     const entry = matches[index]
@@ -256,8 +295,8 @@ export default function Composer(props: ComposerProps) {
   }
   const updateValue = (next: string, caret: number) => {
     onChange(next)
-    const match = /(?:^|\s)([@/])([^\s]*)$/.exec(next.slice(0, caret))
-    setTrigger(match ? { type: match[1] === '@' ? 'file' : 'command', query: match[2] ?? '', from: caret - (match[2]?.length ?? 0) - 1, to: caret } : null)
+    const match = /(?:^|\s)([@/$])([^\s]*)$/.exec(next.slice(0, caret))
+    setTrigger(match ? { type: match[1] === '@' ? 'file' : match[1] === '$' ? 'skill' : 'command', query: match[2] ?? '', from: caret - (match[2]?.length ?? 0) - 1, to: caret } : null)
     setSelectedSuggestion(0)
   }
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -371,10 +410,22 @@ export default function Composer(props: ComposerProps) {
           <button className={css.attachmentRemove} type="button" aria-label={imageAttachment ? t(`移除图片 ${image.file.name}`, `Remove image ${image.file.name}`) : t(`移除文件 ${image.file.name}`, `Remove file ${image.file.name}`)} onClick={() => onRemoveImage(image.id)}><IconCloseOutlineRegular size={12} /></button>
         </div>
       })}</div>}
-      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容, / 调用指令, @ 文件或对话', 'Describe what you want to build, / for commands, @ for files') : t('发消息或创建任务, / 调用指令, @ 文件或对话', 'Send a message or create a task, / commands, @ files')}
+      {pluginContexts.length > 0 && <div className={css.pluginContexts} role="group" aria-label={t('插件上下文', 'Plugin context')}>
+        {pluginContexts.map(entry => {
+          const key = `${entry.pluginId}:${entry.toolCallId ?? ''}`
+          return <span key={key} className={css.pluginContextChip} data-plugin-context={key}>
+            <span className={css.pluginContextId} title={entry.pluginId}>{entry.pluginId}</span>
+            <span className={css.pluginContextText} title={entry.text}>{pluginContextPreview(entry.text)}</span>
+            <button type="button" className={css.pluginContextRemove}
+              aria-label={t(`移除插件上下文 ${entry.pluginId}`, `Remove plugin context ${entry.pluginId}`)}
+              onClick={() => { onRemovePluginContext?.(key) }}><IconCloseOutlineRegular size={11} /></button>
+          </span>
+        })}
+      </div>}
+      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容, / 调用指令, @ 文件, $ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('发消息或创建任务, / 调用指令, @ 文件, $ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
         value={value} disabled={disabled || sending} rows={hero ? 2 : 1} onChange={event => updateValue(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={onKeyDown}
         onPaste={event => { const files = event.clipboardData.files; if (files.length) { event.preventDefault(); onAddImages(files) } }} />
-      {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : t('文件与文件夹', 'Files and folders')}>
+      {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : trigger.type === 'skill' ? t('技能', 'Skills') : t('文件与文件夹', 'Files and folders')}>
         {trigger.type === 'command' ? (['add', 'command'] as const).map(group => {
           const rows = commandMatches.map((item, index) => ({ item, index })).filter(row => row.item.group === group)
           if (rows.length === 0) return null
@@ -388,7 +439,16 @@ export default function Composer(props: ComposerProps) {
               <span className={css.suggestionDesc}>{item.description}</span>
             </button>)}
           </div>
-        }) : <>
+        }) : trigger.type === 'skill' ? <>
+          <div className={css.suggestionGroupTitle}>{t('技能', 'Skills')}</div>
+          {skillMatches.map((skill, index) => <button key={skill.id} type="button" role="option" aria-selected={index === selectedSuggestion}
+            className={`${css.suggestionItem} ${index === selectedSuggestion ? css.suggestionItemSelected : ''}`}
+            onMouseDown={event => event.preventDefault()} onMouseEnter={() => setSelectedSuggestion(index)} onClick={() => chooseSuggestion(index)}>
+            <span className={css.suggestionIcon}><IconAgentPresetOutlineRegular size={16} /></span>
+            <span className={css.suggestionName}>{skill.name}<small>${skill.source === 'plugin' ? ` · ${skill.pluginName ?? 'plugin'}` : ''}</small></span>
+            <span className={css.suggestionDesc}>{skill.description}</span>
+          </button>)}
+        </> : <>
           <div className={css.suggestionGroupTitle}>{matches.some(item => item.type === 'directory') ? t('文件与文件夹', 'Files and folders') : t('文件', 'Files')}</div>
           {matches.map((item, index) => <button key={`${item.type}:${item.path}`} type="button" role="option" aria-selected={index === selectedSuggestion}
             className={`${css.suggestionItem} ${index === selectedSuggestion ? css.suggestionItemSelected : ''}`}

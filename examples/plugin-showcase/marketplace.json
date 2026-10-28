@@ -1,0 +1,116 @@
+{
+  "name": "Pi Web Showcase",
+  "description": "A polished local marketplace covering every plugin state and capability type.",
+  "owner": {
+    "name": "pi-web"
+  },
+  "featured": [
+    "kanban-board",
+    "metrics-studio"
+  ],
+  "plugins": [
+    {
+      "name": "lineup-card",
+      "version": "1.0.0",
+      "description": "Skill-only plugin that turns a rough roster into a polished match-day lineup.",
+      "category": "demo",
+      "source": "./plugins/lineup-card",
+      "listing": {
+        "displayName": "Lineup Card",
+        "displayName_i18n": {
+          "zh-CN": "首发阵容卡"
+        },
+        "examplePrompts": [
+          "用首发阵容卡帮我排一套 4-3-3，并说明每个位置的理由"
+        ]
+      }
+    },
+    {
+      "name": "weather-station",
+      "version": "1.2.0",
+      "description": "Skill + MCP plugin with a live forecast tool. Installed version is one minor behind, so the card shows an update.",
+      "category": "demo",
+      "source": "./plugins/weather-station",
+      "listing": {
+        "displayName": "Weather Station",
+        "displayName_i18n": {
+          "zh-CN": "气象站"
+        },
+        "examplePrompts": [
+          "查一下上海未来三小时的降雨风险"
+        ]
+      }
+    },
+    {
+      "name": "kanban-board",
+      "version": "1.0.0",
+      "description": "MCP + UI plugin: an interactive kanban board rendered inline and in the right workspace panel.",
+      "category": "demo",
+      "source": "./plugins/kanban-board",
+      "listing": {
+        "displayName": "Kanban Board",
+        "displayName_i18n": {
+          "zh-CN": "看板工作台"
+        },
+        "examplePrompts": [
+          "打开看板，把支付回调任务移到进行中"
+        ]
+      }
+    },
+    {
+      "name": "metrics-studio",
+      "version": "1.0.0",
+      "description": "MCP + UI plugin: a polished metrics dashboard with KPI tiles and a CSS bar chart.",
+      "category": "demo",
+      "source": "./plugins/metrics-studio",
+      "listing": {
+        "displayName": "Metrics Studio",
+        "displayName_i18n": {
+          "zh-CN": "指标工作台"
+        },
+        "examplePrompts": [
+          "打开指标工作台，看看本周的构建成功率"
+        ]
+      }
+    },
+    {
+      "name": "terminal-lab",
+      "version": "1.0.0",
+      "description": "MCP-only plugin used to show the disabled state: no skills, no UI, one probe tool.",
+      "category": "demo",
+      "source": "./plugins/terminal-lab",
+      "listing": {
+        "displayName": "Terminal Lab",
+        "displayName_i18n": {
+          "zh-CN": "终端实验室"
+        }
+      }
+    },
+    {
+      "name": "pdf-notes",
+      "version": "1.0.0",
+      "description": "Skill plugin that also declares commands/hooks/agents, which pi-web reports as unsupported diagnostics.",
+      "category": "demo",
+      "source": "./plugins/pdf-notes",
+      "listing": {
+        "displayName": "PDF Notes",
+        "displayName_i18n": {
+          "zh-CN": "PDF 笔记"
+        }
+      }
+    },
+    {
+      "name": "broken-bridge",
+      "version": "1.0.0",
+      "description": "MCP plugin whose server file is missing: install succeeds, the server reports an error.",
+      "category": "demo",
+      "source": "./plugins/broken-bridge",
+      "listing": {
+        "displayName": "Broken Bridge",
+        "displayName_i18n": {
+          "zh-CN": "断裂桥接"
+        }
+      }
+    }
+  ]
+}

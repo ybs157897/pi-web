@@ -1,0 +1,13 @@
+{
+  "name": "Archive Market",
+  "description": "A second market used to demonstrate the removed-marketplace state.",
+  "plugins": [
+    {
+      "name": "archive-vault",
+      "version": "1.0.0",
+      "description": "Skill-only plugin installed from a market that is later removed.",
+      "source": "./plugins/archive-vault",
+      "listing": { "displayName": "Archive Vault", "displayName_i18n": { "zh-CN": "归档金库" } }
+    }
+  ]
+}

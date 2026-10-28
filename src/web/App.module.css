@@ -38,8 +38,7 @@
 .workspaceLabel,
 .sessionRow,
 .sessionSelect,
-.sidebarFoot,
-.chatTabs {
+.sidebarFoot {
   display: flex;
   align-items: center;
 }
@@ -267,7 +266,8 @@
 .accountMenuRow { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 24px; }
 
 .mainPanel { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; outline: none; background: var(--dsw-alias-bg-base); }
-.mainBody { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
+/* 避免文件定位的 scrollIntoView 把整个网格（含顶栏）滚出视口。只有内容区负责滚动。 */
+.mainBody { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; min-height: 0; overflow: clip; container-type: inline-size; }
 .withInspector { grid-template-columns: minmax(0, 1fr) 5px var(--inspector-width, 360px); }
 .inspectorResizer { position: relative; z-index: 3; cursor: col-resize; touch-action: none; background: transparent; }
 .inspectorResizer::after { content: ''; position: absolute; top: 0; right: 2px; bottom: 0; width: 1px; background: var(--dsw-alias-border-l2); transition: width 80ms var(--ds-ease-in-out), background 80ms var(--ds-ease-in-out); }
@@ -292,15 +292,13 @@
 .cwd { display: flex; align-items: center; gap: 8px; max-width: min(60vw, 720px); overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .running { flex: none; color: var(--dsw-alias-state-business-primary); }
 .topbarActions { flex: none; gap: 4px; }
-.chatTabs { flex: none; height: 36px; gap: 22px; padding: 0 20px; border-bottom: .5px solid var(--dsw-alias-border-l1); }
-.chatTabs button { position: relative; height: 36px; border: 0; padding: 0 2px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font: inherit; font-size: 13px; }
-.chatTabs button:hover { color: var(--dsw-alias-label-primary); }
-.chatTabs button[data-selected] { color: var(--dsw-alias-state-business-primary); }
-.chatTabs button[data-selected]::after { content: ''; position: absolute; inset: auto 0 0; height: 2px; border-radius: 2px 2px 0 0; background: currentColor; }
-
 .chatLayout {
-  --dsh-chat-content-width: clamp(680px, 64cqw, 920px);
-  --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 32px);
+  position: relative;
+  container-type: inline-size;
+  container-name: message-layout;
+  background: var(--message-background, var(--dsw-alias-bg-base));
+  --dsh-chat-content-width: calc(100cqw - 32px);
+  --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 16px);
   --dsh-composer-side-clearance: 16px;
   display: flex;
   flex: 1;
@@ -310,7 +308,30 @@
   flex-direction: column;
   align-items: center;
 }
+.withStatusPanel { padding-right: 336px; }
+.messagesPane { position: relative; display: flex; width: 100%; min-width: 0; min-height: 0; flex: 1; }
 .messagesViewport { width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-gutter: stable; }
+.jumpToBottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 20;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-secondary);
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.jumpToBottom:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.jumpToBottom:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: 2px; }
 .compactionNotice {
   display: flex;
   flex: none;
@@ -423,7 +444,6 @@
   .conversationTitle { max-width: 60vw; }
   .cwd { max-width: 58vw; }
   .topbarActions { gap: 0; }
-  .chatTabs { padding: 0 14px; }
   .withInspector { display: block; }
   .inspectorResizer { display: none; }
   .inspectorPane { position: absolute; inset: 0; width: 100%; height: 100%; border-left: 0; }
@@ -447,4 +467,12 @@
   .workspaceToggle > svg:first-child { transition: none; }
   .spinner,
   .skeleton span { animation: none; }
+}
+
+/* Match ZCode's conversation column while keeping the composer on the same axis. */
+@container message-layout (min-width: 864px) {
+  .chatLayout > * { --dsh-chat-content-width: min(848px, calc(100cqw - 144px)); --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 16px); }
+}
+@container message-layout (min-width: 1280px) {
+  .chatLayout > * { --dsh-chat-content-width: min(1104px, calc(100cqw - 432px)); --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 16px); }
 }

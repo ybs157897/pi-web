@@ -10,6 +10,7 @@ import type {
   PluginOverview,
   PluginStoreItem,
 } from '../shared/plugins.ts'
+import type { PluginUiSurfaceView } from '../shared/plugin-ui.ts'
 import { loadPluginPackage, type LoadedPluginPackage } from './plugin-manifest.ts'
 import {
   catalogCacheSchema,
@@ -654,6 +655,40 @@ export class PluginStore {
       }
     }
     return servers
+  }
+
+  /**
+   * Enabled UI surfaces as the host may open them. Each server name comes from the same projection
+   * as `mcpServers()`, so a renamed plugin server keeps its surface reachable.
+   */
+  uiSurfaces(): PluginUiSurfaceView[] {
+    const servers = this.mcpServers()
+    const surfaces: PluginUiSurfaceView[] = []
+    for (const record of this.#installed) {
+      if (!record.enabled) continue
+      const loaded = this.#manifests.get(record.id)
+      if (loaded === undefined) continue
+      for (const surface of loaded.manifest.uiSurfaces) {
+        const server = servers.find(item => item.pluginId === record.id && item.serverKey === surface.server)
+        if (server === undefined) continue
+        surfaces.push({
+          id: `${record.id}:${surface.id}`,
+          pluginId: record.id,
+          pluginName: loaded.manifest.name,
+          title: surface.title,
+          serverName: server.serverName,
+          resourceUri: surface.resourceUri,
+        })
+      }
+    }
+    return surfaces
+  }
+
+  /** The enabled plugin owning one namespaced MCP server, for page-originated calls. */
+  pluginServer(serverName: string): { pluginId: string; pluginName: string; serverKey: string } | undefined {
+    const server = this.mcpServers().find(item => item.serverName === serverName)
+    if (server === undefined) return undefined
+    return { pluginId: server.pluginId, pluginName: server.pluginName, serverKey: server.serverKey }
   }
 
   /** Components of one candidate (or installed) plugin for the install confirmation. */

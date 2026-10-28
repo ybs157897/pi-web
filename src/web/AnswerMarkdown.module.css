@@ -1,0 +1,39 @@
+.markdown { min-width: 0; width: 100%; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; letter-spacing: .025em; overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.paragraph { margin: 16px 0; }
+.h1, .h2, .h3, .h4, .h5, .h6 { margin: 24px 0 16px; font-weight: 600; line-height: inherit; }
+.h1 { font-size: calc(var(--message-font) + 4px); }
+.h2 { font-size: calc(var(--message-font) + 2px); }
+.h3, .h4, .h5, .h6 { font-size: var(--message-font); }
+.h5, .strong { font-weight: 500; }
+.h6 { font-weight: 400; }
+.unordered { list-style: disc outside; margin: 12px 0; padding-left: 20px; }
+.ordered { list-style: decimal inside; margin: 12px 0; padding-left: 0; }
+.item { padding-left: 4px; }
+.item + .item { margin-top: 6px; }
+.item::marker { color: var(--message-muted); }
+.item > .paragraph { display: inline; margin: 0; }
+.item > .unordered, .item > .ordered { margin-block: 6px; }
+.quote { margin: 16px 0; padding-left: 12px; border-left: 2px solid var(--message-border); color: var(--message-subtle); }
+.quote .paragraph { margin: 0; }
+.quote .paragraph + .paragraph { margin-top: 8px; }
+.inlineCode { font-family: var(--message-mono); font-size: calc(var(--message-font) - 2px); line-height: inherit; border-radius: 6px; background: var(--message-inline-code); margin-inline: 2px; padding: 2px 6px; }
+.link, .fileLink { color: var(--message-link); text-decoration: none; font-weight: 500; }
+.link:hover, .fileLink:hover { text-decoration: underline dotted; text-underline-offset: 4px; }
+.fileLink { display: inline-flex; max-width: 100%; align-items: baseline; gap: 4px; vertical-align: baseline; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+.fileLink img, .fileLink svg { align-self: center; }
+.link:focus-visible, .fileLink:focus-visible, .imageButton:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; border-radius: 4px; }
+.rule { border: 0; border-top: 1px solid var(--message-border); margin: 24px 0; }
+.imageButton { display: block; width: fit-content; max-width: 50%; border: 0; padding: 0; margin: 16px 0; border-radius: 12px; background: transparent; cursor: zoom-in; overflow: hidden; vertical-align: top; position: relative; }
+.image { display: block; max-width: 100%; max-height: 360px; height: auto; object-fit: cover; border-radius: 12px; border: 1px solid var(--message-border); background: var(--message-background); }
+.imageButton[data-loading] { width: 176px; height: 176px; max-width: 100%; cursor: default; }
+.imageButton[data-loading] .image { visibility: hidden; }
+.imageLoading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--message-subtle); background: var(--message-surface); }
+.imageFallback { display: inline-flex; width: min(224px, 100%); min-height: 128px; align-items: center; justify-content: center; margin: 16px 0; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-surface); color: var(--message-subtle); }
+.gallery { display: grid; grid-template-columns: 1fr; gap: 8px; margin: 16px 0; }
+.gallery > .imageButton { margin: 0; width: 100%; max-width: none; height: 128px; }
+.gallery .image { width: 100%; height: 100%; max-height: none; }
+@media(min-width:640px) { .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media(min-width:768px) { .gallery { display: flex; flex-wrap: wrap; } .gallery > .imageButton { width: auto; height: 176px; flex: none; } .gallery .image { width: auto; height: 176px; max-width: none; } }
+.fallback { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; }

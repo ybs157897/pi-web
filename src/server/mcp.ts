@@ -28,6 +28,7 @@ import type { Extension, ToolExecutionResult, ToolRegistration } from '@earendil
 import { Type, type TSchema } from 'typebox'
 import packageJson from '../../package.json' with { type: 'json' }
 import type { McpExposure, McpServerView, McpToolView, McpView } from '../shared/types.ts'
+import { pluginUiDescriptorFromMeta, type PluginUiDescriptor } from '../shared/plugin-ui.ts'
 import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from './mcp-config.ts'
 import type { PluginMcpServerConfig } from './plugin-types.ts'
 
@@ -78,6 +79,8 @@ type McpToolDetails = {
   isError: boolean
   durationMs: number
   structuredContent?: JsonValue
+  /** Validated MCP Apps descriptor; plugin servers only, and never arbitrary `_meta`. */
+  ui?: PluginUiDescriptor
 }
 
 interface RetiredClient {
@@ -347,7 +350,7 @@ function buildRegistrations(servers: readonly ServerState[]): {
         `${state.config.name}\u0000${tool.name}`,
         used,
       )
-      registrations.push(createRegistration(state.config, client, tool, exposure, registeredName))
+      registrations.push(createRegistration(state.config, client, tool, exposure, registeredName, state.pluginId))
     }
   }
   return { registrations, namespaces }
@@ -360,6 +363,7 @@ function createRegistration(
   tool: McpTool,
   exposure: McpExposure,
   registeredName: string,
+  pluginId: string | undefined,
 ): ToolRegistration {
   const registration: ToolRegistration = {
     name: registeredName,
@@ -375,7 +379,7 @@ function createRegistration(
     // model. `direct` tools are registered normally; `hidden` never reaches here.
     ...(exposure === 'codemode' || exposure === 'deferred' ? { deferred: true as const } : {}),
     async execute(args, _api, context) {
-      return executeMcpTool(server, client, tool, args, context.abortSignal)
+      return executeMcpTool(server, client, tool, args, context.abortSignal, pluginId)
     },
   }
   return registration
@@ -388,6 +392,7 @@ async function executeMcpTool(
   tool: McpTool,
   args: unknown,
   signal: AbortSignal | undefined,
+  pluginId: string | undefined,
 ): Promise<ToolExecutionResult<JsonValue>> {
   const startedAt = Date.now()
   try {
@@ -395,6 +400,8 @@ async function executeMcpTool(
     // MCP reports tool failures in the result instead of as a protocol error.
     const isError = result.isError === true
     const structuredContent = result.structuredContent === undefined ? undefined : result.structuredContent as JsonValue
+    // MCP Apps metadata reaches the transcript only through this validated descriptor.
+    const ui = pluginUiDescriptorFromMeta(result._meta, { pluginId, serverName: server.name })
     return {
       output: toLlmContent(result),
       ...(isError ? { isError: true as const } : {}),
@@ -404,6 +411,7 @@ async function executeMcpTool(
         isError,
         durationMs: Date.now() - startedAt,
         ...(structuredContent !== undefined ? { structuredContent } : {}),
+        ...(ui === undefined ? {} : { ui }),
       }),
     }
   } catch (error) {

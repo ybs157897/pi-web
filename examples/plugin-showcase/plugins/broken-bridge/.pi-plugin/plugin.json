@@ -1,0 +1,13 @@
+{
+  "name": "broken-bridge",
+  "version": "1.0.0",
+  "description": "MCP plugin with a deliberately missing server file: installation succeeds, the server reports an error.",
+  "author": { "name": "pi-web showcase" },
+  "mcpServers": {
+    "bridge": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/missing-server.mjs"],
+      "exposure": "direct"
+    }
+  }
+}

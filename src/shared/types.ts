@@ -225,6 +225,58 @@ export interface GitBranchMutation {
 export interface SwitchGitBranchInput { branchName: string }
 export interface CreateGitBranchInput { branchName: string }
 
+/** One worktree change summarized for the status panel. */
+export type GitWorktreeFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted'
+export interface GitWorktreeFile {
+  path: string
+  status: GitWorktreeFileStatus
+  added: number
+  removed: number
+}
+/** ZCode's `GitRepositorySummary` + worktree line counts, flattened for the status card. */
+export interface GitWorktreeStatus {
+  isGitAvailable: boolean
+  isRepository: boolean
+  repoRoot: string | null
+  branchName: string | null
+  headRefType: GitHeadRefType
+  ahead: number
+  behind: number
+  dirtyFileCount: number
+  added: number
+  removed: number
+  files: GitWorktreeFile[]
+}
+export interface GitCommitInput {
+  message: string
+  /** Stage every worktree change before committing, matching ZCode's "include unstaged" option. */
+  includeUnstaged: boolean
+}
+export interface GitCommitResult {
+  ok: boolean
+  commitHash: string | null
+  status: GitWorktreeStatus
+  error?: string
+}
+export interface GitPushResult { ok: boolean; error?: string }
+export interface GitCommitMessageInput {
+  /** Use this conversation's model; falls back to the runtime default model. */
+  conversationId?: string
+  includeUnstaged: boolean
+}
+export interface GitCommitMessageResult {
+  message: string
+  provider: string
+  model: string
+}
+/** A single worktree diff; the inspector accepts `diff` and `newText` directly. */
+export interface GitWorktreeDiff {
+  path: string
+  diff?: string
+  newText?: string
+}
+
+
 export interface AgentPreset {
   id: string
   name: string

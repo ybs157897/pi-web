@@ -7,6 +7,7 @@ import packageJson from '../../package.json' with { type: 'json' }
 import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
 import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, SHORTCUT_COMMANDS, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
+import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugin-ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
 const packageVersion: string = packageJson.version
@@ -75,6 +76,8 @@ const goalSchema = z.object({
 }).strict().refine(value => value.action !== 'create' || value.objective !== undefined, { message: 'create needs an objective' })
 const planSchema = z.object({ active: z.boolean() }).strict()
 const branchNameSchema = z.object({ branchName: z.string().trim().min(1).max(255) }).strict()
+const gitCommitSchema = z.object({ message: z.string().trim().min(1).max(10_000), includeUnstaged: z.boolean() }).strict()
+const gitCommitMessageSchema = z.object({ conversationId: z.string().min(1).max(200).optional(), includeUnstaged: z.boolean() }).strict()
 const childMessageSchema = z.object({
   text: z.string().min(1).max(20_000), requestId: z.string().min(1).max(160),
 }).strict()
@@ -137,6 +140,28 @@ const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginName
 const pluginEnabledSchema = z.object({ enabled: z.boolean() }).strict()
 const pluginUpdateSchema = z.object({ pluginId: pluginIdParam }).strict()
 const pluginIdSchema = pluginIdParam.regex(/^[a-z0-9][a-z0-9._-]{0,127}@[a-z0-9][a-z0-9._-]{0,63}$/u)
+/** A namespaced plugin MCP server (`plugin_<name>_<server>`, optionally hash-suffixed). */
+const pluginUiServerName = z.string().min(1).max(200).regex(/^[A-Za-z0-9._-]+$/u)
+/** Resource URIs are scheme-qualified and carry no raw whitespace or control characters. */
+const pluginUiResourceUri = z.string().min(1).max(2_048)
+  .regex(/^[A-Za-z][A-Za-z0-9+.-]*:[^\s\u0000-\u001f]*$/u)
+const pluginUiPageQuery = z.object({
+  pluginId: pluginIdSchema,
+  serverName: pluginUiServerName,
+  uri: pluginUiResourceUri,
+}).strict()
+const pluginUiCallSchema = z.object({
+  conversationId: identifier.optional(),
+  pluginId: pluginIdSchema,
+  serverName: pluginUiServerName,
+  tool: z.string().min(1).max(200).regex(/^[^\s\u0000-\u001f]+$/u),
+  arguments: z.unknown().optional(),
+}).strict()
+const pluginUiReadResourceSchema = z.object({
+  pluginId: pluginIdSchema,
+  serverName: pluginUiServerName,
+  uri: pluginUiResourceUri,
+}).strict()
 
 const interactionAnswerSchema = z.object({  answers: z.array(z.object({
     id: z.string().min(1).max(160),
@@ -179,6 +204,7 @@ function publicFailure(error: unknown): PublicFailure {
       NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422, PROVIDER_ERROR: 502,
       MARKETPLACE_NOT_FOUND: 404, PLUGIN_NOT_FOUND: 404, PLUGIN_ALREADY_INSTALLED: 409, PLUGIN_SOURCE_INVALID: 400,
       PLUGIN_CHECKSUM_MISMATCH: 422, PLUGIN_UNSUPPORTED_SOURCE: 422, PLUGIN_DEPENDENCY_MISSING: 422, PLUGIN_UI_UNAVAILABLE: 422,
+      ACCESS_DENIED: 403, PLAN_BLOCKED: 409,
     } as const
     const message = error.message.replace(/[\r\n\t]+/g, ' ').replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]').replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]').trim().slice(0, 240)
     return { status: statuses[error.code], code: error.code, message: message || 'The operation could not be completed' }
@@ -670,6 +696,34 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
       },
     })
   })
+  app.get('/api/plugins/ui/surfaces', c => {
+    for (const value of [c.req.query('workspaceId'), c.req.query('conversationId')]) {
+      if (value !== undefined && !identifier.safeParse(value).success) {
+        throw new ApiFault(400, 'invalid_query', 'Plugin UI surfaces query is invalid')
+      }
+    }
+    return c.json({ surfaces: runtime.pluginUiSurfaces() })
+  })
+  app.get('/api/plugins/ui/page', async c => {
+    const query = pluginUiPageQuery.safeParse({
+      pluginId: c.req.query('pluginId'),
+      serverName: c.req.query('serverName'),
+      uri: c.req.query('uri'),
+    })
+    if (!query.success) throw new ApiFault(400, 'invalid_query', 'Plugin UI page query is invalid')
+    const html = await runtime.pluginUiPage(query.data)
+    c.header('Content-Type', PLUGIN_UI_PAGE_CONTENT_TYPE)
+    c.header('Cache-Control', 'no-store')
+    return c.body(html)
+  })
+  app.post('/api/plugins/ui/call', async c => {
+    const input = await readJson(c.req.raw, pluginUiCallSchema)
+    return c.json({ result: await runtime.pluginUiCall(input) })
+  })
+  app.post('/api/plugins/ui/read-resource', async c => {
+    const input = await readJson(c.req.raw, pluginUiReadResourceSchema)
+    return c.json({ resource: await runtime.pluginUiReadResource(input) })
+  })
   app.post('/api/plugins/marketplaces', async c => {
     const input = await readJson(c.req.raw, pluginMarketplaceSchema)
     return c.json(await runtime.addPluginMarketplace(input.source), 201)
@@ -708,6 +762,21 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     return c.body(new Uint8Array(asset.data).buffer)
   })
   app.get('/api/workspaces/:id/git/branches', async c => c.json(await runtime.gitBranches(pathId(c.req.param('id')))))
+  app.get('/api/workspaces/:id/git/status', async c => c.json(await runtime.gitWorktreeStatus(pathId(c.req.param('id')))))
+  app.get('/api/workspaces/:id/git/diff', async c => {
+    const path = c.req.query('path') ?? ''
+    if (path === '') throw new RuntimeError('INVALID_INPUT', '缺少文件路径')
+    return c.json(await runtime.gitWorktreeDiff(pathId(c.req.param('id')), path))
+  })
+  app.post('/api/workspaces/:id/git/commit', async c => {
+    const input = await readJson(c.req.raw, gitCommitSchema)
+    return c.json(await runtime.gitCommit(pathId(c.req.param('id')), input))
+  })
+  app.post('/api/workspaces/:id/git/commit-message', async c => {
+    const input = await readJson(c.req.raw, gitCommitMessageSchema)
+    return c.json(await runtime.gitCommitMessage(pathId(c.req.param('id')), input))
+  })
+  app.post('/api/workspaces/:id/git/push', async c => c.json(await runtime.gitPush(pathId(c.req.param('id')))))
   app.post('/api/workspaces/:id/git/switch', async c => {
     const input = await readJson(c.req.raw, branchNameSchema)
     return c.json(await runtime.switchGitBranch(pathId(c.req.param('id')), { branchName: input.branchName }))

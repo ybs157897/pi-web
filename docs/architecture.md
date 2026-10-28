@@ -1,6 +1,6 @@
 # Architecture
 
-The browser renders application DTOs using DSH React display components and the pinned DSH theme. The HTTP server owns input validation and streaming transport. The runtime owns Pi Durable, its SQLite session, provider configuration, and conversation metadata.
+The browser renders host DTOs with ZCode-aligned message components and a shell using the pinned DSH theme. The HTTP server owns input validation and streaming transport. The runtime owns Pi Durable, its SQLite session, provider configuration, and conversation metadata.
 
 ## Data ownership
 
@@ -14,7 +14,11 @@ The server projects Pi state into complete `ConversationDetail` snapshots. A str
 
 ## UI integration
 
-DSH primitives remain the owner of Markdown parsing, code highlighting, tool-output blocks, and shared controls. DSH theme CSS is pinned under `vendor/dsh-theme`; project CSS consumes its semantic variables. The application owns its React composition and Pi actions instead of emulating DSH Cordis services.
+`AnswerMarkdown` owns assistant Markdown rendering through Streamdown. Stable component functions read host capabilities through React context, so changes to file handlers do not replace every code block. `src/web/message-rendering` owns code (@pierre/diffs), table export/scrolling, image and diagram previews, and reasoning presentation. `ProcessTerminal` owns its command/output scrollports; it does not query inside a third-party terminal component. Work and tool expansion state is scoped to the current conversation.
+
+The output components use scoped `--message-*` variables derived from ZCode and retain user font/theme preferences. DSH primitives still serve the application shell, settings, inspector and domain-specific interactions; their CSS does not style the inside of the new code viewer. File access, permissions, tool execution, questions and child-session actions remain host-owned. See [the rendering plan and acceptance record](zcode-markdown-rendering-plan.md).
+
+The floating status card mirrors ZCode's `ConversationStatusPanel`: it sits in the conversation's right margin, collapses when that column is too narrow, and reserves horizontal room only while visible. Git data comes from bounded `git` reads (`git-worktree.ts`), not from the model transcript; the card also projects the conversation's Todo snapshot and live child sessions. Commit/push are explicit user actions over HTTP, and a failed Git command is reported inline instead of interrupting the chat stream. The commit dialog can draft a message from the selected diff with the conversation model, and the agent section keeps finished children behind a separate fold so long histories do not crowd the card.
 
 ## Model configuration
 

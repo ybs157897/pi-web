@@ -1,12 +1,15 @@
 import type {
   AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
-  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GoalUpdateRequest,
+  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
+import type {
+  PluginUiCallInput, PluginUiDescriptor, PluginUiReadResourceInput, PluginUiSurfaceView,
+} from '../shared/plugin-ui.ts'
 
 export class ApiFailure extends Error {
   readonly code: string | undefined
@@ -209,6 +212,32 @@ export const api = {
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginOverview> {
     return request(`/api/plugins/${encodeURIComponent(pluginId)}`, { method: 'PATCH', body: JSON.stringify({ enabled }) })
   },
+  /** Enabled plugin UI surfaces the current workspace conversation can open. */
+  async pluginUiSurfaces(workspaceId?: string, conversationId?: string): Promise<PluginUiSurfaceView[]> {
+    const query = new URLSearchParams()
+    if (workspaceId !== undefined) query.set('workspaceId', workspaceId)
+    if (conversationId !== undefined) query.set('conversationId', conversationId)
+    const suffix = query.size === 0 ? '' : `?${query.toString()}`
+    const result = await request<{ surfaces: PluginUiSurfaceView[] }>(`/api/plugins/ui/surfaces${suffix}`)
+    return result.surfaces
+  },
+  /** Proxy one MCP `tools/call` a sandboxed plugin page issued through the bridge. */
+  pluginUiCall(input: PluginUiCallInput): Promise<{ result: unknown }> {
+    return request('/api/plugins/ui/call', { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** Proxy one MCP `resources/read` a sandboxed plugin page issued through the bridge. */
+  pluginUiReadResource(input: PluginUiReadResourceInput): Promise<{ resource: unknown }> {
+    return request('/api/plugins/ui/read-resource', { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** The sandboxed page URL for one plugin UI surface. */
+  pluginUiPageUrl(page: Pick<PluginUiDescriptor, 'pluginId' | 'serverName' | 'resourceUri'>): string {
+    const query = new URLSearchParams({
+      pluginId: page.pluginId,
+      serverName: page.serverName,
+      uri: page.resourceUri,
+    })
+    return `/api/plugins/ui/page?${query.toString()}`
+  },
   createWorkspace(input: AddWorkspaceInput): Promise<{ workspace: WorkspaceSummary }> {
     return request('/api/workspaces', { method: 'POST', body: JSON.stringify(input) })
   },
@@ -235,6 +264,22 @@ export const api = {
   },
   createGitBranch(id: string, branchName: string): Promise<GitBranchMutation> {
     return request(`/api/workspaces/${encodeURIComponent(id)}/git/branches`, { method: 'POST', body: JSON.stringify({ branchName }) })
+  },
+  gitWorktreeStatus(id: string): Promise<GitWorktreeStatus> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/status`)
+  },
+  gitWorktreeDiff(id: string, path: string): Promise<GitWorktreeDiff> {
+    const query = new URLSearchParams({ path })
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/diff?${query.toString()}`)
+  },
+  gitCommit(id: string, input: GitCommitInput): Promise<GitCommitResult> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/commit`, { method: 'POST', body: JSON.stringify(input) })
+  },
+  gitPush(id: string): Promise<GitPushResult> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/push`, { method: 'POST' })
+  },
+  gitCommitMessage(id: string, input: GitCommitMessageInput): Promise<GitCommitMessageResult> {
+    return request(`/api/workspaces/${encodeURIComponent(id)}/git/commit-message`, { method: 'POST', body: JSON.stringify(input) })
   },
   listPresets(): Promise<{ presets: AgentPreset[] }> {
     return request('/api/presets')

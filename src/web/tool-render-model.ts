@@ -118,15 +118,19 @@ export function toolRowTitle(name: string, t: Translate): string {
   if (mcp !== undefined) return mcp
   const id = name.toLocaleLowerCase()
   if (id === CODEMODE_TOOL_NAME) return t('代码', 'Code')
-  if (id === 'grep') return t('搜索文件内容', 'Search file contents')
-  if (id === 'glob') return t('查找文件', 'Find files')
+  // A listing is not a text search; name the operation the tool actually performs.
+  if (id === 'list_files') return t('搜索列表', 'List files')
+  if (id === 'skill') return t('技能', 'Skill')
+  if (id === 'task_stop') return t('停止任务', 'Stop task')
   switch (toolActivity(id)) {
     case 'read': case 'readImage': return t('读取', 'Read')
-    case 'search': case 'webSearch': case 'webFetch': return t('搜索', 'Search')
+    case 'search': case 'webSearch': return t('搜索', 'Search')
+    case 'webFetch': return t('网页抓取', 'Fetch')
     case 'write': return t('写入', 'Write')
     case 'edit': return t('编辑', 'Edit')
     case 'commands': return t('运行命令', 'Bash')
     case 'code': return t('代码', 'Code')
+    case 'plan': return t('待办', 'Todos')
     default: return t('工具调用', 'Tool call')
   }
 }
@@ -233,7 +237,7 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     ...(failed && output !== '' ? { errorText: firstLine(output) } : {}),
     knownPresentation: specialized || COMMAND_NAMES.has(normalizedName) || READ_NAMES.has(normalizedName)
       || WRITE_NAMES.has(normalizedName) || EDIT_NAMES.has(normalizedName) || SEARCH_NAMES.has(normalizedName)
-      || WEB_SEARCH_NAMES.has(normalizedName) || WEB_FETCH_NAMES.has(normalizedName),
+      || WEB_SEARCH_NAMES.has(normalizedName) || WEB_FETCH_NAMES.has(normalizedName) || normalizedName === 'list_files',
   }
 }
 
@@ -425,9 +429,18 @@ function summaryFor(
     const script = typeof args.code === 'string' ? firstLine(args.code) : ''
     if (script !== '') return script
   }
-  if (path !== undefined) return path
   const query = stringField(args, ['query', 'pattern', 'searchQuery'])
     ?? (record === undefined ? undefined : stringField(record, ['query', 'pattern']))
+  // A search row names what was searched for, not where it searched.
+  const searchQuery = query === undefined ? '' : firstLine(query)
+  if (SEARCH_NAMES.has(normalizedName) && searchQuery !== '') {
+    return t(`查找 ${searchQuery}`, `Find ${searchQuery}`)
+  }
+  if (normalizedName === 'list_files') {
+    // Listings are shown as the real request, so the row needs no decoding.
+    return JSON.stringify({ name: 'list_files', arguments: args }, null, 1).replace(/\n\s*/gu, ' ')
+  }
+  if (path !== undefined) return path
   if (query !== undefined) return firstLine(query)
   if (output !== '') return firstLine(output)
   return emptyLabel(normalizedName, t)

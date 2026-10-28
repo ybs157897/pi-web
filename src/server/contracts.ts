@@ -15,6 +15,13 @@ import type {
   CreateAutomationInput,
   CreateConversationInput,
   CreateGitBranchInput,
+  GitCommitInput,
+  GitCommitMessageInput,
+  GitCommitMessageResult,
+  GitCommitResult,
+  GitPushResult,
+  GitWorktreeDiff,
+  GitWorktreeStatus,
   DirectoryListing,
   EditQueueInput,
   GitBranchMutation,
@@ -99,6 +106,16 @@ export interface Runtime {
   switchGitBranch(id: string, input: SwitchGitBranchInput): Promise<GitBranchMutation>
   /** Create a branch at HEAD and switch to it. */
   createGitBranch(id: string, input: CreateGitBranchInput): Promise<GitBranchMutation>
+  /** Worktree changes, branch position and line counts for the status card. */
+  gitWorktreeStatus(id: string): Promise<GitWorktreeStatus>
+  /** One file's current worktree diff, or its text when it is untracked. */
+  gitWorktreeDiff(id: string, path: string): Promise<GitWorktreeDiff>
+  /** Commit the index, optionally staging every worktree change first. */
+  gitCommit(id: string, input: GitCommitInput): Promise<GitCommitResult>
+  /** Push the current branch to its configured upstream. */
+  gitPush(id: string): Promise<GitPushResult>
+  /** Draft a commit message from the selected worktree diff with a conversation model. */
+  gitCommitMessage(id: string, input: GitCommitMessageInput): Promise<GitCommitMessageResult>
   skills(workspaceId: string): Promise<SkillCatalog>
   skill(workspaceId: string, skillId: string, resource?: string): Promise<SkillContent>
   validateSkill(workspaceId: string, skillId: string): Promise<SkillValidation>

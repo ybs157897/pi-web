@@ -1,0 +1,14 @@
+.root { min-width: 0; color: var(--message-muted); }
+.separator { flex: none; color: var(--message-muted); }
+.summary { min-width: 0; overflow: hidden; white-space: nowrap; flex: 1; color: var(--message-subtle); font-size: var(--message-font); }
+.summary[data-overflow] { mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent); }
+.summaryText { display: inline-block; animation: reasoning-line-in 140ms ease-out both; }
+@keyframes reasoning-line-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+.contentPadding { padding-top: 4px; }
+.scroll { max-height: 240px; margin-left: 8px; border-left: 1px solid var(--message-border); padding-left: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--message-muted); font-size: var(--message-font); line-height: 1.5; }
+.scroll[data-edges='top'] { mask-image: linear-gradient(to bottom, transparent, black 14px); }
+.scroll[data-edges='bottom'] { mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent); }
+.scroll[data-edges='both'] { mask-image: linear-gradient(to bottom, transparent, black 14px, black calc(100% - 14px), transparent); }
+.scroll:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
+.redacted { padding: 4px 0 0 22px; color: var(--message-muted); }
+@media (prefers-reduced-motion: reduce) { .summaryText { animation: none; } }

@@ -299,6 +299,26 @@ class FakeRuntime implements Runtime {
     const snapshot = await this.gitBranches(id)
     return { ok: true, action: 'create-and-switch', branchName: input.branchName, didChange: true, created: true, snapshot, issues: [] }
   }
+  async gitWorktreeStatus(id: string): Promise<Protocol.GitWorktreeStatus> {
+    this.calls.push('git-status:' + id)
+    return { isGitAvailable: true, isRepository: true, repoRoot: '/tmp/repo', branchName: 'main', headRefType: 'branch', ahead: 0, behind: 0, dirtyFileCount: 1, added: 2, removed: 1, files: [{ path: 'a.ts', status: 'modified', added: 2, removed: 1 }] }
+  }
+  async gitWorktreeDiff(id: string, path: string): Promise<Protocol.GitWorktreeDiff> {
+    this.calls.push(`git-diff:${id}:${path}`)
+    return { path, diff: '- old\n+ new\n' }
+  }
+  async gitCommit(id: string, input: Protocol.GitCommitInput): Promise<Protocol.GitCommitResult> {
+    this.calls.push(`git-commit:${id}:${input.message}:${input.includeUnstaged}`)
+    return { ok: true, commitHash: 'abc1234', status: await this.gitWorktreeStatus(id) }
+  }
+  async gitPush(id: string): Promise<Protocol.GitPushResult> {
+    this.calls.push('git-push:' + id)
+    return { ok: true }
+  }
+  async gitCommitMessage(id: string, input: Protocol.GitCommitMessageInput): Promise<Protocol.GitCommitMessageResult> {
+    this.calls.push(`git-commit-message:${id}:${input.includeUnstaged}:${input.conversationId ?? ''}`)
+    return { message: 'Add the status panel', provider: 'demo', model: 'demo-model' }
+  }
   async skills() { return { skills: [], diagnostics: [] } }
   async skill(): Promise<import('../src/shared/skills.ts').SkillContent> { throw new RuntimeError('NOT_FOUND', 'Skill not found') }
   async validateSkill() { return { valid: false, errors: ['Skill not found'], warnings: [] } }
@@ -321,6 +341,24 @@ class FakeRuntime implements Runtime {
   async uninstallPlugin(pluginId: string) { this.calls.push('uninstall-plugin:' + pluginId); return this.plugins() }
   async setPluginEnabled(pluginId: string, enabled: boolean) { this.calls.push(`enable-plugin:${pluginId}:${enabled}`); return this.plugins() }
   watchPlugins(): () => void { return () => undefined }
+  pluginUiSurfaces() {
+    return [{ id: 'demo@market:canvas', pluginId: 'demo@market', pluginName: 'demo', title: 'Canvas', serverName: 'plugin_demo_canvas', resourceUri: 'ui://demo/canvas' }]
+  }
+  async pluginUiPage(input: { pluginId: string; serverName: string; uri: string }): Promise<string> {
+    this.calls.push(`plugin-ui-page:${input.pluginId}:${input.serverName}:${input.uri}`)
+    if (input.pluginId === 'missing@market') throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', 'Plugin UI server is unavailable')
+    return `<!doctype html><html><head></head><body>${input.uri}</body></html>`
+  }
+  async pluginUiCall(input: { pluginId: string; serverName: string; tool: string; arguments?: unknown }) {
+    this.calls.push(`plugin-ui-call:${input.pluginId}:${input.serverName}:${input.tool}`)
+    if (input.pluginId === 'missing@market') throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', 'Plugin UI server is unavailable')
+    return { content: [{ type: 'text' as const, text: `call:${input.tool}` }] }
+  }
+  async pluginUiReadResource(input: { pluginId: string; serverName: string; uri: string }) {
+    this.calls.push(`plugin-ui-read:${input.pluginId}:${input.uri}`)
+    if (input.pluginId === 'missing@market') throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', 'Plugin UI server is unavailable')
+    return { contents: [{ uri: input.uri, text: 'resource' }] }
+  }
   presets(): Protocol.AgentPreset[] { return [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: ['coding'], tools: ['read'], accessMode: 'readOnly' }] }
   async createPreset(input: Protocol.CreateAgentPresetInput) { return { ...input, id: input.id ?? 'preset-new' } }
   async updatePreset(id: string, input: Protocol.UpdateAgentPresetInput) { return { ...this.presets()[0]!, ...input, id } }
@@ -861,6 +899,24 @@ describe('management API', () => {
     const frames = new TextDecoder().decode((await reader.read()).value)
     expect(frames).toContain('event: ready')
     await reader.cancel()
+    const uiSurfaces = await app.request('/api/plugins/ui/surfaces?workspaceId=ws-1')
+    expect(uiSurfaces.status).toBe(200)
+    expect(await uiSurfaces.json()).toMatchObject({ surfaces: [{ id: 'demo@market:canvas', serverName: 'plugin_demo_canvas' }] })
+    expect((await app.request('/api/plugins/ui/surfaces?workspaceId=bad id')).status).toBe(400)
+    const pageQuery = new URLSearchParams({ pluginId: 'demo@market', serverName: 'plugin_demo_canvas', uri: 'ui://demo/canvas' })
+    const page = await app.request(`/api/plugins/ui/page?${pageQuery}`)
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-type')).toContain('text/html')
+    expect(await page.text()).toContain('ui://demo/canvas')
+    expect((await app.request('/api/plugins/ui/page?pluginId=demo%40market&serverName=plugin_demo_canvas&uri=not-a-uri')).status).toBe(400)
+    expect((await app.request(`/api/plugins/ui/page?${new URLSearchParams({ pluginId: 'missing@market', serverName: 'plugin_demo_canvas', uri: 'ui://demo/canvas' })}`)).status).toBe(422)
+    const uiCall = await app.request('/api/plugins/ui/call', json('POST', { pluginId: 'demo@market', serverName: 'plugin_demo_canvas', tool: 'echo', arguments: { text: 'hi' } }))
+    expect(uiCall.status).toBe(200)
+    expect(await uiCall.json()).toEqual({ result: { content: [{ type: 'text', text: 'call:echo' }] } })
+    expect((await app.request('/api/plugins/ui/call', json('POST', { pluginId: 'demo@market', serverName: 'plugin_demo_canvas' }))).status).toBe(400)
+    const resource = await app.request('/api/plugins/ui/read-resource', json('POST', { pluginId: 'demo@market', serverName: 'plugin_demo_canvas', uri: 'ui://demo/canvas' }))
+    expect(resource.status).toBe(200)
+    expect(await resource.json()).toEqual({ resource: { contents: [{ uri: 'ui://demo/canvas', text: 'resource' }] } })
     expect((await app.request('/api/plugins/demo@market', json('PATCH', { enabled: false }))).status).toBe(200)
     expect((await app.request('/api/plugins/demo@market', { method: 'DELETE' })).status).toBe(200)
     expect((await app.request('/api/plugins/not-an-id', json('PATCH', { enabled: false }))).status).toBe(400)
@@ -886,6 +942,32 @@ describe('management API', () => {
 
     expect((await app.request('/api/workspaces/ws-1/git/switch', json('POST', { branchName: '   ' }))).status).toBe(400)
     expect((await app.request('/api/workspaces/ws-1/git/switch', json('POST', { branchName: 'main', force: true }))).status).toBe(400)
+    const status = await app.request('/api/workspaces/ws-1/git/status')
+    expect(status.status).toBe(200)
+    expect(await status.json()).toMatchObject({ isRepository: true, branchName: 'main', added: 2, removed: 1 })
+    expect(runtime.calls).toContain('git-status:ws-1')
+
+    const diff = await app.request('/api/workspaces/ws-1/git/diff?path=a.ts')
+    expect(diff.status).toBe(200)
+    expect(await diff.json()).toMatchObject({ path: 'a.ts', diff: '- old\n+ new\n' })
+    expect(runtime.calls).toContain('git-diff:ws-1:a.ts')
+    expect((await app.request('/api/workspaces/ws-1/git/diff')).status).toBe(400)
+
+    const commit = await app.request('/api/workspaces/ws-1/git/commit', json('POST', { message: 'Update a', includeUnstaged: true }))
+    expect(commit.status).toBe(200)
+    expect(await commit.json()).toMatchObject({ ok: true, commitHash: 'abc1234' })
+    expect(runtime.calls).toContain('git-commit:ws-1:Update a:true')
+    const drafted = await app.request('/api/workspaces/ws-1/git/commit-message', json('POST', { conversationId: 'conv-1', includeUnstaged: true }))
+    expect(drafted.status).toBe(200)
+    expect(await drafted.json()).toMatchObject({ message: 'Add the status panel', provider: 'demo', model: 'demo-model' })
+    expect(runtime.calls).toContain('git-commit-message:ws-1:true:conv-1')
+    expect((await app.request('/api/workspaces/ws-1/git/commit-message', json('POST', { includeUnstaged: 'yes' }))).status).toBe(400)
+    expect((await app.request('/api/workspaces/ws-1/git/commit', json('POST', { message: '   ', includeUnstaged: true }))).status).toBe(400)
+
+    const push = await app.request('/api/workspaces/ws-1/git/push', { method: 'POST' })
+    expect(push.status).toBe(200)
+    expect(await push.json()).toMatchObject({ ok: true })
+    expect(runtime.calls).toContain('git-push:ws-1')
   })
 
   it('supports queue changes, persisted feedback, retry and automation actions', async () => {

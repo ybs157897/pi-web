@@ -40,8 +40,11 @@
 /* Inspector view switcher beside the document name: the plan is its own view next to file/diff. */
 .viewTabs {
   display: inline-flex;
+  min-width: 0;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
 }
 
@@ -70,6 +73,158 @@
 .viewTabs button:focus-visible {
   outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 2px;
+}
+
+/* One mounted plugin page: its title tab plus its own close affordance. */
+.pluginTab {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 190px;
+  align-items: center;
+  gap: 1px;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.viewTabs .pluginTabButton {
+  min-width: 0;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewTabs .pluginTabClose {
+  display: inline-flex;
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+}
+
+/* The `+` menu lists the surfaces this workspace and conversation can open. */
+.surfacesAnchor {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.viewTabs .addPage {
+  display: inline-flex;
+  width: 24px;
+  min-height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 15px;
+  line-height: 18px;
+}
+
+.surfacesMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  width: min(260px, 60vw);
+  max-height: 320px;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-base));
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.surfacesEmpty {
+  padding: 8px 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.surfaceItem {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.surfaceItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.surfaceItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: -2px;
+}
+
+.surfaceTitle,
+.surfaceMeta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.surfaceMeta {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+/* All plugin pages stay mounted; only the active one is visible. */
+.pluginSurfaces {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pluginSurfaces[hidden] {
+  display: none;
+}
+
+/* A host created by the transcript's inline card: appending it here moves the iframe. */
+.pluginPageHost {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pluginPageHost[hidden] {
+  display: none;
+}
+
+/* Read-only child conversations stay mounted beside the plugin pages; only the active tab shows. */
+.subagentSurfaces {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.subagentSurfaces[hidden] {
+  display: none;
 }
 
 .close {

@@ -1,0 +1,10 @@
+{
+  "name": "pdf-notes",
+  "version": "1.0.0",
+  "description": "A skill plugin that also declares commands, hooks and agents. pi-web reports those as unsupported diagnostics.",
+  "author": { "name": "pi-web showcase" },
+  "skills": ["./skills"],
+  "commands": { "summarize-pdf": { "description": "Summarize the current PDF" } },
+  "hooks": { "SessionStart": "echo unsupported" },
+  "agents": { "pdf-reader": { "description": "Read a PDF and answer questions" } }
+}

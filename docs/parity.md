@@ -9,9 +9,11 @@
 
 | ID | 差异 | 说明 | 状态 |
 |---|---|---|---|
-| DF-1 | 插件市场按 ZCode 数据模型原生实现（2026-10-27 起取代原「不展示插件管理界面」决策） | 设置 → 扩展 → 插件市场：本地目录 / HTTPS / GitHub / git 来源、安装 / 更新 / 卸载 / 启停、安装确认（展示 MCP 命令与能力）、插件技能接入技能目录、插件 MCP 工具热重载；插件 UI（内联卡 / 右侧面板）属 P2。原「所有内置扩展工具恒开启」仍成立，不做逐插件工具开关。 | 已实现（P0+P1） |
+| DF-1 | 插件市场按 ZCode 数据模型原生实现（2026-10-27 起取代原「不展示插件管理界面」决策） | 设置 → 扩展 → 插件市场：本地目录 / HTTPS / GitHub / git 来源、安装 / 更新 / 卸载 / 启停、安装确认（展示 MCP 命令与能力）、插件技能接入技能目录、插件 MCP 工具热重载；P2 补齐 `@` 引用 reminder、`_meta.ui` 内联卡、右侧插件 tab 与 JSON-RPC bridge。原「所有内置扩展工具恒开启」仍成立，不做逐插件工具开关。 | 已实现（P0+P1+P2） |
 | DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 由用户级 `mcp.json` 与已启用插件的 `mcpServers` 合并而成（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`），插件能力变化时热重载。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
-| DF-3 | ~~回答的最终结论按「设计文档」版式渲染~~（差异已随功能移除，2026-10-26） | 「结论文档排版」整体下线：前端渲染层（`DocText` / `DocBlock` / `DocInline` / `doc-split` / `doc-inline`、`DocBody.module.css` / `DocBlock.module.css`）、设置项 `docStyle`、模型契约 `doc-style-instruction.ts`，以及为 doc 块 JSON 载荷引入的「结构化输出」模型能力开关（b3093f6）一并删除；结论与过程回答一样走库的 `MarkdownText`。历史会话里已有的 ```` ```doc ```` 围栏按普通代码块显示。详见 `docs/spec.md` 2026-10-26。 | 已移除（用户要求） |
+| DF-3 | ~~回答的最终结论按「设计文档」版式渲染~~（差异已随功能移除，2026-10-26） | 「结论文档排版」整体下线：前端渲染层（`DocText` / `DocBlock` / `DocInline` / `doc-split` / `doc-inline`、`DocBody.module.css` / `DocBlock.module.css`）、设置项 `docStyle`、模型契约 `doc-style-instruction.ts`，以及为 doc 块 JSON 载荷引入的「结构化输出」模型能力开关（b3093f6）一并删除；移除时结论与过程回答统一走库的 `MarkdownText`；2026-10-27 的 ZCode 输出迁移见 DF-4。历史会话里已有的 ```` ```doc ```` 围栏按普通代码块显示。详见 `docs/spec.md` 2026-10-26。 | 已移除（用户要求） |
+
+| DF-4 | AI 输出改按 ZCode（2026-10-27） | 回答、代码、表格/图表/图片、思考、常见工具过程与已更改文件摘要以 ZCode 3.16.2 源码和 3.16.3 实机为参考；宿主执行、权限、问答、计划和子会话语义保留。新正文不再使用 DSH Markdown/CodeBlock，终端不再依赖 DSH 内部 DOM。详见 `docs/zcode-markdown-rendering-plan.md`。 | 有意差异（用户要求，已实施） |
 
 ## 输入区
 
@@ -741,3 +743,14 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **契约要求写全路径**：模型侧新增一条规则「路径写工作区里的相对路径，带上目录」，让模型少制造需要兜底的路径。
 - **反引号与目录**：`changes` 块的 `path` 字段若带反引号（契约要求如此），渲染与点击都用去壳后的路径；路径指向目录时，文件接口返回目录条目，检查器切到文件浏览器并定位到该目录，而不是报「只能预览普通文件」。
 - 这是 pi-web 相对 DSH 的**有意增强**：DSH 的行为在 DSH 里没有对应实现，pi-web 记为 DF-3 同类的有意差异。
+
+## 右侧状态卡：Git / 进程 / 智能体（2026-10-28）
+
+按 ZCode `ConversationStatusPanel` 的结构补齐右侧浮动状态卡：
+
+- **Git 工具**：worktree 状态（分支、ahead/behind、dirty、+/− 行数）、逐文件改动、单文件 diff、分支切换、提交/推送，以及用当前会话模型生成 commit message。服务端 `git-worktree.ts` 用 `execFile` 直接读 Git，不经过 shell；`GIT_TERMINAL_PROMPT=0` 避免凭据提示挂住。HTTP 路由：`/api/workspaces/:id/git/{status,diff,commit,push,commit-message}`。
+- **进程**：读取 TodoWrite 快照，`已完成/总数`；超过 6 项时保留当前项附近 3 项，前后折叠；宽屏下底部 Todo dock 让位。
+- **智能体**：运行中的子智能体显示标题、实时时长、停止与打开；已结束的子智能体收在「已结束的智能体 · N」折叠里，显示 token/时长并可打开只读 tab。
+- **布局**：卡片在会话右上角，宽 320px；会话列宽度不足或打开右侧 Inspector 时自动隐藏，并在可见时向左让出 336px。Git 状态每 5 秒刷新，会话更新时也会重读。
+- **有意不实现：终端（后台 Bash）与工作流分区**。pi-web 的协议没有 `backgroundWorks` / `workflowRuns` 投影：Pi Durable 的 shell 工具是前台调用，`harness.inspect()` 只给任务记录而不区分可展示的终端/工作流；pi-web 也没有 CreateWorkflow 协议。没有真实数据源时不画空分区或伪造状态。因此这两项**从后续清单移除**，不算待办；若未来 Pi 增加后台 shell / workflow 投影，再按 ZCode 结构接入。
+- **验证**：`tests/git-worktree.test.ts`（临时仓库真实 commit/push）、`tests/git-commit-message.test.ts`（消息清洗与上下文）、`tests/status-panel.test.tsx`（进程窗口、智能体折叠、窄宽隐藏）、`tests/http.test.ts`（新路由）。实机截图：`artifacts/status-panel/panel-git-wide2.png`、`panel-git-changes.png`、`commit-modal-2.png`、`commit-ai-generated.png`、`ended-agents.png`、`process-live.png`。

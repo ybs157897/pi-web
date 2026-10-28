@@ -4,9 +4,9 @@
   max-width: var(--dsh-chat-content-width, 742px);
   min-width: 0;
   flex-direction: column;
-  gap: 18px;
+  gap: 0;
   margin: 0 auto;
-  padding: 22px 0 28px;
+  padding: 0 0 28px;
   color: var(--dsw-alias-label-primary);
   font-size: var(--dsh-content-font-size, 14px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
@@ -16,7 +16,8 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
+  padding: 56px 0 20px;
 }
 
 .message {
@@ -288,185 +289,25 @@
   font-size: 12px;
 }
 
-.processGroup {
-  min-width: 0;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.processHeader {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  min-height: 33px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 0 8px;
-  border: 0;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-  font: inherit;
-  font-size: var(--dsh-content-font-size, 14px);
-  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
-  text-align: left;
-  cursor: pointer;
-}
-
-.processHeader:hover {
-  color: var(--dsw-alias-label-secondary);
-}
-
-.processGroup[data-state="error"] .processHeader {
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.processGroup[data-state="cancelled"] .processHeader {
-  color: var(--dsw-alias-state-warn-label);
-}
-
-.processLeading {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-}
-
-.processTitle {
-  flex: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.processPreview {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: var(--dsw-alias-label-tertiary);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.processChevron {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  color: inherit;
-}
-
-.processBody {
-  display: flex;
-  max-height: min(400px, 50vh);
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 0 4px 7px 22px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-/* Rows keep their natural height and let the body scroll; without this, the
-   size-contained Think rows have a zero min-content height and flex-crush to
-   zero once the rows exceed the cap, painting over the rows below (DSH sets
-   the same rule on its group body). */
-.processBody > * {
-  flex-shrink: 0;
-}
-
-.processBody[hidden] {
-  display: none;
-}
-
-/* Ungrouped modes render the rows flat: no header, no group-level height cap. */
-.processFlatBody {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.reasoning {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* DSH keeps a collapsed Think row exactly one row tall so streaming never reflows the column. */
-.reasoning:not([data-expanded]) {
-  contain: size layout;
-  height: calc(24px + var(--dsh-content-font-delta, 0px));
-}
-
-.processOutput {
-  min-width: 0;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.reasoning[data-running] {
-  color: var(--dsw-alias-label-secondary);
-}
-
-.reasoningSeparator {
-  flex: none;
-  width: 2px;
-  height: 2px;
-  margin: 0 8px;
-  border-radius: 1px;
-  background: var(--dsw-alias-label-caption);
-}
-
-.reasoningSummary {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: inherit;
-  font-size: var(--dsh-content-font-size-secondary, 13px);
-  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
-  white-space: nowrap;
-}
-
-.reasoningSummaryText {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The streaming tail fades under the row's right edge instead of a hard ellipsis. */
-.reasoningSummary[data-streaming] {
-  mask-image: linear-gradient(to right, black calc(100% - 48px), transparent);
-}
-
-.reasoningSummary[data-streaming] .reasoningSummaryText {
-  overflow: visible;
-  text-overflow: clip;
-}
-
-/* DSH hides the preview entirely when the mode turns settled previews off. */
-.reasoning:not([data-preview]) .reasoningSeparator,
-.reasoning:not([data-preview]) .reasoningSummary {
-  display: none;
-}
-
-.reasoningBody {
-  padding: 4px 0 4px calc(22px + var(--dsh-content-font-delta, 0px));
-  color: var(--dsw-alias-label-secondary);
-}
-
-.redactedReasoning {
-  padding: 8px 0 5px 22px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 13px;
-}
+.processGroup { min-width: 0; color: var(--message-subtle); }
+.processHeader { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--message-subtle); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
+.processHeader:disabled { cursor: default; }
+.processFlatStatus { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); color: var(--message-subtle); font-size: var(--message-font); line-height: 1.5; }
+.processGroup[data-state='error'] .processFlatStatus { color: var(--message-danger); }
+.processGroup[data-state='error'] .processHeader { color: var(--message-danger); }
+.processGroup[data-state='cancelled'] .processHeader { color: var(--message-subtle); }
+.processTitle { flex: none; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.processTitle[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
+.processChevron { flex: none; color: var(--message-muted); transition: transform .2s ease-out; }
+.processChevron[data-open] { transform: rotate(90deg); }
+.processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
+.processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
+.processClip { overflow: hidden; min-height: 0; }
+.processBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
+.processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; color: var(--message-muted); }
+.processOutput { min-width: 0; color: var(--message-fg); }
+@keyframes work-sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .processCollapse, .processChevron { transition: none; } .processTitle[data-running] { animation: none; background: none; color: var(--message-subtle); } }
 
 .images {
   display: flex;
@@ -630,4 +471,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .runningIndicatorIcon { animation: none; }
+}
+
+
+.message[data-role='assistant'] { animation: none; color: var(--message-fg); }
+.actionRow { margin-top: 4px; }
+@media (hover: hover) and (pointer: fine) {
+  .message[data-role='assistant'] .actionRow { opacity: 0; transition: opacity .15s; }
+  .message[data-role='assistant']:hover .actionRow, .message[data-role='assistant'] .actionRow:focus-within { opacity: 1; }
 }

@@ -2,7 +2,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
 }
 
 .root[data-error] {
@@ -19,12 +19,27 @@
   align-items: center;
   margin-inline-start: 1px;
   overflow: hidden;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-size: var(--message-font);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
+
+.accessories { display: inline-flex; flex: none; align-items: center; gap: 8px; }
+.statusFailed,
+.statusStopped {
+  flex: none;
+  color: var(--message-muted);
+  font-size: calc(var(--message-font) - 1px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+  white-space: nowrap;
+}
+.statusStopped { cursor: default; text-decoration: none; }
+.subagentStatus { flex: none; color: var(--message-muted); font-size: calc(var(--message-font) - 1px); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); white-space: nowrap; }
 
 .sep {
   width: 2px;
@@ -51,9 +66,9 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px 0 4px 22px;
-  color: var(--dsw-alias-label-secondary);
+  gap: 12px;
+  padding: 0;
+  color: var(--message-subtle);
 }
 
 .output {
@@ -98,7 +113,7 @@
   min-height: 24px;
   align-items: center;
   gap: 7px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 12px;
 }
 
@@ -148,7 +163,7 @@
 
 .questionText {
   min-width: 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: var(--dsh-content-font-size, 14px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
   overflow-wrap: anywhere;
@@ -165,12 +180,12 @@
 }
 
 .questionAnswer[data-skipped] {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
 }
 
 /* DSH's record verdict line (`ask.pendingDetail` / `ask.closedDetail` / `ask.cancelledDetail`). */
 .questionVerdict {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: var(--dsh-content-font-size, 14px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
   overflow-wrap: anywhere;
@@ -192,13 +207,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 12px;
   line-height: 18px;
 }
 
 .subagentStatus {
-  color: var(--dsw-alias-label-secondary);
+  color: var(--message-subtle);
 }
 
 .subagentTask {
@@ -219,7 +234,7 @@
   border: .5px solid var(--dsw-alias-border-l3);
   border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-button-floating-fill, transparent);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--message-subtle);
   font: inherit;
   font-size: 12px;
   line-height: 18px;
@@ -275,7 +290,7 @@
   place-items: center;
   border: .5px solid var(--dsw-alias-border-l1);
   border-radius: 10px;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--message-subtle);
 }
 
 .planCardDetails {
@@ -297,7 +312,7 @@
 
 .planCardDescription {
   overflow: hidden;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 10px;
   line-height: 16px;
   text-overflow: ellipsis;
@@ -328,14 +343,14 @@
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 12px;
   cursor: pointer;
 }
 
 .inspectButton:hover {
   background: var(--dsw-alias-bg-module-platform);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--message-subtle);
 }
 
 .imageButton {
@@ -374,7 +389,7 @@
 }
 
 .codemodeLabel {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 12px;
   line-height: 18px;
 }
@@ -409,14 +424,14 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 6px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-size: 12px;
   line-height: 18px;
 }
 
 .codemodeCallName {
   overflow: hidden;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--message-subtle);
   font-family: var(--ds-font-family-code);
   font-size: 11px;
   text-overflow: ellipsis;
@@ -428,7 +443,7 @@
 }
 
 .codemodeCallDuration {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -445,7 +460,7 @@
 }
 
 .codemodeCall[data-status='running'] .codemodeCallStatus {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
 }
 
 .codemodeCallError {
@@ -458,8 +473,25 @@
 }
 
 .codemodePath {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--message-muted);
   font-family: var(--ds-font-family-code);
   font-size: 11px;
   overflow-wrap: anywhere;
 }
+
+
+
+.fileSummary { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 8px; color: var(--message-subtle); font-size: var(--message-font); }
+.fileChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 6px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+.fileChip > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fileChip:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fileChip:focus-visible, .rowInspect:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
+.directory { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--message-muted); }
+.diffCounts { display: inline-flex; flex: none; gap: 6px; font-size: calc(var(--message-font) - 2px); }
+.diffCounts > :first-child { color: #16a34a; }
+.diffCounts > :last-child { color: #dc2626; }
+.rowInspect { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--message-muted); cursor: pointer; opacity: 0; }
+.root:hover .rowInspect, .rowInspect:focus-visible { opacity: 1; }
+.fileContent { max-height: 240px; overflow: auto; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); }
+
+.summary > :last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

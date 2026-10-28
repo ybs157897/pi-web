@@ -1,25 +1,31 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useState } from 'react'
 import {
-  DisclosureRow, IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
-  IconChevronUpOutlineRegular, IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
-  IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconLoadingOutlineRegular, IconThinkOutlineRegular,
-  ImageLightbox, MarkdownDelegateProvider,
-  Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, StateDot, TextShimmer, Tooltip, writeClipboard,
+  IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
+  IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
+  IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconLoadingOutlineRegular, ImageLightbox, MarkdownDelegateProvider,
+  Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, SubagentSummary } from '../shared/types.ts'
+import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest } from '../shared/types.ts'
+import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
-import SubagentRunStrip from './SubagentRunStrip.tsx'
 import ChangedFiles from './ChangedFiles.tsx'
-import { groupSubagentRuns } from './subagent-run-model.ts'
 import ToolCard from './ToolCard.tsx'
+import { ProcessToolGroup } from './ProcessToolGroup.tsx'
 import { formatTokens, markdownLabels, type Translate } from './render-labels.ts'
 import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
-import { activityRunning, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, processTitleFromCounts, toolLiveDetail, type LateAnswer } from './tool-render-model.ts'
-import { toolActivity } from './render-model.ts'
+import { dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, type LateAnswer } from './tool-render-model.ts'
+import { AnswerMarkdown } from './AnswerMarkdown.tsx'
+import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
+import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
+import { PluginUiConversationContext } from './plugin-ui-bridge.ts'
+import { parseAnswerFileLink } from './answer-markdown-model.ts'
+import { ChevronRight } from 'lucide-react'
+import './message-rendering/theme.css'
+import { defaultProcessOpen, workGroupTitle } from './process-presentation.ts'
 import css from './Transcript.module.css'
 
 export interface PendingMessage {
@@ -43,8 +49,6 @@ export interface TranscriptProps {
   messages: readonly ChatMessage[]
   /** The conversation these messages belong to; the subagent strip re-reads its live children. */
   conversationId?: string
-  /** The conversation's projected direct subagents: the strip's first paint before its own poll. */
-  subagents?: readonly SubagentSummary[]
   pending?: readonly PendingMessage[]
   /** A compaction is running: render the same transcript-level status row as the completed marker. */
   compactionRunning?: boolean
@@ -60,22 +64,28 @@ export interface TranscriptProps {
   onOpenFile?: (path: string, line?: number) => void
   onInspectDiff?: (diff: InspectorDiff) => void
   onOpenTool?: (messageId: string, toolCallId?: string) => void
-  /** Open the child conversation a `subagent` row created, through the normal selection path. */
-  onOpenSubagent?: (conversationId: string) => void
+  /** Open the child conversation a `subagent` row created as a read-only inspector tab. */
+  onOpenSubagent?: (conversationId: string, title?: string) => void
   /** Open a submitted plan in the inspector's plan view; `auto` marks DSH's one automatic open. */
   onOpenPlan?: (plan: PlanDocument, auto?: boolean) => void
+  /** Open a plugin UI page in the inspector; a row calls it once for a fullscreen surface, and
+   * an inline card passes its host so both surfaces share one iframe. */
+  onOpenPluginUi?: (page: PluginUiPage, host?: HTMLElement) => void
+  /** Context/message/link relays for inline plugin pages. */
+  onPluginContext?: (entry: PluginContextEntry) => void
+  onPluginMessage?: (text: string) => void
+  onPluginOpenLink?: (url: string) => void
   resolveFileImage?: (path: string) => string | undefined
 }
 
-/** Render Pi Durable conversation messages with DSH process, Markdown, and tool components. */
+/** Render host-owned conversation state with the ZCode-aligned message and work components. */
 export default function Transcript({
-  messages, conversationId, subagents, pending = [], compactionRunning = false, running = false, interactions, policy, onFork, onRetry, onFeedback,
-  onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage,
+  messages, conversationId, pending = [], compactionRunning = false, running = false, interactions, policy, onFork, onRetry, onFeedback,
+  onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
   const presentation = policy ?? presentationPolicyFor(settings.transcriptView, settings.collapseTiming)
   const model = useMemo(() => buildRenderModel(messages), [messages])
-  const liveSubagents = useLiveSubagents(conversationId, subagents)
   // Late answers keyed by their question call: the reply bubble reads them from
   // its own message, and the tool row uses its call's answer to settle.
   const replies = useMemo(() => {
@@ -111,20 +121,26 @@ export default function Transcript({
     blockedByActiveWork: compactionRunning,
   })
   return (
-    <div className={css.transcript}>
+    <div className={css.transcript} data-message-column>
+      <PluginUiConversationContext.Provider value={conversationId}>
+      <ProcessExpansionProvider key={conversationId}>
       <MarkdownDelegateProvider openFile={openMarkdownFile} fileImages={fileImages}>
         {model.timeline.map(entry => entry.kind === 'run'
           ? <RunTranscript key={entry.run.key} run={entry.run} latest={entry.run.key === lastRunKey}
             liveCompaction={compactionRunning && entry.run.key === lastRunKey} policy={presentation}
             onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
-            resolveFileImage={resolveFileImage} labels={labels} t={t} subagents={liveSubagents}
+            onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext} onPluginMessage={onPluginMessage}
+            onPluginOpenLink={onPluginOpenLink}
+            resolveFileImage={resolveFileImage} labels={labels} t={t}
             showChanges={showChanges} replies={replies} interactions={interactions} />
           : <SystemMessageRow key={entry.row.key} message={entry.row.message} />)}
         {compactionRunning && lastRunKey === undefined && <CompactionRunningRow t={t} />}
         {pending.map(message => <PendingRow key={message.id} message={message} onOpenFile={onOpenFile} t={t} />)}
         {tailLoading && <TurnRunningIndicator t={t} />}
       </MarkdownDelegateProvider>
+      </ProcessExpansionProvider>
+      </PluginUiConversationContext.Provider>
     </div>
   )
 }
@@ -160,28 +176,10 @@ function CompactionRunningRow({ t }: { t: Translate }) {
   )
 }
 
-/**
- * The parent's child rows, used by every subagent strip on screen. DSH pushes catalog frames on
- * the parent's stream; Pi's owner edge is a plain table row with no subscription, so the strips
- * re-read their children while any of them runs and keep the projection's first paint otherwise.
- */
-function useLiveSubagents(conversationId: string | undefined, projected: readonly SubagentSummary[] | undefined): readonly SubagentSummary[] {
-  const [rows, setRows] = useState<readonly SubagentSummary[]>(() => projected ?? [])
-  useEffect(() => { setRows(projected ?? []) }, [projected])
-  const running = rows.some(row => row.status === 'running')
-  useEffect(() => {
-    if (conversationId === undefined || !running) return
-    let active = true
-    const timer = window.setInterval(() => {
-      api.listChildren(conversationId).then(next => { if (active) setRows(next) }).catch(() => undefined)
-    }, 1_500)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [conversationId, running])
-  return rows
-}
 
 function RunTranscript({
-  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, subagents, showChanges, replies, interactions,
+  run, latest, liveCompaction, policy, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
@@ -196,10 +194,13 @@ function RunTranscript({
   onOpenTool?: TranscriptProps['onOpenTool']
   onOpenSubagent?: TranscriptProps['onOpenSubagent']
   onOpenPlan?: TranscriptProps['onOpenPlan']
+  onOpenPluginUi?: TranscriptProps['onOpenPluginUi']
+  onPluginContext?: TranscriptProps['onPluginContext']
+  onPluginMessage?: TranscriptProps['onPluginMessage']
+  onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   labels: ReturnType<typeof markdownLabels>
   t: Translate
-  subagents: readonly SubagentSummary[]
   showChanges: boolean
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
@@ -209,9 +210,11 @@ function RunTranscript({
       {run.users[0] !== undefined && <UserEntryRow key={run.users[0].id} message={run.users[0]}
         onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />}
       {(run.process.length > 0 || run.status === 'error' || run.status === 'cancelled') && (
-        <ProcessGroup run={run} latest={latest} policy={policy} t={t} subagents={subagents}
+        <ProcessGroup run={run} latest={latest} policy={policy} t={t}
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
-          onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} replies={replies} interactions={interactions} />
+          onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
+          onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
+          resolveFileImage={resolveFileImage} labels={labels} replies={replies} interactions={interactions} />
       )}
       {run.systemRows.filter(row => row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {run.responses.map((response, index) => (
@@ -429,17 +432,21 @@ function QuestionReplyRow({ message, data, t }: {
   )
 }
 
-function ProcessGroup({ run, latest, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, replies, interactions }: {
+function ProcessGroup({ run, latest, policy, t, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
   policy: ChatPresentationPolicy
   t: Translate
-  subagents: readonly SubagentSummary[]
   onOpenFile?: TranscriptProps['onOpenFile']
   onInspectDiff?: TranscriptProps['onInspectDiff']
   onOpenTool?: TranscriptProps['onOpenTool']
   onOpenSubagent?: TranscriptProps['onOpenSubagent']
   onOpenPlan?: TranscriptProps['onOpenPlan']
+  onOpenPluginUi?: TranscriptProps['onOpenPluginUi']
+  onPluginContext?: TranscriptProps['onPluginContext']
+  onPluginMessage?: TranscriptProps['onPluginMessage']
+  onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   labels: ReturnType<typeof markdownLabels>
   replies: ReadonlyMap<string, LateAnswer>
@@ -447,26 +454,27 @@ function ProcessGroup({ run, latest, policy, t, subagents, onOpenFile, onInspect
 }) {
   const live = run.status === 'running'
   const hasInterleavedUser = run.process.some(part => part.kind === 'user')
-  // DSH's policy decides whether this turn folds and whether it keeps a group header:
-  // `history` groups only past turns, `none` renders the rows flat.
-  const grouped = policy.stepGrouping !== 'none' && (policy.stepGrouping === 'collapsed' || !latest)
-  const folds = policy.foldCompletedTurns && (policy.collapseTiming === 'completion' || !latest)
-  const defaultOpen = hasInterleavedUser || !folds
+  // Keep a work header while preserving each display mode's default expansion.
+  // Verbose mode remains flat and interleaved user messages stay visible.
+  const grouped = policy.stepGrouping !== 'none'
+  const defaultOpen = defaultProcessOpen(policy, latest, live, hasInterleavedUser)
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
   const open = hasInterleavedUser ? true : manualOpen ?? defaultOpen
   const bodyId = useId()
-  const title = processTitle(run, t)
-  const preview = live && policy.liveProcessDetail ? processPreview(run.process, t) : ''
-  // Consecutive `subagent` calls fold into one strip; every other row keeps its own card.
-  const parts = useMemo(() => groupSubagentRuns(run.process, t, live, subagents), [run.process, t, live, subagents])
-  const body = parts.map(part => part.kind === 'subagentRun'
-    ? <SubagentRunStrip key={part.key} group={part} summaries={subagents} t={t} onOpen={onOpenSubagent} />
-    : <ProcessPartView key={part.key} part={part} runRunning={live}
-      policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
-      onOpenPlan={onOpenPlan} resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />)
+  const title = workGroupTitle(run, t)
+  // Every tool keeps its own row; subagent rows open a read-only child tab instead of
+  // folding into a separate strip.
+  const body = run.process.map(part => <ProcessPartView key={part.key} part={part} runRunning={live}
+    policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
+    onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
+    onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
+    resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />)
   if (!grouped) {
     return (
       <div className={css.processGroup} data-state={run.status} data-latest={latest || undefined} data-flat data-run-id={run.runId}>
+        <div className={css.processFlatStatus} data-state={run.status}>
+          <span className={css.processTitle} data-running={live || undefined}>{title}</span>
+        </div>
         <div className={css.processFlatBody}>{body}</div>
       </div>
     )
@@ -476,20 +484,16 @@ function ProcessGroup({ run, latest, policy, t, subagents, onOpenFile, onInspect
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? defaultOpen)) }}>
-        {run.status !== 'completed' && <span className={css.processLeading} aria-hidden="true">
-          {live ? <StateDot state="ongoing" size={14} /> : run.status === 'error' ? <StateDot state="error" size={14} />
-            : <StateDot state="warning" size={14} />}
-        </span>}
-        <TextShimmer active={live} className={css.processTitle}>{title}</TextShimmer>
-        {preview !== '' && <span className={css.processPreview}>{preview}</span>}
-        <span className={css.processChevron} aria-hidden="true">{open ? <IconChevronUpOutlineRegular size={14} /> : <IconChevronDownOutlineRegular size={14} />}</span>
+        <span className={css.processTitle} data-running={live || undefined}>{title}</span>
+        <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
       </button>
-      <div id={bodyId} className={css.processBody} hidden={!open}>{body}</div>
+      <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
     </div>
   )
 }
 
-function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, resolveFileImage, labels, t, replies, interactions }: {
+function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, replies, interactions }: {
   part: ProcessPart
   runRunning: boolean
   policy: ChatPresentationPolicy
@@ -498,6 +502,10 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
   onOpenTool?: TranscriptProps['onOpenTool']
   onOpenSubagent?: TranscriptProps['onOpenSubagent']
   onOpenPlan?: TranscriptProps['onOpenPlan']
+  onOpenPluginUi?: TranscriptProps['onOpenPluginUi']
+  onPluginContext?: TranscriptProps['onPluginContext']
+  onPluginMessage?: TranscriptProps['onPluginMessage']
+  onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   labels: ReturnType<typeof markdownLabels>
   t: Translate
@@ -508,65 +516,16 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
     resolveFileImage={resolveFileImage} t={t} />
   if (part.kind === 'tool') return <ToolCard item={part.item} runRunning={runRunning} replies={replies} interactions={interactions}
     onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
-    onOpenPlan={onOpenPlan} t={t} />
+    onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
+    onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink} t={t} />
+  if (part.kind === 'toolGroup') return <ProcessToolGroup groupKey={part.key} group={part.group} items={part.items}
+    runRunning={runRunning} replies={replies} interactions={interactions} onOpenFile={onOpenFile}
+    onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan} t={t} />
   if (part.kind === 'content') return <div className={css.processOutput} data-message-id={part.message.id}>
-    <ContentBlockView block={part.block} streaming={part.streaming}
+    <ContentBlockView block={part.block} streaming={part.streaming} answer
       onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} labels={labels} t={t} />
   </div>
-  return <ReasoningPart part={part} preview={policy.settledReasoningPreview}
-    onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} labels={labels} t={t} />
-}
-
-/** DSH's Think row: a fixed-height disclosure whose summary tracks the reasoning tail while running. */
-function ReasoningPart({ part, preview, onOpenFile, resolveFileImage, labels, t }: {
-  part: Extract<ProcessPart, { kind: 'reasoning' }>
-  preview: boolean
-  onOpenFile?: TranscriptProps['onOpenFile']
-  resolveFileImage?: TranscriptProps['resolveFileImage']
-  labels: ReturnType<typeof markdownLabels>
-  t: Translate
-}) {
-  const [open, setOpen] = useState(false)
-  const running = part.streaming
-  const redacted = part.redacted
-  const text = part.text
-  const summary = (running ? latestCompletedParagraphFirstLine(text) : firstLine(text)).replaceAll('**', '')
-  const showSummary = preview && summary !== ''
-  return (
-    <div className={css.reasoning} data-running={running || undefined} data-expanded={open || undefined} data-preview={showSummary || undefined}>
-      {running && <span className={css.visuallyHidden} aria-live="polite">{t('正在思考', 'Thinking')}</span>}
-      <DisclosureRow icon={<IconThinkOutlineRegular size={14} />} title={t('思考', 'Think')}
-        open={open} expandable onToggle={() => { setOpen(value => !value) }} expandOnRowClick running={running}
-        collapsedContent={showSummary ? <>
-          <span className={css.reasoningSeparator} aria-hidden="true" />
-          <span className={css.reasoningSummary} data-streaming={running || undefined}>
-            <span className={css.reasoningSummaryText}>{running ? <TextShimmer>{summary}</TextShimmer> : summary}</span>
-          </span>
-        </> : undefined}>
-        {redacted ? <div className={css.redactedReasoning}>{t('此模型隐藏了思考内容', 'This model hides its reasoning content')}</div>
-          : <div className={css.reasoningBody}><MarkdownText text={text} streaming={running} labels={markdownLabels(t)} variant="compact" /></div>}
-      </DisclosureRow>
-    </div>
-  )
-}
-
-/** While streaming, the summary is the first line of the latest completed paragraph. */
-function latestCompletedParagraphFirstLine(text: string): string {
-  let summary = ''
-  let paragraphStart = 0
-  const separator = /\r?\n(?:[\t ]*\r?\n)+/g
-  while (true) {
-    const nextParagraph = separator.exec(text)
-    const paragraphEnd = nextParagraph === null ? text.length
-      : nextParagraph.index + nextParagraph[0].indexOf('\n')
-    const newline = text.indexOf('\n', paragraphStart)
-    if (newline !== -1 && newline <= paragraphEnd) {
-      const candidate = text.slice(paragraphStart, newline).trim()
-      if (candidate !== '') summary = candidate
-    }
-    if (nextParagraph === null) return summary
-    paragraphStart = nextParagraph.index + nextParagraph[0].length
-  }
+  return <ReasoningBlock id={part.key} text={part.text} streaming={part.streaming} redacted={part.redacted} preview={policy.liveReasoningPreview} t={t} />
 }
 
 function AssistantResponse({ response, run, last, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
@@ -623,7 +582,7 @@ function AssistantResponse({ response, run, last, showChanges, onInspectDiff, on
       data-streaming={streaming || undefined}>
       <div className={css.assistantBody}>
         {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${block.slot ?? index}`} block={block}
-          streaming={streaming} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
+          streaming={streaming} answer onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
           fileMentions={fileMentions} pathImages={pathImages} />)}
         {!streaming && run.status === 'cancelled' && <div className={css.runNotice} data-status="cancelled" role="status">
           {t('回答已停止', 'Response stopped')}
@@ -686,10 +645,11 @@ function AssistantResponse({ response, run, last, showChanges, onInspectDiff, on
   )
 }
 
-function ContentBlockView({ block, streaming = false, plainText = false, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
+function ContentBlockView({ block, streaming = false, plainText = false, answer = false, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
   block: ContentBlock
   streaming?: boolean
   plainText?: boolean
+  answer?: boolean
   onOpenFile?: TranscriptProps['onOpenFile']
   resolveFileImage?: TranscriptProps['resolveFileImage']
   t: Translate
@@ -700,6 +660,8 @@ function ContentBlockView({ block, streaming = false, plainText = false, onOpenF
   switch (block.type) {
     case 'text':
       return plainText ? <div className={css.userText}>{block.text}</div>
+        : answer ? <AnswerMarkdown text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)} t={t}
+          fileMentions={fileMentions} pathImages={pathImages} onOpenFile={onOpenFile} />
         : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
           fileMentions={fileMentions} pathImages={pathImages} />
     case 'thinking':
@@ -768,40 +730,6 @@ function PendingRow({ message, onOpenFile, t }: { message: PendingMessage; onOpe
   )
 }
 
-function processTitle(run: RenderRun, t: Translate): string {
-  if (run.status === 'running') {
-    const last = run.process.at(-1)
-    if (last?.kind === 'tool') {
-      const name = last.item.call?.name ?? last.item.result?.toolName ?? ''
-      return activityRunning(toolActivity(name), t)
-    }
-    if (last?.kind === 'reasoning') return t('正在分析请求', 'Analyzing the request')
-    if (last?.kind === 'content') return t('正在生成回答', 'Writing a response')
-    return t('正在处理', 'Working')
-  }
-  if (run.status === 'error') return t('处理失败', 'Turn failed')
-  if (run.status === 'cancelled') return t('已停止', 'Stopped')
-  // Settled groups carry DSH's ranked category title; the finished duration lives in the footer stats.
-  return processTitleFromCounts(run.activityCounts, t)
-}
-
-function processPreview(process: readonly ProcessPart[], t: Translate): string {
-  const last = process.at(-1)
-  if (last?.kind === 'user') return t('收到新的输入', 'New input received')
-  if (last?.kind === 'reasoning') return latestCompletedParagraphFirstLine(last.text).replaceAll('**', '')
-  if (last?.kind === 'tool') {
-    const args = last.item.call?.arguments
-    const detail = args === undefined ? '' : toolLiveDetail(args)
-    return detail === '' ? last.item.call?.name ?? last.item.result?.toolName ?? t('工具', 'Tool') : detail
-  }
-  if (last?.kind === 'content') {
-    if (last.block.type === 'text') return firstContentLine(last.block.text)
-    if (last.block.type === 'image') return t('图片', 'Image')
-    if (last.block.type === 'file') return last.block.name
-  }
-  return ''
-}
-
 function responseText(response: ResponsePart): string {
   return response.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
@@ -840,14 +768,8 @@ function pathBasename(path: string): string {
 
 /** Turn an authored absolute image destination into this workspace's asset URL. */
 function localPathMediaUrl(value: string, resolveFileImage: NonNullable<TranscriptProps['resolveFileImage']>): string | undefined {
-  let path: string
-  try {
-    path = decodeURIComponent(value.split(/[?#]/u)[0] ?? '')
-  } catch {
-    // Malformed URL escapes cannot identify a file.
-    return undefined
-  }
-  return path.startsWith('/') ? resolveFileImage(path) : undefined
+  const file = parseAnswerFileLink(value)
+  return file ? resolveFileImage(file.path) : undefined
 }
 
 function formatClock(timestamp: number, locale: 'zh' | 'en'): string {
@@ -864,17 +786,6 @@ function formatFileSize(size: number, t: Translate): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** DSH's settled reasoning summary: the block's first line. */
-function firstLine(text: string): string {
-  const newline = text.indexOf('\n')
-  return (newline === -1 ? text : text.slice(0, newline)).trim()
-}
-
-/** First non-empty line, used for process previews and compact summaries. */
-function firstContentLine(text: string): string {
-  return text.split(/\r?\n/u).find(line => line.trim() !== '')?.trim() ?? ''
 }
 
 function inspectorDiff(artifact: FileArtifact): InspectorDiff {

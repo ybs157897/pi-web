@@ -1,0 +1,5 @@
+.viewer { min-width: 0; width: 100%; overflow: auto; font-family: var(--message-mono); font-size: var(--message-code-font); color: var(--message-fg); }
+.viewer > * { min-width: 0; width: 100%; }
+
+.fallback { margin: 0; padding: 0 8px; font: inherit; line-height: 20px; white-space: pre; }
+.fallback[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }

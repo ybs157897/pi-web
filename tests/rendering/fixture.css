@@ -1,0 +1,6 @@
+.fixture-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; height: 52px; padding: 8px 16px; border-bottom: 1px solid var(--message-border); background: var(--message-card); color: var(--message-fg); }
+.fixture-toolbar select, .fixture-toolbar button { color: inherit; background: var(--message-card); border: 1px solid var(--message-border); border-radius: 6px; padding: 3px 8px; }
+.fixture-toolbar output { font-size: 12px; }
+.fixture-scroll { height: calc(100dvh - 52px); overflow: auto; background: #fafafa; padding: 0 24px 40px; --dsh-chat-content-width: 1064px; }
+body[data-ds-dark-theme] .fixture-scroll { background: #171717; }
+@media(max-width:600px) { .fixture-toolbar { height: auto; min-height: 80px; gap: 6px; } .fixture-scroll { height: calc(100dvh - 92px); padding-inline: 16px; } }

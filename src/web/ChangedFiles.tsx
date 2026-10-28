@@ -1,131 +1,41 @@
-import { useMemo, useRef, useState } from 'react'
-import {
-  CodeBlock, DiffBlock, FileTypeIcon, HoverCard, IconChevronDownOutlineRegular, IconChevronUpOutlineRegular, ReadBlock,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { useId, useMemo, useState } from 'react'
+import { ChevronRight, FileDiff } from 'lucide-react'
 import type { FileArtifact } from '../shared/types.ts'
 import { fileStats } from './file-stats.ts'
-import { diffLabels, readLabels, type Translate } from './render-labels.ts'
+import type { Translate } from './render-labels.ts'
+import { MessageFileIcon } from './message-rendering/FileIcon.tsx'
+import './message-rendering/theme.css'
 import css from './ChangedFiles.module.css'
 
-/** Rows shown before the fold, matching DSH's closing-message summary height. */
-const COLLAPSED_ROWS = 4
-
-/** Counts use the same grouping DSH's card does, so 1234 reads as 1,234. */
-const GROUPED = new Intl.NumberFormat('en-US')
-
-/** One file of the turn, with the content its preview and its diff need. */
 export interface ChangedFileEntry {
-  readonly path: string
-  readonly name: string
-  readonly added: number
-  readonly deleted: number
-  readonly before: string | undefined
-  readonly after: string | undefined
-  readonly diff: string | undefined
-  readonly lineStart: number | undefined
+  readonly path: string; readonly name: string; readonly added: number; readonly deleted: number
+  readonly before: string | undefined; readonly after: string | undefined; readonly diff: string | undefined; readonly lineStart: number | undefined
 }
-
 export interface ChangedFilesProps {
   readonly artifacts: readonly FileArtifact[]
-  readonly onInspectDiff?: ((diff: { path: string; oldText?: string | null; newText?: string; diff?: string }) => void) | undefined
+  readonly onInspectDiff?: (diff: { path: string; oldText?: string | null; newText?: string; diff?: string }) => void
   readonly t: Translate
 }
-
-/**
- * The turn's changed files, laid out like DSH's deliverables card: one filled
- * header for the turn, one compact row per file, a fold after four rows, the
- * comparison in the inspector on click and a hover preview on dwell.
- *
- * DSH keeps the turn's authoritative summary on the Host; pi-web derives the
- * same rows from the run's own file artifacts, which is where its diff stats
- * already come from.
- */
+/** Host-owned changes, presented as ZCode's collapsed file summary. */
 export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFilesProps) {
   const files = useMemo(() => collectChangeFiles(artifacts), [artifacts])
-  const [expanded, setExpanded] = useState(false)
-  // DSH 的卡没有整卡折叠；这里补一个，让长长的改动列表能收回到卡头。
-  const [collapsed, setCollapsed] = useState(false)
-  const cardRef = useRef<HTMLDivElement>(null)
-  if (files.length === 0) return null
-  const total = files.length
-  const added = files.reduce((sum, file) => sum + file.added, 0)
-  const deleted = files.reduce((sum, file) => sum + file.deleted, 0)
-  const single = total === 1 ? files[0] : undefined
-  const foldable = files.length > COLLAPSED_ROWS
-  const rows = foldable && !expanded ? files.slice(0, COLLAPSED_ROWS) : files
-  const open = (file: ChangedFileEntry): void => {
-    onInspectDiff?.({
-      path: file.path,
-      ...(file.before === undefined ? {} : { oldText: file.before }),
-      ...(file.after === undefined ? {} : { newText: file.after }),
-      ...(file.diff === undefined ? {} : { diff: file.diff }),
-    })
-  }
-  const header = (
-    <button type="button" className={css.header}
-      aria-label={single === undefined ? t('在侧边栏查看本轮改动', 'Review this turn’s changes in the sidebar') : t(`查看 ${single.name} 的改动`, `View changes to ${single.name}`)}
-      onClick={() => { open(files[0]) }}>
-      <span className={css.tile}>
-        {single === undefined ? <FileTypeIcon kind="code" size={20} /> : <FileTypeIcon path={single.path} size={20} />}
-      </span>
-      <span className={css.titles}>
-        <span className={css.title}>{single === undefined
-          ? t(`已编辑 ${total} 个文件`, `Edited ${total} files`)
-          : t(`已编辑 ${single.name}`, `Edited ${single.name}`)}</span>
-        <span className={css.stat}>
-          <span className={css.statCounts}>
-            <span className={css.added}>{`+${GROUPED.format(added)}`}</span>
-            <span className={css.deleted}>{`-${GROUPED.format(deleted)}`}</span>
-          </span>
-          <span className={css.previewHint}>{t('在侧边栏预览', 'Preview in sidebar')}</span>
-        </span>
-      </span>
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  if (!files.length) return null
+  const added = files.reduce((sum, file) => sum + file.added, 0), deleted = files.reduce((sum, file) => sum + file.deleted, 0)
+  const inspect = (file: ChangedFileEntry) => onInspectDiff?.({ path: file.path,
+    ...(file.before === undefined ? {} : { oldText: file.before }), ...(file.after === undefined ? {} : { newText: file.after }), ...(file.diff === undefined ? {} : { diff: file.diff }) })
+  return <section className={css.card} data-message-changes>
+    <button type="button" className={css.header} aria-label={open ? t('收起已更改文件', 'Collapse changed files') : t('展开已更改文件', 'Expand changed files')} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
+      <ChevronRight size={14} data-open={open || undefined} aria-hidden="true" /><span>{t(`${files.length} 个文件已更改`, `${files.length} ${files.length === 1 ? 'file' : 'files'} changed`)}</span>
+      <span className={css.counts}><span>+{added}</span><span>−{deleted}</span></span>
     </button>
-  )
-  return (
-    <div ref={cardRef} className={css.card} data-changed-files="" data-single={single === undefined ? undefined : ''}
-      data-collapsed={collapsed ? '' : undefined}>
-      <div className={css.headerRow}>
-        {single === undefined
-          ? header
-          : <HoverCard variant="preview" widthAnchorRef={cardRef} openDelayMs={500} anchor={header}
-            content={<ChangePreview file={single} t={t} />} />}
-        <button type="button" className={css.collapse} aria-expanded={!collapsed}
-          aria-label={collapsed ? t('展开改动文件列表', 'Expand changed files') : t('收起改动文件列表', 'Collapse changed files')}
-          title={collapsed ? t('展开改动文件列表', 'Expand changed files') : t('收起改动文件列表', 'Collapse changed files')}
-          onClick={() => { setCollapsed(value => !value) }}>
-          {collapsed ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronUpOutlineRegular size={14} />}
-        </button>
-      </div>
-      {!collapsed && single === undefined && (
-        <ul className={css.list}>
-          {rows.map(file => (
-            <li key={file.path}>
-              <HoverCard variant="preview" widthAnchorRef={cardRef} openDelayMs={500}
-                anchor={<button type="button" className={css.row}
-                  aria-label={t(`查看 ${file.name} 的改动`, `View changes to ${file.name}`)}
-                  onClick={() => { open(file) }}>
-                  <span className={css.path}>{file.path}</span>
-                  <span className={css.counts}>
-                    <span className={css.added}>{`+${GROUPED.format(file.added)}`}</span>
-                    <span className={css.deleted}>{`-${GROUPED.format(file.deleted)}`}</span>
-                  </span>
-                </button>}
-                content={<ChangePreview file={file} t={t} />} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {!collapsed && foldable && (
-        <button type="button" className={css.toggle} aria-expanded={expanded}
-          aria-label={expanded ? t('收起改动文件列表', 'Collapse changed files') : t(`展开全部 ${total} 个改动文件`, `Show all ${total} changed files`)}
-          onClick={() => { setExpanded(value => !value) }}>
-          <span>{expanded ? t('收起', 'Collapse') : t(`全部 ${total} 个文件`, `All ${total} files`)}</span>
-          {expanded ? <IconChevronUpOutlineRegular size={14} /> : <IconChevronDownOutlineRegular size={14} />}
-        </button>
-      )}
-    </div>
-  )
+    <div id={id} className={css.collapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.clip}><div className={css.list}>
+      {files.map(file => <button key={file.path} type="button" className={css.row} title={file.path} disabled={!onInspectDiff} onClick={() => inspect(file)} aria-label={t(`查看 ${file.name} 的改动`, `View changes to ${file.name}`)}>
+        <MessageFileIcon path={file.path} /><span className={css.path}>{file.path}</span><span className={css.counts}><span>+{file.added}</span><span>−{file.deleted}</span></span><FileDiff size={14} aria-hidden="true" />
+      </button>)}
+    </div></div></div>
+  </section>
 }
 
 /**
@@ -164,22 +74,4 @@ export function collectChangeFiles(artifacts: readonly FileArtifact[]): ChangedF
       lineStart: last?.lineStart,
     }
   })
-}
-
-/** The hover preview: the file's comparison, read-only and bounded by the card. */
-function ChangePreview({ file, t }: { readonly file: ChangedFileEntry; readonly t: Translate }) {
-  const lines = file.after === undefined ? [] : file.after.split(/\r?\n/u)
-  return (
-    <div className={css.preview} data-changes-hover-preview="">
-      <div className={css.previewHeader}><span className={css.previewPath}>{file.path}</span></div>
-      {file.before !== undefined && file.after !== undefined
-        ? <DiffBlock diffs={[{ path: file.path, oldText: file.before, newText: file.after }]} labels={diffLabels(t)} />
-        : file.diff !== undefined
-          ? <CodeBlock code={file.diff} lang="diff" copyLabel={t('复制差异', 'Copy diff')} copiedLabel={t('已复制', 'Copied')} />
-          : file.after !== undefined
-            ? <ReadBlock label={file.path} lines={lines.map((text, index) => ({ number: (file.lineStart ?? 1) + index, text }))}
-              totalLines={lines.length} labels={readLabels(t)} />
-            : null}
-    </div>
-  )
 }

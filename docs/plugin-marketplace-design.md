@@ -1,10 +1,12 @@
 # 插件市场与插件 UI 集成设计
 
-> 状态：P0、P1 已实施（2026-10-27）；P2（正文交互 / 插件 UI）未开始。
+> 状态：P0、P1、P2 已实施（2026-10-27）；P3 可选增强部分前置。
 > P0 落地：`src/shared/plugins.ts`、`src/server/plugin-{types,manifest,source,store}.ts`、`src/web/PluginsPanel.tsx`、`src/web/plugin-store-model.ts`，以及 `runtime.ts` / `app.ts` / `SkillStore` / 设置页的接线；测试见 `tests/plugin-{manifest,source,store,runtime,store-model}.test.ts`。
 > P1 落地：`McpManager` 重构为可重载的 `McpRegistry`（`src/server/mcp.ts`）、插件 MCP 投影（`PluginStore.mcpServers()`）、runtime 的 `refreshMcpExtensions()`、更新/describe 与 GitHub/git 来源，以及 `GET /api/plugins/events` SSE 与设置页的更新按钮/安装确认；测试见 `tests/mcp.test.ts`、`tests/plugin-store.test.ts`、`tests/plugin-runtime.test.ts`、`tests/http.test.ts`。
 > P0 实现说明：① 安装是后台操作，返回 `202 { operationId }`，状态在 `overview.operations` 里轮询（`/api/plugins/events` 属 P1）；② ZIP 使用 `node:zlib` 的自建读取器（本仓不引入新依赖），校验归档 sha256、拒绝 zip-slip/符号链接/加密/ZIP64；③ `manifest.dependencies` 暂解释为同一市场内的插件名；④ 插件 `mcpServers` / `ui.surfaces` 会被解析、校验并展示数量，但 P0 不启动 MCP、不渲染插件 UI；⑤ 插件的市场目录源只支持本地市场，远程市场目前只接受带 sha256 的 zip 源。
 > P1 实现说明：⑥ `McpRegistry.reload()` 重读 `mcp.json` 与插件投影，新连接就绪后原子替换视图；旧 client 保留 10s 宽限让在飞调用收尾，`close()` 立即关闭。⑦ 插件 server 名 `plugin_<plugin>_<server>`，与配置同名时追加 pluginId 短哈希；`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 在投影时展开，其他 `${VAR}` 保持字面；默认 `exposure: 'codemode'`，manifest 可声明 `direct`/`deferred`/`hidden`。⑧ 每次插件能力变化都会重装 `codemode`（namespace 快照）、`mcp`、`tool_search`（仅当存在 deferred 工具）与 `execution-policy`，并始终保持 execution-policy 最后安装。⑨ 更新是后台操作，与安装共用「暂存 → 逐插件 rename（带备份）→ 一次 installed.json 提交 → 清理旧版本目录」的事务；版本/内容指纹不变时直接成功。⑩ `describe` 为安装/更新确认临时物化包并返回技能、MCP 命令（只给 env 键名）、UI surface 与不支持能力；已安装且目录版本未变时直接读本地清单，不发网络请求。⑪ GitHub 用 `codeload.github.com/<repo>/zip/<ref>`（默认 `HEAD`，支持 `path` 子目录），git 用 `git clone --depth 1`（仅 HTTPS、`GIT_TERMINAL_PROMPT=0`）；npm/pip 仍是诊断。⑫ `/api/plugins/events` 推送完整 overview，设置页用它替代进度轮询（仍保留 800ms 轮询兜底）。
+>
+> P2 实现说明：⑬ `plugin-reference.ts` + 无工具 `plugin-reference` extension，在 `beforeRequest` 追加 `<plugin_reference>` system 消息，不落库、不改工具可见性；技能/MCP/UI 能力取自 `PluginStore.overview()` 的 installed+enabled 记录，任一能力为空即跳过。⑭ MCP `tools/call` 的 `_meta.ui` 经 `pluginUiDescriptorFromMeta()` 校验后进入 tool `details.ui`，只保留 pluginId/serverName/resourceUri/title/heightHint/preferredDisplayMode/showInline/toolCallId。⑮ `PluginStore.uiSurfaces()` / `pluginServer()` 提供 surface 与归属校验；runtime 新增 `pluginUiSurfaces/Page/Call/ReadResource`，页面路由带 CSP，`readOnly` 返回 `ACCESS_DENIED`、Plan active 返回 `PLAN_BLOCKED`。⑯ 前端新增 `plugin-ui-bridge.ts`（JSON-RPC 五方法白名单）、`PluginUiPane`（sandbox allow-scripts、隐藏不卸载）、`PluginUiCard`（heightHint 默认 320、上限 640）；`ToolCard` 自动展开内联卡，`fullscreen` 只自动开一次右侧 tab。⑰ App/Inspector 增加插件 tab 池与 `+` surfaces 菜单；Composer 增加插件上下文 chips，发送时追加 `# Plugin context:` 块。
 >
 > **进度总览（更新于 2026-10-27）**
 >
@@ -12,10 +14,10 @@
 > | --- | --- | --- | --- |
 > | P0 市场与安装 | ✅ 已实施 | manifest/catalog/installed、目录与校验 zip 来源、`/api/plugins/*`（overview/add/remove/refresh/install/uninstall/enable）、设置页插件市场、插件技能接入 | `tests/plugin-{manifest,source,store,runtime,store-model}.test.ts`；ego P0（安装→技能→重启→启停→卸载） |
 > | P1 MCP 与运行时投影 | ✅ 已实施 | `McpRegistry` 与热重载、插件 MCP 合并、更新/describe、GitHub/git 来源、`/api/plugins/events`、安装/更新确认 | `tests/mcp.test.ts`、`tests/plugin-store.test.ts`、`tests/plugin-runtime.test.ts`、`tests/http.test.ts`；ego P1（真实模型 v1/v2 调用、停用、只读、重启） |
-> | P2 正文交互与插件 UI | ⏳ 未开始 | — | — |
-> | P3 可选增强 | ◐ 部分前置 | 「更新 badge + 一键更新」已随 P1 交付；页面池、工作区级覆盖、`$` 提及、官方市场分片未开始 | 同上 |
+> | P2 正文交互与插件 UI | ✅ 已实施 | `@` 引用 reminder、`details.ui` 投影、内联插件卡、右侧插件 tab、JSON-RPC bridge（tools/call、resources/read、update-model-context、message、open-link）、Composer 上下文 chips | `tests/plugin-reference.test.ts`、`tests/plugin-ui.test.ts`、`tests/plugin-ui-bridge.test.ts`、`tests/plugin-ui-card.test.tsx`、`tests/plugin-ui-app.test.tsx`；ego P2（自写 smoke-ui 插件：安装→技能→工具→内联卡→右侧 tab→context chip→页面 message） |
+> | P3 可选增强 | ◐ 部分 | 「更新 badge + 一键更新」已随 P1 交付；`$` 技能提及已交付（含插件技能）；页面池已做单 iframe 复用/内联占位，但 Chromium 重新挂载 iframe 仍会重载。**剩余项（真正 page plane、工作区级启用覆盖、插件命令映射、官方市场分片）为有意延后，不进入当前交付与后续清单**：page plane 需要绕过 Chromium iframe 重挂；命令映射需要插件 commands 协议；官方市场分片依赖官方 catalog；工作区级覆盖需要 per-workspace 工具过滤。需要时单独立项。 | `tests/plugin-ui-app.test.tsx` + ego P3（`$` 菜单列出 `skill-creator` 与插件 `smoke`，插入 `$smoke` 并发送；见 `artifacts/plugin-p3-check/summary.md`） |
 >
-> 最近门禁：`npm run check`（43 个测试文件 / 490 通过 / 1 跳过，typecheck + build 通过）；实机记录与截图见 `artifacts/plugin-p1-check/`（gitignored）。
+> 最近门禁：`npm run check`（56 个测试文件 / 589 通过 / 1 跳过，typecheck + build 通过）；P2 实机记录与截图见 `artifacts/plugin-p2-check/`（gitignored）。
 >
 > 依据：ZCode 仓 `work/ZCode`（2026-10-26，main）插件市场与 plugin-reference/plugin-ui 全部源码；pi-web `main @ 7df69b1` 全部挂点逐行核对。
 > 术语沿用 ZCode 根目录 `CONTEXT.md`：官方市场、CDN 插件、个人来源、Store Listing、Plugin Manifest、UI Plugin。
@@ -721,26 +723,29 @@ Inspector tab 条末尾加 `+` 菜单（`IconPluginPinwheelOutlineRegular`），
 - 「更新 badge + 一键更新」原属 P3，提前随 P1 交付。
 - `scripts/plugin-live-check.ts` 未创建；用 `tests/plugin-runtime.test.ts`（真实 stdio MCP fixture）与 ego 真实模型验收替代。
 
-### P2：正文交互 ⏳ 未开始
+### P2：正文交互 ✅ 已实施（2026-10-27）
 
 范围：`@` token、`plugin-reference` reminder、工具 `_meta.ui` 投影、内联插件卡、右侧插件 tab、bridge 子集、`update-model-context` / `message`。
 
-前置已就绪：`McpRegistry.listResources()` / `readResource()` / `callTool()` 已实现；manifest 的 `ui.surfaces` 已解析并进入 `PluginCapabilities` / `PluginDescription`；`details.ui` 的模型侧字段尚未投影。
+前置已就绪：`McpRegistry.listResources()` / `readResource()` / `callTool()`；manifest 的 `ui.surfaces` 已进入 `PluginCapabilities` / `PluginDescription`；P2 已把 `details.ui` 投影到 tool result details。
 
-验收（未开始）：
+验收：
 
-- `@excalidraw@my-market 帮我画一个架构图` 的请求里出现 `<plugin_reference>` system 消息，且不改变工具可见性。
-- 引用未安装/禁用/冲突插件时不注入，对话照常。
-- 工具返回 `_meta.ui.resourceUri` 时正文出现内联卡；`fullscreen` 自动开右侧 tab。
-- 页面 `tools/call` 能拿到真实 MCP 结果；`update-model-context` 在 Composer 形成 chip，发送后出现在 `# Plugin context:` 块。
-- 右侧 tab 切换不丢失页面（CSS hidden），关闭后销毁。
+- [x] `@excalidraw@my-market 帮我画一个架构图` 的请求里出现 `<plugin_reference>` system 消息，且不改变工具可见性。
+- [x] 引用未安装/禁用/冲突插件时不注入，对话照常。
+- [x] 工具返回 `_meta.ui.resourceUri` 时正文出现内联卡；`fullscreen` 自动开右侧 tab。
+- [x] 页面 `tools/call` 能拿到真实 MCP 结果；`update-model-context` 在 Composer 形成 chip，发送后出现在 `# Plugin context:` 块。
+- [x] 右侧 tab 切换不丢失页面（CSS hidden），关闭后销毁。
+
+实施说明：`src/server/plugin-reference.ts`、`src/server/plugin-ui.ts`、`src/web/plugin-ui-bridge.ts`、`src/web/PluginUiPane.tsx`、`src/web/PluginUiCard.tsx`；`App.tsx` / `Inspector.tsx` / `Composer.tsx` 接 tab 池、surfaces 菜单与上下文 chips。实机验收用自写插件 `smoke-ui`（技能 `smoke`、MCP `echo`、UI surface `ui://smoke/panel`）在独立 demo 实例 4412 完成安装、工具调用、内联卡、右侧 tab、context chip 与页面 `ui/message`；证据见 `artifacts/plugin-p2-check/`。
 
 ### P3：可选增强
 
-- [ ] 页面池（inline ↔ 侧栏共享同一页面，ZCode 的 page plane）
-- [ ] 每个工作区的启用覆盖
+- [◐] 页面池：已改为同一 page 的单个 iframe + 内联占位/侧栏复用（`plugin-page-pool.tsx`）；但 Chromium 在 DOM 重新挂载时会重载 iframe，真正的零重载 page plane 需要固定宿主/几何覆盖，尚未实现
+- [ ] 每个工作区的启用覆盖（MCP registry 全局，需按会话过滤工具；留待独立设计）
 - [x] 插件更新 badge + 一键更新（提前到 P1，2026-10-27）
-- [ ] `$` 技能提及、插件命令映射
+- [x] `$` 技能提及（Composer `$` 菜单，含插件技能；插入 `$name`）
+- [ ] 插件命令映射（manifest 的 `commands` 仍作为 unsupported 诊断，pi-web 没有命令系统）
 - [ ] 官方市场分片（若产品确认要分发 pi-web 官方插件）
 
 ### 建议的首个提交切分（实际进度）
@@ -751,8 +756,8 @@ Inspector tab 条末尾加 `+` 菜单（`IconPluginPinwheelOutlineRegular`），
 4. ✅ `app.ts` 路由 + `http.test.ts`（P1 追加 update/describe/events）
 5. ✅ `PluginsPanel.tsx` + `plugin-store-model.ts` + 纯函数测试
 6. ✅ P1：`McpRegistry` 重构 + 插件 MCP 合并 + 热重载（2026-10-27）
-7. ⏳ P2：`plugin-reference.ts` + `beforeRequest` + runtime-policy 测试
-8. ⏳ P2：`details.ui` 投影 + `PluginUiCard/Pane` + 手动验收脚本
+7. ✅ P2：`plugin-reference.ts` + `beforeRequest` + runtime-policy 测试
+8. ✅ P2：`details.ui` 投影 + `PluginUiCard/Pane` + 手动验收脚本
 
 ---
 
@@ -768,11 +773,11 @@ Inspector tab 条末尾加 `+` 菜单（`IconPluginPinwheelOutlineRegular`），
 | 路由 | `tests/http.test.ts` + `tests/plugin-runtime.test.ts` | ✅ | 状态码、错误码、202 安装/更新、describe、events、Host/Origin |
 | 运行时 | `tests/plugin-runtime.test.ts` | ✅ | 技能根、MCP 免重启连接、真实 stdio fixture 调用、停用后 server 消失、重启保留 |
 | MCP | `tests/mcp.test.ts` | ✅ | 插件 server 合并、namespace、`direct`/`deferred`、reload 后旧 server 消失、close 关闭新旧连接 |
-| 提示词 | `tests/plugin-reference.test.ts` | ⏳ P2 | token/link 解析、去重/上限、capability 求交、空结果不注入 |
-| 投影 | `tests/projection.test.ts` | ⏳ P2 | `details.ui` 透传、插件消息 source |
+| 提示词 | `tests/plugin-reference.test.ts` | ✅ | token/link 解析、去重/上限、capability 求交、空结果不注入、runtime 真请求注入与停用后停止 |
+| 投影 | `tests/plugin-ui.test.ts` | ✅ | `details.ui` 仅保留白名单字段、`buildPluginUiPageHtml` CSP、UI surface 归属 |
 | 前端纯逻辑 | `tests/plugin-store-model.test.ts` | ✅ | 分桶、搜索、排序、状态、更新可用性、能力标签 |
-| 前端纯逻辑 | `tests/plugin-ui-bridge.test.ts` | ⏳ P2 | 消息 schema、白名单、tool 路由校验 |
-| 手动/脚本 | ego + `artifacts/plugin-{p0,p1}-check/` | ✅ | P0：安装→技能→重启→卸载；P1：真实模型调用→停用→只读→更新→重启 |
+| 前端纯逻辑 | `tests/plugin-ui-bridge.test.ts`、`tests/plugin-ui-card.test.tsx`、`tests/plugin-ui-app.test.tsx` | ✅ | 消息 schema/白名单/tool 路由、内联 iframe、fullscreen 仅一次、Inspector tab 常驻、Composer chips |
+| 手动/脚本 | ego + `artifacts/plugin-{p0,p1,p2}-check/` | ✅ | P0：安装→技能→重启→卸载；P1：真实模型调用→停用→只读→更新→重启；P2：自写 smoke-ui 插件→技能→工具→内联卡→右侧 tab→context chip→页面 message |
 
 `tests/http.test.ts` 的旧 404 断言、`docs/parity.md` 的 DF-1/ST-3 已同步修改；`tests/runtime.test.ts:199-218` 未受影响（现有 MCP 行为保持不变）。
 
@@ -794,8 +799,8 @@ Inspector tab 条末尾加 `+` 菜单（`IconPluginPinwheelOutlineRegular`），
 | --- | --- | --- | --- |
 | 2026-10-27 | P0 市场与安装 | ✅ 完成 | 本地市场、安装/卸载/启停、技能接入、设置页；ego 验证安装→技能→重启→卸载。 |
 | 2026-10-27 | P1 MCP 与运行时投影 | ✅ 完成 | `McpRegistry` 热重载、插件 MCP 合并、更新/describe、GitHub/git、SSE；ego 用真实模型验证 v1/v2 调用、停用、只读与重启。 |
-| 2026-10-27 | P2 正文交互与插件 UI | ⏳ 未开始 | 前置接口（资源读取、MCP 直调、`ui.surfaces` 解析）已就绪。 |
-| 2026-10-27 | P3 可选增强 | ◐ 部分 | 更新 badge + 一键更新已提前交付；其余未开始。 |
+| 2026-10-27 | P2 正文交互与插件 UI | ✅ 完成 | `plugin-reference` reminder、`details.ui` 投影、内联插件卡、右侧 tab、JSON-RPC bridge、context chips；ego 用自写 `smoke-ui` 插件验证安装→技能→工具→内联卡→右侧 tab→context chip→页面 message。 |
+| 2026-10-27 | P3 可选增强 | ◐ 部分 | 更新 badge + 一键更新（P1）；`$` 技能提及 + 插件技能菜单已交付；页面池已做单 iframe 复用/内联占位，但 Chromium 重新挂载仍会重载，真正 page plane 未做；工作区覆盖、插件命令映射、官方市场分片未开始。 |
 
 P1 完成明细：
 
@@ -803,7 +808,14 @@ P1 完成明细：
 - 前端：`src/web/PluginsPanel.tsx`（SSE、更新按钮、安装/更新确认）、`src/web/plugin-store-model.ts`（`updateAvailable`）、`src/web/api.ts`（`updatePlugin`/`describePlugin`/`watchPlugins`）、`src/web/SettingsDialog.tsx`（MCP 文案）。
 - 测试：`tests/mcp.test.ts`、`tests/plugin-store.test.ts`、`tests/plugin-runtime.test.ts`、`tests/http.test.ts`、`tests/plugin-store-model.test.ts`；全量 `npm run check` 为 43 文件 / 490 通过 / 1 跳过。
 - 实机（ego + `opencode-go/deepseek-v4.1-flash`）：安装后免重启调用返回 `plugin-echo-v1: P1-ACCEPT`；停用后下一轮回答「工具已不可用」；只读会话「只读会话无此工具」；升到 2.0.0 并更新后返回 `plugin-echo-v2: P1-UPDATED`；重启后 MCP 仍为 connected。步骤/截图见 `artifacts/plugin-p1-check/summary.md`。
-- 已知边界：`mcp.json` 自身修改仍需重启；git 来源只接受 HTTPS；更新确认会为目录版本变化临时物化一次包；P2 的 `details.ui`/bridge 未接线。
+- 已知边界：`mcp.json` 自身修改仍需重启；git 来源只接受 HTTPS；更新确认会为目录版本变化临时物化一次包。
+
+P2 完成明细：
+
+- 服务端：`src/server/plugin-reference.ts`（token/link 解析、能力求交、`<plugin_reference>` 模板、`beforeRequest` 注入）；`src/server/plugin-ui.ts`（页面 HTML+CSP）；`src/server/plugin-store.ts`（`uiSurfaces()`、`pluginServer()`）；`src/server/mcp.ts`（`_meta.ui` → `details.ui` 白名单投影）；`src/server/runtime.ts`（四个 UI 方法 + readOnly/Plan 校验）；`src/server/app.ts`（`/api/plugins/ui/*`）。
+- 前端：`src/web/plugin-ui-bridge.ts`、`PluginUiPane.tsx`、`PluginUiCard.tsx`、`ToolCard.tsx`（内联自动展开、fullscreen 一次）、`transcript.tsx`、`App.tsx`（page 池 + context scope）、`Inspector.tsx`（插件 tab 与 `+` surfaces 菜单）、`Composer.tsx`（context chips）。
+- 测试：`tests/plugin-reference.test.ts`、`tests/plugin-ui.test.ts`、`tests/plugin-ui-bridge.test.ts`、`tests/plugin-ui-card.test.tsx`、`tests/plugin-ui-app.test.tsx`；全量 `npm run check` 为 56 文件 / 589 通过 / 1 跳过。
+- 实机（ego，独立 demo 实例 4412）：自写 `smoke-ui` 插件（技能 `smoke`、MCP `echo`、UI surface `ui://smoke/panel`）→ 添加本地市场 `smoke-market` → 安装确认展示 MCP 命令/技能/界面 → 安装后技能目录出现 `smoke`（来源「插件」）→ `[plugin-tool:mcp__plugin_smoke_ui_panel__echo]` 返回 `plugin:hello` → 工具结果自动展开内联 `Smoke Panel` → 页面 `tools/call` 返回 `plugin:from-page` → 「在右侧打开」出现插件 tab → 页面 `update-model-context` 形成 Composer chip → 发送后用户消息包含 `# Plugin context:` 与 structuredContent → 页面 `ui/message` 成功提交新用户消息。截图与步骤见 `artifacts/plugin-p2-check/`。
 
 ---
 
@@ -818,12 +830,12 @@ P1 完成明细：
 | `.../atomic-directory.ts` | 原子目录提交/回滚 | `src/server/plugin-store.ts` |
 | `apps/zcode-cli/packages/bootstrap/src/plugins.ts:271` | overview 聚合 | `src/server/plugin-store.ts` + `app.ts` |
 | `apps/zcode-cli/packages/bootstrap/src/app/create-app.ts:239,329` | 能力装配与 catalog 冻结 | `src/server/runtime.ts` + `plugin-store.ts`（catalog 冻结属 P2） |
-| `apps/zcode-cli/packages/core/src/plugin-reference/references.ts:67` | canonical 解析 | P2：`src/server/plugin-reference.ts`（未创建） |
-| `.../plugin-reference/reminder.ts:159` | reminder 模板与求交 | P2：`src/server/plugin-reference.ts`（未创建） |
-| `.../runtime/methods/plugin-reference.ts:80` | 每轮注入 | P2：`GenerationTask.beforeRequest` |
-| `packages/ui/src/mentions/providers/pluginsMentionProvider.ts:81` | `@` 候选 | P2：`Composer.tsx` + `api` |
-| `packages/ui/src/plugin-ui/domain/pluginUiModelContext.ts:46` | `# Plugin context:` 序列化 | P2：`src/web/plugin-ui-bridge.ts`（未创建） |
-| `packages/services/src/plugin-ui-bridge/pluginUiBridgeService.ts:105` | 资源读取/工具代理 | P2：`src/server/plugin-ui.ts`（未创建）；`McpRegistry` 的资源/直调接口已就绪 |
+| `apps/zcode-cli/packages/core/src/plugin-reference/references.ts:67` | canonical 解析 | `src/server/plugin-reference.ts` |
+| `.../plugin-reference/reminder.ts:159` | reminder 模板与求交 | `src/server/plugin-reference.ts` |
+| `.../runtime/methods/plugin-reference.ts:80` | 每轮注入 | `GenerationTask.beforeRequest`（`plugin-reference` extension） |
+| `packages/ui/src/mentions/providers/pluginsMentionProvider.ts:81` | `@` 候选 | 文本 token 已支持；结构化候选菜单未移植（P3） |
+| `packages/ui/src/plugin-ui/domain/pluginUiModelContext.ts:46` | `# Plugin context:` 序列化 | `src/shared/plugin-ui.ts` + `src/web/Composer.tsx` |
+| `packages/services/src/plugin-ui-bridge/pluginUiBridgeService.ts:105` | 资源读取/工具代理 | `src/server/plugin-ui.ts` + `src/web/plugin-ui-bridge.ts` |
 | `packages/ui/src/plugin-ui/adapters/usePluginUiHost.ts` | 页面宿主/页面池 | P2/P3：`src/web/PluginUiPane.tsx`（未创建） |
 | `packages/ui/src/ToolCallBlocks.tsx:379` | 正文内联 UI 卡 | P2：`ToolCard.tsx`（未接线） |
 

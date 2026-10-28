@@ -12,6 +12,8 @@ interface GitBranchSwitcherProps {
   workspaceId: string | undefined
   /** Tighter trigger used inside the composer toolbar. */
   compact?: boolean
+  /** Menus open upward from the composer and downward from the status card. */
+  side?: 'top' | 'bottom'
 }
 
 /**
@@ -19,7 +21,7 @@ interface GitBranchSwitcherProps {
  * the current branch is pinned first, and the footer creates a branch at HEAD and switches to it.
  * Switching stays Git-native — blocked switches keep the menu open with ZCode's structured issues.
  */
-export default function GitBranchSwitcher({ workspaceId, compact = false }: GitBranchSwitcherProps) {
+export default function GitBranchSwitcher({ workspaceId, compact = false, side = 'top' }: GitBranchSwitcherProps) {
   const { t } = useUiPreferences()
   const [snapshot, setSnapshot] = useState<GitBranchSnapshot | null>(null)
   const [open, setOpen] = useState(false)
@@ -159,7 +161,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false }: GitB
     }
   }
 
-  return <Menu open={open} onClose={() => setOpen(false)} side="top" align="start" portal listClassName={css.menu}
+  return <Menu open={open} onClose={() => setOpen(false)} side={side} align="start" portal listClassName={css.menu}
     anchor={<button type="button" className={`${css.trigger} ${compact ? css.compact : ''}`}
       aria-label={`${t('切换 Git 分支，当前：', 'Switch Git branch, current: ')}${label}`} aria-expanded={open} aria-haspopup="menu"
       onClick={toggle}>

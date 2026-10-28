@@ -1,0 +1,7 @@
+{
+  "name": "lineup-card",
+  "version": "1.0.0",
+  "description": "Turn a squad list into a match-day lineup with role notes and a printable summary.",
+  "author": { "name": "pi-web showcase" },
+  "skills": ["./skills"]
+}

@@ -1,0 +1,12 @@
+.inline { max-width: 100%; overflow: auto; padding: 0 12px 12px; text-align: center; }
+.inline > svg { max-width: 100%; height: auto; display: inline-block; }
+.loading { padding: 20px; color: var(--message-subtle); font-size: var(--message-font); }
+.preview { display: flex; min-height: 0; flex-direction: column; gap: 8px; }
+.toolbar { display: flex; gap: 4px; align-items: center; justify-content: center; }
+.toolbar button { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--message-subtle); cursor: pointer; }
+.toolbar button:hover { background: var(--message-hover); }
+.toolbar output { min-width: 54px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.viewport { position: relative; width: 100%; height: min(65vh, 620px); min-height: 220px; overflow: hidden; border: 1px solid var(--message-border); border-radius: 12px; touch-action: none; background: var(--message-panel); cursor: grab; }
+.viewport:active { cursor: grabbing; }
+.viewport:focus-visible, .toolbar button:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
+.picture { position: absolute; inset: 0 auto auto 0; transform-origin: 0 0; user-select: none; }

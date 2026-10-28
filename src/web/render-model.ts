@@ -1,4 +1,5 @@
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, MessageUsage } from '../shared/types.ts'
+import { groupProcessParts, type ProcessToolGroupKind } from './process-grouping.ts'
 
 export interface ToolItem {
   readonly key: string
@@ -15,6 +16,13 @@ export type ProcessPart =
   | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly streaming: boolean; readonly order: number }
   | { readonly kind: 'content'; readonly key: string; readonly message: ChatMessage; readonly block: ContentBlock; readonly streaming: boolean; readonly order: number }
   | { readonly kind: 'tool'; readonly key: string; readonly item: ToolItem; readonly order: number }
+  | {
+      readonly kind: 'toolGroup'
+      readonly key: string
+      readonly group: ProcessToolGroupKind
+      readonly items: readonly ToolItem[]
+      readonly order: number
+    }
 
 export interface ResponsePart {
   readonly key: string
@@ -31,7 +39,7 @@ export function toolActivity(name: string): ToolActivity {
   const id = name.toLocaleLowerCase()
   if (id === 'read') return 'read'
   if (id === 'read_image') return 'readImage'
-  if (id === 'grep' || id === 'glob' || id.endsWith('_inspect')) return 'search'
+  if (id === 'grep' || id === 'glob' || id === 'list_files' || id === 'find' || id === 'find_files' || id.endsWith('_inspect')) return 'search'
   if (id === 'write') return 'write'
   if (id === 'edit' || id === 'apply_patch') return 'edit'
   if (['bash', 'pwsh', 'exec_command', 'write_stdin'].includes(id) || id.startsWith('terminal_')) return 'commands'
@@ -349,6 +357,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     }
   }
   process.sort((left, right) => left.order - right.order)
+  const groupedProcess = groupProcessParts(process)
 
   const status = runStatus(run.messages)
   const durationMs = run.messages.reduce<number | undefined>((latest, message) => (
@@ -361,7 +370,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     ...(run.runId === undefined ? {} : { runId: run.runId }),
     users: run.users,
     messages: run.messages,
-    process,
+    process: groupedProcess,
     responses,
     systemRows,
     artifacts,

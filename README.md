@@ -1,6 +1,6 @@
 # Pi Durable Web
 
-一个独立的 Pi Durable Web 入口。React 正文直接使用 DSH 的 Markdown、代码、终端和 Diff 展示组件，主题使用固定版本的 DSH 设计变量。执行、消息、工具和恢复由 Pi Durable 1.3.0 与 SQLite 承担。
+一个独立的 Pi Durable Web 入口。AI 回答与工作过程按 ZCode 的展示和交互实现：正文使用 Streamdown，代码使用 @pierre/diffs，表格、图表、思考和终端拥有独立展示组件；应用外壳继续使用固定版本的 DSH 设计变量。执行、消息、工具和恢复由 Pi Durable 1.3.0 与 SQLite 承担。
 
 ## 启动
 
@@ -229,11 +229,15 @@ npx tsx scripts/render-fixture.ts
 
 `test:live` 使用临时数据库、当前配置的默认真实模型和一个最小文本请求；`test:live:tools` 与 `test:live:codemode` 分别验证真实模型的直接工具调用和 `codemode` 脚本调用；`test:live:skills` 验证 Skills 的创建、校验、重启后发现与使用；`test:live:workflow` 验证默认任务规划与多步开发闭环，并由宿主独立运行产物测试。它们都不会修改已有会话或静默更换模型。最后的 `render-fixture.ts` 不是 npm script，会写入 `artifacts/render-fixture-*`，用于确定性 Markdown/工具渲染 fixture，Windows 上使用 `pwsh`。供应商授权失败单独报告（本轮 opencode-go key 过期时的 401 已按该规则保留）。
 
+开发服务运行时可打开 `/tests/rendering/fixture.html` 重播 AI 输出夹具，覆盖正文、代码/图表、表格、图片、思考/工具和流式状态；此测试入口不进入生产构建。真实 DOM 交互回归位于 `tests/rendering-interactions.test.tsx`。
+
 Windows 上跑验证前先看 [Windows](#windows)：shell 相关验证走 `pwsh`；`npm test` 仍有 POSIX mode、Skills 路径分隔符及可能的 symlink 条件性失败；`test:live:tools` 与 `test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`；`test:live:skills` 与 `test:live:workflow` 需真实模型与 Windows 实机记录。
 
 ## UI 来源
 
-- DSH 展示组件：`@deepseek-ai/dsh-client-ui-primitives@0.2.1-rc.2`。
+- AI 输出参考 ZCode 3.16.2；实现与验收见 [docs/zcode-markdown-rendering-plan.md](docs/zcode-markdown-rendering-plan.md)。
+- 代码查看器：`@pierre/diffs@1.1.22`；正文解析：`streamdown@2.5.0`；图标：`lucide-react@1.17.0`。
+- 应用外壳、设置和部分专用面板的 DSH 展示组件：`@deepseek-ai/dsh-client-ui-primitives@0.2.1-rc.2`。
 - 主题来源：DSH `687f282e8625c6b8d11ff58211a90524be2e4317`。
-- 许可和来源见 [vendor/README.md](vendor/README.md)。
+- 许可和来源见 [vendor/README.md](vendor/README.md) 与 [third-party/message-rendering-NOTICE.md](third-party/message-rendering-NOTICE.md)。
 - 数据与组件衔接见 [docs/architecture.md](docs/architecture.md)。

@@ -1,29 +1,26 @@
 import type { CollapseTiming, TranscriptViewMode } from '../shared/types.ts'
 
 /**
- * Presentation capabilities one work-details mode enables, copied from DSH so
- * pi-web's transcript folds, groups, and previews exactly like the reference.
+ * Presentation capabilities for the transcript's work-details modes.
  */
 export interface ChatPresentationPolicy {
   readonly mode: TranscriptViewMode
   readonly collapseTiming: CollapseTiming
   /** Whether a completed turn folds its process rows behind the whole-turn control. */
   readonly foldCompletedTurns: boolean
-  /** Collapsible group headers for all turns, historical turns only, or no turns. */
+  /** Group all turns; `history` keeps the latest expanded, or `none` renders flat. */
   readonly stepGrouping: 'collapsed' | 'history' | 'none'
-  /** Show the running command, path, query, or reasoning detail in group titles. */
-  readonly liveProcessDetail: boolean
-  /** Whether a settled reasoning row previews its first line beside the Think title. */
-  readonly settledReasoningPreview: boolean
+  /** Show the latest line alongside a collapsed, streaming thought. */
+  readonly liveReasoningPreview: boolean
 }
 
 type ModeCaps = Omit<ChatPresentationPolicy, 'collapseTiming'>
 
 const POLICIES: Readonly<Record<TranscriptViewMode, ModeCaps>> = {
-  compact: { mode: 'compact', foldCompletedTurns: true, stepGrouping: 'collapsed', liveProcessDetail: false, settledReasoningPreview: false },
-  standard: { mode: 'standard', foldCompletedTurns: true, stepGrouping: 'collapsed', liveProcessDetail: true, settledReasoningPreview: true },
-  detailed: { mode: 'detailed', foldCompletedTurns: true, stepGrouping: 'history', liveProcessDetail: true, settledReasoningPreview: true },
-  verbose: { mode: 'verbose', foldCompletedTurns: false, stepGrouping: 'none', liveProcessDetail: false, settledReasoningPreview: true },
+  compact: { mode: 'compact', foldCompletedTurns: true, stepGrouping: 'collapsed', liveReasoningPreview: false },
+  standard: { mode: 'standard', foldCompletedTurns: true, stepGrouping: 'collapsed', liveReasoningPreview: true },
+  detailed: { mode: 'detailed', foldCompletedTurns: true, stepGrouping: 'history', liveReasoningPreview: true },
+  verbose: { mode: 'verbose', foldCompletedTurns: false, stepGrouping: 'none', liveReasoningPreview: true },
 }
 
 const TIMINGS: Readonly<Record<CollapseTiming, Readonly<Record<TranscriptViewMode, ChatPresentationPolicy>>>> = {

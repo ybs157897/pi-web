@@ -1,0 +1,7 @@
+{
+  "name": "archive-vault",
+  "version": "1.0.0",
+  "description": "Skill-only plugin installed from a market that is later removed.",
+  "author": { "name": "pi-web showcase" },
+  "skills": ["./skills"]
+}

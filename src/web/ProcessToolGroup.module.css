@@ -1,0 +1,6 @@
+.root { min-width: 0; }
+.separator { flex: none; color: var(--message-muted); }
+.summary { display: inline-flex; min-width: 0; align-items: center; gap: 8px; overflow: hidden; color: var(--message-muted); font-size: var(--message-font); white-space: nowrap; text-overflow: ellipsis; }
+.liveLabel { flex: none; color: var(--message-subtle); }
+.liveDetail { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.groupChildren { display: flex; min-width: 0; flex-direction: column; gap: 8px; margin-left: 8px; padding-left: 14px; border-left: 1px solid var(--message-border); }

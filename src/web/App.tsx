@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { ArrowDown } from 'lucide-react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
@@ -15,6 +16,8 @@ import type {
   ModelOption, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
   UpdateAppSettingsInput,
 } from '../shared/types.ts'
+import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
+import { pluginContextBlock } from '../shared/plugin-ui.ts'
 import { ApiFailure, api } from './api.ts'
 import Composer, { type BusySendMode, type DraftImage } from './Composer.tsx'
 import TodoPanel from './TodoPanel.tsx'
@@ -24,12 +27,13 @@ import GoalBar from './GoalBar.tsx'
 import QuestionComposer from './QuestionComposer.tsx'
 import SettingsDialog from './SettingsDialog.tsx'
 import Transcript, { type PendingMessage } from './transcript.tsx'
+import StatusPanel from './StatusPanel.tsx'
 import { conversationStats, visibleTranscriptMessages } from './render-model.ts'
 import { latestPlan, type PlanDocument } from './plan-preview.ts'
-import TrajectoryView, { transcriptMessageDomId } from './TrajectoryView.tsx'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
-import type { InspectorDiff, InspectorFile, InspectorView } from './Inspector.tsx'
+import { PluginPageHostContext } from './plugin-page-pool.tsx'
+import type { InspectorDiff, InspectorFile, InspectorSubagentTab, InspectorView } from './Inspector.tsx'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
@@ -40,7 +44,6 @@ import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
 type MainPage = 'chat' | 'automations'
-type ChatView = 'chat' | 'trajectory'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
 /** One attachment as the limits see it: an image flag and its byte size. */
@@ -60,6 +63,8 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
 }
 /** Draft scopes without attachments share this, so the composer prop keeps a stable identity. */
 const NO_IMAGES: readonly DraftImage[] = []
+/** Scopes without plugin context share this, for the same reason. */
+const NO_PLUGIN_CONTEXTS: readonly PluginContextEntry[] = []
 const MAX_IMAGE_COUNT = 4
 const MAX_FILE_COUNT = 8
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
@@ -194,7 +199,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
   const [renameWorkspace, setRenameWorkspace] = useState<WorkspaceSummary | null>(null)
-  const [chatView, setChatView] = useState<ChatView>('chat')
   const [inspectorFile, setInspectorFile] = useState<InspectorFile | undefined>()
   const [inspectorDiff, setInspectorDiff] = useState<InspectorDiff | undefined>()
   const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
@@ -203,6 +207,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [inspectorWidth, setInspectorWidth] = useState(360)
   const [inspectorLoading, setInspectorLoading] = useState(false)
   const [inspectorError, setInspectorError] = useState('')
+  /** Plugin pages the inspector keeps mounted, one per plugin call site. */
+  const [pluginPages, setPluginPages] = useState<PluginUiPage[]>([])
+  const [activePluginPageId, setActivePluginPageId] = useState<string | undefined>(undefined)
+  /** Read-only child conversations kept mounted as inspector tabs. */
+  const [subagentTabs, setSubagentTabs] = useState<InspectorSubagentTab[]>([])
+  const [activeSubagentId, setActiveSubagentId] = useState<string | undefined>(undefined)
+  /** Inline cards hand their page host to the inspector here, so the side pane moves the iframe. */
+  const [pluginPageHosts, setPluginPageHosts] = useState<Record<string, HTMLElement>>({})
+  /** `ui/update-model-context` chips, scoped like drafts so switching sessions keeps each one. */
+  const [pluginContextsByScope, setPluginContextsByScope] = useState<Record<string, PluginContextEntry[]>>({})
+  const [pluginSurfaces, setPluginSurfaces] = useState<PluginUiSurfaceView[]>([])
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
@@ -225,6 +240,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [newAccessMode, setNewAccessMode] = useState<AccessMode>(settings.defaultAccessMode)
   const [sendMode, setSendMode] = useState<BusySendMode>(settings.busySendMode)
   const [sending, setSending] = useState(false)
+  /** ZCode shows the circular jump button as soon as the reader leaves the 48px bottom band. */
+  const [jumpToBottomVisible, setJumpToBottomVisible] = useState(false)
+  const [statusPanelVisible, setStatusPanelVisible] = useState(false)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const sidebarRef = useRef<HTMLElement | null>(null)
@@ -257,9 +275,23 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const translateRef = useRef(t)
   translateRef.current = t
   const toastSequence = useRef(0)
+  /** Keeps the auto-follow ref and the jump-button visibility in one place. */
+  const syncViewportScroll = useCallback((element: HTMLDivElement): void => {
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight
+    wasAtBottom.current = distance < 88
+    setJumpToBottomVisible(distance > 48)
+  }, [])
+  const jumpToBottom = useCallback((): void => {
+    const viewport = messagesViewport.current
+    if (viewport === null) return
+    wasAtBottom.current = true
+    setJumpToBottomVisible(false)
+    viewport.scrollTop = viewport.scrollHeight
+  }, [])
   const activeScope = selectedId === null ? '__new__' : selectedId
   const draft = draftState.scope === activeScope ? draftState.text : ''
   const images = imageStore[activeScope] ?? NO_IMAGES
+  const pluginContexts = pluginContextsByScope[activeScope] ?? NO_PLUGIN_CONTEXTS
   const selectedSummary = conversations.find(item => item.id === selectedId)
   const conversationReady = detail?.conversation.id === selectedId
   const activeConversation = conversationReady ? detail : null
@@ -399,6 +431,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   useEffect(() => {
     const scope = selectedId ?? '__new__'
     wasAtBottom.current = true
+    setJumpToBottomVisible(false)
+    setStatusPanelVisible(false)
     detailRef.current = null
     setDraftState({ scope, text: loadDraft(scope) })
     setDetail(null)
@@ -575,7 +609,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const selectConversation = useCallback((id: string): void => {
     blankIntent.current = false
     setPage('chat')
-    setChatView('chat')
     if (id === selectedId) {
       setSidebarOpen(false)
       return
@@ -611,13 +644,39 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     detailRef.current = detail
     setSelectedId(detail.conversation.id)
     setPage('chat')
-    setChatView('chat')
     setSidebarOpen(false)
     return detail
   }, [newAccessMode, newPlan, newPresetId, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
 
   const setDraft = useCallback((value: string): void => {
     setDraftState({ scope: activeScope, text: value })
+  }, [activeScope])
+
+  /**
+   * `ui/update-model-context` writes one chip for the active scope. The same plugin call
+   * overwrites its previous entry, which is the documented "keep the last one" rule.
+   */
+  const addPluginContext = useCallback((entry: PluginContextEntry): void => {
+    const scope = activeScope
+    const key = `${entry.pluginId}:${entry.toolCallId ?? ''}`
+    setPluginContextsByScope(current => {
+      const entries = current[scope] ?? []
+      const index = entries.findIndex(item => `${item.pluginId}:${item.toolCallId ?? ''}` === key)
+      const next = index === -1
+        ? [...entries, entry]
+        : entries.map((item, position) => position === index ? entry : item)
+      return { ...current, [scope]: next }
+    })
+  }, [activeScope])
+
+  const removePluginContext = useCallback((key: string): void => {
+    setPluginContextsByScope(current => {
+      const entries = current[activeScope]
+      if (entries === undefined) return current
+      const next = entries.filter(entry => `${entry.pluginId}:${entry.toolCallId ?? ''}` !== key)
+      if (next.length === entries.length) return current
+      return { ...current, [activeScope]: next }
+    })
   }, [activeScope])
 
   /** Write one scope's attachments and mirror them synchronously, so the next batch validates against them. */
@@ -705,6 +764,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       return
     }
     const ready = attachments.filter(image => image.status === 'ready')
+    // `ui/update-model-context` entries ride along with the message, but the pending row,
+    // the title and the retry fingerprint all keep reading the operator's own text.
+    const contextBlock = pluginContextBlock(pluginContextsByScope[activeScope] ?? NO_PLUGIN_CONTEXTS)
+    const submittedText = contextBlock === '' ? text : text === '' ? contextBlock : `${text}\n\n${contextBlock}`
     submitLock.current = true
     setSending(true)
     let targetId = selectedId
@@ -742,13 +805,21 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const imageAttachments = ready.filter(item => isImageType(item.mimeType))
       const fileAttachments = ready.filter(item => !isImageType(item.mimeType))
       const result = await api.submit(targetId, {
-        text,
+        text: submittedText,
         requestId,
         ...(target?.conversation.busy ? { whenBusy: requestedMode ?? sendMode } : {}),
         ...(imageAttachments.length === 0 ? {} : { images: imageAttachments.map(image => ({ data: image.data, mimeType: image.mimeType })) }),
         ...(fileAttachments.length === 0 ? {} : { files: fileAttachments.map(file => ({ name: file.file.name, mimeType: file.mimeType, data: file.data })) }),
       })
       lastFailedSubmit.current = null
+      // The server accepted the message, so this scope's chips are consumed. A scope that
+      // gained another entry while the request was in flight keeps nothing stale either.
+      setPluginContextsByScope(current => {
+        if (current[activeScope] === undefined) return current
+        const next = { ...current }
+        delete next[activeScope]
+        return next
+      })
       const accepted: PendingSubmission = {
         ...firstPending,
         requestId,
@@ -762,6 +833,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         ? existing.filter(item => item.id !== pendingId)
         : existing.map(item => item.id === pendingId ? accepted : item))
       wasAtBottom.current = true
+      setJumpToBottomVisible(false)
       requestAnimationFrame(() => {
         const viewport = messagesViewport.current
         if (viewport !== null) viewport.scrollTop = viewport.scrollHeight
@@ -783,7 +855,36 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       submitLock.current = false
       setSending(false)
     }
-  }, [activeScope, announce, createConversation, detail, draftState, selectedId, sendMode, t, writeImages])
+  }, [activeScope, announce, createConversation, detail, draftState, pluginContextsByScope, selectedId, sendMode, t, writeImages])
+
+  /** `ui/message` from a plugin page submits straight to the open conversation, leaving the draft alone. */
+  const sendPluginMessage = useCallback(async (text: string): Promise<void> => {
+    if (selectedId === null) {
+      announce(t('请先开始一个会话', 'Start a conversation first'))
+      return
+    }
+    try {
+      await api.submit(selectedId, { text, requestId: crypto.randomUUID() })
+      wasAtBottom.current = true
+      setJumpToBottomVisible(false)
+      requestAnimationFrame(() => {
+        const viewport = messagesViewport.current
+        if (viewport !== null) viewport.scrollTop = viewport.scrollHeight
+      })
+    } catch (cause) {
+      announce(errorText(cause, t('消息发送失败', 'Message failed to send')))
+    }
+  }, [announce, selectedId, t])
+
+  /** `ui/open-link` may only reach an https destination, even when a caller skips the bridge check. */
+  const openPluginLink = useCallback((url: string): void => {
+    try {
+      if (new URL(url).protocol !== 'https:') return
+    } catch {
+      return
+    }
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }, [])
 
   const stop = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
@@ -999,14 +1100,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   const navigate = useCallback((next: MainPage): void => {
     setPage(next)
-    setChatView('chat')
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
   }, [mobile])
 
   const openConversation = useCallback(async (id: string): Promise<void> => {
     setPage('chat')
-    setChatView('chat')
     setSidebarOpen(false)
     if (!conversations.some(item => item.id === id)) await refreshList()
     setSelectedId(id)
@@ -1059,6 +1158,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (workspaceId === undefined) return []
     const result = await api.searchWorkspaceFiles(workspaceId, needle)
     return result.entries
+  }, [currentWorkspaceId])
+
+  /** `$` uses the same workspace catalog as Settings → Skills, so plugin skills are included. */
+  const searchSkills = useCallback(async (query: string) => {
+    const workspaceId = currentWorkspaceId
+    if (workspaceId === undefined) return []
+    const catalog = await api.getSkills(workspaceId)
+    const needle = query.trim().toLocaleLowerCase()
+    if (needle === '') return catalog.skills
+    return catalog.skills.filter(skill =>
+      `${skill.name} ${skill.description} ${skill.id}`.toLocaleLowerCase().includes(needle))
   }, [currentWorkspaceId])
 
   const submitFeedback = useCallback(async (entryId: string, rating: 'up' | 'down' | null): Promise<void> => {
@@ -1127,7 +1237,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       setDetail(forked)
       setSelectedId(forked.conversation.id)
       setPage('chat')
-      setChatView('chat')
       setSidebarOpen(false)
       announce(t('已创建分支会话', 'Forked conversation created'), true)
     } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork this conversation'))) }
@@ -1204,7 +1313,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  const showInspector = inspectorOpen || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
+  const showInspector = inspectorOpen || pluginPages.length > 0 || subagentTabs.length > 0 || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
   const conversationPlan = useMemo(() => activeDetail === null
     ? undefined
@@ -1223,7 +1332,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const startNewConversation = useCallback((): void => {
     blankIntent.current = true
     setPage('chat')
-    setChatView('chat')
     setSelectedId(null)
     setDetail(null)
     detailRef.current = null
@@ -1235,6 +1343,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
     setInspectorPlan(undefined)
+    setPluginPages([])
+    setActivePluginPageId(undefined)
+    setPluginPageHosts({})
+    setPluginSurfaces([])
+    setSubagentTabs([])
+    setActiveSubagentId(undefined)
     setInspectorOpen(false)
     setBrowseWorkspaceId(null)
     inspectorRequestId.current += 1
@@ -1336,9 +1450,133 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorFile(undefined)
     setInspectorDiff(undefined)
     setInspectorPlan(undefined)
+    setPluginPages([])
+    setActivePluginPageId(undefined)
+    setPluginPageHosts({})
+    setSubagentTabs([])
+    setActiveSubagentId(undefined)
     setInspectorError('')
     setInspectorLoading(false)
   }
+
+  /**
+   * Closing one plugin tab removes only that page. When the active tab closes, its neighbour takes
+   * over; when the last page goes the panel falls back to another document or closes entirely.
+   */
+  const closePluginPage = useCallback((id: string): void => {
+    const index = pluginPages.findIndex(page => page.id === id)
+    if (index === -1) return
+    const next = pluginPages.filter(page => page.id !== id)
+    setPluginPages(next)
+    // The tab no longer owns the host; its inline card appends it back on the next render.
+    setPluginPageHosts(current => {
+      if (current[id] === undefined) return current
+      const hosts = { ...current }
+      delete hosts[id]
+      return hosts
+    })
+    if (activePluginPageId !== id) return
+    setActivePluginPageId(next[index]?.id ?? next[index - 1]?.id)
+    if (next.length > 0) return
+    if (inspectorPlan !== undefined || conversationPlan !== undefined) setInspectorView('plan')
+    else if (inspectorDiff !== undefined) setInspectorView('diff')
+    else if (inspectorFile !== undefined) setInspectorView('file')
+    else if (browseWorkspace !== undefined) setInspectorView('browse')
+    else closeInspector()
+  }, [activePluginPageId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages])
+  /**
+   * Open or focus one plugin page tab; the id keeps one page per plugin call site. An inline card
+   * passes its host, so the inspector moves the mounted page instead of opening a second iframe.
+   */
+  const openPluginPage = useCallback((input: PluginUiPage | Omit<PluginUiPage, 'id'>, host?: HTMLElement): void => {
+    // A card names its own page; the `+` menu has no page yet, so its id comes from the conversation.
+    const id = 'id' in input ? input.id : `${selectedId ?? 'new'}:${input.pluginId}:${input.toolCallId ?? input.resourceUri}`
+    const stored: PluginUiPage = { ...input, id, ...(selectedId === null ? {} : { conversationId: selectedId }) }
+    setPluginPages(current => current.some(item => item.id === id) ? current : [...current, stored])
+    if (host !== undefined) {
+      setPluginPageHosts(current => current[id] === host ? current : { ...current, [id]: host })
+    }
+    setActivePluginPageId(id)
+    setInspectorOpen(true)
+    setInspectorView('plugin')
+  }, [selectedId])
+
+  /**
+   * Open or focus one child conversation as a read-only tab in the inspector. The child never
+   * replaces the parent in the primary column: its transcript streams beside it, the same way
+   * a file or plugin document does. The title comes from the parent's projected child list, so a
+   * chip or panel row that only knows the id still lands on the delegation label.
+   */
+  const openSubagentTab = useCallback((childId: string, title?: string): void => {
+    const row = activeDetail?.subagents?.find(item => item.id === childId)
+    const label = row?.label !== undefined && row.label !== ''
+      ? row.label
+      : row?.title !== undefined && row.title !== ''
+        ? row.title
+        : title !== undefined && title.trim() !== ''
+          ? title.trim()
+          : t('子智能体', 'Subagent')
+    setSubagentTabs(current => {
+      const index = current.findIndex(tab => tab.id === childId)
+      if (index === -1) return [...current, { id: childId, title: label }]
+      if (current[index]!.title === label) return current
+      return current.map(tab => tab.id === childId ? { ...tab, title: label } : tab)
+    })
+    setActiveSubagentId(childId)
+    setInspectorOpen(true)
+    setInspectorView('subagent')
+    setSidebarOpen(false)
+  }, [activeDetail, t])
+
+  /**
+   * Close one child conversation tab. The tab's neighbour takes over when it was active; with no
+   * child left, the panel falls back to a document or plugin tab and only then closes entirely.
+   */
+  const closeSubagentTab = useCallback((id: string): void => {
+    const index = subagentTabs.findIndex(tab => tab.id === id)
+    if (index === -1) return
+    const next = subagentTabs.filter(tab => tab.id !== id)
+    setSubagentTabs(next)
+    if (activeSubagentId !== id) return
+    const replacement = next[index]?.id ?? next[index - 1]?.id
+    setActiveSubagentId(replacement)
+    if (replacement !== undefined) return
+    if (pluginPages.length > 0) { setInspectorView('plugin'); return }
+    if (inspectorPlan !== undefined || conversationPlan !== undefined) { setInspectorView('plan'); return }
+    if (inspectorDiff !== undefined) { setInspectorView('diff'); return }
+    if (inspectorFile !== undefined) { setInspectorView('file'); return }
+    if (browseWorkspace !== undefined) { setInspectorView('browse'); return }
+    closeInspector()
+  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentTabs])
+
+  /** Page ids whose host the inspector owns; an inline card shows a placeholder for those. */
+  const sidePageIds = useMemo(() => new Set(Object.keys(pluginPageHosts)), [pluginPageHosts])
+  const pluginPageHolding = useRef<HTMLDivElement>(null)
+  const holdPluginPageHost = useCallback((host: HTMLElement): void => {
+    pluginPageHolding.current?.appendChild(host)
+  }, [])
+  const pluginPagePool = useMemo(() => ({ sidePageIds, openSide: openPluginPage, hold: holdPluginPageHost }), [holdPluginPageHost, openPluginPage, sidePageIds])
+
+  /** The `+` menu reads the surfaces the server enables for this workspace and conversation. */
+  const refreshPluginSurfaces = useCallback(async (): Promise<void> => {
+    try {
+      const surfaces = await api.pluginUiSurfaces(currentWorkspaceId, selectedId ?? undefined)
+      setPluginSurfaces(surfaces)
+    } catch (cause) {
+      setPluginSurfaces([])
+      announce(errorText(cause, t('无法读取插件页面', 'Could not load plugin pages')))
+    }
+  }, [announce, currentWorkspaceId, selectedId, t])
+
+  const openPluginSurface = useCallback((surface: PluginUiSurfaceView): void => {
+    openPluginPage({
+      pluginId: surface.pluginId,
+      serverName: surface.serverName,
+      resourceUri: surface.resourceUri,
+      title: surface.title,
+    })
+  }, [openPluginPage])
+
   const toggleInspector = (): void => {
     if (showInspector) {
       closeInspector()
@@ -1401,6 +1639,18 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   // so switching sessions resets it; a plan that is no longer pending never auto-opens.
   useEffect(() => {
     planAutoOpenedFor.current = null
+  }, [selectedId])
+
+  // Plugin pages belong to the conversation that opened them (`plugin-marketplace-design.md` §8.2),
+  // so a session switch destroys both the mounted pages and the surface list for the old session.
+  // Child tabs go with them: a subagent belongs to the parent that delegated it.
+  useEffect(() => {
+    setPluginPages([])
+    setActivePluginPageId(undefined)
+    setPluginPageHosts({})
+    setPluginSurfaces([])
+    setSubagentTabs([])
+    setActiveSubagentId(undefined)
   }, [selectedId])
   useEffect(() => {
     if (selectedId === null || conversationPlan === undefined || conversationPlan.pending !== true) return
@@ -1573,6 +1823,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
           <IconPanelLeftOutlineRegular size={16} />
         </button>}
+        <PluginPageHostContext.Provider value={pluginPagePool}>
+        <div ref={pluginPageHolding} aria-hidden="true"
+          style={{ position: 'fixed', left: '-10000px', top: 0, width: 0, height: 0, overflow: 'hidden' }} />
         <div className={`${css.mainBody} ${showInspector ? css.withInspector : ''}`}
           style={showInspector ? ({ '--inspector-width': `${inspectorWidth}px` } as CSSProperties) : undefined}>
           <div className={css.primaryPanel}>
@@ -1596,7 +1849,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     {/* DSH puts the descendant count and the team action between the title and the header actions. */}
                     {activeDetail !== null && <SubagentPanel conversationId={activeDetail.conversation.id}
                       subagents={activeDetail.subagents}
-                      onOpen={childId => { selectConversation(childId) }}
+                      onOpen={childId => { openSubagentTab(childId) }}
                       onNotice={message => { announce(message) }} />}
                     {activeDetail !== null && <TeamPanel conversationId={activeDetail.conversation.id}
                       team={activeDetail.team}
@@ -1628,12 +1881,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     </Tooltip>
                   </div>
                 </header>
-                <nav className={css.chatTabs} aria-label={t('会话视图', 'Conversation views')}>
-                  <button type="button" aria-current={chatView === 'chat' ? 'page' : undefined} data-selected={chatView === 'chat' || undefined}
-                    onClick={() => { setChatView('chat') }}>{t('对话', 'Chat')}</button>
-                  <button type="button" aria-current={chatView === 'trajectory' ? 'page' : undefined} data-selected={chatView === 'trajectory' || undefined}
-                    onClick={() => { setChatView('trajectory') }}>{t('轨迹', 'Trajectory')}</button>
-                </nav>
               </>}
               {hero
                 ? <>
@@ -1657,7 +1904,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
                     onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
                     onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }} onNewConversation={startNewConversation}
-                    onSearchFiles={searchWorkspaceFiles} onPreviewFile={path => { void openWorkspaceFile(path) }} />
+                    onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
+                    pluginContexts={pluginContexts} onRemovePluginContext={removePluginContext} />
                   </div>
                 </>
                 : <>
@@ -1672,39 +1920,41 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         .finally(() => { setDetailLoading(false) })
                     }}>{t('重试', 'Retry')}</Button>
                   </div>}
-                  {activeDetail !== null && <div className={css.chatLayout}>
-                    <div className={css.messagesViewport} ref={messagesViewport} tabIndex={-1} onScroll={event => {
-                      const element = event.currentTarget
-                      wasAtBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 88
-                    }}>
-                      {chatView === 'chat'
-                        ? <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
-                          subagents={activeDetail.subagents} pending={selectedPending} interactions={activeDetail.interactions}
-                          running={activeDetail.conversation.busy === true}
-                          onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
-                          onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
-                          onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {
-                            if (line !== undefined) setInspectorFile(current => current === undefined ? undefined : { ...current, line })
-                          }) }}
-                          resolveFileImage={path => currentWorkspaceId === undefined ? undefined
-                            : `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/asset?${new URLSearchParams({ path }).toString()}`}
-                          onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
-                          onOpenSubagent={childId => { selectConversation(childId) }}
-                          onOpenPlan={plan => { openPlan(plan) }}
-                          onOpenTool={() => { setChatView('trajectory') }} />
-                        : <TrajectoryView messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)}
-                          onJumpToMessage={messageId => {
-                            setChatView('chat')
-                            requestAnimationFrame(() => document.getElementById(transcriptMessageDomId(messageId))?.scrollIntoView({ block: 'center' }))
-                          }} onOpenTool={messageId => {
-                            setChatView('chat')
-                            requestAnimationFrame(() => document.getElementById(transcriptMessageDomId(messageId))?.scrollIntoView({ block: 'center' }))
-                          }} />}
+                  {activeDetail !== null && <div className={`${css.chatLayout} ${statusPanelVisible ? css.withStatusPanel : ''}`}>
+                    <div className={css.messagesPane}>
+                    <div className={css.messagesViewport} ref={messagesViewport} tabIndex={-1} onScroll={event => { syncViewportScroll(event.currentTarget) }}>
+                      <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
+                        pending={selectedPending} interactions={activeDetail.interactions}
+                        running={activeDetail.conversation.busy === true}
+                        onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
+                        onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
+                        onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {
+                          if (line !== undefined) setInspectorFile(current => current === undefined ? undefined : { ...current, line })
+                        }) }}
+                        resolveFileImage={path => currentWorkspaceId === undefined ? undefined
+                          : `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/asset?${new URLSearchParams({ path }).toString()}`}
+                        onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
+                        onOpenSubagent={(childId, title) => { openSubagentTab(childId, title) }}
+                        onOpenPlan={plan => { openPlan(plan) }}
+                        onOpenPluginUi={openPluginPage}
+                        onPluginContext={addPluginContext}
+                        onPluginMessage={text => { void sendPluginMessage(text) }}
+                        onPluginOpenLink={openPluginLink} />
                     </div>
+                    {jumpToBottomVisible && <button type="button" className={css.jumpToBottom}
+                      aria-label={t('滚动到底部', 'Scroll to bottom')} title={t('滚动到底部', 'Scroll to bottom')}
+                      onClick={jumpToBottom}><ArrowDown size={16} aria-hidden="true" /></button>}
+                    </div>
+                    <StatusPanel workspaceId={currentWorkspaceId} conversationId={activeDetail.conversation.id}
+                      todos={activeDetail.todos} subagents={activeDetail.subagents}
+                      refreshToken={`${activeDetail.messages.length}:${activeDetail.conversation.busy === true}`}
+                      onOpenSubagent={(childId, title) => { openSubagentTab(childId, title) }}
+                      onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
+                      onNotice={announce} onVisibilityChange={setStatusPanelVisible} />
                     {catalogError !== '' && <div className={css.catalogNotice} role="status"><span>{catalogError}</span>
                       <button type="button" onClick={() => { void refreshCatalog() }}>{t('重试', 'Retry')}</button></div>}
                     <GoalBar goal={activeDetail.goal} onSetState={(action, payload) => { void updateGoal(action, payload) }} />
-                    <TodoPanel todos={activeDetail.todos} />
+                    {!statusPanelVisible && <TodoPanel todos={activeDetail.todos} />}
                     <QuestionComposer conversationId={activeDetail.conversation.id} interactions={activeDetail.interactions}
                       onDismiss={focusComposer}
                       onOpenPlan={plan => { openPlan(plan) }}
@@ -1731,7 +1981,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
                       onUpdateQueue={updateQueue} onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
                       onCompact={() => { void compact() }}
-                      onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onPreviewFile={path => { void openWorkspaceFile(path) }} />
+                      onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
+                      pluginContexts={pluginContexts} onRemovePluginContext={removePluginContext} />
                   </div>}
                 </>}
             </>}
@@ -1758,10 +2009,21 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 }}
                 view={inspectorView} onView={setInspectorView}
                 loading={inspectorLoading} error={inspectorError}
+                pluginPages={pluginPages} activePluginPageId={activePluginPageId}
+                pluginPageHosts={pluginPageHosts} sidePageIds={sidePageIds}
+                onReleasePluginPageHost={holdPluginPageHost}
+                onSelectPluginPage={setActivePluginPageId} onClosePluginPage={closePluginPage}
+                onPluginContext={addPluginContext} onPluginMessage={text => { void sendPluginMessage(text) }}
+                onPluginOpenLink={openPluginLink}
+                pluginSurfaces={pluginSurfaces} onOpenPluginSurface={openPluginSurface}
+                onRefreshPluginSurfaces={refreshPluginSurfaces}
+                subagentTabs={subagentTabs} activeSubagentId={activeSubagentId}
+                onSelectSubagentTab={setActiveSubagentId} onCloseSubagentTab={closeSubagentTab}
                 onClose={closeInspector} />
             </aside>
           </>}
         </div>
+        </PluginPageHostContext.Provider>
       </section>
       <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={currentWorkspaceId}
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}

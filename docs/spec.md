@@ -11,7 +11,7 @@
 
 - 判据：已通过真实默认模型 opencode/deepseek-v4.1-flash 最小调用，以及真实 HTTP/Pi/SQLite 的幂等、工具执行、分叉和进程重启恢复验收。
 - 判据：类型检查、14项测试和生产构建通过；浏览器真实模型对话、刷新恢复、置顶重命名、亮暗主题及390px侧栏与设置弹窗验收通过。
-- 定了：继续完整对齐真实 DSH Web，包含居中空态、工作区会话树、插件和自动化页面、聊天过程分组、回答操作栏、轨迹/文件侧栏、输入与队列操作、两栏设置。
+- 定了：继续完整对齐真实 DSH Web，包含居中空态、工作区会话树、插件和自动化页面、聊天过程分组、回答操作栏、右侧状态卡（Git/进程/智能体）、文件侧栏、输入与队列操作、两栏设置。
 - 判据：按相同 viewport/主题与真实 DSH 逐屏验收；菜单、表单和操作必须连接真实接口，不交付静态占位。
 - 判据：用现有默认模型实际执行 write/read/edit/bash，检查工具结果和磁盘产物，不以模型自行宣称成功作为验收。
 
@@ -124,7 +124,7 @@
 
 ## 2026-10-27
 
-> 插件进度：P0 ✅、P1 ✅、P2 ⏳、P3 ◐（更新按钮已提前）；逐阶段说明、测试矩阵与实施日志见 `docs/plugin-marketplace-design.md` 的「进度总览」与 §15。
+> 插件进度：P0 ✅、P1 ✅、P2 ✅、P3 ◐（更新按钮已提前）；逐阶段说明、测试矩阵与实施日志见 `docs/plugin-marketplace-design.md` 的「进度总览」与 §15。
 
 - 定了：按 `docs/plugin-marketplace-design.md` 实施 **P0 插件市场**（P1 插件 MCP 与 P2 插件 UI 未开始）。反转 `docs/parity.md` 的 DF-1：设置 → 扩展新增「插件市场」。存储独立于 `app-state.json`，位于 `<数据Dir>/plugins/`：`marketplaces.json` + `marketplaces/<id>.json` 目录缓存 + `installed.json` + `cache/<market>/<name>/<version>` + `data/<plugin>` + `staging`。接受 `.pi-plugin` / `.zcode-plugin` / `.claude-plugin` 的 `plugin.json` 兼容子集（`name/version/description/author/homepage/skills/mcpServers/ui/dependencies`），`commands/agents/hooks/lspServers/outputStyles/channels` 不执行、以诊断展示；`ui.surfaces.server` 必须引用已声明的 MCP server。
 - 定了：P0 来源为本地目录（市场根相对路径）与带 sha256 的 HTTPS/loopback zip；ZIP 用 `node:zlib` 自建读取器，限制 100 MiB / 20,000 条目 / 单文件 20 MiB，拒绝 zip-slip、绝对路径、符号链接、加密与 ZIP64；目录源拒绝符号链接与逃逸。安装是后台操作：`POST /api/plugins/install` 返回 `202 { operationId }`，状态在 `GET /api/plugins/overview` 的 `operations` 中轮询（`/api/plugins/events` 属 P1）；失败回滚已激活目录且不写安装记录，依赖按同一市场内的插件名做闭包。启停只改 `installed.json.enabled`；卸载删除记录/缓存，`keepData=1` 保留插件私有数据。
@@ -134,4 +134,10 @@
 - 定了：按同一设计实施 **P1 插件 MCP 与运行时投影**。`McpManager` 重构为 `McpRegistry`（`src/server/mcp.ts`）：有效配置 = 用户级 `mcp.json` + 已启用插件的 `mcpServers`，插件 server 名 `plugin_<plugin>_<server>`（与配置重名时追加 pluginId 短哈希），`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 在投影时展开（其他 `${VAR}` 不展开），`cwd` 为插件包根目录，默认 `exposure: 'codemode'`；新增 `reload()`、`listResources`、`readResource`、`callTool`，旧连接保留 10s 宽限。`PluginStore` 新增 `onChange` 事件、`mcpServers()`、`describe()`、`startUpdate()`；runtime 在每个能力变化后串行执行 `mcp.reload()` 并重装 `codemode`（namespace 快照）、`mcp`、`tool_search`（仅当存在 deferred 工具）与 `execution-policy`，保持 policy 最后安装。`GET /api/plugins/events` 推送完整 overview；新增 `POST /api/plugins/update` 与 `GET /api/plugins/:pluginId/describe`。
 - 定了：来源扩展为 GitHub zipball（`codeload.github.com/<repo>/zip/<ref>`，默认 `HEAD`，支持 `path` 子目录，404 时依次尝试 `refs/heads` / `refs/tags`）与 HTTPS `git clone --depth 1`（`GIT_TERMINAL_PROMPT=0`，支持 `path`）；npm/pip 仍为诊断。更新与安装共用「暂存 → 逐插件 rename（旧目录备份）→ 一次 `installed.json` 提交 → 清理旧版本/备份」事务，版本与内容指纹不变时直接成功；更新确认使用目录版本（`describe` 在目录版本变化时物化候选包）。设置页改为 SSE 驱动，新增更新按钮与安装/更新确认弹窗（展示 MCP 命令与参数、env 键名、技能、UI surface、不支持能力），仍保留轮询兜底。
 - 判据：`npm run typecheck`、全量 vitest（43 文件 490 项通过、1 项跳过）、`npm run build` 通过。新增/改写：`tests/mcp.test.ts`（插件 server 合并、namespace、`deferred`、reload 后旧服务器消失、close 关闭新旧连接）、`tests/plugin-store.test.ts`（更新成功/旧版本清理/无效包回滚、describe 不泄露 env 值、目录版本变化时描述候选包、`${PLUGIN_ROOT}`/`${PLUGIN_DATA}` 投影、启停时 MCP 投影为空、onChange 事件）、`tests/plugin-runtime.test.ts`（真实 runtime + stdio MCP fixture：安装后不重启即连接、demo `[plugin-tool:…]` 实际调用返回、停用后 server 消失）、`tests/http.test.ts`（update/describe/events 路由）。
-- 未决：P2（`@` 插件引用、`<plugin_reference>` reminder、`_meta.ui` 投影、内联卡与右侧插件 tab、bridge 子集）未开始；市场无内置官方源；插件更新签名/审核未定义；`mcp.json` 自身修改仍需重启（插件 MCP 不需要）。
+- 定了：按同一设计实施 **P2 正文交互与插件 UI**。`plugin-reference` extension 在 `beforeRequest` 对 `@name@marketplace` / `plugin://` 引用注入 `<plugin_reference>` system 消息（只读能力元数据，不落库、不改工具可见性；未安装/禁用/能力为空不注入）。MCP `tools/call` 的 `_meta.ui` 经白名单校验后进入 `details.ui`；`ToolCard` 自动展开内联 `PluginUiCard`，`fullscreen` 自动开右侧 tab。右侧 Inspector 增加插件 tab 池（CSS hidden 常驻）与 `+` surfaces 菜单；`PluginUiPane` 用 `sandbox="allow-scripts"` iframe，`plugin-ui-bridge` 支持 `tools/call`、`resources/read`、`ui/update-model-context`、`ui/message`、`ui/open-link`，页面调用重新走 readOnly/Plan 校验。Composer 显示插件上下文 chips，发送时追加 `# Plugin context:` 块。
+- 判据：`npm run check` 56 文件、589 通过、1 跳过，typecheck/build 通过；新增 `tests/plugin-reference.test.ts`、`tests/plugin-ui.test.ts`、`tests/plugin-ui-bridge.test.ts`、`tests/plugin-ui-card.test.tsx`、`tests/plugin-ui-app.test.tsx`。ego 独立 demo 实例 4412 自写 `smoke-ui` 插件（技能 `smoke`、MCP `echo`、UI surface `ui://smoke/panel`）：添加市场→安装确认→技能目录出现插件技能→`[plugin-tool:…]` 返回 `plugin:hello`→内联 Smoke Panel→页面 `tools/call` 返回 `plugin:from-page`→右侧插件 tab→`update-model-context` 形成 chip→发送后出现 `# Plugin context:` 块→页面 `ui/message` 提交成功。
+- 未决：P3（页面池、工作区级启用覆盖、`$` 技能提及、官方市场分片）未开始；市场无内置官方源；插件更新签名/审核未定义；`mcp.json` 自身修改仍需重启（插件 MCP 不需要）。
+- 定了（子智能体执行渲染）：`subagent` 工具行改为 ZCode 风格单行摘要（「子智能体」+ label/task + 状态），点击摘要行在右侧 Inspector 打开只读 child conversation tab；插件 tab、文件 tab 与子智能体 tab 共用同一个右侧工作区面板。child transcript 复用只读 `Transcript`，不提供 composer/retry/fork/stop；同一 childId 只建一个 tab，隐藏 tab 保持挂载和 SSE 订阅。实现见 `src/web/SubagentPane.tsx`、`Inspector.tsx`、`App.tsx` 与 `tests/subagent-pane.test.tsx`；ego demo `[subagent]` 已验证行点击→右侧只读 tab。原 DSH 彩色 `SubagentRunStrip` 不再用于主转录。
+
+- 定了（AI 输出修订）：回答、代码、表格/图表/图片、思考、常见工具过程和文件变更摘要按 ZCode 的源码与实际效果对齐；宿主执行/权限/会话语义保留。具体合同、例外和证据见 `docs/zcode-markdown-rendering-plan.md`，取代当前正文必须使用 DSH Markdown/CodeBlock 的描述。
+- 判据：`npm run check` 47文件、517通过、1跳过，typecheck/build与diff check通过；真实 DeepSeek 正文会话2248、终端会话2268，加上 Ego 固定场景和浅深色/窄屏截图；不把未移植的宿主特有能力或 Windows/长会话压测写成已完成。

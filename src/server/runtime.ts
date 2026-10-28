@@ -45,6 +45,13 @@ import type {
   CreateAutomationInput,
   CreateConversationInput,
   CreateGitBranchInput,
+  GitCommitInput,
+  GitCommitMessageInput,
+  GitCommitMessageResult,
+  GitCommitResult,
+  GitPushResult,
+  GitWorktreeDiff,
+  GitWorktreeStatus,
   EditQueueInput,
   GitBranchMutation,
   GitBranchSnapshot,
@@ -102,8 +109,18 @@ import { argumentPath, ensureMemoryDirectory, resolveMemoryRoot, resolveSafeMemo
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { PluginStore, type PluginChangeEvent } from './plugin-store.ts'
+import { PLUGIN_REFERENCE_EXTENSION_NAME, createPluginReferenceExtension, pluginReferenceCapabilities } from './plugin-reference.ts'
+import { MAX_PLUGIN_UI_ARGUMENT_BYTES, buildPluginUiPageHtml, pluginUiArgumentsSize, pluginUiResourceText } from './plugin-ui.ts'
+import type {
+  PluginUiCallInput,
+  PluginUiPageRequest,
+  PluginUiReadResourceInput,
+  PluginUiSurfaceView,
+} from '../shared/plugin-ui.ts'
 import { WorkspaceFiles, type AttachmentInput, type AttachmentReference } from './workspace-files.ts'
 import { GitBranches } from './git-branches.ts'
+import { GitWorktree } from './git-worktree.ts'
+import { commitMessageSystemPrompt, frameCommitContext, normalizeCommitMessage } from './git-commit-message.ts'
 import { createExecutionEnv, workspaceWriteSupported } from './execution-env.ts'
 
 export type ConversationMetadata = {
@@ -159,13 +176,23 @@ const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'med
 const CODEMODE_EXTENSION_NAME = 'codemode'
 /** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
 const READ_ONLY_TOOLS = new Set(['read', 'list_files', 'search_files', 'glob', 'grep', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
+/**
+ * Mirrors `PLAN_TOOLS` in execution-policy.ts. Page-originated plugin tool calls are a second
+ * execution entry point, so they apply the same Plan-mode allowlist.
+ */
+const PLUGIN_UI_PLAN_TOOLS = new Set([
+  'read', 'list_files', 'search_files', 'glob', 'grep', 'skill_list', 'skill_load', 'skill_validate',
+  'ask_user_question', 'exit_plan_mode', 'get_goal', 'codemode',
+  'subagent', 'spawn_teammate', 'list_agents', 'wait_agent', 'interrupt_agent',
+  'team_task_list', 'team_task_get',
+])
 
 /** Add the host's tool-free policy without changing a conversation's tools or custom instructions. */
 async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): Promise<void> {
   const conversationId = record.id
   const agent = await tx.doc(AgentDoc, conversationId)
   const extensions = agent.extensions
-  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME]
+  const required = [WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME]
   if (Array.isArray(extensions)) {
     for (const name of required) if (!extensions.includes(name)) extensions.unshift(name)
   } else if (extensions !== undefined) {
@@ -419,6 +446,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
   const gitBranches = new GitBranches(() => appState.snapshot().workspaces)
+  const gitWorktree = new GitWorktree(() => appState.snapshot().workspaces)
   let onPluginChange: (event: PluginChangeEvent) => void = () => undefined
   const pluginStore = await PluginStore.open({ dataDir, onChange: event => onPluginChange(event) })
   const skillStore = new SkillStore({ pluginRoots: () => pluginStore.skillRoots() })
@@ -600,6 +628,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     conversationInfo,
     watchMembers: watchTeamMembers,
     memberSession,
+  }))
+  // Tool-free: it only appends a per-request reminder from the live plugin projection.
+  registry.install(createPluginReferenceExtension({
+    capabilities: () => pluginReferenceCapabilities(pluginStore.overview()),
   }))
   /** Pi's deferred-tool loader; reinstalled whenever the MCP tool set changes. */
   const TOOL_SEARCH_EXTENSION_NAME = 'tool-search'
@@ -1031,7 +1063,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
     // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
@@ -1943,6 +1975,31 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const gitBranchSnapshot = (id: string): Promise<GitBranchSnapshot> => gitBranches.snapshot(id)
   const switchGitBranch = (id: string, input: SwitchGitBranchInput): Promise<GitBranchMutation> => gitBranches.switch(id, input)
   const createGitBranch = (id: string, input: CreateGitBranchInput): Promise<GitBranchMutation> => gitBranches.create(id, input)
+  const gitWorktreeStatus = (id: string): Promise<GitWorktreeStatus> => gitWorktree.status(id)
+  const gitWorktreeDiff = (id: string, path: string): Promise<GitWorktreeDiff> => gitWorktree.diff(id, path)
+  const gitCommit = (id: string, input: GitCommitInput): Promise<GitCommitResult> => gitWorktree.commit(id, input)
+  const gitPush = (id: string): Promise<GitPushResult> => gitWorktree.push(id)
+  const gitCommitMessage = async (id: string, input: GitCommitMessageInput): Promise<GitCommitMessageResult> => {
+    const { status, diff } = await gitWorktree.commitContext(id, input.includeUnstaged)
+    if (!status.isRepository) throw new RuntimeError('INVALID_INPUT', '工作区不在 Git 仓库中')
+    if (status.files.length === 0) throw new RuntimeError('INVALID_INPUT', '没有可提交的改动')
+    if (!input.includeUnstaged && diff.trim() === '') throw new RuntimeError('INVALID_INPUT', '没有已暂存的改动')
+    const route = input.conversationId === undefined
+      ? modelRuntime.defaultModel
+      : (await (await requireConversation(input.conversationId)).agent(CTX)).model ?? modelRuntime.defaultModel
+    if (route === undefined) throw new RuntimeError('MODEL_UNAVAILABLE', '没有可用的模型')
+    const model = modelRuntime.models.getModel(route.provider, route.modelId)
+    if (model === undefined) throw new RuntimeError('MODEL_UNAVAILABLE', '会话模型不在 Pi 模型目录中')
+    const locale = appState.snapshot().settings.locale
+    const result = await modelRuntime.models.completeSimple(model, {
+      systemPrompt: commitMessageSystemPrompt(locale),
+      messages: [{ role: 'user', content: frameCommitContext({ branchName: status.branchName, files: status.files, diff, locale }), timestamp: Date.now() }],
+    }, { maxTokens: 512, timeoutMs: 30_000, sessionId: `git-commit-${randomUUID()}` })
+    if (result.stopReason !== 'stop') throw new RuntimeError('PROVIDER_ERROR', '模型没有返回提交信息')
+    const message = normalizeCommitMessage(result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n'))
+    if (message === '') throw new RuntimeError('PROVIDER_ERROR', '模型没有返回提交信息')
+    return { message, provider: route.provider, model: route.modelId }
+  }
 
   const validatePreset = (value: AgentPreset): AgentPreset => {
     if (!/^[A-Za-z0-9._~-]{1,128}$/.test(value.id)) throw new RuntimeError('INVALID_INPUT', 'Preset ID 无效')
@@ -2419,6 +2476,21 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // per conversation: bring idle conversations onto the current presentation before serving.
   await syncIdleAgents()
 
+  /** Page-originated calls only reach the plugin's own enabled server. */
+  const requirePluginUiServer = (pluginId: string, serverName: string): void => {
+    const owner = pluginStore.pluginServer(serverName)
+    if (owner === undefined || owner.pluginId !== pluginId) {
+      throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', '插件 UI 服务不可用')
+    }
+  }
+  const readPluginUiResource = async (serverName: string, uri: string) => {
+    try {
+      return await mcp.readResource(serverName, uri)
+    } catch (error) {
+      throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', error instanceof Error ? error.message : String(error))
+    }
+  }
+
   return {
     list,
     create,
@@ -2469,6 +2541,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     gitBranches: gitBranchSnapshot,
     switchGitBranch,
     createGitBranch,
+    gitWorktreeStatus,
+    gitWorktreeDiff,
+    gitCommit,
+    gitPush,
+    gitCommitMessage,
     skills: async (workspaceId) => skillStore.list(workspaceFiles.workspace(workspaceId).path),
     skill: async (workspaceId, skillId, resource) => skillStore.load(workspaceFiles.workspace(workspaceId).path, skillId, resource),
     validateSkill: async (workspaceId, skillId) => skillStore.validate(workspaceFiles.workspace(workspaceId).path, skillId),
@@ -2492,6 +2569,47 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     watchPlugins: (listener) => {
       pluginListeners.add(listener)
       return () => { pluginListeners.delete(listener) }
+    },
+    pluginUiSurfaces: (): PluginUiSurfaceView[] => pluginStore.uiSurfaces(),
+    pluginUiPage: async (input: PluginUiPageRequest): Promise<string> => {
+      requirePluginUiServer(input.pluginId, input.serverName)
+      const resource = await readPluginUiResource(input.serverName, input.uri)
+      const text = pluginUiResourceText(resource)
+      if (text === undefined) throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', '插件页面不是文本资源')
+      return buildPluginUiPageHtml(text)
+    },
+    pluginUiCall: async (input: PluginUiCallInput) => {
+      requirePluginUiServer(input.pluginId, input.serverName)
+      const server = mcp.view().servers.find(item => item.name === input.serverName)
+      const tool = server?.tools.find(item => item.name === input.tool)
+      if (server === undefined || server.status !== 'connected' || tool === undefined || tool.exposure === 'hidden') {
+        throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', '插件 UI 工具不可用')
+      }
+      if (pluginUiArgumentsSize(input.arguments) > MAX_PLUGIN_UI_ARGUMENT_BYTES) {
+        throw new RuntimeError('INVALID_INPUT', '插件工具参数过大')
+      }
+      if (input.conversationId !== undefined) {
+        const conversationId = parseConversationId(input.conversationId)
+        const metadata = await harness.snapshot(META, conversationId, CTX)
+        if (metadata === undefined) throw new RuntimeError('NOT_FOUND', '会话不存在')
+        // The page is a second tool entry point: the same read-only and Plan rules apply.
+        if (metadata.accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(input.tool)) {
+          throw new RuntimeError('ACCESS_DENIED', '只读会话不允许调用插件工具')
+        }
+        const plan = await harness.snapshot(Plans, conversationId, CTX)
+        if (plan?.active === true && !PLUGIN_UI_PLAN_TOOLS.has(input.tool)) {
+          throw new RuntimeError('PLAN_BLOCKED', '计划模式下不允许调用插件工具')
+        }
+      }
+      try {
+        return await mcp.callTool(input.serverName, input.tool, input.arguments)
+      } catch (error) {
+        throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', error instanceof Error ? error.message : String(error))
+      }
+    },
+    pluginUiReadResource: async (input: PluginUiReadResourceInput) => {
+      requirePluginUiServer(input.pluginId, input.serverName)
+      return await readPluginUiResource(input.serverName, input.uri)
     },
     presets,
     createPreset,

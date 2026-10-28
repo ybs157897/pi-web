@@ -1,0 +1,20 @@
+{
+  "name": "weather-station",
+  "version": "1.2.0",
+  "description": "A live forecast tool plus a storm-watch skill. The marketplace entry is 1.2.0, so the card demonstrates an available update.",
+  "author": {
+    "name": "pi-web showcase"
+  },
+  "skills": [
+    "./skills"
+  ],
+  "mcpServers": {
+    "forecast": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/server.mjs"
+      ],
+      "exposure": "direct"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+.group { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.diff { min-width: 0; max-height: 240px; overflow: auto; margin-bottom: 8px; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); color: var(--message-fg); font-family: var(--message-mono); line-height: 20px; }
+.line { display: flex; min-width: max-content; padding-inline: 8px; }
+.line code { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; font: inherit; white-space: pre; }
+.marker { width: 24px; flex: none; user-select: none; text-align: center; }
+.line[data-kind='add'] { background: rgb(34 197 94 / 12%); }
+.line[data-kind='remove'] { background: rgb(239 68 68 / 12%); }
+.line[data-kind='add'] .marker { color: #16a34a; }
+.line[data-kind='remove'] .marker { color: #dc2626; }
+.diff:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }

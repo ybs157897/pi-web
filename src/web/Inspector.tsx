@@ -1,12 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, MarkdownText, ReadBlock,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
 import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import PlanPreview, { type PlanDocument } from './PlanPreview.tsx'
 import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
+import { PluginUiPane } from './PluginUiPane.tsx'
+import SubagentPane from './SubagentPane.tsx'
 import type { WorkspaceSummary } from '../shared/types.ts'
 import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
@@ -26,8 +29,14 @@ export interface InspectorFile {
 
 export type { InspectorDiff } from './transcript.tsx'
 
-/** The inspector's views: a workspace browser beside file, diff and plan documents. */
-export type InspectorView = 'file' | 'diff' | 'plan' | 'browse'
+/** The inspector's views: a workspace browser beside file, diff, plan, plugin and subagent documents. */
+export type InspectorView = 'file' | 'diff' | 'plan' | 'browse' | 'plugin' | 'subagent'
+
+/** One read-only child conversation the inspector keeps mounted as a tab. */
+export interface InspectorSubagentTab {
+  id: string
+  title: string
+}
 
 export interface InspectorBrowse {
   workspace: WorkspaceSummary
@@ -47,50 +56,218 @@ export interface InspectorProps {
   onView?: (view: InspectorView) => void
   loading?: boolean
   error?: string | null
+  /** Every plugin page stays mounted while its tab is not active; the page keeps its own state. */
+  pluginPages?: readonly PluginUiPage[]
+  activePluginPageId?: string
+  /**
+   * Hosts the transcript's inline cards created, keyed by page id. Appending one here moves the
+   * same iframe into the panel instead of mounting a second page.
+   */
+  pluginPageHosts?: Readonly<Record<string, HTMLElement>>
+  /** Page ids whose host the side pane owns; pages outside the set keep their own pane. */
+  sidePageIds?: ReadonlySet<string>
+  /** Park a host in the app's holding node instead of detaching it when this slot unmounts. */
+  onReleasePluginPageHost?: (host: HTMLElement) => void
+  onSelectPluginPage?: (id: string) => void
+  onClosePluginPage?: (id: string) => void
+  onPluginContext?: (entry: PluginContextEntry) => void
+  onPluginMessage?: (text: string) => void
+  onPluginOpenLink?: (url: string) => void
+  /** Surfaces the `+` menu lists for the current workspace and conversation. */
+  pluginSurfaces?: readonly PluginUiSurfaceView[]
+  onOpenPluginSurface?: (surface: PluginUiSurfaceView) => void
+  onRefreshPluginSurfaces?: () => void | Promise<void>
+  /** Read-only child conversations, appended after the document and plugin tabs. */
+  subagentTabs?: readonly InspectorSubagentTab[]
+  activeSubagentId?: string
+  onSelectSubagentTab?: (id: string) => void
+  onCloseSubagentTab?: (id: string) => void
   onClose: () => void
 }
 
-/** Show a workspace file, recorded artifact, submitted plan, or workspace browser in the right inspector panel. */
-export default function Inspector({ file = null, diff = null, plan = null, browse = null, view, onView, loading = false, error = null, onClose }: InspectorProps) {
+const noop = (): void => {}
+
+const NO_SIDE_PAGES: ReadonlySet<string> = new Set()
+
+/** Append a transcript-owned page host so the inspector shows the same iframe, not a reload. */
+function PluginPageHostSlot({ pageId, host, hidden, onRelease }: { pageId: string; host: HTMLElement; hidden: boolean; onRelease?: (host: HTMLElement) => void }) {
+  const container = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = container.current
+    if (element === null) return
+    element.appendChild(host)
+    return () => {
+      if (host.parentElement !== element) return
+      // Keep the iframe connected while the tab closes; detaching and reattaching a frame
+      // reloads it, which would lose the page's local state.
+      if (onRelease !== undefined) onRelease(host)
+      else element.removeChild(host)
+    }
+  }, [host, onRelease])
+  return <div ref={container} className={css.pluginPageHost} hidden={hidden} data-plugin-host-slot={pageId} />
+}
+
+/** Show a workspace file, recorded artifact, submitted plan, workspace browser or plugin page. */
+export default function Inspector({
+  file = null, diff = null, plan = null, browse = null, view, onView, loading = false, error = null,
+  pluginPages = [], activePluginPageId, pluginPageHosts = {}, sidePageIds = NO_SIDE_PAGES,
+  onReleasePluginPageHost,
+  onSelectPluginPage, onClosePluginPage,
+  onPluginContext, onPluginMessage, onPluginOpenLink,
+  pluginSurfaces = [], onOpenPluginSurface, onRefreshPluginSurfaces, onClose,
+  subagentTabs = [], activeSubagentId, onSelectSubagentTab, onCloseSubagentTab,
+}: InspectorProps) {
   const { t } = useUiPreferences()
+  const [surfacesOpen, setSurfacesOpen] = useState(false)
+  const [surfacesLoading, setSurfacesLoading] = useState(false)
+  const surfacesAnchor = useRef<HTMLSpanElement>(null)
   const planView = view === 'plan'
+  const pluginView = view === 'plugin' && pluginPages.length > 0
+  const subagentView = view === 'subagent' && subagentTabs.length > 0
   const browseView = browse !== null && view === 'browse'
-  const path = browse !== null && view === 'browse'
-    ? browse.workspace.name
-    : planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
+  const activePluginPage = pluginPages.find(page => page.id === activePluginPageId)
+  const activeSubagentTab = subagentTabs.find(tab => tab.id === activeSubagentId)
+  const path = subagentView
+    ? activeSubagentTab?.title ?? t('子智能体', 'Subagent')
+    : pluginView
+      ? activePluginPage?.title ?? activePluginPage?.pluginId ?? t('插件', 'Plugin')
+      : browse !== null && view === 'browse'
+        ? browse.workspace.name
+        : planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
   const hasDocument = plan !== null || diff !== null || file !== null
+  const showTabs = onView !== undefined
+    && (browse !== null || hasDocument || pluginPages.length > 0 || subagentTabs.length > 0 || onRefreshPluginSurfaces !== undefined)
+  useEffect(() => {
+    if (!surfacesOpen) return
+    const close = (event: MouseEvent): void => {
+      if (event.target instanceof Node && surfacesAnchor.current?.contains(event.target) === true) return
+      setSurfacesOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => { document.removeEventListener('mousedown', close) }
+  }, [surfacesOpen])
+  // A view switch dismisses the surface menu; it belongs to the tab it was opened from.
+  useEffect(() => { setSurfacesOpen(false) }, [view])
+  const toggleSurfaces = (): void => {
+    const next = !surfacesOpen
+    setSurfacesOpen(next)
+    if (!next || onRefreshPluginSurfaces === undefined) return
+    setSurfacesLoading(true)
+    const pending = onRefreshPluginSurfaces()
+    if (pending instanceof Promise) void pending.finally(() => { setSurfacesLoading(false) })
+    else setSurfacesLoading(false)
+  }
+  const closeActive = (): void => {
+    if (subagentView && onCloseSubagentTab !== undefined) {
+      const target = activeSubagentId ?? subagentTabs[0]?.id
+      if (target !== undefined) {
+        onCloseSubagentTab(target)
+        return
+      }
+    }
+    if (pluginView && onClosePluginPage !== undefined) {
+      const target = activePluginPageId ?? pluginPages[0]?.id
+      if (target !== undefined) {
+        onClosePluginPage(target)
+        return
+      }
+    }
+    onClose()
+  }
+  const closeLabel = subagentView
+    ? t('关闭子智能体会话', 'Close subagent session')
+    : pluginView
+      ? t('关闭插件页面', 'Close plugin page')
+      : browseView
+        ? t('关闭文件浏览器', 'Close file browser')
+        : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')
   return (
-    <aside className={css.root} aria-label={browseView
-      ? t('文件浏览器', 'File browser')
-      : planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
+    <aside className={css.root} aria-label={subagentView
+      ? t('子智能体会话', 'Subagent session')
+      : pluginView
+        ? t('插件面板', 'Plugin panel')
+        : browseView
+          ? t('文件浏览器', 'File browser')
+          : planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
       <header className={css.header}>
         <div className={css.fileIcon} aria-hidden="true"><IconBrowseOutlineRegular size={15} /></div>
         <div className={css.path} title={path}>{path}</div>
-        {onView !== undefined && (browse !== null || hasDocument) && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
+        {showTabs && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
           {browse !== null && <button type="button" data-browse-view aria-pressed={browseView}
-            onClick={() => { onView('browse') }}>{t('浏览', 'Browse')}</button>}
-          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView && !browseView}
-            onClick={() => { onView(diff !== null ? 'diff' : 'file') }}>{diff !== null ? t('差异', 'Diff') : t('文件', 'File')}</button>}
+            onClick={() => { setSurfacesOpen(false); onView('browse') }}>{t('浏览', 'Browse')}</button>}
+          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView && !browseView && !pluginView && !subagentView}
+            onClick={() => { setSurfacesOpen(false); onView(diff !== null ? 'diff' : 'file') }}>{diff !== null ? t('差异', 'Diff') : t('文件', 'File')}</button>}
           {plan !== null && <button type="button" data-plan-view aria-pressed={planView}
-            onClick={() => { onView('plan') }}>{t('计划', 'Plan')}</button>}
+            onClick={() => { setSurfacesOpen(false); onView('plan') }}>{t('计划', 'Plan')}</button>}
+          {pluginPages.map(page => {
+            const title = page.title ?? page.pluginId
+            return <span key={page.id} className={css.pluginTab} data-plugin-tab={page.id}>
+              <button type="button" className={css.pluginTabButton}
+                aria-pressed={pluginView && page.id === activePluginPageId} title={title}
+                onClick={() => { setSurfacesOpen(false); onSelectPluginPage?.(page.id); onView('plugin') }}>{title}</button>
+              {onClosePluginPage !== undefined && <button type="button" className={css.pluginTabClose}
+                aria-label={t(`关闭插件页面 ${title}`, `Close plugin page ${title}`)}
+                onClick={() => { onClosePluginPage(page.id) }}><IconCloseOutlineRegular size={11} /></button>}
+            </span>
+          })}
+          {onRefreshPluginSurfaces !== undefined && <span className={css.surfacesAnchor} ref={surfacesAnchor}>
+            <button type="button" className={css.addPage} aria-label={t('打开插件页面', 'Open plugin page')}
+              aria-expanded={surfacesOpen} onClick={toggleSurfaces}>+</button>
+            {surfacesOpen && <div className={css.surfacesMenu} role="group" aria-label={t('可用插件页面', 'Available plugin pages')}>
+              {surfacesLoading
+                ? <span className={css.surfacesEmpty}>{t('正在读取插件…', 'Loading plugins…')}</span>
+                : pluginSurfaces.length === 0
+                  ? <span className={css.surfacesEmpty}>{t('去设置里安装插件', 'Install plugins in Settings')}</span>
+                  : pluginSurfaces.map(surface => <button key={surface.id} type="button" className={css.surfaceItem}
+                    data-plugin-surface={surface.id}
+                    onClick={() => { setSurfacesOpen(false); onOpenPluginSurface?.(surface) }}>
+                    <span className={css.surfaceTitle}>{surface.title}</span>
+                    <span className={css.surfaceMeta}>{surface.pluginName}</span>
+                  </button>)}
+            </div>}
+          </span>}
+          {subagentTabs.map(tab => {
+            const title = tab.title
+            return <span key={tab.id} className={css.pluginTab} data-subagent-tab={tab.id}>
+              <button type="button" className={css.pluginTabButton}
+                aria-pressed={subagentView && tab.id === activeSubagentId} title={title}
+                onClick={() => { setSurfacesOpen(false); onSelectSubagentTab?.(tab.id); onView('subagent') }}>{title}</button>
+              {onCloseSubagentTab !== undefined && <button type="button" className={css.pluginTabClose}
+                aria-label={t(`关闭子智能体会话 ${title}`, `Close subagent session ${title}`)}
+                onClick={() => { onCloseSubagentTab(tab.id) }}><IconCloseOutlineRegular size={11} /></button>}
+            </span>
+          })}
         </div>}
-        <button type="button" className={css.close} onClick={onClose} aria-label={browseView
-          ? t('关闭文件浏览器', 'Close file browser')
-          : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')}>
+        <button type="button" className={css.close} onClick={closeActive} aria-label={closeLabel}>
           <IconCloseOutlineRegular size={15} />
         </button>
       </header>
+      {pluginPages.length > 0 && <div className={css.pluginSurfaces} data-plugin-surfaces hidden={!pluginView}>
+        {pluginPages.map(page => {
+          const host = pluginPageHosts[page.id]
+          const hidden = page.id !== activePluginPageId
+          // An inline card already mounted this page; move its host instead of opening a second iframe.
+          return host !== undefined && sidePageIds.has(page.id)
+            ? <PluginPageHostSlot key={page.id} pageId={page.id} host={host} hidden={hidden} onRelease={onReleasePluginPageHost} />
+            : <PluginUiPane key={page.id} page={page} hidden={hidden}
+              onContext={onPluginContext ?? noop} onMessage={onPluginMessage ?? noop} onOpenLink={onPluginOpenLink ?? noop} />
+        })}
+      </div>}
+      {subagentTabs.length > 0 && <div className={css.subagentSurfaces} data-subagent-surfaces hidden={!subagentView}>
+        {subagentTabs.map(tab => <SubagentPane key={tab.id} childId={tab.id} title={tab.title}
+          hidden={!subagentView || tab.id !== activeSubagentId} />)}
+      </div>}
       {browse !== null && <div className={css.browseSurface} hidden={!browseView}>
         <WorkspaceBrowserPage workspace={browse.workspace} path={browse.path ?? ''} onOpenFile={browse.onOpenFile} compact />
       </div>}
-      {!browseView && (planView
+      {!pluginView && !browseView && !subagentView && (planView
         ? <PlanPreview plan={plan} loading={loading} error={error} />
         : <>
           {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}
           {!loading && error !== null && error !== '' && <div className={css.error} role="alert">{error}</div>}
           {!loading && (error === null || error === '') && diff !== null && <DiffContents diff={diff} />}
           {!loading && (error === null || error === '') && diff === null && file !== null && <FileContents key={file.path} file={file} />}
-          {!loading && error === null && diff === null && file === null && !browseView && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
+          {!loading && error === null && diff === null && file === null && <div className={css.empty}>{t('选择文件或工具差异查看详情', 'Select a file or tool diff to inspect')}</div>}
         </>)}
     </aside>
   )
