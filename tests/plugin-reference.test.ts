@@ -212,24 +212,33 @@ describe('plugin reference capabilities', () => {
     ])
   })
 
-  it('skips disabled, missing, and partially-capable plugins', async () => {
+  it('skips disabled and missing plugins but describes a skill-only plugin', async () => {
     const store = await storeFixture()
     expect(pluginReferenceReminder('@missing-plugin@fixture-market', pluginReferenceCapabilities(store.overview()))).toBeNull()
     await store.setEnabled('ref-plugin@fixture-market', false)
     expect(pluginReferenceReminder('@ref-plugin@fixture-market', pluginReferenceCapabilities(store.overview()))).toBeNull()
-    // A skill-only plugin has no MCP server and no UI surface, so it contributes nothing.
-    expect(pluginReferenceReminder('@skill-plugin@fixture-market', pluginReferenceCapabilities(store.overview()))).toBeNull()
+    // ZCode skips a plugin only when it has no live capability at all.
+    const skillOnly = pluginReferenceReminder('@skill-plugin@fixture-market', pluginReferenceCapabilities(store.overview()))
+    expect(skillOnly).toContain('<plugin_reference>')
+    expect(skillOnly).toContain('  skills: ["skill-plugin@fixture-market:review"]')
+    expect(skillOnly).toContain('  mcp_servers: []')
   })
 
-  it('returns no body when the intersection is empty or a capability group is missing', () => {
+  it('returns no body when the intersection is empty or every capability group is empty', () => {
     const reference = { pluginId: 'demo@market', name: 'demo', marketplace: 'market' }
     expect(buildPluginReferenceBody([reference], [])).toBeNull()
+    expect(buildPluginReferenceBody([reference], [{
+      pluginId: 'demo@market',
+      skills: [],
+      mcpServers: [],
+      uiSurfaces: [],
+    }])).toBeNull()
     expect(buildPluginReferenceBody([reference], [{
       pluginId: 'demo@market',
       skills: ['demo@market:draw'],
       mcpServers: [],
       uiSurfaces: ['canvas'],
-    }])).toBeNull()
+    }])).toContain('<plugin_reference>')
     expect(buildPluginReferenceBody([reference], [{
       pluginId: 'demo@market',
       skills: ['demo@market:draw'],

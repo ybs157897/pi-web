@@ -98,8 +98,8 @@ export function pluginReferenceCapabilities(overview: PluginOverview): PluginRef
 }
 
 /**
- * ZCode's reminder body: a plugin with no skill, MCP server, or UI surface has nothing to mention,
- * so it is skipped entirely. `null` means the turn carries no reference worth injecting.
+ * ZCode's reminder body: a plugin is skipped only when every capability group is empty, so a
+ * skill-only plugin is still described. `null` means the turn carries no reference worth injecting.
  */
 export function buildPluginReferenceBody(
   references: readonly PluginReference[],
@@ -110,7 +110,7 @@ export function buildPluginReferenceBody(
   for (const reference of references) {
     const capability = available.get(reference.pluginId)
     if (capability === undefined) continue
-    if (capability.skills.length === 0 || capability.mcpServers.length === 0 || capability.uiSurfaces.length === 0) continue
+    if (capability.skills.length === 0 && capability.mcpServers.length === 0 && capability.uiSurfaces.length === 0) continue
     blocks.push([
       `- id: ${JSON.stringify(capability.pluginId)}`,
       `  skills: ${JSON.stringify(capability.skills)}`,
