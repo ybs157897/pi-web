@@ -1,5 +1,24 @@
 # 提示词改造计划与实施说明
 
+## 实施状态（2026-10-28）
+
+刀 1–8 已按参考提交逐刀 cherry-pick 到 main（9 个提交全部干净落地，无冲突；runtime.ts 上与 f5da931 的 auto-merge 已核对为区域不相交）。实际 commit id 对应关系：
+
+| 刀 | 参考提交 | main 实际提交 |
+|---|---|---|
+| 1 | `08e7f2f` `82d26d7` | `7e04886` `7707ab7` |
+| 2 | `b434f95` | `484a77e` |
+| 3 | `4ab6417` | `8df304b` |
+| 4 | `dcd79ea` | `ed1e702` |
+| 5 | `a6ee211` | `2d9a396` |
+| 6 | `a2cab5a` | `5127b5a` |
+| 7 | `5a63217` | `f0106a6` |
+| 8 | `da925c3` | `5b94859` |
+
+落地后验证：`npm run typecheck` 与全量 `npm test` 通过（65 个文件，637 通过 + 1 个 win32 平台门控跳过）；默认配置 runtime-core 2,758 字符（≤ 3,300）且含"代码修改""引用代码"各一次；7 份快照覆盖 codemode on/only/off、计划模式、只读、记忆+索引；4 处防回归测试均在。刀 9 未实施（P2，可选）；刀 10 真实验收未执行（凭证 401，见「判据」一节）。
+
+---
+
 2026-10-28 评审了模型实际收到的全部提示词（runtime-core、work/plan/goal/team/skills/memory 各 section、工具描述、压缩、记忆提取、commit message、内置 Skill），并对照 DSH 0.2.1-rc.2 与 ZCode 源码核实了两处行为差异。
 
 **参考实现**：`devin/prompt-refactor` 分支（worktree `pi-web-prompt-refactor`）已实现刀 0–8，共 9 个提交（`08e7f2f`…`da925c3`），可整体 diff、逐刀 cherry-pick 或只作对照。本文档按"自己动手实现"的用法组织：每刀给出要改的代码点、可直接采用的文案和验证方式。
