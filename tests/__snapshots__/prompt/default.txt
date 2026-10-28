@@ -1,7 +1,7 @@
 # default
 
 sections (8767 chars): runtime-core 4232, project-instructions 558, work-policy 1094, goal-policy 491, skills-policy 1450, codemode 942
-tools (29; descriptions 12198 chars; parameters 6478 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
+tools (29; descriptions 12424 chars; parameters 6514 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
 
@@ -160,9 +160,9 @@ Edit a single file using exact text replacement. Every edits[].oldText must matc
 
 ## tool bash
 
-Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.
+Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Do not run dev servers, watch modes or interactive programs in the foreground; they hold the call until the timeout. Prefer one-shot forms and non-interactive flags (for example `vitest run`, `tsc --noEmit`, `git commit -m`). Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.
 
-{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Bash command to execute"},"description":{"type":"string","description":"Clear, concise description of what this command does in active voice, 5-10 words."},"workdir":{"type":"string","description":"Working directory for this command. Defaults to the session workspace; a relative path resolves against it."},"timeout":{"type":"number","description":"Timeout in seconds (optional, no default timeout)"}}}
+{"type":"object","required":["command"],"properties":{"command":{"type":"string","description":"Bash command to execute"},"description":{"type":"string","description":"Clear, concise description of what this command does in active voice, 5-10 words."},"workdir":{"type":"string","description":"Working directory for this command. Defaults to the session workspace; a relative path resolves against it."},"timeout":{"type":"number","description":"Timeout in seconds (default 300). Pass a larger value for long builds or test suites."}}}
 
 ## tool list_files
 

@@ -1,7 +1,7 @@
 # memory
 
 sections (10071 chars): runtime-core 4232, project-instructions 558, work-policy 1094, memory 1039, memory-index 265, goal-policy 491, skills-policy 1450, codemode 942
-tools (29; descriptions 12198 chars; parameters 6478 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
+tools (29; descriptions 12424 chars; parameters 6514 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
 

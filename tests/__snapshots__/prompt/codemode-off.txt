@@ -1,7 +1,7 @@
 # codemode-off
 
 sections (7825 chars): runtime-core 4232, project-instructions 558, work-policy 1094, goal-policy 491, skills-policy 1450
-tools (28; descriptions 9753 chars; parameters 6362 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
+tools (28; descriptions 9979 chars; parameters 6398 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
 
 ## section runtime-core
 

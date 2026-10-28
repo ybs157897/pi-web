@@ -8,6 +8,16 @@ import { RuntimeError } from './runtime-errors.ts'
 const baseBash = createBashTool()
 const basePwsh = createPowerShellTool()
 
+/** Bounds a call that sets no timeout, so a server or watcher started in the foreground cannot hold it forever. */
+export const DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
+
+export function commandTimeout(seconds: number | undefined): number {
+  return seconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS
+}
+
+const FOREGROUND_RULE = 'Do not run dev servers, watch modes or interactive programs in the foreground; they hold the call until the timeout. Prefer one-shot forms and non-interactive flags (for example `vitest run`, `tsc --noEmit`, `git commit -m`).'
+const TIMEOUT_PARAMETER = Type.Optional(Type.Number({ description: `Timeout in seconds (default ${DEFAULT_COMMAND_TIMEOUT_SECONDS}). Pass a larger value for long builds or test suites.` }))
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
@@ -47,12 +57,12 @@ async function resolveWorkdir(cwd: string, value: unknown): Promise<string> {
  */
 const bashTool = defineTool({
   ...baseBash,
-  description: 'Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
+  description: `Execute a bash command and return its stdout/stderr. Each call runs in a fresh shell; pass \`workdir\` instead of using \`cd\`. Provide \`description\` before \`command\` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. ${FOREGROUND_RULE} Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.`,
   parameters: Type.Object({
     command: Type.String({ description: 'Bash command to execute' }),
     description: Type.Optional(Type.String({ description: 'Clear, concise description of what this command does in active voice, 5-10 words.' })),
     workdir: Type.Optional(Type.String({ description: 'Working directory for this command. Defaults to the session workspace; a relative path resolves against it.' })),
-    timeout: Type.Optional(Type.Number({ description: 'Timeout in seconds (optional, no default timeout)' })),
+    timeout: TIMEOUT_PARAMETER,
   }),
   execute: async (args, api, context) => {
     const cwd = api.env?.cwd
@@ -62,7 +72,7 @@ const bashTool = defineTool({
     const root = await realpath(cwd).catch(() => resolve(cwd))
     const workdir = await resolveWorkdir(root, args.workdir)
     const command = workdir === root ? args.command : `cd -- ${shellQuote(workdir)} && ${args.command}`
-    return baseBash.execute({ command, ...(args.timeout === undefined ? {} : { timeout: args.timeout }) }, api, context)
+    return baseBash.execute({ command, timeout: commandTimeout(args.timeout) }, api, context)
   },
 })
 
@@ -70,12 +80,12 @@ const bashTool = defineTool({
 const pwshTool = defineTool({
   ...basePwsh,
   name: 'pwsh',
-  description: 'Execute a PowerShell command (`pwsh`, falling back to Windows PowerShell) and return its stdout/stderr. Each call runs in a fresh process; pass `workdir` instead of using `Set-Location`. Provide `description` before `command` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.',
+  description: `Execute a PowerShell command (\`pwsh\`, falling back to Windows PowerShell) and return its stdout/stderr. Each call runs in a fresh process; pass \`workdir\` instead of using \`Set-Location\`. Provide \`description\` before \`command\` in the arguments. Before any delete or move, verify the resolved absolute target path is the intended one; never run it against a computed path you have not checked, and guard path variables so an unset value cannot widen the target. ${FOREGROUND_RULE} Long output is truncated to its tail and the full output is saved to a temp file. Check the exit code before moving on.`,
   parameters: Type.Object({
     command: Type.String({ description: 'PowerShell command to execute' }),
     description: Type.Optional(Type.String({ description: 'Clear, concise description of what this command does in active voice, 5-10 words.' })),
     workdir: Type.Optional(Type.String({ description: 'Working directory for this command. Defaults to the session workspace; a relative path resolves against it.' })),
-    timeout: Type.Optional(Type.Number({ description: 'Timeout in seconds (optional, no default timeout)' })),
+    timeout: TIMEOUT_PARAMETER,
   }),
   execute: async (args, api, context) => {
     const cwd = api.env?.cwd
@@ -85,7 +95,7 @@ const pwshTool = defineTool({
     const root = await realpath(cwd).catch(() => resolve(cwd))
     const workdir = await resolveWorkdir(root, args.workdir)
     const command = workdir === root ? args.command : `Set-Location -LiteralPath ${powershellQuote(workdir)}\n${args.command}`
-    return basePwsh.execute({ command, ...(args.timeout === undefined ? {} : { timeout: args.timeout }) }, api, context)
+    return basePwsh.execute({ command, timeout: commandTimeout(args.timeout) }, api, context)
   },
 })
 

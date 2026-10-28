@@ -5,7 +5,7 @@ import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CodingTools, createCodingTools } from '../src/server/shell-tools.ts'
+import { CodingTools, DEFAULT_COMMAND_TIMEOUT_SECONDS, commandTimeout, createCodingTools } from '../src/server/shell-tools.ts'
 
 const directories: string[] = []
 
@@ -60,6 +60,18 @@ describe('shell tool selection', () => {
     expect(Object.keys(properties)).toEqual(expect.arrayContaining(['command', 'description', 'workdir', 'timeout']))
     expect(posix.find(tool => tool.name === 'bash')?.description).toContain('Before any delete or move')
   })
+
+  it('bounds every command with a default timeout and warns against foreground servers', () => {
+    expect(DEFAULT_COMMAND_TIMEOUT_SECONDS).toBe(300)
+    expect(commandTimeout(undefined)).toBe(300)
+    expect(commandTimeout(30)).toBe(30)
+    for (const tool of [...createCodingTools('darwin').tools ?? [], ...createCodingTools('win32').tools ?? []]) {
+      if (tool.name !== 'bash' && tool.name !== 'pwsh') continue
+      expect(tool.description).toContain('Do not run dev servers, watch modes or interactive programs in the foreground')
+      const timeout = (tool.parameters as { properties?: Record<string, { description?: string }> }).properties?.timeout
+      expect(timeout?.description).toContain('default 300')
+    }
+  })
 })
 
 describe.runIf(process.platform !== 'win32')('workspace-aware bash', () => {
@@ -75,6 +87,15 @@ describe.runIf(process.platform !== 'win32')('workspace-aware bash', () => {
     expect((await readFile(join(root, 'root-cwd.txt'), 'utf8')).trim()).toBe(canonical)
     expect((await readFile(join(root, 'sub', 'child-cwd.txt'), 'utf8')).trim()).toBe(join(canonical, 'sub'))
   })
+
+  it('stops a command at its timeout instead of waiting for it', async () => {
+    const root = await workspace()
+    const started = Date.now()
+    const outcome = await bashTool().execute({ command: 'sleep 5; echo finished', timeout: 1 }, apiFor(root), TEST_CONTEXT)
+      .then(result => result, (error: unknown) => error)
+    expect(Date.now() - started).toBeLessThan(4_000)
+    expect(JSON.stringify(outcome ?? null)).not.toContain('finished')
+  }, 10_000)
 
   it('rejects a workdir outside the workspace or one that does not exist', async () => {
     const root = await workspace()
