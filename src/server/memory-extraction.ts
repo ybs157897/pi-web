@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { isMap, parseDocument } from 'yaml'
@@ -239,7 +239,7 @@ export function extractionPrompt(root: string, messageCount: number, manifest: r
     '',
     `你现在是记忆提取子代理。分析上面最近约 ${messageCount} 条消息，并用它们更新你的持久记忆系统。`,
     '',
-    `可用工具：read、list_files、search_files（只读），以及仅限记忆目录 \`${root}/\` 内 .md 路径的 write/edit。其余工具一律会被拒绝。`,
+    `可用工具：read、list_files、search_files（只读），以及仅限记忆目录 \`${root}/\` 内 .md 路径的 write/edit/delete（不能删除 MEMORY.md）。其余工具一律会被拒绝。`,
     '',
     '你的轮次预算有限（5 轮）。edit 的 oldText 必须与文件当前内容完全一致，所以高效策略是：第 1 轮——并行发出所有可能要更新的文件的 read；第 2 轮——并行发出所有 write/edit。不要把读和写交错到多轮。',
     '',
@@ -270,7 +270,7 @@ export function extractionPrompt(root: string, messageCount: number, manifest: r
 /* Extraction tool catalog                                             */
 /* ------------------------------------------------------------------ */
 
-export const MEMORY_EXTRACTION_TOOL_NAMES = ['read', 'list_files', 'search_files', 'write', 'edit'] as const
+export const MEMORY_EXTRACTION_TOOL_NAMES = ['read', 'list_files', 'search_files', 'write', 'edit', 'delete'] as const
 const EXTRACTION_TOOL_NAMES = new Set<string>(MEMORY_EXTRACTION_TOOL_NAMES)
 
 export function memoryExtractionTools(): Tool[] {
@@ -306,11 +306,16 @@ export function memoryExtractionTools(): Tool[] {
         edits: Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() })),
       }),
     },
+    {
+      name: 'delete',
+      description: 'Delete a memory file. Only .md paths inside the memory directory are allowed; MEMORY.md cannot be deleted.',
+      parameters: Type.Object({ path: Type.String() }),
+    },
   ]
 }
 
 export const MEMORY_EXTRACTION_POLICY_MESSAGE = (root: string): string =>
-  `此上下文只允许 read、list_files、search_files，以及 ${root} 内 .md 的 write/edit`
+  `此上下文只允许 read、list_files、search_files，以及 ${root} 内 .md 的 write/edit/delete`
 
 interface ExtractionExecutorOptions {
   root: string
@@ -467,6 +472,19 @@ export async function executeExtractionTool(call: ToolCall, options: ExtractionE
     return { content: `Successfully edited ${raw}`, isError: false }
   }
 
+  if (call.name === 'delete') {
+    const raw = typeof args.path === 'string' ? args.path : undefined
+    if (raw === undefined) return { content: 'delete requires a path.', isError: true }
+    const path = resolveSafeMemoryPath(isAbsolute(raw) ? raw : resolve(options.cwd, raw), options.root)
+    if (path === undefined || basename(path) === 'MEMORY.md') {
+      return { content: MEMORY_EXTRACTION_POLICY_MESSAGE(options.root), isError: true }
+    }
+    const record = await readMemoryFile(path)
+    if (record.status === 'missing') return { content: `File not found: ${raw}`, isError: true }
+    await rm(path)
+    return { content: `Successfully deleted ${raw}`, isError: false }
+  }
+
   return { content: `Error: No such tool available: ${call.name}`, isError: true }
 }
 
@@ -591,7 +609,7 @@ export async function runExtractionLoop(
 
     const results = await Promise.all(calls.map(async (call): Promise<Message> => {
       const allowed = EXTRACTION_TOOL_NAMES.has(call.name)
-      const memoryWrite = call.name === 'write' || call.name === 'edit'
+      const memoryWrite = call.name === 'write' || call.name === 'edit' || call.name === 'delete'
       const path = memoryWrite ? argumentPath(call.arguments) : undefined
       const safe = memoryWrite && path !== undefined
         ? resolveSafeMemoryPath(isAbsolute(path) ? path : resolve(deps.cwd, path), deps.root) !== undefined

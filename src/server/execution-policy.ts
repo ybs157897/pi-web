@@ -9,7 +9,6 @@ import {
   type ConversationId,
 } from '@earendil-works/pi-durable'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
-import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { Plans } from './plan-tools.ts'
 
 export const EXECUTION_POLICY_EXTENSION_NAME = 'execution-policy'
@@ -41,19 +40,11 @@ function planAgent(agent: Agent): Agent {
   }
 }
 
-export interface ExecutionPolicyOptions {
-  /**
-   * A qualified exception runs even though Plan mode blocks the tool. Memory writes use it: a
-   * safe memory Markdown write is allowed before the plan-mode block, matching ZCode.
-   */
-  isPlanException?: (toolName: string, args: unknown, env: ExecutionEnv | undefined) => Promise<boolean>
-}
-
 /**
  * Keep the stored agent selection intact so leaving Plan restores its tools. Prompt rendering
  * narrows the advertised routes, while execution checks the current state again, including replay.
  */
-export function createExecutionPolicyExtension(installed: readonly Extension[], options: ExecutionPolicyOptions = {}): Extension {
+export function createExecutionPolicyExtension(installed: readonly Extension[]): Extension {
   const tools = [...new Set(installed.flatMap(extension => extension.tools?.map(tool => tool.name) ?? []))]
   const sections = [...new Set(installed.flatMap(extension => extension.sections?.map(item => item.key) ?? []))]
   return defineExtension({
@@ -68,9 +59,6 @@ export function createExecutionPolicyExtension(installed: readonly Extension[], 
             const plan = await api.snapshot(Plans, api.conversationId, context)
             if (plan?.active !== true) return tool.execute(args, api, context)
             if (!PLAN_TOOLS.has(tool.name)) {
-              if (options.isPlanException !== undefined && await options.isPlanException(tool.name, args, api.env)) {
-                return tool.execute(args, api, context)
-              }
               throw new Error(`Plan mode blocks ${tool.name}. Finish planning and wait for the user to leave Plan mode before implementation.`)
             }
             // Code mode discovers its nested tools through api.agent(), not the provider tool list.

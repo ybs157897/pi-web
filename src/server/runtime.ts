@@ -106,7 +106,7 @@ import { ResearchTools } from './research-tools.ts'
 import { COMPACTION_EXTENSION_NAME, COMPACTION_POLICY, createCompactionExtension } from './compaction.ts'
 import { MEMORY_EXTRACTION_DRAIN_MS, createMemoryExtraction } from './memory-extraction.ts'
 import { MEMORY_EXTENSION_NAME, createMemoryExtension } from './memory-policy.ts'
-import { argumentPath, ensureMemoryDirectory, resolveMemoryRoot, resolveSafeMemoryPath } from './memory.ts'
+import { ensureMemoryDirectory, resolveMemoryRoot } from './memory.ts'
 export { RuntimeError } from './runtime-errors.ts'
 import { AppStateStore } from './app-state.ts'
 import { PluginStore, type PluginChangeEvent } from './plugin-store.ts'
@@ -661,18 +661,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
       registry.install(createToolSearchExtension())
     }
-    registry.install(createExecutionPolicyExtension(registry.snapshot().installed(), {
-      isPlanException: async (toolName, args, env) => {
-        if (toolName !== 'write' && toolName !== 'edit') return false
-        if (!appState.snapshot().settings.memoryEnabled) return false
-        const cwd = env?.cwd
-        if (typeof cwd !== 'string' || cwd.trim() === '') return false
-        const path = argumentPath(args)
-        if (path === undefined) return false
-        const target = isAbsolute(path) ? path : resolve(cwd, path)
-        return resolveSafeMemoryPath(target, resolveMemoryRoot({ dataDir, workspacePath: cwd })) !== undefined
-      },
-    }))
+    registry.install(createExecutionPolicyExtension(registry.snapshot().installed()))
   }
   refreshMcpExtensions()
 

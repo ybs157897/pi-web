@@ -77,12 +77,14 @@ describe('memory instructions section', () => {
     expect(rendered).toBeUndefined()
   })
 
-  it('omits the section for a read-only tool surface and keeps it while plan mode is active', async () => {
+  it('omits the section for a read-only tool surface, including plan mode', async () => {
     const readOnly = await fixture({ tools: ['read', 'list_files', 'search_files', 'glob', 'grep'] })
     expect(await readOnly.render('memory')).toBeUndefined()
 
+    // Plan mode filters write/edit out of the advertised tools, so the save protocol stays out;
+    // "remember this" is still captured later by background extraction.
     const plan = await fixture({ tools: ['read'], planActive: true })
-    expect(await plan.render('memory')).toContain('# 记忆')
+    expect(await plan.render('memory')).toBeUndefined()
   })
 })
 

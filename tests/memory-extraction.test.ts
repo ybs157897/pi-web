@@ -308,6 +308,32 @@ describe('extraction tool executor', () => {
     expect(edited).toContain('originSessionId: "3"')
   })
 
+  it('deletes a fact file inside the memory root but never MEMORY.md or outside paths', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'stale.md')
+    const index = join(f.memoryRoot, 'MEMORY.md')
+    await writeFile(source, '---\nname: stale\n---\noutdated\n', 'utf8')
+    await writeFile(index, '- [Stale](stale.md) — index\n', 'utf8')
+    const options = { root: f.memoryRoot, cwd: f.workspace, conversationId: 4 as never, signal: new AbortController().signal }
+
+    const protectIndex = await executeExtractionTool(toolCall('delete', { path: index }), options)
+    expect(protectIndex.isError).toBe(true)
+    expect(protectIndex.content).toBe(MEMORY_EXTRACTION_POLICY_MESSAGE(f.memoryRoot))
+
+    const outside = await executeExtractionTool(toolCall('delete', { path: join(f.workspace, 'notes.md') }, 'call-2'), options)
+    expect(outside.isError).toBe(true)
+    expect(outside.content).toBe(MEMORY_EXTRACTION_POLICY_MESSAGE(f.memoryRoot))
+
+    const removed = await executeExtractionTool(toolCall('delete', { path: source }, 'call-3'), options)
+    expect(removed.isError).toBe(false)
+    await expect(readFile(source, 'utf8')).rejects.toThrow()
+
+    const again = await executeExtractionTool(toolCall('delete', { path: source }, 'call-4'), options)
+    expect(again.isError).toBe(true)
+    expect(again.content).toContain('File not found')
+  })
+
   it('reads, lists and searches the workspace and the memory root', async () => {
     const f = await fixture()
     await mkdir(f.memoryRoot, { recursive: true })

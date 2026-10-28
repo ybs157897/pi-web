@@ -105,7 +105,7 @@ describe('workspace memory at runtime', () => {
     expect(await readIfPresent(join(root, 'MEMORY.md'))).toContain('user-prefers-zh.md')
 
     const extraction = f.extractionRequests()[0]
-    expect(extraction?.tools).toEqual(['read', 'list_files', 'search_files', 'write', 'edit'])
+    expect(extraction?.tools).toEqual(['read', 'list_files', 'search_files', 'write', 'edit', 'delete'])
     expect(extraction?.system).toContain(root)
     const lastUser = [...(extraction?.messages ?? [])].reverse().find(message => message.role === 'user')
     const lastUserText = lastUser?.role === 'user'
