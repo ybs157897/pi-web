@@ -27,32 +27,22 @@ function todoRoute(input: { agent: PromptAgent }): TodoRoute | undefined {
   return codemodeEnabled && todoCallable ? 'codemode' : undefined
 }
 
+const TODO_STEPS = [
+  '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。用户只要计划/方案时，把“调研→形成计划→等待确认”列为步骤，不要开始实施。简单问题或单步改动跳过待办。',
+  '只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
+]
+
 function todoPolicy(route: TodoRoute | undefined): string {
-  if (route === 'direct') {
-    return [
-      '本请求提供直接待办工具 `todo_write`。',
-      '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。用户只要计划/方案时，把“调研→形成计划→等待确认”列为步骤，不要开始实施。简单问题或单步改动跳过待办。',
-      '调研本身也要有边界：先明确要确认什么，只读能改变结论的材料；证据足够就停止，不要用遍历目录或读无关文件来碰运气。',
-      '只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
-    ].join('\n')
-  }
-
+  if (route === 'direct') return ['本请求提供直接待办工具 `todo_write`。', ...TODO_STEPS].join('\n')
   if (route === 'codemode') {
-    return [
-      '本请求可通过 `codemode` 调用 `todo_write`，仅在脚本内使用 `await tools.todo_write({ todos: [...] })`。',
-      '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。用户只要计划/方案时，把“调研→形成计划→等待确认”列为步骤，不要开始实施。简单问题或单步改动跳过待办。',
-      '调研本身也要有边界：先明确要确认什么，只读能改变结论的材料；证据足够就停止，不要用遍历目录或读无关文件来碰运气。',
-      '只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
-    ].join('\n')
+    return ['本请求可通过 `codemode` 调用 `todo_write`，仅在脚本内使用 `await tools.todo_write({ todos: [...] })`。', ...TODO_STEPS].join('\n')
   }
-
-  return [
-    '本请求没有可调用的执行待办工具。多步工作用简短消息说明已完成、当前和下一步；简单任务无需过程播报。不要编造或要求调用当前不可用的工具。',
-  ].join('\n')
+  return '本请求没有可调用的执行待办工具；不要编造或要求调用不可用的工具。'
 }
 
-function routeText(name: string, route: ToolRoute, direct: string, nested: string): string | undefined {
-  if (route === 'direct') return `- ${direct}`
+/** A direct tool already carries its own description, so `direct` is set only for facts that description lacks. */
+function routeText(route: ToolRoute, direct: string | undefined, nested: string): string | undefined {
+  if (route === 'direct') return direct === undefined ? undefined : `- ${direct}`
   if (route === 'codemode') return `- ${nested}`
   return undefined
 }
@@ -60,36 +50,34 @@ function routeText(name: string, route: ToolRoute, direct: string, nested: strin
 function toolGuidance(input: { agent: PromptAgent }): string {
   const route = (name: string): ToolRoute => resolveToolRoute(input.agent, name)
   const lines = [
-    routeText('glob', route('glob'),
-      '找路径用 `glob`（支持 `**`、隐藏路径和按修改时间排序），不要用 shell `find` 或 `ls -R` 做项目发现。',
+    routeText(route('glob'), undefined,
       '在 `codemode` 里用 `await tools.glob(...)` 找路径，不要用 shell `find` 或 `ls -R` 做项目发现。'),
     route('glob') === 'unavailable'
-      ? routeText('list_files', route('list_files'),
+      ? routeText(route('list_files'),
         '找路径用 `list_files`（需要递归时显式传 `recursive: true`），不要用 shell `find` 或 `ls -R` 做项目发现。',
         '在 `codemode` 里用 `await tools.list_files(...)` 找路径，不要用 shell `find` 或 `ls -R` 做项目发现。')
       : undefined,
-    routeText('grep', route('grep'),
-      '搜内容用 `grep`（正则，可用 `include` 限定文件类型），不要用 shell `grep`/`rg`。',
+    routeText(route('grep'), undefined,
       '在 `codemode` 里用 `await tools.grep(...)` 搜内容，不要用 shell `grep`/`rg`。'),
     route('grep') === 'unavailable'
-      ? routeText('search_files', route('search_files'),
+      ? routeText(route('search_files'),
         '搜内容用 `search_files`（字面量短语），不要用 shell `grep`/`rg`。',
         '在 `codemode` 里用 `await tools.search_files(...)` 搜内容，不要用 shell `grep`/`rg`。')
       : undefined,
-    routeText('read', route('read'),
+    routeText(route('read'),
       '读文件用 `read`，不要用 shell `cat`/`head`/`tail`/`sed`；大文件用 `offset`/`limit` 继续读。',
       '在 `codemode` 里用 `await tools.read(...)` 读文件，不要用 shell `cat`/`head`/`tail`/`sed`。'),
-    routeText('edit', route('edit'),
+    routeText(route('edit'),
       '改文件前先用 `read` 确认当前内容；优先用 `edit` 做定点替换，不要用 shell 重写文件。',
       '在 `codemode` 里改文件前先用 `tools.read` 确认内容；优先用 `tools.edit` 做定点替换。'),
-    routeText('write', route('write'),
+    routeText(route('write'),
       '覆盖已有文件前先 `read`；能用 `edit` 就不要整文件 `write`。',
       '在 `codemode` 里覆盖已有文件前先用 `tools.read`；能用 `tools.edit` 就不要整文件 `tools.write`。'),
-    routeText('pwsh', route('pwsh'),
-      'Windows 命令优先用 `pwsh`（构建、测试、git、进程等没有专用工具的操作）；每次调用是新进程，传 `workdir` 而不是 `Set-Location`；先看退出码和真实产物。',
+    routeText(route('pwsh'),
+      'shell（`pwsh`）只用于构建、测试、git、进程等没有专用工具的操作。',
       '在 `codemode` 里用 `await tools.pwsh(...)` 执行 Windows 命令；传 `workdir` 而不是 `Set-Location`，并检查退出码。'),
-    routeText('bash', route('bash'),
-      'shell 只用于构建、测试、git、进程等没有专用工具的操作；每次调用是新的 shell，传 `workdir` 而不是在命令里反复 `cd`；先看退出码和真实产物。',
+    routeText(route('bash'),
+      'shell 只用于构建、测试、git、进程等没有专用工具的操作。',
       '在 `codemode` 里用 `await tools.bash(...)` 执行没有专用工具的操作；传 `workdir` 而不是反复 `cd`，并检查退出码。'),
   ].filter((line): line is string => line !== undefined)
 
@@ -114,7 +102,7 @@ function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undef
       ? `仅可经 codemode 执行 shell（${availableShells.join('、')}）`
       : `可执行 shell（${availableShells.join('、')}）`
   const scope = typeof cwd === 'string' && cwd.trim() !== ''
-    ? `当前工作区（默认当前项目）由 Host 提供：${JSON.stringify(cwd)}。把此目录作为本次任务的项目范围。`
+    ? `当前工作区（默认当前项目）由系统提供：${JSON.stringify(cwd)}。把此目录作为本次任务的项目范围。`
     : '本请求未提供工作区路径，不推测项目位置。'
   return [
     scope,
@@ -142,7 +130,7 @@ const workPolicySection = section('work-policy', async (input, context) => {
 
   return [
     sessionFacts(input),
-    '用户要求制定计划/方案时，即使计划模式未开启，也先做只读研究并在回复中给出可执行计划；不要擅自实施。若用户希望进入审阅流程，提示其打开计划模式（输入框计划按钮或 /plan）。',
+    '用户想走计划审阅流程时，提示其打开计划模式（输入框计划按钮或 /plan）。',
     toolGuidance(input),
     todoPolicy(todoRoute(input)),
   ].filter(Boolean).join('\n\n')

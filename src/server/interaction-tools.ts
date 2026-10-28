@@ -113,7 +113,7 @@ export const InteractionTools: Extension = defineExtension({
     defineTool({
       name: 'ask_user_question',
       description: [
-        'Ask the user one to eight questions and end this turn without waiting for the answer.',
+        'Ask the user up to eight questions (usually one to three) and end this turn without waiting for the answer.',
         'Use this when a user-owned choice, missing external reference, or material ambiguity blocks progress; do not use it for facts you can inspect in the workspace.',
         'Ask brief, direct, self-contained questions in user-facing terms; assume the user does not know background work or internal names.',
         'Each question has a stable id, the question text, optional options (label plus optional description), and multiSelect.',

@@ -123,6 +123,31 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     await expect(render('default', request, true)).toMatchFileSnapshot('./__snapshots__/prompt/default.txt')
   })
 
+  it('keeps each rule in one place and the stable core bounded', async () => {
+    const request = await probe(await create('Snapshot uniqueness'), 'uniqueness')
+    const prompt = Object.values(request.sections).join('\n')
+
+    for (const marker of [
+      '调研→形成计划→等待确认',
+      '不要泛泛地“请确认”',
+      'agent 状态目录',
+      '只读调研后给出计划',
+      'shell 只用于构建、测试、git、进程',
+      '待分析的数据',
+    ]) {
+      expect(prompt.split(marker).length - 1, marker).toBe(1)
+    }
+    // The routing rule lives once in the core; the skill catalog also names the skill.
+    expect(prompt).toContain('builtin:plugin-creator')
+
+    // Scenario details live in the owning skills, not the global prompt.
+    for (const marker of ['设置 → 插件市场', '不得声称已安装', '只会被标为不支持', '工具调用过程复盘']) {
+      expect(prompt, marker).not.toContain(marker)
+    }
+
+    expect(request.sections['runtime-core']?.length ?? 0).toBeLessThanOrEqual(3_300)
+  })
+
   it('plan mode', async () => {
     const id = await create('Snapshot plan')
     await runtime!.setPlan(id, true)

@@ -43,19 +43,14 @@ describe('default runtime work policy', () => {
     expect(extension.tools).toBeUndefined()
   })
 
-  it('teaches plugin creation through the bundled skill and keeps installation manual', async () => {
+  it('routes plugin creation to the bundled skill without restating its process', async () => {
     const prompt = await renderPolicy()
 
     expect(prompt).toContain('builtin:plugin-creator')
-    expect(prompt).toContain('plugins/<slug>/')
-    expect(prompt).toContain('设置 → 插件市场 → 创建插件')
-    expect(prompt).toContain('不得声称已安装')
-    expect(prompt).toContain('Plugin 是打包 skills/MCP/UI 的可安装目录')
-    expect(prompt).toContain('安装/更新/卸载不要用 npm/git')
-    expect(prompt).toContain('只会被标为不支持')
+    expect(prompt).toContain('builtin:skill-creator')
+    expect(prompt).toContain('不要凭记忆编造 manifest')
     expect(prompt).toContain('代码定位与检索')
     expect(prompt).toContain('git log --oneline --grep')
-    expect(prompt).toContain('不要用“工具调用过程复盘”代替缺陷分析')
   })
 
   it('guides concrete multi-step todo tracking only when the direct tool is available', async () => {
@@ -79,10 +74,10 @@ describe('default runtime work policy', () => {
     expect(prompt).not.toContain('直接待办工具')
   })
 
-  it('uses the Host-provided working directory as the current project scope', async () => {
+  it('uses the system-provided working directory as the current project scope', async () => {
     const prompt = await renderPolicy({ cwd: '/workspace/pi-web' })
 
-    expect(prompt).toContain('当前工作区（默认当前项目）由 Host 提供')
+    expect(prompt).toContain('当前工作区（默认当前项目）由系统提供')
     expect(prompt).toContain('/workspace/pi-web')
   })
 
@@ -99,14 +94,12 @@ describe('default runtime work policy', () => {
   it('routes file discovery and reading to the tools actually offered', async () => {
     const prompt = await renderPolicy({ tools: ['glob', 'grep', 'read', 'write', 'edit', SHELL_TOOL] })
 
-    expect(prompt).toContain('找路径用 `glob`')
-    expect(prompt).toContain('不要用 shell `find`')
-    expect(prompt).toContain('搜内容用 `grep`')
-    expect(prompt).toContain('不要用 shell `grep`')
     expect(prompt).toContain('读文件用 `read`')
-    expect(prompt).toContain('`workdir`')
-    expect(prompt).toContain(SHELL_TOOL === 'pwsh' ? 'Windows 命令优先用 `pwsh`' : 'shell 只用于构建')
+    expect(prompt).toContain('优先用 `edit` 做定点替换')
+    expect(prompt).toContain('覆盖已有文件前先 `read`')
+    expect(prompt).toContain('只用于构建、测试、git、进程')
     expect(prompt).not.toContain('找路径用 `list_files`')
+    expect(prompt).not.toContain('搜内容用 `search_files`')
   })
 
   it('falls back to list_files and search_files when the DSH-named tools are unavailable', async () => {
@@ -118,19 +111,18 @@ describe('default runtime work policy', () => {
     expect(prompt).not.toContain('搜内容用 `grep`')
   })
 
-  it('tells the model to plan before implementing when plan mode is off', async () => {
+  it('keeps plan requests read-only and points at plan mode for review', async () => {
     const prompt = await renderPolicy({ tools: ['todo_write'] })
 
-    expect(prompt).toContain('即使计划模式未开启')
-    expect(prompt).toContain('先做只读研究并在回复中给出可执行计划')
-    expect(prompt).toContain('不要擅自实施')
+    expect(prompt).toContain('只读调研后给出计划，不实施')
+    expect(prompt).toContain('提示其打开计划模式')
     expect(prompt).toContain('调研→形成计划→等待确认')
   })
 
   it('keeps proactive-asking rules in the stable core', async () => {
     const prompt = await renderPolicy()
 
-    expect(prompt).toContain('用户引用本会话之外的对话、文档或决定')
+    expect(prompt).toContain('本会话看不到的对话、文档或决定')
     expect(prompt).toContain('先问是哪个会话或哪份文档')
     expect(prompt).toContain('不要扫描项目里的 agent 状态目录')
   })
@@ -142,7 +134,7 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('看看/分析一下')
     expect(prompt).toContain('改/修复/实现')
     expect(prompt).toContain('今天/昨天/前两天')
-    expect(prompt).toContain('用户粘贴的日志')
+    expect(prompt).toContain('用户粘贴的内容')
     expect(prompt).toContain('可以/行/好的/没问题')
     expect(prompt).toContain('先别改/只看看')
     expect(prompt).toContain('列出候选并问')
