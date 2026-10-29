@@ -5,12 +5,29 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
+const UI_DIR = resolve(ROOT, 'ui')
 const UI_URI = 'ui://wetrack/board'
 const MAX_REPORT_DEPTH = 5
 const MAX_REPORT_NODES = 200
 const CLI_TIMEOUT_MS = 45_000
 
-const uiHtml = await readFile(resolve(ROOT, 'ui/board.html'), 'utf8')
+// SurveyJS 发行产物保存在 ui/vendor/，启动时内联进 board.html 的标记位。
+// 插件宿主的 CSP 只允许内联脚本/样式且禁止外链，页面必须自包含。
+function replaceOnce(html, marker, content) {
+  if (!html.includes(marker)) throw new Error(`board.html 缺少标记 ${marker}`)
+  return html.replace(marker, () => content)
+}
+
+const uiHtml = await (async () => {
+  let html = await readFile(resolve(UI_DIR, 'board.html'), 'utf8')
+  const vendor = name => readFile(resolve(UI_DIR, 'vendor', name), 'utf8')
+  html = replaceOnce(html, '/*__SURVEY_CSS__*/', await vendor('survey-core.min.css'))
+  html = replaceOnce(html, '/*__SURVEY_CORE__*/', await vendor('survey.core.min.js'))
+  html = replaceOnce(html, '/*__SURVEY_UI__*/', await vendor('survey-js-ui.min.js'))
+  html = replaceOnce(html, '/*__SURVEY_I18N__*/', await vendor('survey-i18n-zh-cn.min.js'))
+  html = replaceOnce(html, '/*__SURVEY_THEMES__*/', `${await vendor('survey-theme-default-light.min.js')}\n${await vendor('survey-theme-default-dark.min.js')}`)
+  return html
+})()
 
 function send(message) {
   process.stdout.write(JSON.stringify(message) + '\n')
@@ -332,7 +349,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
       send({ jsonrpc: '2.0', id: message.id, result: {
         protocolVersion: '2025-11-25',
         capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: 'wetrack-defects', version: '1.0.0' },
+        serverInfo: { name: 'wetrack-defects', version: '1.1.0' },
       } })
       return
     }

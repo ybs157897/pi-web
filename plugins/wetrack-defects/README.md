@@ -9,6 +9,7 @@
 - `wetrack_report`：接收模型产出的结论 + 章节树，渲染可折叠的层级报告。
 - 默认在**右侧面板**打开一个持久页面（同一 tab 随 pending/detail/report 更新），正文只保留工具摘要和分析文字，页面不会被分析正文淹没。
 - 页面：左侧缺陷列表，右侧详情/报告；支持搜索、严重程度/状态筛选、附件与内嵌图片路径展示，以及「让 AI 分析」按钮。
+- 「登记缺陷」tab：由 [SurveyJS Form Library](https://github.com/surveyjs/survey-library)（v3.2.3，MIT）渲染的登记表单，提交后把结构化草稿经 `ui/message` 发回对话，由模型整理成提单文案；不直接创建缺陷。
 
 ## 安装
 
@@ -60,4 +61,8 @@
 
 ## 离线预览
 
-直接打开页面 URL 并加 `?demo=1` 可以看到内置的演示列表/详情/报告，不依赖 Host 桥接或 CLI。
+直接打开页面 URL 并加 `?demo=1` 可以看到内置的演示列表/详情/报告，不依赖 Host 桥接或 CLI。表单库较大，`ui/vendor/` 里的 SurveyJS 发行产物由 `server.mjs` 启动时内联进页面（宿主 CSP 禁止外链脚本/样式），因此直接以 `file://` 打开时「登记缺陷」tab 会提示不可用，看板与报告不受影响。
+
+## 升级 SurveyJS
+
+`ui/vendor/` 内的文件来自 `survey-core@3.2.3` 与 `survey-js-ui@3.2.3` 的 npm 发行产物（含 `i18n/simplified-chinese` 与 `themes/default-light`、`themes/default-dark`）。升级时替换同名文件即可，不要改动 `board.html` 里的 `/*__SURVEY_*__*/` 标记。

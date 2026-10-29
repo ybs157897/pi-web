@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WeTrack 缺陷</title>
+<!-- SurveyJS 发行产物由 server.mjs 启动时内联进下列标记；直接打开本文件时标记保留为空注释，表单 tab 会给出提示。 -->
+<style>/*__SURVEY_CSS__*/</style>
 <style>
 :root{color-scheme:light dark;--bg:#f4f6fb;--panel:#fff;--panel-2:#f8f9fd;--ink:#1c2434;--muted:#6b7488;--line:#e4e8f1;--accent:#4f6ef7;--accent-2:#7c5cf0;--good:#1a9b6c;--warn:#c9821f;--bad:#d34545;--shadow:0 14px 36px rgba(30,42,75,.12);}
 @media (prefers-color-scheme:dark){:root{--bg:#10141e;--panel:#181e2b;--panel-2:#1e2534;--ink:#eef2fb;--muted:#9aa5bb;--line:#2a3346;--accent:#8ea2ff;--accent-2:#b49bff;--good:#5bd3a5;--warn:#f0b45c;--bad:#ff8a8a;--shadow:0 14px 36px rgba(0,0,0,.35);}}
@@ -52,6 +54,10 @@ button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}butto
 .loading{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}.spinner{width:12px;height:12px;border:1.5px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}
 @media(max-width:760px){.layout{grid-template-columns:1fr}.list{max-height:42vh;border-right:0;border-bottom:1px solid var(--line)}.main{padding:12px}}
 @media(max-width:560px){.brand{flex:1 1 100%}.spacer{display:none}.top{padding:10px 12px}.tabs{order:2}.top > #refresh{order:2}}
+.surveyWrap{max-width:760px}.surveyWrap .sd-root-modern,.surveyWrap .sd-root-modern button,.surveyWrap .sd-root-modern input,.surveyWrap .sd-root-modern textarea{font-family:inherit}
+.surveyWrap .sd-navigation{display:none}
+.formActions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.draftCard pre{margin:8px 0 0;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);font:11px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:auto;max-height:260px;white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -61,6 +67,7 @@ button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}butto
     <div class="spacer"></div>
     <div class="tabs" role="tablist" aria-label="视图">
       <button type="button" role="tab" id="tabBoard" aria-selected="true" data-view="board">待办</button>
+      <button type="button" role="tab" id="tabNew" aria-selected="false" data-view="new">登记缺陷</button>
       <button type="button" role="tab" id="tabReport" aria-selected="false" data-view="report">分析报告</button>
     </div>
     <button type="button" id="refresh">刷新</button>
@@ -79,8 +86,12 @@ button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}butto
     <main class="main" id="main"></main>
   </div>
 </div>
+<script>/*__SURVEY_CORE__*/</script>
+<script>/*__SURVEY_UI__*/</script>
+<script>/*__SURVEY_I18N__*/</script>
+<script>/*__SURVEY_THEMES__*/</script>
 <script>
-const state = { view: 'board', list: null, detail: null, report: null, selected: null, loading: false, error: '' };
+const state = { view: 'board', list: null, detail: null, report: null, selected: null, loading: false, error: '', draft: null };
 const DEMO = {
   pending: { source: 'pending', generatedAt: '2026-10-28 10:29:10', count: 2, items: [
     { defectNumber: 'DTS006749813', defectStep: '105', defectStatusName: '待开发解决问题', severityName: '一般', projectNumber: 'DH3.RDA000897', simpleDesc: '【DMSS_V3.0.0_第四轮_1023】【Android/IOS】设备处于申请安保待同意状态时，删除设备，安保账号拒绝安保申请，安保账号没有提示消息失效/设备不存在' },
@@ -97,6 +108,99 @@ const DEMO = {
     { title: '修复建议', items: ['解除成功后发布 security.changed 事件', '补充 convert → care 同步的集成测试'] },
   ] },
 };
+const DEFECT_FORM = {
+  title: '缺陷登记',
+  description: '填写后生成结构化登记草稿，交给 AI 整理为规范提单文案。',
+  showCompletedPage: false,
+  completeText: '生成登记草稿',
+  elements: [
+    { type: 'text', name: 'projectName', title: '项目名称 / 编号', isRequired: true, placeholder: '例如 Pro 融合 V2.0.0 或 DH3.RDA000902' },
+    { type: 'text', name: 'moduleName', title: '模块', placeholder: '例如 安保服务' },
+    { type: 'dropdown', name: 'severityName', title: '严重程度', isRequired: true, choices: ['致命', '严重', '一般', '轻微', '建议'], defaultValue: '一般' },
+    { type: 'dropdown', name: 'probabilityName', title: '复现概率', choices: ['必现', '大概率', '小概率', '难以复现'], defaultValue: '必现' },
+    { type: 'dropdown', name: 'categoryName', title: '缺陷类型', choices: ['功能问题', '界面问题', '数据问题', '性能问题', '兼容问题', '体验建议'], defaultValue: '功能问题' },
+    { type: 'text', name: 'issueVerName', title: '问题版本', placeholder: '例如 Pro融合V2.0.0_系统三_1017' },
+    { type: 'text', name: 'simpleDesc', title: '简要描述', isRequired: true, placeholder: '一行说清现象，建议【模块】开头' },
+    { type: 'comment', name: 'description', title: '复现步骤与期望', placeholder: '步骤：\n1. …\n实际结果：…\n期望结果：…' },
+    { type: 'text', name: 'env', title: '环境备注（可选）', placeholder: '设备 / 系统版本 / 构建号' },
+  ],
+};
+function nowText() { const d = new Date(), p = v => String(v).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function surveyReady() { return typeof Survey !== 'undefined' && typeof Survey.Model === 'function'; }
+function applySurveyTheme() {
+  if (!surveyModel || !window.SurveyTheme) return;
+  surveyModel.applyTheme(matchMedia('(prefers-color-scheme: dark)').matches ? SurveyTheme.DefaultDark : SurveyTheme.DefaultLight);
+}
+function draftMessage(draft) {
+  return '用户在 WeTrack 插件的「登记缺陷」表单里提交了如下登记草稿（JSON）。请整理成规范的 WeTrack 提单文案：检查字段缺漏（项目、模块、严重程度、复现概率、问题版本），把复现过程整理为「步骤 / 实际结果 / 期望结果」结构；只基于草稿内容整理，不要虚构未填写的信息；整理完给我确认，不要直接创建缺陷。\n\n' + JSON.stringify(draft.defect, null, 2);
+}
+async function submitDraft(draft) {
+  state.draft = draft;
+  if (demo) { render(); return; }
+  try {
+    await rpc('ui/message', { content: [{ type: 'text', text: draftMessage(draft) }] });
+    setSub('已把登记草稿发给 AI');
+  } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+  render();
+}
+let surveyModel = null, surveyHostEl = null;
+function submitDraftFromSurvey() {
+  if (!surveyModel) return;
+  // 校验当前页但不触发 survey 完成（completed 状态会清空表单），已填值保留以便继续调整。
+  if (surveyModel.validateCurrentPage() === false) return;
+  submitDraft({ kind: 'draft', generatedAt: nowText(), defect: { ...surveyModel.data } });
+}
+function buildSurveyHost() {
+  const host = document.createElement('div');
+  host.className = 'surveyWrap';
+  const bannerSlot = document.createElement('div');
+  bannerSlot.className = 'bannerSlot';
+  const draftSlot = document.createElement('div');
+  draftSlot.className = 'draftSlot';
+  const formArea = document.createElement('div');
+  const mount = document.createElement('div');
+  formArea.appendChild(mount);
+  const actions = document.createElement('div');
+  actions.className = 'formActions';
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'primary';
+  submit.textContent = DEFECT_FORM.completeText;
+  submit.onclick = submitDraftFromSurvey;
+  actions.appendChild(submit);
+  host.appendChild(bannerSlot);
+  host.appendChild(draftSlot);
+  host.appendChild(formArea);
+  host.appendChild(actions);
+  if (!surveyReady()) {
+    mount.innerHTML = '<div class="empty"><strong>表单库未加载</strong><span>SurveyJS 资源由插件服务器启动时内联；直接打开本页时仅看板与报告可用。</span></div>';
+    return host;
+  }
+  surveyModel = new Survey.Model(DEFECT_FORM);
+  surveyModel.locale = 'zh-cn';
+  // 提交走自定义按钮（读取数据但不进入 completed 状态）；survey 自带导航栏用 CSS 隐藏，避免双提交入口。
+  surveyModel.render(mount);
+  applySurveyTheme();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applySurveyTheme);
+  return host;
+}
+function ensureSurvey() {
+  if (!surveyHostEl) surveyHostEl = buildSurveyHost();
+  return surveyHostEl;
+}
+function renderNewView() {
+  // SurveyJS 的渲染层不接受父容器被 innerHTML 重建；进入该视图后只原地更新 slot。
+  const host = ensureSurvey();
+  if (!mainEl.contains(host)) { mainEl.innerHTML = ''; mainEl.appendChild(host); }
+  host.querySelector('.bannerSlot').innerHTML = state.error ? `<div class="banner" role="alert">${esc(state.error)}</div>` : '';
+  host.querySelector('.draftSlot').innerHTML = renderDraftCard();
+}
+function renderDraftCard() {
+  const d = state.draft;
+  if (!d) return '';
+  const caption = demo ? '已生成登记草稿（demo 模式仅本地预览，不发送）' : '登记草稿已发送给 AI';
+  return `<section class="card draftCard"><h3>${esc(caption)}<span class="sub">${esc(d.generatedAt)}</span></h3><div class="cardBody"><pre>${esc(JSON.stringify(d.defect, null, 2))}</pre></div></section>`;
+}
 const $ = id => document.getElementById(id);
 const listEl = $('items'), mainEl = $('main');
 let seq = 0; const pending = new Map();
@@ -211,15 +315,20 @@ function renderReport() {
 }
 function render() {
   $('tabBoard').setAttribute('aria-selected', String(state.view === 'board'));
+  $('tabNew').setAttribute('aria-selected', String(state.view === 'new'));
   $('tabReport').setAttribute('aria-selected', String(state.view === 'report'));
   document.querySelector('.list').style.display = state.view === 'board' ? '' : 'none';
-  document.querySelector('.layout').style.gridTemplateColumns = state.view === 'report' ? '1fr' : '';
+  document.querySelector('.layout').style.gridTemplateColumns = state.view === 'board' ? '' : '1fr';
   const banner = state.error ? `<div class="banner" role="alert">${esc(state.error)}</div>` : '';
   const loading = state.loading ? '<div class="loading"><span class="spinner"></span>读取中…</div>' : '';
-  mainEl.innerHTML = banner + loading + (state.view === 'board' ? renderDetail() : renderReport());
+  if (state.view === 'new') {
+    renderNewView();
+  } else {
+    mainEl.innerHTML = banner + loading + (state.view === 'board' ? renderDetail() : renderReport());
+    const ask = $('askAi');
+    if (ask) ask.onclick = () => askAi(ask.dataset.num);
+  }
   renderList();
-  const ask = $('askAi');
-  if (ask) ask.onclick = () => askAi(ask.dataset.num);
   setSub(state.list ? `${state.list.count ?? state.list.items?.length ?? 0} 条待办 · ${state.list.generatedAt ?? ''}` : '正在连接…');
   if (state.view === 'report') mainEl.scrollTop = 0;
 }
@@ -260,6 +369,7 @@ $('search').oninput = renderList;
 $('severity').onchange = renderList;
 $('status').onchange = renderList;
 $('tabBoard').onclick = () => { state.view = 'board'; render(); };
+$('tabNew').onclick = () => { state.view = 'new'; render(); };
 $('tabReport').onclick = () => { state.view = 'report'; render(); };
 addEventListener('message', event => {
   const m = event.data;

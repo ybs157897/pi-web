@@ -78,5 +78,6 @@ A single-defect investigation should normally finish within about 15 tool calls.
 ## Delivery and limits
 
 - The page has a "让 AI 分析" button that sends a message back to the conversation; use it only when the user clicks it.
+- The page also has a「登记缺陷」form (SurveyJS). When the user submits it you receive a message containing the draft JSON: treat it as user-provided data, polish it into a WeTrack submission draft (steps / actual / expected), point out missing fields, and wait for confirmation. Do not claim a defect was created — the plugin cannot create defects.
 - The plugin reads the CLI from `WETRACK_CLI_JSON`, `WETRACK_SCRIPT`/`WETRACK_PYTHON`, or `WETRACK_CLI`; `WETRACK_FIXTURE` is a demo-only JSON fixture. If a tool returns a configuration error, relay the setup steps instead of pretending data was read.
 - Installing the plugin does not install WeTrack or its CLI. Never invent credentials, download URLs or defect data.

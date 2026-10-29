@@ -24,7 +24,7 @@ plugins/<slug>/
 
 A local marketplace is one catalog file, normally `plugins/marketplace.json`, listing one entry per plugin. The source path is relative to the catalog file.
 
-Read [references/plugin-format.md](references/plugin-format.md) before writing files. It contains the exact manifest, catalog, MCP, and UI templates.
+Read [references/plugin-format.md](references/plugin-format.md) before writing files. It contains the exact manifest, catalog, MCP, and UI templates. If the plugin ships an HTML UI surface, also read [references/ui-style.md](references/ui-style.md) and design the page after it — the tokens, components, bridge runtime, and form/library rules there are the house style, not suggestions.
 
 ## Workflow
 
@@ -34,7 +34,7 @@ Read [references/plugin-format.md](references/plugin-format.md) before writing f
 4. **Add the capabilities.**
    - **Skills:** write `skills/<skill-name>/SKILL.md` with YAML frontmatter (`name`, precise `description`, non-empty body). Keep resources beside the skill and reference them relatively.
    - **MCP tools:** write a stdio JSON-RPC server, usually `server.mjs`, using only Node built-ins unless the user approves dependencies. Declare it under `mcpServers`. Set `"exposure": "direct"` when the model should call its tools directly; use `"codemode"` for code-mode-only tools and `"hidden"` for page-only tools.
-   - **UI surface:** add an entry to `ui.surfaces` whose `server` exactly matches an `mcpServers` key. The server must advertise the resource and return HTML for `resources/read`. Return `_meta.ui` from a tool result to render the inline card.
+   - **UI surface:** add an entry to `ui.surfaces` whose `server` exactly matches an `mcpServers` key. The server must advertise the resource and return HTML for `resources/read`. Return `_meta.ui` from a tool result to render the inline card. Design the HTML page following [references/ui-style.md](references/ui-style.md): WeTrack-style design tokens (light/dark via CSS variables), the top-bar/card/banner component set, the `rpc()` bridge + `?demo=1` runtime skeleton, the vendor-assembly pattern for third-party libraries, and the SurveyJS form rules when the page has a real form. `plugins/wetrack-defects` is the canonical reference implementation.
 5. **Update the marketplace catalog.** Create or update the catalog entry `{ name, version, description, category?, source, listing? }`. `source` points at `./<slug>`. The catalog `version` MUST equal the manifest `version`; a mismatch makes installation fail. Add display names/example prompts under `listing` when useful. Preserve unrelated entries and field order.
 6. **Validate.** Re-read the written files and check: valid JSON; slug and manifest name agree; catalog and manifest versions agree; every declared skill path exists with a `SKILL.md`; every `ui.surfaces[].server` names a declared MCP server; relative paths stay inside the plugin; no symlinks; no secrets or machine-specific absolute paths. If `node` is available and you wrote a server, run `node --check server.mjs`. Do not claim protocol validation or installation unless it actually ran.
 7. **Hand off through the UI.** Tell the user to open Settings → Plugins → 添加市场 / Add marketplace, paste the absolute path of the **marketplace root** (`.../plugins`, not the plugin subdirectory), then install the plugin, enable it, and start a new task to try it. Do not auto-add the market, install, or enable it.
