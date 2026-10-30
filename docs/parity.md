@@ -775,6 +775,15 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **验证**：`tests/status-panel.test.tsx` 13 条（胶囊回落、点胶囊展开、显示菜单与收起、折叠组悬停预览）；`tests/projection.test.ts` 新增 2 条（未读判定、运行中不算未读）；`tests/runtime.test.ts` 新增 1 条（回复后未读、打开即已读）。typecheck / build / 663 测试全绿。ego demo 实测：`artifacts/status-panel/panel-controls-20261030.png`、`fold-preview-20261030.png`、`capsule-narrow-20261030.png`、`session-unread-20261030.png`。
 - **已知取舍**：胶囊展开后模式落成 `panel`（常驻展开），要回自动模式需从「…」菜单选「自动」——与 ZCode 一致。
 
+## 技能工具行按 ZCode 的 Skill 卡渲染（2026-10-30）
+
+skill 加载此前落进通用行：标题是「工具调用」，摘要直接把结果首行（`Loaded global:rd-cli-ops (…), resource SKILL.md.`）当描述。
+
+- **行**：`skillRowModel` 对齐 ZCode `ToolCallBlocks/renderers/skill.tsx`。`WandSparkles` 图标 + 操作名（`技能` / `技能列表` / `保存技能` / `校验技能`，加载中为「正在运行技能」），技能 id 用等宽字贴在后面（`skill_load` 带 resource 时显示 `id · resource`）。展开后行摘要保留（ZCode 的 `hideSecondaryTextWhenOpen` 隐藏的是参数，不是主文案）。
+- **卡**：`SkillBody` 取代原来的「原始输出 + 调用参数 JSON + 工具详情 JSON」三块：技能标签 + id 芯片（等宽、底色）、可选「资源」行，正文是工具自己的文本（无内嵌底色，对齐 ZCode 的 `bg-panel` 卡内 pre）。无输出且已结束时显示「没有输出。」，仍在读时显示等待行。
+- **顺带修的解析 bug**：`skill_load` 的 `details.files`（资源路径数组）被通用 `parseSearch` 当成路径搜索结果，导致整行被判为 summary-only、不可展开，卡片永远打不开。`parseDetails` 现在对四个 skill 工具跳过 search 解析。
+- **验证**：新增 `tests/tool-skill-card.test.tsx`（5 条：行不回声结果首行、展开出卡且无 JSON 块、运行中文案、四种操作名、`details.files` 不再吞掉卡片）；`tests/tool-classification.test.ts` 补 4 个工具名。typecheck / build / 669 测试全绿；demo `[skills-create]` 实测截图 `artifacts/status-panel/skill-load-card-20261030.png`。
+
 ## 运行中不再提前显示结束态（2026-10-28）
 
 Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，但会话仍在执行。此前 `AssistantResponse` 只读消息/run 状态，导致工具轮之间短暂显示「已工作 N 秒」、用量、时间和改动文件卡，`ProcessGroup` 也随之在展开/折叠之间切换。

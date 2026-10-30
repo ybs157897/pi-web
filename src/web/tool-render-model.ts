@@ -120,7 +120,11 @@ export function toolRowTitle(name: string, t: Translate): string {
   if (id === CODEMODE_TOOL_NAME) return t('代码', 'Code')
   // A listing is not a text search; name the operation the tool actually performs.
   if (id === 'list_files') return t('搜索列表', 'List files')
-  if (id === 'skill') return t('技能', 'Skill')
+  // pi-web splits ZCode's single Skill tool into four; each row names its own operation.
+  if (id === 'skill' || id === 'skill_load') return t('技能', 'Skill')
+  if (id === 'skill_list') return t('技能列表', 'Skill list')
+  if (id === 'skill_save') return t('保存技能', 'Save skill')
+  if (id === 'skill_validate') return t('校验技能', 'Validate skill')
   if (id === 'task_stop') return t('停止任务', 'Stop task')
   switch (toolActivity(id)) {
     case 'read': case 'readImage': return t('读取', 'Read')
@@ -175,6 +179,9 @@ const EDIT_NAMES = new Set(['edit', 'edit_file', 'apply_patch', 'patch'])
 const SEARCH_NAMES = new Set(['search', 'grep', 'ripgrep', 'glob', 'find_files', 'find'])
 const WEB_SEARCH_NAMES = new Set(['web_search', 'search_web', 'browser_search'])
 const WEB_FETCH_NAMES = new Set(['web_fetch', 'fetch_url', 'fetch'])
+
+/** pi-web splits ZCode's single Skill tool into four; all four share the same card. */
+const SKILL_TOOL_NAMES = new Set(['skill_load', 'skill_list', 'skill_save', 'skill_validate'])
 
 /** Convert a durable Pi tool call into the matching DSH result primitive. */
 export function buildToolRenderModel(item: ToolItem, t: (chinese: string, english: string) => string, runRunning: boolean): ToolRenderModel {
@@ -270,7 +277,11 @@ function parseDetails(record: Record<string, unknown> | undefined, name: string,
   const values = structuredOutput === undefined ? record : { ...record, ...structuredOutput }
   const lines = parseReadLines(values.lines)
   const diffs = parseDiffs(values.diffs)
-  const search = parseSearch(values) ?? parseSearchOutput(name, output)
+  // A Skill result lists its resource paths under `files`; the generic parser would otherwise
+  // read that array as a path-search result and turn the whole row into a summary-only search.
+  const search = SKILL_TOOL_NAMES.has(name.toLocaleLowerCase())
+    ? undefined
+    : parseSearch(values) ?? parseSearchOutput(name, output)
   const web = parseWeb(values, name)
   const command = stringField(values, ['command', 'cmd'])
   const cwd = stringField(values, ['cwd', 'workingDirectory'])
@@ -834,6 +845,39 @@ export interface SubagentRowModel {
   readonly task?: string
 }
 
+/** ZCode's Skill card: the kind label, the skill id in mono, and the optional resource. */
+export interface SkillRowModel {
+  readonly title: string
+  readonly skill?: string
+  readonly resource?: string
+}
+
+/**
+ * Build the Skill row the way ZCode's `SkillToolCallBlock` does: the kind label names the
+ * operation, the skill id rides next to it in monospace, and `skill_load` may also name a
+ * resource. The body is the tool's own text, not a JSON dump.
+ * @returns The row model, or null when this is not a Skill tool.
+ */
+export function skillRowModel(input: {
+  readonly name: string
+  readonly args: Readonly<Record<string, unknown>>
+  readonly running: boolean
+}, t: Translate): SkillRowModel | null {
+  const id = input.name.toLocaleLowerCase()
+  if (!SKILL_TOOL_NAMES.has(id)) return null
+  const skill = stringField(input.args, ['skill', 'name', 'id'])
+  const resource = id === 'skill_load' ? stringField(input.args, ['resource']) : undefined
+  const title = id === 'skill_load'
+    ? input.running ? t('正在运行技能', 'Running a skill') : t('技能', 'Skill')
+    : id === 'skill_list' ? t('技能列表', 'Skill list')
+      : id === 'skill_save' ? t('保存技能', 'Save skill')
+        : t('校验技能', 'Validate skill')
+  return {
+    title,
+    ...(skill === undefined || skill.trim() === '' ? {} : { skill: skill.trim() }),
+    ...(resource === undefined || resource.trim() === '' ? {} : { resource: resource.trim() }),
+  }
+}
 /**
  * Build the `subagent` row from the call's arguments and its details. DSH renders the
  * activation as `started subagent <id>` plus a receipt card carrying the delegated task;

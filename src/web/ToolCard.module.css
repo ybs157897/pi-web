@@ -372,6 +372,53 @@
   border-radius: 10px;
 }
 
+/* ZCode's Skill card: kind label + id chip + optional resource + the loaded text. */
+.skillCard {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.skillHead { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.skillLabel { flex: none; color: var(--message-muted); font-size: var(--message-font); line-height: 20px; }
+.skillChip {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--message-fg);
+  font-family: var(--ds-font-family-code);
+  font-size: calc(var(--message-font) - 1px);
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skillArgs { display: flex; min-width: 0; align-items: flex-start; gap: 8px; font-family: var(--ds-font-family-code); }
+.skillArgValue { min-width: 0; color: var(--message-muted); font-size: calc(var(--message-font) - 1px); line-height: 20px; overflow-wrap: anywhere; }
+/* ZCode keeps the loaded text inside the bordered card, so the pre carries no material of its own. */
+.skillOutput {
+  max-height: 340px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  color: var(--message-muted);
+  font-family: var(--ds-font-family-code);
+  font-size: var(--dsh-code-font-size, 11px);
+  line-height: calc(19px + var(--dsh-code-font-delta, 0px));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The row keeps the skill id in ZCode's monospace, lighter than the kind label. */
+.skillRowName { min-width: 0; overflow: hidden; color: var(--message-subtle); font-family: var(--ds-font-family-code); font-size: var(--message-font); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); text-overflow: ellipsis; white-space: nowrap; }
+.skillEmpty { margin: 0; color: var(--message-muted); font-size: var(--message-font); line-height: 20px; }
+
 /* Code mode: the script card, its nested tool calls, and the result output. */
 .codemode {
   display: flex;

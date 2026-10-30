@@ -49,6 +49,15 @@ describe('tool row titles', () => {
     }
   })
 
+  it('names each split skill tool by its operation', () => {
+    expect(toolRowTitle('skill_load', zh)).toBe('技能')
+    expect(toolRowTitle('skill_list', zh)).toBe('技能列表')
+    expect(toolRowTitle('skill_save', zh)).toBe('保存技能')
+    expect(toolRowTitle('skill_validate', zh)).toBe('校验技能')
+    expect(toolRowTitle('skill_load', en)).toBe('Skill')
+    expect(toolRowTitle('skill_validate', en)).toBe('Validate skill')
+  })
+
   it('keeps the settled rows and the English wording unchanged', () => {
     expect(build('bash', { command: 'pwd' }).title).toBe('运行命令')
     expect(toolRowTitle('list_files', en)).toBe('List files')

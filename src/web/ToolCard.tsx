@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   IconPlanOutlineRegular, ImageLightbox, JsonBlock, StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { SquareTerminal, Search, Pencil, FilePlus2, Globe, Braces, Bot, ListTodo, CircleHelp, Sparkles, Ellipsis } from 'lucide-react'
+import { SquareTerminal, Search, Pencil, FilePlus2, Globe, Braces, Bot, ListTodo, CircleHelp, Sparkles, Ellipsis, WandSparkles } from 'lucide-react'
 import type { ContentBlock, InteractionRequest } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import type { InspectorDiff } from './Inspector.tsx'
@@ -10,8 +10,8 @@ import type { PlanDocument } from './plan-preview.ts'
 import type { ToolItem } from './render-model.ts'
 import { type Translate } from './render-labels.ts'
 import {
-  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, subagentRowModel,
-  type AskQuestionRecord, type CodemodeCallStatus, type CodemodeRowModel, type LateAnswer,
+  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, skillRowModel, subagentRowModel,
+  type AskQuestionRecord, type CodemodeCallStatus, type CodemodeRowModel, type LateAnswer, type SkillRowModel,
 } from './tool-render-model.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import { PluginUiCard } from './PluginUiCard.tsx'
@@ -144,6 +144,13 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
     details: model.details,
     output: model.output,
   }, t), [model, t])
+  // ZCode's Skill card replaces the raw arguments and details dump with the skill id,
+  // its optional resource, and the loaded text.
+  const skill = useMemo(() => skillRowModel({
+    name: model.name,
+    args: model.args,
+    running: model.running,
+  }, t), [model, t])
   const plan = planArgument(item)
   const planDocument = plan === undefined ? undefined : {
     markdown: plan,
@@ -165,12 +172,15 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const summaryOnly = fileRead || subagent !== null || (model.search !== undefined || model.web !== undefined || readOnlySummary) && !model.failed && !model.cancelled && !hasChildren
   const expandable = !summaryOnly && (hasResult || hasArgs || hasDetails || hasChildren || model.artifacts.length > 0)
   const icon = ask !== null ? <CircleHelp size={16} />
-    : codemode !== null ? <Braces size={16} /> : toolIcon(model.name)
+    : codemode !== null ? <Braces size={16} /> : skill !== null ? <WandSparkles size={16} /> : toolIcon(model.name)
   const summary = ask !== null ? ask.summary : subagent !== null ? (subagentPrimary ?? subagent.summary)
-    : codemode !== null ? codemode.summary : model.command !== undefined ? model.command.replace(/\s+/gu, ' ').trim() : model.summary
+    : codemode !== null ? codemode.summary : skill !== null ? (skill.skill ?? model.summary)
+      : model.command !== undefined ? model.command.replace(/\s+/gu, ' ').trim() : model.summary
   const diagnostics = ask !== null && model.failed ? <span className={css.failedSummary}>{ask.summary}</span>
     : subagent !== null && model.failed ? <span className={css.failedSummary}>{t('子智能体未返回答案', 'The subagent returned no answer')}</span>
-      : <span>{plan === undefined ? summary : t('计划 · Markdown', 'Plan · Markdown')}</span>
+      : skill !== null && skill.skill !== undefined
+        ? <code className={css.skillRowName}>{skill.resource === undefined ? skill.skill : `${skill.skill} · ${skill.resource}`}</code>
+        : <span>{plan === undefined ? summary : t('计划 · Markdown', 'Plan · Markdown')}</span>
   // ZCode keeps the failure/stop word at the end of the row; the detail lives in its tooltip.
   const statusAccessory = ask === null && subagent === null && model.failed
     ? <span className={css.statusFailed} title={model.errorText}>{t('执行失败', 'Failed')}</span>
@@ -179,8 +189,9 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
       : undefined
   const title = ask !== null ? ask.title : subagent !== null ? subagent.title
     : codemode !== null ? codemode.title
-      : model.command !== undefined ? (model.running ? t('正在执行', 'Running') : t('终端', 'Terminal'))
-        : plan === undefined || model.failed || model.cancelled ? model.title : planHeading(plan) ?? model.title
+      : skill !== null ? skill.title
+        : model.command !== undefined ? (model.running ? t('正在执行', 'Running') : t('终端', 'Terminal'))
+          : plan === undefined || model.failed || model.cancelled ? model.title : planHeading(plan) ?? model.title
   const outputCard = model.command !== undefined ? (
     <ProcessTerminal command={model.command} cwd={model.cwd} output={model.output}
       {...model.exitCode === undefined ? {} : { exitCode: model.exitCode }}
@@ -196,7 +207,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A recorded question pair replaces the row's own I/O card the way DSH's
   // transcript card does; the raw arguments and details stay available below.
   const record = ask?.record ?? null
-  const resultText = !hasOutputCard && record === null && subagent === null && codemode === null && !pluginUiPresented && model.output !== '' ? model.output : ''
+  const resultText = !hasOutputCard && record === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && model.output !== '' ? model.output : ''
   const sourceMessage = item.call === undefined ? item.result ?? item.message : item.message
   const toolImages = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image') ?? []
   const toolFiles = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'file' }> => block.type === 'file') ?? []
@@ -204,7 +215,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A plan call's arguments hold the whole plan, which the row already summarizes by its heading.
   // A subagent call's arguments hold the whole delegated task, shown by the receipt instead.
   // A code-mode call's argument is the script, shown by its own card instead of raw JSON.
-  const argsPayload = hasArgs && unknownPayload && plan === undefined && subagent === null && codemode === null && !pluginUiPresented
+  const argsPayload = hasArgs && unknownPayload && plan === undefined && subagent === null && codemode === null && skill === null && !pluginUiPresented
     ? model.args : undefined
   // DSH's plan card is one button: icon, plan title, "计划 · Markdown", and "打开"
   // (`ui-plan/src/client/PlanCard.tsx:48-57`, copy `locales.ts:7-11`).
@@ -242,7 +253,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
         accessory={accessory}
         onActivate={subagentOpen}
         interactiveSummary={fileSummary !== undefined}
-        keepSummaryWhenOpen={fileSummary !== undefined || listingRow}
+        keepSummaryWhenOpen={fileSummary !== undefined || listingRow || skill !== null}
         toggleLabel={subagent !== null ? t('打开子智能体会话', 'Open subagent session')
           : open ? t('收起工具详情', 'Collapse tool details') : t('展开工具详情', 'Expand tool details')}
         onToggle={() => { setOpen(value => !value) }}
@@ -270,6 +281,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
           )}
           {record !== null && <QuestionRecord record={record} t={t} />}
           {codemode !== null && <CodemodeBody row={codemode} onOpenFile={onOpenFile} t={t} />}
+          {skill !== null && <SkillBody skill={skill} output={model.output} running={model.running} failed={model.failed} cancelled={model.cancelled} t={t} />}
           {outputCard}
           {resultText !== '' && <pre className={css.output}>{resultText}</pre>}
           {toolImages.map((block, index) => <ToolImage key={`${item.key}:image:${index}`} block={block} />)}
@@ -279,11 +291,11 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
           ))}
           {!hasResult && model.running && <div className={css.inProgress}><StateDot state="ongoing" size={10} />{t('等待工具结果', 'Waiting for tool result')}</div>}
           {!hasResult && !model.running && <div className={css.empty}>{t('没有可显示的工具结果', 'No tool result was recorded')}</div>}
-          {hasResult && model.output === '' && !hasOutputCard && codemode === null && !pluginUiPresented && toolImages.length === 0 && toolFiles.length === 0
+          {hasResult && model.output === '' && !hasOutputCard && codemode === null && skill === null && !pluginUiPresented && toolImages.length === 0 && toolFiles.length === 0
             && <div className={css.empty}>{t('工具没有返回可显示的内容', 'The tool returned no displayable content')}</div>}
           {argsPayload !== undefined && <JsonBlock label={t('调用参数', 'Call arguments')} payload={argsPayload}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
-          {hasDetails && !hasOutputCard && subagent === null && codemode === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
+          {hasDetails && !hasOutputCard && subagent === null && codemode === null && skill === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
           {model.failed && <div className={css.errorLabel} role="alert">{t('工具执行失败', 'Tool failed')}</div>}
           {model.cancelled && <div className={css.stoppedLabel} role="status">{t('工具已停止', 'Tool stopped')}</div>}
@@ -320,6 +332,33 @@ function QuestionRecord({ record, t }: { record: AskQuestionRecord; t: Translate
       ))}
     </dl>
   )
+}
+
+/**
+ * ZCode's Skill card: the kind label, the skill id as a code chip, the optional resource and
+ * the tool's own text. The raw arguments/details JSON stays out of the way.
+ */
+function SkillBody({ skill, output, running, failed, cancelled, t }: {
+  skill: SkillRowModel
+  output: string
+  running: boolean
+  failed: boolean
+  cancelled: boolean
+  t: Translate
+}) {
+  return <div className={css.skillCard} data-skill-card>
+    <div className={css.skillHead}>
+      <span className={css.skillLabel}>{t('技能', 'Skill')}</span>
+      <code className={css.skillChip}>{skill.skill ?? t('未知技能', 'Unknown skill')}</code>
+    </div>
+    {skill.resource !== undefined && <div className={css.skillArgs}>
+      <span className={css.skillLabel}>{t('资源', 'Resource')}</span>
+      <code className={css.skillArgValue}>{skill.resource}</code>
+    </div>}
+    {output !== '' && <pre className={css.skillOutput}>{output}</pre>}
+    {output === '' && running && <div className={css.inProgress}><StateDot state="ongoing" size={10} />{t('正在读取技能内容', 'Loading the skill body')}</div>}
+    {output === '' && !running && !failed && !cancelled && <p className={css.skillEmpty}>{t('没有输出。', 'No output.')}</p>}
+  </div>
 }
 
 /**
