@@ -1,6 +1,6 @@
 # 整族功能：DSH 机制 → Pi Durable 落点
 
-基准：DSH `687f282e86`（0.2.1-rc.2）对照 Pi Durable 1.3.0 与本仓库 `src/server/runtime.ts` / `projection.ts` / `shared/types.ts`。
+基准：DSH `687f282e86`（0.2.1-rc.2）对照 Pi Durable 1.3.0 与本仓库 `src/server/runtime/` / `conversation/projection.ts` / `shared/types.ts`。
 本文件是实施蓝图：每族写清「DSH 机制 → Pi 等价物 → pi-web 最小切片」，与 `docs/parity.md` 的状态表配套。
 
 ## 贯穿全局的三条事实
@@ -41,7 +41,7 @@
   ```
 - **写路由**：`POST /api/conversations/:id/interactions/:id/answer`（校验「每题恰好一次、选项来自题干」），服务端把回答作为 steer 用户消息提交（entry kind `pi-web.user-question-reply`，data 带 callId/answers），并写 doc 结算。
 - **投影**：三源配对 —— 工具调用参数（题目）、工具结果（pending/答案）、reply entry（迟到回答）→ `ConversationDetail.interactions`。
-- **pi-web 切片**：`src/server/interactions.ts`（服务 + 状态机纯函数）、runtime 注册 `AskTools`、`src/web/QuestionComposer.tsx`（多题导航、选项/推荐、自定义、跳过、只读记录）、`tests/interactions.test.ts`（状态机）+ http 路由测试。
+- **pi-web 切片**：`src/server/conversation/interactions.ts`（服务 + 状态机纯函数）、runtime 注册 `AskTools`、`src/web/QuestionComposer.tsx`（多题导航、选项/推荐、自定义、跳过、只读记录）、`tests/interactions.test.ts`（状态机）+ http 路由测试。
 
 ## 4. 目标（goal）
 
@@ -63,7 +63,7 @@
 
 ## 7. 实现顺序
 
-1. ~~**todo**~~ —— **已实现并验证**：`src/server/todo-tools.ts`（工具 + doc）、`projection` 的 `todos` 字段、`src/web/TodoPanel.tsx`；runtime 已注册并支持新用户输入清空、readOnly 白名单放行；测试覆盖投影与端到端（demo `[todo]` 脚本），ego 复核收起/展开/清空。
+1. ~~**todo**~~ —— **已实现并验证**：`src/server/tools/todo.ts`（工具 + doc）、`projection` 的 `todos` 字段、`src/web/TodoPanel.tsx`；runtime 已注册并支持新用户输入清空、readOnly 白名单放行；测试覆盖投影与端到端（demo `[todo]` 脚本），ego 复核收起/展开/清空。
 2. ~~**交互协议 + ask_user_question**~~ —— **已实现并验证**（`interaction-tools.ts` + doc + `POST .../interactions/:callId/answer` + 三源配对投影 + `QuestionComposer`；78 用例与 ego 端到端含跳过/400/404）
 3. ~~**plan mode + exit_plan_mode**~~ —— **已实现并验证**（`plan-tools.ts`：doc + `plan-policy` section + `exit_plan_mode`；`setPlan` 路由、投影 `plan`、Composer chip、待审卡；A11 的「下一次请求生效」即 pending 语义；86 用例 + ego 全流程）
 4. ~~**goal**~~ —— **已实现并验证**（`goal-tools.ts`：doc + 3 工具 + CAS + `onYield` 续跑 hook（上界 `maxGoalRounds`）；runtime/投影/路由/`GoalBar` 已接线；demo 实测自动续跑 3/3 轮、暂停生效；79 测试通过）
@@ -130,7 +130,7 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 - 旧状态（本次改动前）：策略固定、不可配，`enabled=true / reserveTokens=16384 / keepRecentTokens=20000 / backgroundTokens=32768`（`node_modules/@earendil-works/pi-durable/dist/harness/agent.js:12-17`）；`Harness.open` 没有传 `settings.compaction`。
 - 触发在 generation 准备阶段：`> window - 16384` 阻塞、`> window - 49152` 后台；provider 溢出压缩后重试一次（`dist/harness/generation.js:219-233,371-395`）。
 - 摘要用独立 summarizer system prompt + 把旧消息序列化成纯文本（工具结果截 2000 字符），`cacheRetention: "none"`，`maxTokens≈13107`，模板 6 节（Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context）（`dist/harness/compaction.js:12-47,103-160,294-337`）。
-- 落地为 `pi.compaction` entry（`head=firstKept`，内容是一条 framed summary user message），旧 entry 留在 SQLite 但离开 active view；旧状态：前端只显示一条「较早的上下文已压缩」系统行，无条数/token/展开/运行态（`src/server/projection.ts:743,814-815`）。
+- 落地为 `pi.compaction` entry（`head=firstKept`，内容是一条 framed summary user message），旧 entry 留在 SQLite 但离开 active view；旧状态：前端只显示一条「较早的上下文已压缩」系统行，无条数/token/展开/运行态（`src/server/conversation/projection.ts`（原行号 743、814-815））。
 - `/compact` 走 `App.tsx:749-755 → POST /api/conversations/:id/compact`（`app.ts:481`）→ `conversation.compact(undefined, CTX)`（`runtime.ts:1522-1526`）；202 立即返回，不能带指示、不能取消、失败后只有 toast/`ConversationDetail.error`（且该字段前端未渲染）。
 
 ### 并排差异（2026-10-20 核对）
@@ -183,7 +183,7 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 - **cloudflare/pi-durable-cloudflare-chat**：只用 Pi 默认策略，`beforeCompact` 仅做观测日志。
 - **IgorWarzocha/pi-durable-components**：走另一条路——用 notes/checkpoint + `new_context` 工具显式交接，非 overflow 的自动压缩直接 `decline`。
 
-### pi-web 已落地的机制（`src/server/compaction.ts`）
+### pi-web 已落地的机制（`src/server/conversation/compaction.ts`）
 
 - **策略**：`reserveTokens=16384`、`keepRecentTokens=30000`、`backgroundTokens=34000`（通过 `Harness.open.settings.compaction` 生效；`PI_WEB_COMPACTION_*` 可覆盖）。有效窗口默认使用模型真实窗口（1M 就是 1M），只有模型未声明窗口时才回退 200k；`PI_WEB_CONTEXT_BUDGET` 可显式设置成本上限。
 - **压力裁剪**：`GenerationTask.beforeRequest` 在估算 token 超过有效窗口 85% 时，把最老的（保留最近 4 条）超过 8192 字符的 tool result 中间段替换为头 4096 + 标记 + 尾 1024；不改存储，同样压力下输出稳定，避免每次请求产生不同前缀。对应 DSH 的 tool-result pruner，但只作用于请求视图。

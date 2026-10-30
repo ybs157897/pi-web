@@ -4,7 +4,7 @@ import {
   MAX_AUTOMATION_TIMEOUT_MS,
   type AutomationTimerDriver,
   type AutomationTimerHandle,
-} from '../src/server/automation-scheduler.ts'
+} from '../src/server/automation/scheduler.ts'
 
 interface ManualTimer extends AutomationTimerHandle {
   id: number

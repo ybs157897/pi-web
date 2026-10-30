@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Extension, ToolRegistration } from '@earendil-works/pi-durable'
-import { createMemoryExtension, memoryInstructions, MEMORY_EXTENSION_NAME } from '../src/server/memory-policy.ts'
-import { resolveMemoryRoot } from '../src/server/memory.ts'
+import { createMemoryExtension, memoryInstructions, MEMORY_EXTENSION_NAME } from '../src/server/memory/policy.ts'
+import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {

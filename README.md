@@ -138,7 +138,7 @@ Windows 上这些变量用 `set NAME=value`（cmd）或 `$env:NAME='value'`（Po
 
 ## 默认任务规划与进度
 
-应用现在默认加载项目内的 [运行时核心提示词](src/server/prompts/runtime-core.md)，无需复制到 Agent Preset。普通多步任务会在开始前拆出具体步骤和验证，再用 `todo_write` 更新进行中与完成状态；用户只要计划/方案时，步骤是“调研→形成计划→等待确认”，不擅自实施。单步小任务跳过正式清单。阶段完成、遇到阻塞或调整计划时，模型应简短汇报已完成、当前和下一步。
+应用现在默认加载项目内的 [运行时核心提示词](src/server/conversation/prompts/runtime-core.md)，无需复制到 Agent Preset。普通多步任务会在开始前拆出具体步骤和验证，再用 `todo_write` 更新进行中与完成状态；用户只要计划/方案时，步骤是“调研→形成计划→等待确认”，不擅自实施。单步小任务跳过正式清单。阶段完成、遇到阻塞或调整计划时，模型应简短汇报已完成、当前和下一步。
 
 模型会先判断用户话语的请求类型：问句、评估、排查原因默认只读诊断；明确要求修改、修复、实现才实施；要计划/方案则只读研究后给计划。“这个/它/刚才那个”绑定当前对话中最近明确提到的对象，有多个候选时列出并问；“今天/昨天/前两天/上周”按当前日期和时区解释。用户说“可以/行/好的”只确认被问到的具体事项，不会自动扩大到提交、推送、发布或删除。
 
@@ -217,6 +217,30 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 - 能力：插件技能以「插件」来源进入技能目录，ID 为 `<插件ID>:<技能名>`，只读；插件的 MCP server 以 `plugin_<插件>_<server>` 合并进 MCP 目录（`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 自动展开，默认 `codemode` 暴露），安装、启停、更新、卸载后无需重启即可生效，重启保留。
 - 边界：P1 已接入插件技能与 MCP 工具；插件 UI surface 会解析并展示，但正文内联卡与右侧插件面板属 P2。`readOnly` 会话看不到插件工具，Plan 模式执行会被拒绝。安装插件等于信任其声明的 MCP 子进程以当前用户权限运行。
 
+## 问题清单（WeTrack）
+
+侧栏「自动化任务」上方的**问题清单**是一个独立页面：只读列举 WeTrack 缺陷，按项目分组，不经过模型、不产生会话。页面用 antd 6 的 `Tabs` + `Listy` 渲染列表、`BorderBeam` 装饰面板；搜索、刷新和页签筛选都在本地完成，未连接数据源时显示配置说明，不会伪造数据。
+
+数据来自 `GET /api/wetrack/defects`，与 `plugins/wetrack-defects` 插件共用同一套环境变量（配置在服务进程上，需重启）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `WETRACK_CLI_JSON` | 推荐；JSON 数组，例如 `["python","C:\\tools\\wetrack.py"]` |
+| `WETRACK_SCRIPT` | `wetrack.py` 路径，可配 `WETRACK_PYTHON`（默认 `python`） |
+| `WETRACK_CLI` | 单个可执行文件，例如 `rd-cli`（路径不要含空格） |
+| `WETRACK_FIXTURE` | 离线夹具路径，结构见 [`plugins/wetrack-defects/fixtures/demo.json`](plugins/wetrack-defects/fixtures/demo.json) |
+
+服务端执行 `<CLI> pending --json`，接受 `{ pending: { items } }`、`{ pending: [] }`、`{ items: [] }` 或裸数组，只保留行级标量字段（`defectNumber` / `severityName` / `defectStatusName` / `projectName` / `simpleDesc` / `submitTime` 等）；详情里的附件与内嵌图片不进列表。`PI_WEB_DEMO=1` 且没有配置任何 CLI/夹具时改用内置夹具，页面标记「演示数据」。
+
+antd 只在这个页面使用，经 `lazy()` 单独打成 chunk（约 380 kB / 128 kB gzip），不影响首屏主包。
+
+## 代码结构
+
+- `src/server/index.ts` 启动进程，`app.ts` 是 HTTP 路由，`contracts.ts` 定义 `Runtime` 接口。
+- `src/server/runtime/`：`createRuntime` 装配点 + 功能模块——`conversations`（会话读写/提交/标题/分叉/订阅）、`queue`、`interactions`、`team`（团队与子会话目录）、`automations`、`workspaces`、`presets`、`settings`（设置与模型目录）、`plugins`（市场与页面桥）、`core`（元数据/详情投影/模型策略）、`helpers`（纯函数）。
+- `src/server/<功能>/`：`conversation`（投影、压缩、执行与计划策略、提示词）、`tools`（shell/search 与各工具扩展）、`model`、`plugins`、`skills`、`memory`、`workspace`（文件与 `git/`）、`mcp`、`automation`、`platform`（Windows 原生对话框）、`state`（全局目录与 app-state）。
+- 功能模块只接收依赖、不反向导入装配点；跨模块环（详情投影 ↔ 团队目录）用晚绑定回调解开。
+
 ## 验证
 
 自动化测试使用真实 Pi Durable/SQLite 与可控模型，验证持久化、幂等发送、队列、流式视图和恢复；HTTP 测试验证请求校验与订阅清理。可控模型验证不等于真实供应商调用通过。代码模式用真实 QuickJS 沙箱执行脚本并调用真实平台 shell；MCP 用内存传输与真实 stdio 子进程夹具覆盖连接、工具注册与失败隔离。
@@ -242,6 +266,7 @@ Windows 上跑验证前先看 [Windows](#windows)：shell 相关验证走 `pwsh`
 - AI 输出参考 ZCode 3.16.2；实现与验收见 [docs/zcode-markdown-rendering-plan.md](docs/zcode-markdown-rendering-plan.md)。
 - 代码查看器：`@pierre/diffs@1.1.22`；正文解析：`streamdown@2.5.0`；图标：`lucide-react@1.17.0`。
 - 应用外壳、设置和部分专用面板的 DSH 展示组件：`@deepseek-ai/dsh-client-ui-primitives@0.2.1-rc.2`。
+- 问题清单页的 antd 6 组件（`BorderBeam` / `Listy` / `Tabs` / `Tag`），按需加载，不进入首屏。
 - 主题来源：DSH `687f282e8625c6b8d11ff58211a90524be2e4317`。
 - 许可和来源见 [vendor/README.md](vendor/README.md) 与 [third-party/message-rendering-NOTICE.md](third-party/message-rendering-NOTICE.md)。
 - 数据与组件衔接见 [docs/architecture.md](docs/architecture.md)。

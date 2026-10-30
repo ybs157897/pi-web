@@ -7,7 +7,7 @@ import {
   loadProjectInstructions,
   MAX_PROJECT_INSTRUCTIONS_BYTES,
   renderProjectInstructions,
-} from '../src/server/project-instructions.ts'
+} from '../src/server/workspace/instructions.ts'
 
 const roots: string[] = []
 

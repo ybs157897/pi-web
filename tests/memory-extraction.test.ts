@@ -13,8 +13,8 @@ import {
   memorySkipReason,
   runExtractionLoop,
   scanMemoryManifest,
-} from '../src/server/memory-extraction.ts'
-import { resolveMemoryRoot } from '../src/server/memory.ts'
+} from '../src/server/memory/extraction.ts'
+import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {

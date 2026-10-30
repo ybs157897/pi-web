@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createRuntime } from '../src/server/runtime.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
 import { createApp } from '../src/server/app.ts'
-import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from '../src/server/model-allowlist.ts'
+import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from '../src/server/model/allowlist.ts'
 
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 

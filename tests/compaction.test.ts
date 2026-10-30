@@ -19,7 +19,7 @@ import {
   stripFileLists,
   summaryText,
   validateSummary,
-} from '../src/server/compaction.ts'
+} from '../src/server/conversation/compaction.ts'
 
 const usage = (input: number): Usage => ({
   input,

@@ -3,8 +3,8 @@ import type { AssistantMessage, ToolResultMessage, UserMessage } from '@earendil
 import type { ConversationView, EntryId, EntryRecord, JsonObject, ModelRef, TaskId } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationMetadata } from '../src/server/runtime.ts'
-import { projectConversation, activeDurationMs, usageTokens } from '../src/server/projection.ts'
+import type { ConversationMetadata } from '../src/server/runtime/index.ts'
+import { projectConversation, activeDurationMs, usageTokens } from '../src/server/conversation/projection.ts'
 
 const WORKSPACE = '/tmp/pi-projection-workspace'
 const DEFAULT_MODEL: ModelRef = { provider: 'test-provider', modelId: 'test-model' }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { foldInteractions, validateAnswers, type QuestionCall, type QuestionReply } from '../src/server/interactions.ts'
-import { cleanPlan, decidePlanReview, planReviewOf, planTitle, PLAN_APPROVE_LABEL, type StoredPlanReview } from '../src/server/plan-tools.ts'
+import { foldInteractions, validateAnswers, type QuestionCall, type QuestionReply } from '../src/server/conversation/interactions.ts'
+import { cleanPlan, decidePlanReview, planReviewOf, planTitle, PLAN_APPROVE_LABEL, type StoredPlanReview } from '../src/server/tools/plan.ts'
 import type { AskUserQuestionItem } from '../src/shared/types.ts'
 
 const questions: AskUserQuestionItem[] = [

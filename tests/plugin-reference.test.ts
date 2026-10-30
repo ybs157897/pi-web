@@ -5,17 +5,17 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { Message } from '@earendil-works/pi-ai'
-import { createRuntime } from '../src/server/runtime.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
 import type { Runtime } from '../src/server/contracts.ts'
-import { PluginStore } from '../src/server/plugin-store.ts'
+import { PluginStore } from '../src/server/plugins/store.ts'
 import {
   MAX_PLUGIN_REFERENCES,
   buildPluginReferenceBody,
   extractPluginReferences,
   pluginReferenceCapabilities,
   pluginReferenceReminder,
-} from '../src/server/plugin-reference.ts'
-import { observeDemoRequests } from '../src/server/demo-model.ts'
+} from '../src/server/plugins/reference.ts'
+import { observeDemoRequests } from '../src/server/model/demo.ts'
 import { writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 
 /** Minimal stdio MCP server: the runtime needs at least one connected plugin server. */

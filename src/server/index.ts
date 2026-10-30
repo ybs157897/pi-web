@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { createServer as createViteServer, type ViteDevServer } from 'vite'
 import { createAdaptorServer, getRequestListener, type ServerType } from '@hono/node-server'
 import { createApp } from './app.ts'
-import { migrateGlobalHome, piWebHome } from './home.ts'
-import { createRuntime } from './runtime.ts'
+import { migrateGlobalHome, piWebHome } from './state/home.ts'
+import { createRuntime } from './runtime/index.ts'
 
 const host = '127.0.0.1'
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')

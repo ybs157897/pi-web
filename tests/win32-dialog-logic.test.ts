@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR, FOS_PICKFOLDERS, HRESULT_CANCELLED,
   runFolderDialog, type Win32DialogBindings, type Win32FolderDialog,
-} from '../src/server/win32-dialog-logic.ts'
+} from '../src/server/platform/win32-dialog-logic.ts'
 
 const E_FAIL = 0x80004005 | 0
 

@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import assert from 'node:assert/strict'
-import { createRuntime } from '../src/server/runtime.ts'
-import { piWebHome } from '../src/server/home.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
+import { piWebHome } from '../src/server/state/home.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const directory = await mkdtemp(join(tmpdir(), 'pi-web-live-tools-'))

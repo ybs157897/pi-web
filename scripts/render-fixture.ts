@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createRuntime } from '../src/server/runtime.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const timestamp = new Date().toISOString().replaceAll(/[:.]/gu, '-')

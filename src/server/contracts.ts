@@ -43,6 +43,7 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceSummary,
+  WetrackDefectList,
 } from '../shared/types.ts'
 
 /** Runtime operations used by HTTP and deterministic integration tests. */
@@ -147,6 +148,8 @@ export interface Runtime {
   updateAutomation(id: string, input: UpdateAutomationInput): Promise<Automation>
   deleteAutomation(id: string): Promise<void>
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
+  /** WeTrack issues for the standalone list page; this data never enters a conversation. */
+  wetrackDefects(): Promise<WetrackDefectList>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */

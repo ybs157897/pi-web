@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   cleanTitleText, fallbackSessionTitle, frameTitleMessages, normalizeSessionTitle, titleSystemPrompt, TITLE_POLICY,
-} from '../src/server/session-title.ts'
+} from '../src/server/conversation/session-title.ts'
 
 describe('session titles', () => {
   it('caps the deterministic fallback by words and by UTF-8 bytes', () => {

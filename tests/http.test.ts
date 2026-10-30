@@ -7,10 +7,10 @@ import type { Runtime } from '../src/server/contracts.ts'
 import type { GoalUpdateRequest } from '../src/shared/types.ts'
 import type * as Protocol from '../src/shared/types.ts'
 import { createApp } from '../src/server/app.ts'
-import { AppStateStore } from '../src/server/app-state.ts'
+import { AppStateStore } from '../src/server/state/app-state.ts'
 import { RuntimeError } from '../src/server/runtime-errors.ts'
-import { validateAnswers } from '../src/server/interactions.ts'
-import { WorkspaceFiles } from '../src/server/workspace-files.ts'
+import { validateAnswers } from '../src/server/conversation/interactions.ts'
+import { WorkspaceFiles } from '../src/server/workspace/files.ts'
 import { DEFAULT_SHORTCUTS, resolveShortcuts } from '../src/web/keyboard.ts'
 
 const NOW = 1_800_000_000_000
@@ -377,6 +377,13 @@ class FakeRuntime implements Runtime {
   async updateAutomation(id: string, input: Protocol.UpdateAutomationInput): Promise<Protocol.Automation> { return { ...this.automations()[0]!, ...input, id, intervalMs: input.intervalMs ?? undefined } }
   async deleteAutomation(id: string) { this.calls.push('delete-automation:' + id) }
   async runAutomation(id: string) { return { automation: { ...this.automations()[0]!, id }, conversationId: 'scheduled-conv' } }
+  async wetrackDefects(): Promise<Protocol.WetrackDefectList> {
+    this.calls.push('wetrack-defects')
+    return {
+      configured: true, source: 'fixture', generatedAt: '2026-10-30 12:00:00', count: 1,
+      items: [{ defectNumber: 'DTS006749813', defectStatusName: '待开发解决问题', severityName: '一般', simpleDesc: '设备删除后无提示' }],
+    }
+  }
 
   async close(): Promise<void> {
     this.closeCount += 1
@@ -981,6 +988,10 @@ describe('management API', () => {
     expect((await app.request('/api/automations/auto-1', json('PATCH', { intervalMs: null }))).status).toBe(200)
     expect((await app.request('/api/automations/auto-1/run-now', { method: 'POST' })).status).toBe(202)
     expect((await app.request('/api/automations/auto-1', { method: 'DELETE' })).status).toBe(200)
+    const defects = await app.request('/api/wetrack/defects')
+    expect(defects.status).toBe(200)
+    expect(await defects.json()).toMatchObject({ configured: true, count: 1, items: [{ defectNumber: 'DTS006749813' }] })
+    expect(runtime.calls).toContain('wetrack-defects')
   })
 
   it('opens the application configuration file and reports a missing file as NOT_FOUND', async () => {

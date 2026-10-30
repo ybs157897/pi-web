@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
-import { createRuntime } from '../src/server/runtime.ts'
-import { piWebHome } from '../src/server/home.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
+import { piWebHome } from '../src/server/state/home.ts'
 
 const dir = await mkdtemp(join(tmpdir(), 'pi-web-live-'))
 const runtime = await createRuntime({ dataDir: join(dir, 'data'), workspace: dir, piDir: piWebHome() })

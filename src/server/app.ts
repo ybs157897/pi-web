@@ -7,7 +7,7 @@ import packageJson from '../../package.json' with { type: 'json' }
 import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
 import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, SHORTCUT_COMMANDS, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
-import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugin-ui.ts'
+import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugins/ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
 const packageVersion: string = packageJson.version
@@ -818,6 +818,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.patch('/api/automations/:id', async c => c.json({ automation: await runtime.updateAutomation(pathId(c.req.param('id')), await readJson(c.req.raw, automationPatchSchema)) }))
   app.delete('/api/automations/:id', async c => { await runtime.deleteAutomation(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.post('/api/automations/:id/run-now', async c => c.json(await runtime.runAutomation(pathId(c.req.param('id'))), 202))
+  app.get('/api/wetrack/defects', async c => c.json(await runtime.wetrackDefects()))
 
   app.onError((error, c) => {
     const failure = publicFailure(error)

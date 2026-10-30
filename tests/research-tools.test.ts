@@ -9,8 +9,8 @@ import {
   resolveRipgrep,
   searchWithRipgrep,
   setRipgrepForTests,
-} from '../src/server/native-search.ts'
-import { ResearchTools, RESEARCH_TOOL_NAMES } from '../src/server/research-tools.ts'
+} from '../src/server/tools/search/native.ts'
+import { ResearchTools, RESEARCH_TOOL_NAMES } from '../src/server/tools/research.ts'
 
 const directories: string[] = []
 

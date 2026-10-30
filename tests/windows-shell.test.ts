@@ -1,8 +1,8 @@
 import iconv from 'iconv-lite'
 import { describe, expect, it } from 'vitest'
-import { isNoMatchCommand, withNoMatchSuccess } from '../src/server/shell-common.ts'
-import { LegacyAwareDecoder } from '../src/server/text-decode.ts'
-import { buildPowerShellScript, isBlockedRecursiveSearch } from '../src/server/windows-shell.ts'
+import { isNoMatchCommand, withNoMatchSuccess } from '../src/server/tools/shell/common.ts'
+import { LegacyAwareDecoder } from '../src/server/tools/shared/text-decode.ts'
+import { buildPowerShellScript, isBlockedRecursiveSearch } from '../src/server/tools/shell/windows.ts'
 
 describe('Windows recursive search guard', () => {
   it('blocks recursive Get-ChildItem piped into Select-String', () => {

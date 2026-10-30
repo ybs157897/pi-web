@@ -34,7 +34,7 @@ binary falls back silently.
 ## Shared shell runner
 
 Both the Windows `pwsh` tool and the POSIX `bash` tool use one runner
-(`src/server/shell-runner.ts`):
+(`src/server/tools/shell/runner.ts`):
 
 - Streaming stdout/stderr into the retained tail (50 KiB / 2000 lines).
 - A full log under the OS temp directory, named in a diagnostic when output was clipped.

@@ -10,7 +10,7 @@ import {
   cleanObjective,
   goalContinuation,
   type GoalState,
-} from '../src/server/goal-tools.ts'
+} from '../src/server/tools/goal.ts'
 
 function goal(overrides: Partial<GoalState> = {}): GoalState {
   return {

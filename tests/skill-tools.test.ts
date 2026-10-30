@@ -6,8 +6,8 @@ import type { ToolExecutionApi, Tx } from '@earendil-works/pi-durable'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LoadedSkills, SKILL_READ_TOOLS, createSkillTools } from '../src/server/skill-tools.ts'
-import { SkillStore } from '../src/server/skills.ts'
+import { LoadedSkills, SKILL_READ_TOOLS, createSkillTools } from '../src/server/tools/skill.ts'
+import { SkillStore } from '../src/server/skills/store.ts'
 
 const directories: string[] = []
 

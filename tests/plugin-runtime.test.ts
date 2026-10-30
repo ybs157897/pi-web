@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '../src/server/app.ts'
-import { createRuntime } from '../src/server/runtime.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import { writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 

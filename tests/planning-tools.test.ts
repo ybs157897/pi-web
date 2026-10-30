@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord/context'
 import type { Extension } from '@earendil-works/pi-durable'
-import { Goals, createGoalExtension } from '../src/server/goal-tools.ts'
-import { InteractionTools } from '../src/server/interaction-tools.ts'
-import { PlanExtension, Plans } from '../src/server/plan-tools.ts'
-import { TodoTools, Todos } from '../src/server/todo-tools.ts'
+import { Goals, createGoalExtension } from '../src/server/tools/goal.ts'
+import { InteractionTools } from '../src/server/tools/interaction.ts'
+import { PlanExtension, Plans } from '../src/server/tools/plan.ts'
+import { TodoTools, Todos } from '../src/server/tools/todo.ts'
 
 type PromptInput = {
   conversationId: string

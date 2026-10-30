@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadPluginPackage } from '../src/server/plugin-manifest.ts'
+import { loadPluginPackage } from '../src/server/plugins/manifest.ts'
 import { writePlugin } from './plugin-fixtures.ts'
 
 const cleanups: Array<() => Promise<void>> = []

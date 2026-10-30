@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, type ToolExecutionApi } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { createExecutionPolicyExtension } from '../src/server/execution-policy.ts'
+import { createExecutionPolicyExtension } from '../src/server/conversation/execution-policy.ts'
 
 describe('execution policy at the executable tool boundary', () => {
   it('checks current Plan state for unknown external tools, including an execution replay', async () => {

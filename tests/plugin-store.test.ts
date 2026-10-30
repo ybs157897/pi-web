@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
-import { PluginStore } from '../src/server/plugin-store.ts'
-import { dataDirectoryName, pluginIdOf } from '../src/server/plugin-types.ts'
+import { PluginStore } from '../src/server/plugins/store.ts'
+import { dataDirectoryName, pluginIdOf } from '../src/server/plugins/types.ts'
 import { makeZip, writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 
 const cleanups: Array<() => Promise<void>> = []

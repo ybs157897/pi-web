@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AppSettings } from '../shared/types.ts'
 
@@ -10,20 +10,28 @@ export const DEFAULT_UI_SETTINGS: AppSettings = {
 
 interface UiPreferences {
   settings: AppSettings
+  /** Resolved color scheme, so components outside the DSH tokens (antd) follow the theme. */
+  dark: boolean
   t: (chinese: string, english: string) => string
 }
 
-const UiPreferencesContext = createContext<UiPreferences>({ settings: DEFAULT_UI_SETTINGS, t: chinese => chinese })
+const UiPreferencesContext = createContext<UiPreferences>({ settings: DEFAULT_UI_SETTINGS, dark: false, t: chinese => chinese })
 
 /** Applies the DSH theme and typography axes once for the complete application. */
 export function UiPreferencesProvider({ value, children }: { value: AppSettings; children: ReactNode }) {
-  const preferences = useMemo<UiPreferences>(() => ({ settings: value, t: (zh, en) => value.locale === 'en' ? en : zh }), [value])
+  const [dark, setDark] = useState(() => value.theme === 'dark'
+    || value.theme === 'system' && typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const preferences = useMemo<UiPreferences>(
+    () => ({ settings: value, dark, t: (zh, en) => value.locale === 'en' ? en : zh }),
+    [value, dark],
+  )
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const apply = () => {
-      const dark = value.theme === 'dark' || value.theme === 'system' && media.matches
-      document.body.toggleAttribute('data-ds-dark-theme', dark)
-      document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+      const isDark = value.theme === 'dark' || value.theme === 'system' && media.matches
+      setDark(isDark)
+      document.body.toggleAttribute('data-ds-dark-theme', isDark)
+      document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
       document.documentElement.lang = value.locale === 'en' ? 'en' : 'zh-CN'
       const secondary = value.fontSize - (value.fontSize <= 14 ? 1 : 2)
       const variables = {

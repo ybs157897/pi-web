@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GitWorktree } from '../src/server/git-worktree.ts'
+import { GitWorktree } from '../src/server/workspace/git/worktree.ts'
 import type { WorkspaceSummary } from '../src/shared/types.ts'
 
 let root = ''

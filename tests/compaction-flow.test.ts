@@ -11,8 +11,8 @@ process.env.PI_WEB_COMPACTION_RESERVE_TOKENS = '4000'
 process.env.PI_WEB_COMPACTION_BACKGROUND_TOKENS = '2000'
 delete process.env.PI_WEB_CONTEXT_BUDGET
 
-const { createRuntime } = await import('../src/server/runtime.ts')
-const { compactionThreshold, ownsCompactionThreshold } = await import('../src/server/compaction.ts')
+const { createRuntime } = await import('../src/server/runtime/index.ts')
+const { compactionThreshold, ownsCompactionThreshold } = await import('../src/server/conversation/compaction.ts')
 
 const cleanups: Array<() => Promise<void>> = []
 

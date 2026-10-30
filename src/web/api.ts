@@ -3,7 +3,7 @@ import type {
   CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
-  UpdateAppSettingsInput, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
+  UpdateAppSettingsInput, WetrackDefectList, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
@@ -307,6 +307,9 @@ export const api = {
   },
   runAutomation(id: string): Promise<{ automation: Automation; conversationId?: string }> {
     return request(`/api/automations/${encodeURIComponent(id)}/run-now`, { method: 'POST' })
+  },
+  wetrackDefects(): Promise<WetrackDefectList> {
+    return request('/api/wetrack/defects')
   },
   updateQueued(id: string, submissionId: string, input: EditQueueInput): Promise<{ submissionId: string }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/queue/${encodeURIComponent(submissionId)}`, {

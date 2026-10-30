@@ -16,7 +16,7 @@ import {
   resolveSafeMemoryPath,
   stampExistingFile,
   stampOriginSessionId,
-} from '../src/server/memory.ts'
+} from '../src/server/memory/store.ts'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {

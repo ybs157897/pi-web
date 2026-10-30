@@ -5,9 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { getCurrentSystemMessage, getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
-import { createRuntime } from '../src/server/runtime.ts'
-import { observeDemoRequests } from '../src/server/demo-model.ts'
-import { resolveMemoryRoot } from '../src/server/memory.ts'
+import { createRuntime } from '../src/server/runtime/index.ts'
+import { observeDemoRequests } from '../src/server/model/demo.ts'
+import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 
 /**

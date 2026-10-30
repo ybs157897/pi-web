@@ -5,9 +5,9 @@ import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, describe, expect, it } from 'vitest'
-import { executePosixBash, isBlockedShellSearch, killPosixTree, resolvePosixEnv } from '../src/server/posix-shell.ts'
-import { createExecutionEnv, localShellSpawn } from '../src/server/execution-env.ts'
-import { disposeBackgroundShells, runShellCommand } from '../src/server/shell-runner.ts'
+import { executePosixBash, isBlockedShellSearch, killPosixTree, resolvePosixEnv } from '../src/server/tools/shell/posix.ts'
+import { createExecutionEnv, localShellSpawn } from '../src/server/conversation/execution-env.ts'
+import { disposeBackgroundShells, runShellCommand } from '../src/server/tools/shell/runner.ts'
 
 const directories: string[] = []
 const originalEnv = {

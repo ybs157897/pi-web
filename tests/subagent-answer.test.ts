@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { latestOwnAnswer } from '../src/server/subagent-answer.ts'
+import { latestOwnAnswer } from '../src/server/conversation/subagent-answer.ts'
 import type { ChatMessage } from '../src/shared/types.ts'
 
 function assistantText(id: string, body: string, overrides: Partial<ChatMessage> = {}): ChatMessage {

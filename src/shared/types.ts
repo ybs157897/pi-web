@@ -320,6 +320,31 @@ export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partia
 }
 export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'intervalMs'> & { intervalMs?: number | null }
 
+/** One WeTrack list row. Unknown scalar fields survive, matching the plugin's list contract. */
+export interface WetrackDefectItem {
+  defectNumber: string
+  defectStep?: string
+  defectStatusName?: string
+  severityName?: string
+  projectNumber?: string
+  projectName?: string
+  simpleDesc?: string
+  creatorName?: string
+  submitTime?: string
+  updateTime?: string
+  [field: string]: string | number | boolean | undefined
+}
+/** The `pending` list shape the standalone issues page renders as a project-grouped list. */
+export interface WetrackDefectList {
+  /** False when neither a CLI nor a fixture is configured; `notice` then explains how to set one up. */
+  configured: boolean
+  source: 'pending' | 'fixture'
+  generatedAt: string
+  count: number
+  items: WetrackDefectItem[]
+  notice?: string
+}
+
 export interface DirectoryEntry { name: string; path: string; hidden: boolean }
 export interface DirectoryListing {
   path: string

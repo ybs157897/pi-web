@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadMarketplace, materializePluginSource, parseMarketplaceSource } from '../src/server/plugin-source.ts'
+import { loadMarketplace, materializePluginSource, parseMarketplaceSource } from '../src/server/plugins/source.ts'
 import { makeZip, writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 
 const cleanups: Array<() => Promise<void>> = []

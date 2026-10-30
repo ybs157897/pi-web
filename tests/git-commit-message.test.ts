@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commitMessageSystemPrompt, frameCommitContext, normalizeCommitMessage } from '../src/server/git-commit-message.ts'
+import { commitMessageSystemPrompt, frameCommitContext, normalizeCommitMessage } from '../src/server/workspace/git/commit-message.ts'
 
 describe('commit message helpers', () => {
   it('removes fences, labels and surrounding quotes from the model answer', () => {

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { SkillStore } from '../src/server/skills.ts'
+import { SkillStore } from '../src/server/skills/store.ts'
 
 const temporaryRoots: string[] = []
 

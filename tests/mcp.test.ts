@@ -12,9 +12,9 @@ import { createInMemoryTransportPair } from '@earendil-works/pi-mcp/testing'
 import type { Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from '@earendil-works/pi-durable'
-import { McpRegistry } from '../src/server/mcp.ts'
-import type { McpServerConfig } from '../src/server/mcp-config.ts'
-import type { PluginMcpServerConfig } from '../src/server/plugin-types.ts'
+import { McpRegistry } from '../src/server/mcp/registry.ts'
+import type { McpServerConfig } from '../src/server/mcp/config.ts'
+import type { PluginMcpServerConfig } from '../src/server/plugins/types.ts'
 
 const temporaryDirectories: string[] = []
 const openManagers: McpRegistry[] = []

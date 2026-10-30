@@ -32,9 +32,9 @@ import {
   type TeamMemberRecord,
   type MemberSessionState,
   type TeamTaskRecord,
-} from '../src/server/team-tools.ts'
-import { createSubagentTools } from '../src/server/subagent-tools.ts'
-import { Plans } from '../src/server/plan-tools.ts'
+} from '../src/server/tools/team.ts'
+import { createSubagentTools } from '../src/server/tools/subagent.ts'
+import { Plans } from '../src/server/tools/plan.ts'
 
 const NOW = 1_800_000_000_000
 const LEAD: TeamActor = { lead: true, name: 'lead' }

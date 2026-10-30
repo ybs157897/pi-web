@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDown, Loader } from 'lucide-react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
-  IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
+  IconCheckOutlineRegular, IconChecklistOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
   IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconListPenOutlineRegular,
   IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
@@ -37,13 +37,15 @@ import type { InspectorDiff, InspectorFile, InspectorSubagentTab, InspectorView 
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
+/** antd is only needed by this page, so it loads as its own chunk on first visit. */
+const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
 import PresetsPanel from './PresetsPanel.tsx'
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'automations'
+type MainPage = 'chat' | 'defects' | 'automations'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
 /** One attachment as the limits see it: an image flag and its byte size. */
@@ -1711,6 +1713,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           {t('新会话', 'New conversation')}
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
+          <button type="button" className={css.navItem} data-active={page === 'defects' || undefined}
+            aria-label={t('问题清单', 'Issues')} aria-current={page === 'defects' ? 'page' : undefined} onClick={() => { navigate('defects') }}>
+            <IconChecklistOutlineRegular size={16} /><span>{t('问题清单', 'Issues')}</span>
+          </button>
           <button type="button" className={css.navItem} data-active={page === 'automations' || undefined}
             aria-label={t('自动化任务', 'Automations')} aria-current={page === 'automations' ? 'page' : undefined} onClick={() => { navigate('automations') }}>
             <IconClockOutlineRegular size={16} /><span>{t('自动化任务', 'Automations')}</span>
@@ -2022,6 +2028,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   </div>}
                 </>}
             </>}
+            {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
+              <WetrackPage />
+            </Suspense>}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>

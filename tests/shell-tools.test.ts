@@ -5,7 +5,7 @@ import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CodingTools, DEFAULT_COMMAND_TIMEOUT_SECONDS, commandTimeout, createCodingTools } from '../src/server/shell-tools.ts'
+import { CodingTools, DEFAULT_COMMAND_TIMEOUT_SECONDS, commandTimeout, createCodingTools } from '../src/server/tools/shell/tools.ts'
 
 const directories: string[] = []
 
