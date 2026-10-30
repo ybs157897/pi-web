@@ -1,4 +1,6 @@
-.card { overflow: hidden; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); color: var(--message-fg); font-size: var(--message-font); }
+/* 20px matches ZCode's assistant-turn `gap-5`: the answer's last block zeroes its
+   margin-bottom, so the card owns the gap before it. */
+.card { margin-top: 20px; overflow: hidden; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); color: var(--message-fg); font-size: var(--message-font); }
 .header { display: flex; width: 100%; min-width: 0; height: 40px; gap: 8px; align-items: center; padding: 0 12px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .header:hover { background: var(--message-hover); }
 .header > svg { flex: none; color: var(--message-muted); transition: transform .2s; }
