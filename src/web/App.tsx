@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowDown } from 'lucide-react'
+import { ArrowDown, Loader } from 'lucide-react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
@@ -1904,6 +1904,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         onClick={toggleInspector} />
                     </Tooltip>
                   </div>
+                  {workspaces.length === 0 && !workspaceLoading && <div className={css.emptyWorkspaceNotice} role="status">
+                    <span>{t('还没有工作区：添加一个文件夹，AI 才能读写文件和运行命令', 'No workspace yet: add a folder so the AI can read files and run commands')}</span>
+                    <Button variant="outline" size="sm" icon={<IconPlusOutlineRegular size={14} />} onClick={() => { void addWorkspaceFromPicker() }}>
+                      {t('添加工作区', 'Add workspace')}
+                    </Button>
+                  </div>}
                   <div className={css.heroArea}>
                   <Composer hero value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                     busy={false} disabled={detailLoading} queue={[]} sendMode={sendMode} sending={sending}
@@ -2126,7 +2132,13 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
             </div>
             : <>
               <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
-                <span className={css.sessionSlot}>{item.busy && <span className={css.sessionBusy} aria-label={t('正在运行', 'Running')} />}</span>
+                {/* ZCode spins a 16px loader in the leading cell instead of a dot; the animation sits on the
+                    wrapper so the SVG keeps one static style. */}
+                <span className={css.sessionSlot}>{item.busy && (
+                  <span className={css.sessionSpinner} role="img" aria-label={t('正在运行', 'Running')}>
+                    <Loader size={16} aria-hidden="true" />
+                  </span>
+                )}</span>
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
               </button>
               <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>

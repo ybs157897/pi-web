@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import { lstat, mkdir, open, opendir, realpath, rename, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,7 @@ import { RuntimeError } from './runtime-errors.ts'
 const MAX_SKILL_BYTES = 64 * 1024
 const MAX_FRONTMATTER_BYTES = 16 * 1024
 const MAX_DESCRIPTION_LENGTH = 1_024
+const MAX_WHEN_TO_USE_LENGTH = 1_024
 const MAX_ROOT_ENTRIES = 500
 const MAX_RESOURCE_FILES = 500
 const MAX_RESOURCE_DEPTH = 16
@@ -27,11 +28,17 @@ const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 type SkillSource = SkillSummary['source']
-export interface SkillRoot { source: SkillSource; path: string; pluginId?: string; pluginName?: string }
+/**
+ * One discovery root. Workspace roots (`agents`/`pi`) carry `base`: the workspace
+ * level the root hangs off, which may be an ancestor of the workspace up to the
+ * repository root (ZCode-style layered discovery).
+ */
+export interface SkillRoot { source: SkillSource; path: string; pluginId?: string; pluginName?: string; base?: string }
 interface SkillDirectory extends SkillRoot { name: string; directory: string; skillPath: string }
 interface SkillDocument {
   name?: string
   description?: string
+  whenToUse?: string
   body: string
   warnings: string[]
   errors: string[]
@@ -40,6 +47,8 @@ interface SkillDocument {
 export interface SkillStoreOptions {
   /** Bundled, read-only skills. Defaults to the repository's top-level `skills/` directory. */
   builtinRoot?: string
+  /** User-level (global) skills, read-only; defaults to none. Anchored at `~/.pi-web/skills` in production. */
+  globalRoot?: string
   /** Enabled plugin skill roots, read on every catalog/list operation. */
   pluginRoots?: () => readonly SkillRoot[]
 }
@@ -87,6 +96,13 @@ function safeRelativePath(value: string): string {
   return segments.join('/')
 }
 
+/**
+ * Parses a SKILL.md with ZCode's two-tier failure model: `errors` drop the Skill,
+ * `warnings` are routing-quality notes only. A file without frontmatter still loads,
+ * named after its directory with an empty description; a file whose frontmatter
+ * exists but lacks `name`/`description` (or overruns the description limit) is
+ * dropped. Malformed YAML lines are skipped as warnings.
+ */
 function parseSkillDocument(content: string, expectedName: string): SkillDocument {
   const errors: string[] = []
   const warnings: string[] = []
@@ -96,13 +112,15 @@ function parseSkillDocument(content: string, expectedName: string): SkillDocumen
 
   const normalized = content.startsWith('\uFEFF') ? content.slice(1) : content
   if (!normalized.startsWith('---\n') && !normalized.startsWith('---\r\n')) {
-    return { body: '', warnings, errors: ['SKILL.md must start with YAML frontmatter delimited by ---'] }
+    return { name: expectedName, description: '', body: normalized, warnings, errors }
   }
 
   const openingEnd = normalized.indexOf('\n') + 1
   const closingMatch = /^(?:---|\.\.\.)[ \t]*\r?$/m.exec(normalized.slice(openingEnd))
   if (!closingMatch || closingMatch.index === undefined) {
-    return { body: '', warnings, errors: ['YAML frontmatter is missing its closing --- delimiter'] }
+    // An unterminated delimiter cannot be frontmatter; treat the file as frontmatter-free.
+    warnings.push('SKILL.md starts with --- but has no closing delimiter; treating it as frontmatter-free')
+    return { name: expectedName, description: '', body: normalized, warnings, errors }
   }
   const frontmatter = normalized.slice(openingEnd, openingEnd + closingMatch.index)
   if (Buffer.byteLength(frontmatter, 'utf8') > MAX_FRONTMATTER_BYTES) {
@@ -110,37 +128,45 @@ function parseSkillDocument(content: string, expectedName: string): SkillDocumen
   }
   const bodyOffset = openingEnd + closingMatch.index + closingMatch[0].length
   const body = normalized.slice(bodyOffset).replace(/^\r?\n/, '')
-  if (!body.trim()) errors.push('SKILL.md body must not be empty')
+  if (!body.trim()) warnings.push('SKILL.md body is empty')
 
   let metadata: unknown
   try {
     const document = parseDocument(frontmatter, { uniqueKeys: true, version: '1.2' })
-    errors.push(...document.errors.map(issue => `invalid YAML frontmatter: ${issue.message}`))
+    // Malformed lines are skipped instead of dropping the Skill (ZCode behavior).
+    warnings.push(...document.errors.map(issue => `invalid YAML frontmatter: ${issue.message}`))
     warnings.push(...document.warnings.map(issue => `YAML frontmatter: ${issue.message}`))
-    if (document.errors.length === 0) metadata = document.toJS({ maxAliasCount: MAX_YAML_ALIASES })
+    metadata = document.toJS({ maxAliasCount: MAX_YAML_ALIASES })
   } catch (error) {
     errors.push(`invalid YAML frontmatter: ${errorMessage(error)}`)
   }
 
   if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
-    errors.push('YAML frontmatter must be a mapping')
+    errors.push('frontmatter must be a mapping with name and description')
     return { body, warnings, errors }
   }
 
   const fields = metadata as Record<string, unknown>
-  const name = typeof fields.name === 'string' ? fields.name : undefined
+  const rawName = typeof fields.name === 'string' ? fields.name.trim() : ''
+  const name = rawName === '' ? undefined : rawName
   const description = typeof fields.description === 'string' ? fields.description : undefined
-  if (name === undefined) errors.push('frontmatter name must be a string')
-  else {
-    errors.push(...validateSkillName(name))
-    if (name !== expectedName) errors.push(`frontmatter name must match directory name "${expectedName}"`)
+  let whenToUse = typeof fields.when_to_use === 'string' ? fields.when_to_use.trim() : undefined
+  if (whenToUse !== undefined && whenToUse.length > MAX_WHEN_TO_USE_LENGTH) {
+    warnings.push(`when_to_use exceeds ${MAX_WHEN_TO_USE_LENGTH} characters and was ignored`)
+    whenToUse = undefined
   }
-  if (description === undefined || !description.trim()) errors.push('frontmatter description must be a non-empty string')
+  if (name === undefined) errors.push('frontmatter name must be a non-empty string')
+  else {
+    if (!SKILL_NAME.test(name)) warnings.push('frontmatter name is not lowercase kebab-case')
+    if (name !== expectedName) warnings.push(`frontmatter name "${name}" differs from its directory name "${expectedName}"; the directory name stays the lookup key`)
+  }
+  if (description === undefined) errors.push('frontmatter description must be a string')
   else if (description.length > MAX_DESCRIPTION_LENGTH) errors.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters`)
-  return { name, description, body, warnings, errors }
+  else if (!description.trim()) warnings.push('frontmatter description is empty; the model has little to match on')
+  return { name, description, whenToUse: whenToUse === undefined || whenToUse === '' ? undefined : whenToUse, body, warnings, errors }
 }
 
-function summary(directory: SkillDirectory, name: string, description: string, version: string): SkillSummary {
+function summary(directory: SkillDirectory, name: string, description: string, version: string, whenToUse?: string): SkillSummary {
   const id = directory.source === 'plugin' && directory.pluginId !== undefined
     ? `${directory.pluginId}:${directory.name}`
     : `${directory.source}:${directory.name}`
@@ -148,6 +174,7 @@ function summary(directory: SkillDirectory, name: string, description: string, v
     id,
     name,
     description,
+    ...(whenToUse === undefined ? {} : { whenToUse }),
     source: directory.source,
     path: directory.skillPath,
     version,
@@ -307,11 +334,13 @@ async function* boundedNames(directory: string, limit: number): AsyncGenerator<s
 
 export class SkillStore {
   private readonly builtinRoot: string
+  private readonly globalRoot: string | undefined
   private readonly pluginRoots: () => readonly SkillRoot[]
   private readonly writeTails = new Map<string, Promise<void>>()
 
   constructor(options: SkillStoreOptions = {}) {
     this.builtinRoot = resolve(options.builtinRoot ?? join(dirname(fileURLToPath(import.meta.url)), '../../skills'))
+    this.globalRoot = options.globalRoot === undefined ? undefined : resolve(options.globalRoot)
     this.pluginRoots = options.pluginRoots ?? (() => [])
   }
 
@@ -345,11 +374,8 @@ export class SkillStore {
           continue
         }
         if (!info.isDirectory()) continue
-        const nameErrors = validateSkillName(name)
-        if (nameErrors.length > 0) {
-          diagnostics.push({ path: directoryPath, message: nameErrors.join('; ') })
-          continue
-        }
+        // Directory names are not format-checked (ZCode loads skills by file path);
+        // `save` still enforces kebab-case for anything this app creates.
         const skillDirectory: SkillDirectory = { ...root, name, directory: directoryPath, skillPath: join(directoryPath, 'SKILL.md') }
         try {
           const bytes = await readBoundedBuffer(skillDirectory.skillPath, MAX_SKILL_BYTES)
@@ -359,15 +385,25 @@ export class SkillStore {
             diagnostics.push({ path: skillDirectory.skillPath, message: document.errors.join('; ') })
             continue
           }
-          skills.push(summary(skillDirectory, document.name!, document.description!, hash(bytes)))
+          skills.push(summary(skillDirectory, document.name!, document.description!, hash(bytes), document.whenToUse))
         } catch (error) {
           diagnostics.push({ path: join(directoryPath, 'SKILL.md'), message: errorMessage(error) })
         }
       }
     }
-    skills.sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source))
+    // Shadowed same-id copies (same name on several workspace levels) collapse to the
+    // first in discovery order — the one that would load; the catalog stays the
+    // loadable set. Sorting happens after dedup so display order stays stable.
+    const seen = new Set<string>()
+    const unique: SkillSummary[] = []
+    for (const skill of skills) {
+      if (seen.has(skill.id)) continue
+      seen.add(skill.id)
+      unique.push(skill)
+    }
+    unique.sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source))
     diagnostics.sort((left, right) => left.path.localeCompare(right.path))
-    return { skills, diagnostics }
+    return { skills: unique, diagnostics }
   }
 
   async load(workspace: string, id: string, resource = 'SKILL.md'): Promise<SkillContent> {
@@ -383,7 +419,7 @@ export class SkillStore {
     const raw = skillBytes.toString('utf8')
     const document = parseSkillDocument(raw, directory.name)
     if (document.errors.length > 0) throw new RuntimeError('INVALID_INPUT', document.errors.join('; '))
-    const skill = summary(directory, document.name!, document.description!, hash(skillBytes))
+    const skill = summary(directory, document.name!, document.description!, hash(skillBytes), document.whenToUse)
     const safeResource = resource === 'SKILL.md' || resource === '' ? 'SKILL.md' : safeRelativePath(resource)
     const files = await this.scanResources(directory.directory)
     let content = raw
@@ -431,8 +467,12 @@ export class SkillStore {
     const nameErrors = validateSkillName(name)
     if (nameErrors.length > 0) throw new RuntimeError('INVALID_INPUT', nameErrors.join('; '))
     if (typeof input.content !== 'string') throw new RuntimeError('INVALID_INPUT', 'Skill content must be a string')
+    // Loading accepts loose frontmatter, but anything this app writes must be canonical.
     const document = parseSkillDocument(input.content, name)
     if (document.errors.length > 0) throw new RuntimeError('INVALID_INPUT', document.errors.join('; '))
+    if (document.name !== name) throw new RuntimeError('INVALID_INPUT', `frontmatter name must match the Skill name "${name}"`)
+    if (document.description === undefined || document.description.trim() === '') throw new RuntimeError('INVALID_INPUT', 'frontmatter description must be a non-empty string')
+    if (document.body.trim() === '') throw new RuntimeError('INVALID_INPUT', 'SKILL.md body must not be empty')
     const workspaceRoot = await this.workspaceRoot(workspace)
     const agentsRoot = await checkedDirectory(workspaceRoot, ['.agents', 'skills'], true)
     if (!agentsRoot) throw new RuntimeError('NOT_FOUND', 'Workspace skill directory is unavailable')
@@ -458,7 +498,7 @@ export class SkillStore {
       await this.validateReferences(directory, document.body)
       if (current !== undefined && current.equals(Buffer.from(input.content, 'utf8'))) {
         return {
-          skill: summary(directory, document.name!, document.description!, hash(current)),
+          skill: summary(directory, document.name!, document.description!, hash(current), document.whenToUse),
           created: false,
           unchanged: true,
           validation: { valid: true, errors: [], warnings: document.warnings },
@@ -478,7 +518,7 @@ export class SkillStore {
       const savedDocument = parseSkillDocument(savedContent, name)
       if (savedDocument.errors.length > 0) throw new RuntimeError('PROVIDER_ERROR', `Saved skill failed validation: ${savedDocument.errors.join('; ')}`)
       return {
-        skill: summary(directory, savedDocument.name!, savedDocument.description!, hash(Buffer.from(savedContent, 'utf8'))),
+        skill: summary(directory, savedDocument.name!, savedDocument.description!, hash(Buffer.from(savedContent, 'utf8')), savedDocument.whenToUse),
         created: current === undefined,
         unchanged: false,
         validation: { valid: true, errors: [], warnings: savedDocument.warnings },
@@ -489,10 +529,40 @@ export class SkillStore {
   private roots(workspaceRoot: string): SkillRoot[] {
     return [
       { source: 'builtin', path: this.builtinRoot },
-      { source: 'agents', path: join(workspaceRoot, '.agents', 'skills') },
-      { source: 'pi', path: join(workspaceRoot, '.pi-web', 'skills') },
+      ...(this.globalRoot === undefined ? [] : [{ source: 'global' as const, path: this.globalRoot }]),
+      ...this.workspaceRoots(workspaceRoot),
       ...this.pluginRoots(),
     ]
+  }
+
+  /**
+   * ZCode-style layered workspace roots: walk from the workspace up to its repository
+   * root (a `.git` entry stops the walk); without a repository only the workspace level
+   * itself counts, so stray skill directories above an un-versioned folder stay out of
+   * scope. Deeper levels win, and within the layer `.pi-web/skills` is scanned before
+   * `.agents/skills`, mirroring ZCode's `.zcode` before `.agents`.
+   */
+  private workspaceRoots(workspaceRoot: string): SkillRoot[] {
+    const levels: string[] = [workspaceRoot]
+    let inRepository = existsSync(join(workspaceRoot, '.git'))
+    let cursor = workspaceRoot
+    while (!inRepository) {
+      const parent = dirname(cursor)
+      if (parent === cursor) break
+      cursor = parent
+      levels.push(cursor)
+      inRepository = existsSync(join(cursor, '.git'))
+    }
+    if (!inRepository) levels.length = 1
+    const roots: SkillRoot[] = []
+    for (const source of ['pi', 'agents'] as const) {
+      const directory = source === 'pi' ? '.pi-web' : '.agents'
+      for (const level of levels) {
+        const path = join(level, directory, 'skills')
+        roots.push({ source, path, base: level })
+      }
+    }
+    return roots
   }
 
   private async workspaceRoot(workspace: string): Promise<string> {
@@ -511,7 +581,13 @@ export class SkillStore {
     try {
       if (root.source === 'agents' || root.source === 'pi') {
         const segments = root.source === 'agents' ? ['.agents', 'skills'] : ['.pi-web', 'skills']
-        return await checkedDirectory(workspaceRoot, segments, false)
+        return await checkedDirectory(root.base ?? workspaceRoot, segments, false)
+      }
+      if (root.source === 'global') {
+        // The global root is user-configured and may legitimately sit under a
+        // symlinked prefix (macOS /var, network homes): resolve it, then require
+        // a real directory. A missing root is the normal fresh-install state.
+        return await realpath(root.path)
       }
       return await assertNoSymlinkComponents(root.path)
     } catch (error) {
@@ -535,8 +611,11 @@ export class SkillStore {
         name = id
       }
       if (name === undefined) continue
-      const nameErrors = validateSkillName(name)
-      if (nameErrors.length > 0) throw new RuntimeError('INVALID_INPUT', nameErrors.join('; '))
+      // The lookup key is a directory name; it need not be kebab-case, but it must
+      // stay a single path segment.
+      if (name === '' || name === '.' || name === '..' || /[/\\\u0000]/u.test(name)) {
+        throw new RuntimeError('INVALID_INPUT', 'Skill id must name a single directory')
+      }
       const rootPath = await this.rootPath(root, workspaceRoot, [])
       if (!rootPath) continue
       const directory = await checkedDirectory(rootPath, [name], false)
@@ -553,7 +632,8 @@ export class SkillStore {
       }
       throw new RuntimeError('NOT_FOUND', `Skill "${id}" was not found`)
     }
-    if (directories.length > 1) throw new RuntimeError('CONFLICT', `Skill name "${id}" is ambiguous; use a source-qualified ID`)
+    // ZCode-style shadowing: same-named Skills at several roots are all discovered but
+    // only the first in discovery order loads, so the bare name is never ambiguous.
     return directories[0]!
   }
 

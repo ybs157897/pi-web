@@ -27,7 +27,9 @@ export const SKILL_READ_TOOLS = ['skill_list', 'skill_load', 'skill_validate'] a
 const MAX_ACTIVE_SKILLS = 8
 const MAX_CATALOG_SKILLS = 32
 const MAX_SKILL_FILES_IN_RESULT = 100
-const MAX_DESCRIPTION_LENGTH = 180
+/** ZCode presents descriptions truncated to ~250 characters; match that for routing parity. */
+const MAX_DESCRIPTION_LENGTH = 250
+const MAX_WHEN_TO_USE_LENGTH = 250
 const MAX_RESOURCE_PATH_LENGTH = 512
 const MAX_OUTPUT_BYTES = 300_000
 
@@ -57,7 +59,8 @@ const skillSummarySchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
   description: Type.String(),
-  source: Type.Union([Type.Literal('builtin'), Type.Literal('agents'), Type.Literal('pi'), Type.Literal('plugin')]),
+  whenToUse: Type.Optional(Type.String()),
+  source: Type.Union([Type.Literal('builtin'), Type.Literal('global'), Type.Literal('agents'), Type.Literal('pi'), Type.Literal('plugin')]),
   pluginId: Type.Optional(Type.String()),
   pluginName: Type.Optional(Type.String()),
   version: Type.String(),
@@ -99,6 +102,7 @@ function safeSummary(skill: SkillSummary): Omit<SkillSummary, 'path'> {
     id: skill.id,
     name: skill.name,
     description: cleanMessage(skill.description),
+    ...(skill.whenToUse === undefined ? {} : { whenToUse: cleanMessage(skill.whenToUse) }),
     source: skill.source,
     ...(skill.pluginId === undefined ? {} : { pluginId: skill.pluginId }),
     ...(skill.pluginName === undefined ? {} : { pluginName: skill.pluginName }),
@@ -198,6 +202,7 @@ function renderCatalog(catalog: SkillCatalog): string {
       id: cleanMessage(skill.id, 128),
       name: cleanMessage(skill.name, 128),
       description: cleanMessage(skill.description),
+      ...(skill.whenToUse === undefined ? {} : { whenToUse: cleanMessage(skill.whenToUse, MAX_WHEN_TO_USE_LENGTH) }),
       source: skill.source,
       ...(skill.pluginId === undefined ? {} : { pluginId: cleanMessage(skill.pluginId, 160) }),
       writable: skill.writable,
@@ -261,6 +266,14 @@ function renderSkillSection(store: SkillStore) {
         : available.has('skill_save')
           ? ['skill_save may write only if its runtime permission check passes; the bundled creator cannot be loaded with the tools available in this request.']
           : []),
+      // Where Skills come from (the catalog above is the authoritative what), and how to bring
+      // external ones in — none of this is discoverable by the model otherwise.
+      ...(available.has('skill_list')
+        ? [
+          'Skills are discovered in this order: the built-in bundle, the user-level global root `~/.pi-web/skills` (read-only, shared across every workspace), then workspace levels — from the current workspace up to its repository root, deeper levels win — with `.pi-web/skills` scanned before `.agents/skills` on each level, and finally enabled plugin packages. When several Skills share a name, only the first in this order is loadable and the rest are shadowed.',
+          'To integrate a Skill that lives elsewhere, copy its whole directory (SKILL.md plus any resource files) into `.agents/skills/<skill-name>/` of the current workspace with workspace file tools — global and built-in Skills are read-only, so customizing one means copying it into the workspace — or recreate a single-file Skill through skill_save, which writes only SKILL.md. Afterwards call skill_list to confirm it is discovered and skill_validate to check it.',
+        ]
+        : []),
       ...(available.has('skill_validate') ? ['Call skill_validate after a Skill is saved or updated.'] : []),
     ]
     return [
@@ -368,7 +381,7 @@ export function createSkillTools(options: {
 
   const saveTool = defineTool({
     name: 'skill_save',
-    description: 'Create or update a workspace Skill at `.agents/skills/<name>/SKILL.md`. Writes only that file. For updates, pass the target file current version as expectedVersion; never reuse a read-only source Skill version. Requires workspace-write permission; never retries an uncertain write blindly.',
+    description: 'Create or update a workspace Skill at `.agents/skills/<name>/SKILL.md`. Writes only that file. A same-named Skill in a higher-precedence root (global or `.pi-web/skills`) will shadow the saved copy. For updates, pass the target file current version as expectedVersion; never reuse a read-only source Skill version. Requires workspace-write permission; never retries an uncertain write blindly.',
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 64 }),
       content: Type.String({ minLength: 1 }),

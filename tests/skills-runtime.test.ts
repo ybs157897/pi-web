@@ -109,7 +109,7 @@ describe('Skills through the application runtime', () => {
     const app = createApp(runtime, { demo: true })
     const ws = runtime.workspaces()[0]!
     await mkdir(join(workspace, '.agents/skills/broken'), { recursive: true })
-    await writeFile(join(workspace, '.agents/skills/broken/SKILL.md'), 'invalid skill')
+    await writeFile(join(workspace, '.agents/skills/broken/SKILL.md'), '---\nname: broken\n---\nmissing description\n')
     const path = `/api/workspaces/${ws.id}/skills`
     const catalogResponse = await app.request(path)
     expect(catalogResponse.status).toBe(200)

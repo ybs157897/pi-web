@@ -4,7 +4,9 @@ export interface SkillSummary {
   id: string
   name: string
   description: string
-  source: 'builtin' | 'agents' | 'pi' | 'plugin'
+  /** Optional "when to use this" guidance from frontmatter, surfaced for skill routing. */
+  whenToUse?: string
+  source: 'builtin' | 'global' | 'agents' | 'pi' | 'plugin'
   /** Marketplace-qualified plugin id for `source: 'plugin'`. */
   pluginId?: string
   pluginName?: string

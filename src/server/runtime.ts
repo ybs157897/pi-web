@@ -98,6 +98,7 @@ import { validateAnswers } from './interactions.ts'
 import { createDirectory as createHostDirectory, listDirectories as listHostDirectories, pickNativeDirectory } from './directory-picker.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from './mcp.ts'
 import { SkillStore } from './skills.ts'
+import { piWebHome } from './home.ts'
 import { createSkillTools, SKILL_READ_TOOLS } from './skill-tools.ts'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from './work-policy.ts'
 import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME, inheritPlanConstraint } from './execution-policy.ts'
@@ -414,10 +415,10 @@ function cloneMetadata(value: Readonly<ConversationMetadata>): ConversationMetad
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const dataDir = resolve(options.dataDir)
-  const requestedWorkspace = resolve(options.workspace)
+  const requestedWorkspace = options.workspace === undefined ? undefined : resolve(options.workspace)
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
-  await mkdir(requestedWorkspace, { recursive: true })
-  const initialWorkspacePath = await realpath(requestedWorkspace)
+  if (requestedWorkspace !== undefined) await mkdir(requestedWorkspace, { recursive: true })
+  const initialWorkspacePath = requestedWorkspace === undefined ? undefined : await realpath(requestedWorkspace)
   const modelRuntime = options.demo ? createDemoModelRuntime() : await createModelRuntime({ dataDir, piDir: options.piDir })
   /** Catalog reloads (file edits, saves, another instance) fanned out to web clients. */
   const modelListeners = new Set<() => void>()
@@ -426,7 +427,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       try { listener() } catch { /* a dropped event stream must not stop the reload */ }
     }
   })
-  const initialWorkspace: WorkspaceSummary = {
+  const initialWorkspace: WorkspaceSummary | undefined = initialWorkspacePath === undefined ? undefined : {
     id: randomUUID(),
     name: basename(initialWorkspacePath) || initialWorkspacePath,
     path: initialWorkspacePath,
@@ -435,23 +436,42 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   const appState = await AppStateStore.open({
     dataDir,
-    defaultWorkspace: initialWorkspace,
+    ...(initialWorkspace === undefined ? {} : { defaultWorkspace: initialWorkspace }),
     defaultThinkingLevel: modelRuntime.defaultThinkingLevel,
   })
   const initialState = appState.snapshot()
-  const launchWorkspace = initialState.workspaces.find(item => item.path === initialWorkspacePath) ?? initialWorkspace
-  const defaultWorkspace = initialState.workspaces.find(item => item.id === initialState.settings.defaultWorkspaceId) ??
-    launchWorkspace
-  if (defaultWorkspace.id !== initialState.settings.defaultWorkspaceId) {
-    await appState.update(state => { state.settings.defaultWorkspaceId = defaultWorkspace.id })
+  const launchWorkspace = initialWorkspacePath === undefined
+    ? undefined
+    : initialState.workspaces.find(item => item.path === initialWorkspacePath) ?? initialWorkspace
+  if (initialState.workspaces.find(item => item.id === initialState.settings.defaultWorkspaceId) === undefined && launchWorkspace !== undefined) {
+    await appState.update(state => { state.settings.defaultWorkspaceId = launchWorkspace.id })
+  }
+  /**
+   * The live default workspace: whatever the current settings point at, resolved
+   * against the current list so deleting it takes effect on the next read instead
+   * of keeping a startup-time object alive.
+   */
+  const defaultWorkspace = (): WorkspaceSummary | undefined => {
+    const state = appState.snapshot()
+    return state.workspaces.find(item => item.id === state.settings.defaultWorkspaceId)
   }
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
   const gitBranches = new GitBranches(() => appState.snapshot().workspaces)
   const gitWorktree = new GitWorktree(() => appState.snapshot().workspaces)
   let onPluginChange: (event: PluginChangeEvent) => void = () => undefined
   const pluginStore = await PluginStore.open({ dataDir, onChange: event => onPluginChange(event) })
-  const skillStore = new SkillStore({ pluginRoots: () => pluginStore.skillRoots() })
-  const workspaceWriteAvailable = await workspaceWriteSupported(defaultWorkspace.path)
+  const skillStore = new SkillStore({
+    // ZCode-style user-level root: read-only skills shared across every workspace.
+    // Demo runs stay isolated from the real global home.
+    globalRoot: options.demo ? join(dataDir, 'skills') : join(piWebHome(), 'skills'),
+    pluginRoots: () => pluginStore.skillRoots(),
+  })
+  // Probe the sandbox against the default workspace at startup; with no workspace yet there is
+  // nothing to probe, so report the platform capability and let per-conversation creation re-test
+  // against whichever workspace the user picks.
+  const workspaceWriteAvailable = process.platform !== 'darwin'
+    ? false
+    : defaultWorkspace() === undefined || await workspaceWriteSupported(defaultWorkspace()!.path)
   const storage = await openNodeSqliteStorage(resolve(dataDir, 'pi-durable.sqlite'))
   // Declared before the extensions so their closures can read the harness at call time.
   let harness: Harness
@@ -570,7 +590,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const parent = await tx.doc(META, parentId)
     metadata.title = label
     metadata.titleSource = 'user'
-    metadata.workspaceId = parent.workspaceId ?? defaultWorkspace.id
+    metadata.workspaceId = parent.workspaceId ?? defaultWorkspace()?.id ?? null
     metadata.presetId = parent.presetId ?? null
     metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
     await inheritPlanConstraint(tx, childId, parentId)
@@ -723,7 +743,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     settings: { compaction: COMPACTION_POLICY },
     env: async (target) => {
       const metadata = await harness.snapshot(META, target.conversationId, CTX)
-      const selectedWorkspace = workspaceFiles.workspace(metadata?.workspaceId ?? defaultWorkspace.id)
+      const workspaceId = metadata?.workspaceId ?? defaultWorkspace()?.id
+      const selectedWorkspace = workspaceId === undefined
+        ? undefined
+        : appState.snapshot().workspaces.find(item => item.id === workspaceId)
+      if (selectedWorkspace === undefined) {
+        throw new RuntimeError('INVALID_INPUT', '此会话没有可用的工作区，请先在侧栏添加工作区')
+      }
       const selectedMode = metadata?.accessMode ?? appState.snapshot().settings.defaultAccessMode
       const memoryRoot = appState.snapshot().settings.memoryEnabled
         ? resolveMemoryRoot({ dataDir, workspacePath: selectedWorkspace.path })
@@ -744,14 +770,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       metadata.queueCreatedAt = {}
       metadata.requestReceipts = {}
       metadata.title = DEFAULT_TITLE
-      metadata.workspaceId = defaultWorkspace.id
+      metadata.workspaceId = defaultWorkspace()?.id ?? null
       metadata.accessMode = appState.snapshot().settings.defaultAccessMode
       metadata.feedback = {}
       metadata.queueEdits = {}
       if (conversation.parent) {
         const parent = await tx.doc(META, conversation.parent.conversationId)
         metadata.title = parent.title === DEFAULT_TITLE ? 'Fork' : `${parent.title} (fork)`
-        metadata.workspaceId = parent.workspaceId ?? defaultWorkspace.id
+        metadata.workspaceId = parent.workspaceId ?? defaultWorkspace()?.id ?? null
         metadata.presetId = parent.presetId ?? null
         metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
         metadata.feedback = {}
@@ -802,7 +828,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     await harness.commit(async (tx) => {
       const metadata = await tx.doc(META, id)
       metadata.updatedAt = Date.now()
-      metadata.workspaceId ??= defaultWorkspace.id
+      metadata.workspaceId ??= defaultWorkspace()?.id ?? null
       metadata.accessMode ??= appState.snapshot().settings.defaultAccessMode
       metadata.presetId ??= null
       metadata.feedback ??= {}
@@ -829,10 +855,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   ): Promise<ConversationDetail> => {
     const currentMetadata = metadata ?? await ensureMetadata(id)
     const settings = appState.snapshot().settings
-    const fallbackWorkspace = workspaceFiles.workspace(currentMetadata.workspaceId ?? settings.defaultWorkspaceId ?? defaultWorkspace.id)
+    const fallbackWorkspaceId = currentMetadata.workspaceId ?? settings.defaultWorkspaceId ?? defaultWorkspace()?.id
+    const fallbackWorkspace = fallbackWorkspaceId === undefined
+      ? undefined
+      : appState.snapshot().workspaces.find(item => item.id === fallbackWorkspaceId)
     const team = options.team === true ? await teamProjection(id) : undefined
     const detail = projectConversation(view, cloneMetadata(currentMetadata), {
-      workspace: fallbackWorkspace.path,
+      workspace: fallbackWorkspace?.path,
       defaultModel: settings.defaultModel ?? modelRuntime.defaultModel,
       todos: await harness.snapshot(Todos, id, CTX),
       interactions: await harness.snapshot(Interactions, id, CTX),
@@ -977,7 +1006,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
 
   const selectedWorkspace = (id: string | undefined): WorkspaceSummary => {
-    return workspaceFiles.workspace(id ?? appState.snapshot().settings.defaultWorkspaceId ?? defaultWorkspace.id)
+    const resolved = id ?? appState.snapshot().settings.defaultWorkspaceId ?? defaultWorkspace()?.id
+    if (resolved === undefined) throw new RuntimeError('NOT_FOUND', '工作区不存在')
+    return workspaceFiles.workspace(resolved)
   }
 
   const selectedPreset = (id: string | null | undefined): AgentPreset | undefined => {
@@ -1184,6 +1215,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     assertOpen()
     const title = safeTitle(input.title)
     const settings = appState.snapshot().settings
+    if (input.workspaceId === undefined && settings.defaultWorkspaceId === undefined && appState.snapshot().workspaces.length === 0) {
+      throw new RuntimeError('INVALID_INPUT', '还没有工作区，请先添加一个工作区再创建会话')
+    }
     const workspace = selectedWorkspace(input.workspaceId ?? settings.defaultWorkspaceId)
     const presetId = input.presetId ?? settings.defaultPresetId ?? null
     const preset = selectedPreset(presetId)
@@ -1365,9 +1399,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     assertSubmit(input)
     const conversation = await requireConversation(value)
     const metadata = await ensureMetadata(conversation.id)
-    const files = input.files?.length
-      ? await workspaceFiles.saveAttachments(metadata.workspaceId ?? defaultWorkspace.id, String(conversation.id), input.requestId, input.files)
-      : []
+    const files: AttachmentReference[] = []
+    if (input.files?.length) {
+      const attachmentWorkspaceId = metadata.workspaceId ?? defaultWorkspace()?.id
+      if (attachmentWorkspaceId === undefined) throw new RuntimeError('INVALID_INPUT', '此会话没有可用的工作区，无法保存附件')
+      files.push(...await workspaceFiles.saveAttachments(attachmentWorkspaceId, String(conversation.id), input.requestId, input.files))
+    }
     return submitWithReferences(conversation, input, files)
   }
 
@@ -1634,12 +1671,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }
       const current = await queuedContentFor(conversation, sourceId)
       if (!current) throw new RuntimeError('CONFLICT', '无法读取排队消息内容')
-      const workspaceId = currentMetadata.workspaceId ?? defaultWorkspace.id
-      const files = input.files === undefined
-        ? current.files
-        : input.files.length
-          ? await workspaceFiles.saveAttachments(workspaceId, String(conversation.id), `queue-edit-${input.requestId}`, input.files)
-          : []
+      let files = current.files
+      if (input.files !== undefined) {
+        if (input.files.length > 0) {
+          const attachmentWorkspaceId = currentMetadata.workspaceId ?? defaultWorkspace()?.id
+          if (attachmentWorkspaceId === undefined) throw new RuntimeError('INVALID_INPUT', '此会话没有可用的工作区，无法保存附件')
+          files = await workspaceFiles.saveAttachments(attachmentWorkspaceId, String(conversation.id), `queue-edit-${input.requestId}`, input.files)
+        } else {
+          files = []
+        }
+      }
       const effective = {
         text: input.text,
         whenBusy: input.whenBusy,
@@ -1865,7 +1906,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       else if (input.defaultModel !== undefined) state.settings.defaultModel = { ...input.defaultModel }
       if (input.defaultPresetId === null) delete state.settings.defaultPresetId
       else if (input.defaultPresetId !== undefined) state.settings.defaultPresetId = input.defaultPresetId
-      if (input.defaultWorkspaceId === null) state.settings.defaultWorkspaceId = launchWorkspace.id
+      if (input.defaultWorkspaceId === null) {
+        if (launchWorkspace === undefined) delete state.settings.defaultWorkspaceId
+        else state.settings.defaultWorkspaceId = launchWorkspace.id
+      }
       else if (input.defaultWorkspaceId !== undefined) state.settings.defaultWorkspaceId = input.defaultWorkspaceId
       if (input.shortcuts === null) delete state.settings.shortcuts
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
@@ -1924,27 +1968,27 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   /**
    * Unregister a workspace, mirroring DSH's row action: its sessions rebind to a
    * remaining workspace so no conversation keeps a dangling binding, and the
-   * directory on disk is left untouched.
+   * directory on disk is left untouched. Deleting the last workspace is allowed;
+   * its sessions stay unbound until the user adds another one.
    */
   const deleteWorkspace = async (id: string): Promise<void> => {
     const state = appState.snapshot()
     if (!state.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
     assertNoAutomationReferences(state.automations, 'workspace', id)
-    const remaining = state.workspaces.filter(workspace => workspace.id !== id)
-    if (remaining.length === 0) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
     await appState.update(async current => {
       if (!current.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
       assertNoAutomationReferences(current.automations, 'workspace', id)
       const currentRemaining = current.workspaces.filter(workspace => workspace.id !== id)
-      if (currentRemaining.length === 0) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
       const currentFallback = currentRemaining.find(workspace => workspace.id === current.settings.defaultWorkspaceId) ?? currentRemaining[0]
-      if (currentFallback === undefined) throw new RuntimeError('INVALID_INPUT', '至少需要保留一个工作区')
       for (const summary of await list()) {
         if (summary.workspaceId !== id) continue
-        await withMetadata(parseConversationId(summary.id), draft => { draft.workspaceId = currentFallback.id })
+        await withMetadata(parseConversationId(summary.id), draft => { draft.workspaceId = currentFallback?.id ?? null })
       }
       current.workspaces = current.workspaces.filter(workspace => workspace.id !== id)
-      if (current.settings.defaultWorkspaceId === id) current.settings.defaultWorkspaceId = currentFallback.id
+      if (current.settings.defaultWorkspaceId === id) {
+        if (currentFallback === undefined) delete current.settings.defaultWorkspaceId
+        else current.settings.defaultWorkspaceId = currentFallback.id
+      }
     })
   }
 
@@ -2103,7 +2147,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       child = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: change }, CTX)
     }
     await withMetadata(child.id, draft => {
-      draft.workspaceId = metadata.workspaceId ?? defaultWorkspace.id
+      draft.workspaceId = metadata.workspaceId ?? defaultWorkspace()?.id ?? null
       draft.presetId = metadata.presetId
       draft.accessMode = metadata.accessMode
       draft.title = metadata.title

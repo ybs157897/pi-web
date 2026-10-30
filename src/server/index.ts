@@ -56,7 +56,9 @@ export async function startServer() {
   const port = parsePort(process.env.PI_WEB_PORT)
   const home = piWebHome()
   const dataDir = resolve(process.env.PI_WEB_DATA_DIR ?? home)
-  const workspace = resolve(process.env.PI_WEB_WORKSPACE ?? 'workspace')
+  // No implicit default: without PI_WEB_WORKSPACE the app starts with an empty
+  // workspace list and the user adds folders from the UI.
+  const workspace = process.env.PI_WEB_WORKSPACE === undefined ? undefined : resolve(process.env.PI_WEB_WORKSPACE)
   const demo = process.env.PI_WEB_DEMO === '1'
   // One-time import of the old project-local `.data` and `~/.pi/agent` files
   // into the global home. Explicit data directories (tests/demo) are untouched.
@@ -75,10 +77,10 @@ export async function startServer() {
   const distRoot = resolve(projectRoot, 'dist/web')
 
   await mkdir(dataDir, { recursive: true })
-  await mkdir(workspace, { recursive: true })
+  if (workspace !== undefined) await mkdir(workspace, { recursive: true })
   if (production) await access(resolve(distRoot, 'index.html'))
 
-  const runtime = await createRuntime({ dataDir, workspace, demo, ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }) })
+  const runtime = await createRuntime({ dataDir, ...(workspace === undefined ? {} : { workspace }), demo, ...(mcpConfigPath === undefined ? {} : { mcpConfigPath }) })
   const app = createApp(runtime, { demo, ...(production ? { staticRoot: distRoot } : {}) })
   let vite: ViteDevServer | undefined
   let server: ServerType | undefined

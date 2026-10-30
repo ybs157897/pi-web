@@ -39,7 +39,8 @@ import type { ConversationMetadata } from './runtime.ts'
 const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly ThinkingLevel[]
 
 type ProjectOptions = {
-  workspace: string
+  /** The workspace path backing this conversation; absent before a workspace is bound. */
+  workspace?: string
   defaultModel?: PiModelRef
   queuedAt?: Record<string, number>
   /** The `pi-web.todos` document; the view carries only Pi's own mounted documents. */
@@ -969,7 +970,7 @@ export function projectConversation(
     ...(runStatus ? { status: runStatus } : {}),
     ...(model ? { model } : {}),
     thinkingLevel: thinkingLevel(agent?.thinkingLevel),
-    cwd: agent?.cwd ?? options.workspace,
+    cwd: agent?.cwd ?? options.workspace ?? '',
   }
 
   const usage = usageSummary(view.docs['pi.usage'])

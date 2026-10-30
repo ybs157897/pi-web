@@ -465,7 +465,7 @@ describe('Pi Durable runtime', () => {
     expect(JSON.stringify(reloaded)).not.toContain('secret-two')
   })
 
-  it('deletes a workspace, rebinding its sessions, and refuses to drop the last one', async () => {
+  it('deletes a workspace, rebinding its sessions, and allows dropping the last one', async () => {
     const { runtime, root } = await fixture()
     const second = join(root, 'second-workspace')
     await mkdir(second, { recursive: true })
@@ -481,9 +481,39 @@ describe('Pi Durable runtime', () => {
     expect(rebound.conversation.workspaceId).not.toBe(added.id)
     expect(runtime.workspaces().map(workspace => workspace.id)).toContain(rebound.conversation.workspaceId)
 
-    const last = runtime.workspaces()[0]
-    await expect(runtime.deleteWorkspace(last?.id ?? '')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(runtime.deleteWorkspace('missing-workspace')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+
+    // Dropping the last workspace is allowed; its sessions stay unbound until another is added.
+    const last = runtime.workspaces()[0]
+    await runtime.deleteWorkspace(last.id)
+    expect(runtime.workspaces()).toEqual([])
+    expect(runtime.settings().defaultWorkspaceId).toBeUndefined()
+    const unbound = await runtime.detail(bound.conversation.id)
+    expect(unbound.conversation.workspaceId).toBeUndefined()
+  })
+
+  it('starts with no workspaces when no default directory is given, until one is added', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-runtime-'))
+    const dataDir = join(root, 'data')
+    const piDir = join(root, 'pi')
+    await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(piDir, { recursive: true })])
+    await writeFile(join(piDir, 'settings.json'), '{}\n')
+    const runtime = await createRuntime({ dataDir, piDir, demo: true })
+    const cleanup = { root, closers: [() => runtime.close()] }
+    fixtures.push(cleanup)
+
+    expect(runtime.workspaces()).toEqual([])
+    expect(runtime.settings().defaultWorkspaceId).toBeUndefined()
+    await expect(runtime.create({ title: 'No workspace' })).rejects.toMatchObject({
+      code: 'INVALID_INPUT',
+      message: expect.stringContaining('还没有工作区'),
+    })
+
+    const added = join(root, 'late-workspace')
+    await mkdir(added, { recursive: true })
+    const workspace = await runtime.addWorkspace({ path: added, name: 'Late' })
+    const created = await runtime.create({ title: 'Bound later', workspaceId: workspace.id })
+    expect(created.conversation.workspaceId).toBe(workspace.id)
   })
 
   it('blocks deleting a workspace referenced by a disabled automation, then allows removal after reassignment', async () => {

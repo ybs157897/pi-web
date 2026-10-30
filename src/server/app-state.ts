@@ -162,7 +162,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, workspaceId: string): AppSettings {
+function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, workspaceId: string | undefined): AppSettings {
   return {
     theme: 'system',
     locale: 'zh',
@@ -179,7 +179,7 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     defaultAccessMode: DEFAULT_ACCESS,
     codemodeMode: 'on',
     memoryEnabled: false,
-    defaultWorkspaceId: workspaceId,
+    ...(workspaceId === undefined ? {} : { defaultWorkspaceId: workspaceId }),
   }
 }
 
@@ -212,7 +212,8 @@ export class AppStateStore {
 
   static async open(options: {
     dataDir: string
-    defaultWorkspace: WorkspaceSummary
+    /** Optional: without it a fresh install starts with an empty workspace list. */
+    defaultWorkspace?: WorkspaceSummary
     defaultThinkingLevel?: ThinkingLevel
   }): Promise<AppStateStore> {
     const path = join(resolve(options.dataDir), 'app-state.json')
@@ -226,8 +227,8 @@ export class AppStateStore {
       if (!isMissing(error)) throw new Error(`无法读取有效的应用配置：${path}`)
       state = {
         version: 1,
-        settings: defaultSettings(options.defaultThinkingLevel, options.defaultWorkspace.id),
-        workspaces: [structuredClone(options.defaultWorkspace)],
+        settings: defaultSettings(options.defaultThinkingLevel, options.defaultWorkspace?.id),
+        workspaces: options.defaultWorkspace === undefined ? [] : [structuredClone(options.defaultWorkspace)],
         plugins: {},
         presets: [],
         automations: [],
@@ -242,7 +243,7 @@ export class AppStateStore {
       await writeJsonAtomic(path, state)
     }
     const store = new AppStateStore(path, state)
-    await store.ensureWorkspace(options.defaultWorkspace)
+    if (options.defaultWorkspace !== undefined) await store.ensureWorkspace(options.defaultWorkspace)
     return store
   }
 

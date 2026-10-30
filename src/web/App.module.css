@@ -205,10 +205,11 @@
   font: inherit;
 }
 .sessionTitle { flex: 1; min-width: 0; margin: 0 6px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: normal; }
-/* DSH's leading 16px cell: the status dot lives here, so titles line up across rows. */
+/* ZCode's leading 16px cell: a spinning loader while the turn runs, nothing when idle. */
 .sessionSlot { display: inline-flex; flex: none; width: 16px; height: 20px; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); }
 .sessionPin { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-label-tertiary); }
-.sessionBusy { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
+.sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
 .sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
 /* DSH's trailing action strip: hidden until the row is hovered, then the
    time cell and the strip swap places so nothing shifts. */
@@ -368,6 +369,7 @@
 .loadingState { flex-direction: row; color: var(--dsw-alias-label-tertiary); }
 .spinner { width: 14px; height: 14px; border: 1.5px solid var(--dsw-alias-border-l3); border-top-color: var(--dsw-alias-state-business-primary); border-radius: 50%; animation: spin .8s linear infinite; }
 .catalogNotice { display: flex; align-items: center; gap: 8px; width: min(100% - 32px, var(--dsh-chat-content-width)); margin: 0 auto 4px; color: var(--dsw-alias-state-error-primary); font-size: 11px; line-height: 16px; }
+.emptyWorkspaceNotice { display: flex; align-items: center; justify-content: center; gap: 12px; width: min(100% - 32px, var(--dsh-chat-content-width)); margin: 0 auto 4px; padding: 6px 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .catalogNotice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .catalogNotice button { flex: none; border: 0; background: transparent; color: var(--dsw-alias-link); cursor: pointer; font: inherit; }
 /* 检查器根节点是 flex 子项（`flex: 1 1 auto; min-height: 0`），这一层必须是

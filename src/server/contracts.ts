@@ -149,4 +149,5 @@ export interface Runtime {
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
   close(): Promise<void>
 }
-export interface RuntimeOptions { dataDir: string; workspace: string; piDir?: string; demo?: boolean; /** Override the imported Pi MCP file (tests and `PI_WEB_MCP_CONFIG`). */ mcpConfigPath?: string }
+/** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */
+export interface RuntimeOptions { dataDir: string; workspace?: string; piDir?: string; demo?: boolean; /** Override the imported Pi MCP file (tests and `PI_WEB_MCP_CONFIG`). */ mcpConfigPath?: string }

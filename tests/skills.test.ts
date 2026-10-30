@@ -58,27 +58,125 @@ describe('SkillStore', () => {
     expect(await store.validate(workspace, 'release-check')).toEqual({ valid: true, errors: [], warnings: [] })
   })
 
-  it('reports malformed skills without hiding valid entries and validates them by explicit ID', async () => {
+  it('drops skills whose frontmatter lacks name or description and validates them by explicit ID', async () => {
     const { workspace, store } = await fixture()
     await putSkill(join(workspace, '.agents', 'skills'), 'valid-skill', skill('valid-skill'))
-    await putSkill(join(workspace, '.agents', 'skills'), 'broken-skill', '---\nname: broken-skill\nname: duplicate\ndescription: broken\n---\nbody\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'no-name', '---\ndescription: Has no name.\n---\nbody\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'no-description', '---\nname: no-description\n---\nbody\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'long-description', `---\nname: long-description\ndescription: ${'x'.repeat(1_025)}\n---\nbody\n`)
 
     const catalog = await store.list(workspace)
     expect(catalog.skills.map(item => item.id)).toEqual(['agents:valid-skill'])
-    expect(catalog.diagnostics).toHaveLength(1)
-    expect(catalog.diagnostics[0]?.path).toContain('/broken-skill/SKILL.md')
-    expect(catalog.diagnostics[0]?.message).toMatch(/YAML|name/u)
-    expect(await store.validate(workspace, 'agents:broken-skill')).toMatchObject({ valid: false })
+    expect(catalog.diagnostics.map(item => item.path)).toEqual(expect.arrayContaining([
+      expect.stringContaining('/no-name/SKILL.md'),
+      expect.stringContaining('/no-description/SKILL.md'),
+      expect.stringContaining('/long-description/SKILL.md'),
+    ]))
+    expect(await store.validate(workspace, 'agents:no-description')).toMatchObject({ valid: false })
   })
 
-  it('requires source-qualified IDs when a name exists in multiple roots', async () => {
+  it('loads loose skills: no frontmatter, mismatched name, non-kebab directory, empty description', async () => {
+    const { workspace, store } = await fixture()
+    await putSkill(join(workspace, '.agents', 'skills'), 'plain-notes', '# Plain notes\n\nNo frontmatter at all.\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'folder-name', '---\nname: display-name\ndescription: Frontmatter name differs.\n---\nbody\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'My Notes', '---\nname: My Notes\ndescription: Non-kebab names load too.\n---\nbody\n')
+    await putSkill(join(workspace, '.agents', 'skills'), 'empty-description', '---\nname: empty-description\ndescription: ""\n---\nbody\n')
+    // Duplicate YAML keys are skipped as warnings, not dropped.
+    await putSkill(join(workspace, '.agents', 'skills'), 'dup-keys', '---\nname: first\nname: dup-keys\ndescription: Duplicate keys.\n---\nbody\n')
+
+    const catalog = await store.list(workspace)
+    expect(catalog.diagnostics).toEqual([])
+    expect(catalog.skills.map(item => item.id)).toEqual([
+      'agents:folder-name', 'agents:dup-keys', 'agents:empty-description', 'agents:My Notes', 'agents:plain-notes',
+    ])
+
+    // No frontmatter: named after the directory, empty description, still loadable.
+    await expect(store.load(workspace, 'plain-notes')).resolves.toMatchObject({
+      skill: { id: 'agents:plain-notes', name: 'plain-notes', description: '' },
+      content: '# Plain notes\n\nNo frontmatter at all.\n',
+    })
+    // Mismatched frontmatter name: the directory name stays the lookup key.
+    await expect(store.load(workspace, 'folder-name')).resolves.toMatchObject({ skill: { name: 'display-name' } })
+    // Non-kebab directory and empty description load; validation reports the quality notes.
+    const validation = await store.validate(workspace, 'empty-description')
+    expect(validation.valid).toBe(true)
+    expect(validation.warnings.join(' ')).toMatch(/description is empty/u)
+  })
+
+  it('shadows same-named skills by discovery order instead of failing', async () => {
     const { workspace, builtin, store } = await fixture()
     await putSkill(builtin, 'shared-name', skill('shared-name', 'Bundled version.'))
     await putSkill(join(workspace, '.pi-web', 'skills'), 'shared-name', skill('shared-name', 'Pi version.'))
+    await putSkill(join(workspace, '.agents', 'skills'), 'shared-name', skill('shared-name', 'Agents version.'))
 
-    await expect(store.load(workspace, 'shared-name')).rejects.toMatchObject({ code: 'CONFLICT' })
+    // All copies stay visible in the catalog (sorted by name, then source), but the
+    // bare name loads the first in discovery order: builtin > .pi-web > .agents.
+    const catalog = await store.list(workspace)
+    expect(catalog.skills.map(item => item.id)).toEqual(['agents:shared-name', 'builtin:shared-name', 'pi:shared-name'])
+    await expect(store.load(workspace, 'shared-name')).resolves.toMatchObject({ skill: { source: 'builtin', description: 'Bundled version. with a second line' } })
+    // A source-qualified id still reaches a shadowed copy directly.
     await expect(store.load(workspace, 'pi:shared-name')).resolves.toMatchObject({ skill: { source: 'pi', description: 'Pi version. with a second line' } })
+    await expect(store.load(workspace, 'agents:shared-name')).resolves.toMatchObject({ skill: { source: 'agents', description: 'Agents version. with a second line' } })
     await expect(store.load(workspace, 'unknown:shared-name')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('walks workspace levels up to the repository root with deeper levels winning', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-skills-')))
+    temporaryRoots.push(root)
+    const repo = join(root, 'repo')
+    const workspace = join(repo, 'packages', 'app')
+    await mkdir(join(repo, '.git'), { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    await putSkill(join(repo, '.pi-web', 'skills'), 'from-repo-root', skill('from-repo-root', 'Repo root version.'))
+    await putSkill(join(repo, '.agents', 'skills'), 'layered', skill('layered', 'Repo agents version.'))
+    await putSkill(join(workspace, '.agents', 'skills'), 'layered', skill('layered', 'Deeper agents version.'))
+    const store = new SkillStore({ builtinRoot: join(root, 'builtin') })
+
+    const catalog = await store.list(workspace)
+    expect(catalog.skills.map(item => item.id)).toEqual(['pi:from-repo-root', 'agents:layered'])
+    // Same name on two levels: the deeper level shadows the repository root.
+    await expect(store.load(workspace, 'layered')).resolves.toMatchObject({ skill: { description: 'Deeper agents version. with a second line' } })
+    await expect(store.load(workspace, 'from-repo-root')).resolves.toMatchObject({ skill: { source: 'pi' } })
+
+    // Above the repository root is out of scope.
+    await putSkill(join(root, '.pi-web', 'skills'), 'outside-repo', skill('outside-repo'))
+    const bounded = await store.list(workspace)
+    expect(bounded.skills.map(item => item.id)).toEqual(['pi:from-repo-root', 'agents:layered'])
+
+    // Without a repository the walk stops at the workspace itself.
+    const plain = join(root, 'plain')
+    await mkdir(plain, { recursive: true })
+    const plainStore = new SkillStore({ builtinRoot: join(root, 'builtin') })
+    const plainCatalog = await plainStore.list(plain)
+    expect(plainCatalog.skills.map(item => item.id)).toEqual([])
+  })
+
+  it('discovers user-level global skills as read-only and surfaces when_to_use', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-skills-')))
+    temporaryRoots.push(root)
+    const workspace = join(root, 'workspace')
+    const globalRoot = join(root, 'global-skills')
+    await mkdir(workspace)
+    await mkdir(globalRoot)
+    const whenToUseSkill = '---\nname: triage-helper\ndescription: Triage production incidents.\nwhen_to_use: >-\n  Use when the user asks to diagnose\n  a live incident.\n---\n\nSteps here.\n'
+    await putSkill(globalRoot, 'triage-helper', whenToUseSkill)
+    const store = new SkillStore({ builtinRoot: join(root, 'builtin'), globalRoot })
+
+    const catalog = await store.list(workspace)
+    expect(catalog.diagnostics).toEqual([])
+    expect(catalog.skills.map(item => item.id)).toEqual(['global:triage-helper'])
+    expect(catalog.skills[0]).toMatchObject({
+      source: 'global',
+      writable: false,
+      whenToUse: 'Use when the user asks to diagnose a live incident.',
+    })
+    await expect(store.load(workspace, 'global:triage-helper')).resolves.toMatchObject({ skill: { source: 'global' } })
+
+    // Workspace skills without when_to_use simply omit the field.
+    await putSkill(join(workspace, '.agents', 'skills'), 'plain-skill', skill('plain-skill'))
+    const withWorkspace = await store.list(workspace)
+    expect(withWorkspace.skills.map(item => item.id)).toEqual(['agents:plain-skill', 'global:triage-helper'])
+    expect(withWorkspace.skills.find(item => item.id === 'agents:plain-skill')?.whenToUse).toBeUndefined()
   })
 
   it('saves idempotently, requires the current hash for updates, serializes writers, and reloads in a new store', async () => {
