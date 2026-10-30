@@ -259,6 +259,12 @@ function renderSkillSection(store: SkillStore) {
       : (saved?.references ?? []).filter(reference => reference.workspace === workspace)
     const active = renderReferences(currentReferences, available.has('skill_load'))
     const skillInstructions = [
+      // Identity anchor: without it, a workspace that is itself another agent's source tree
+      // (with its own AGENTS.md and skills memories) pulls "integrate into this agent" to that host.
+      'You are pi-web. Installing a Skill means writing files under pi-web\'s own discovery roots — the current workspace `.agents/skills/<name>/`, or the global `~/.pi-web/skills` when it should apply to every workspace — never by modifying the workspace project\'s source or configuration. When the user says "integrate into this agent" / "our agent" without naming another host, the target is pi-web itself; another host (for example the `pi` CLI, whose user-level root is `~/.pi/agent/skills`) is targeted only when the user names it. If the intended host or destination is genuinely ambiguous, ask the user with `ask_user_question` before writing anything.',
+      // pi-web's SKILL.md schema; copying a Skill while "fixing" it to another host's fields
+      // silently loses capability the catalog and tools already support.
+      'pi-web Skill frontmatter supports `name`, `description`, and an optional `when_to_use`. Keep these fields when copying or rewriting a Skill — never drop `when_to_use` or reshape a Skill to another host\'s schema.',
       ...(available.has('skill_list') ? ['Call skill_list when you need to refresh or search the workspace Skill catalog.'] : []),
       ...(available.has('skill_load') ? ['When the user names a Skill (by name, id or `$name`) or the task clearly matches a Skill description, load it with skill_load before acting and follow it. Do not load Skills on loose keyword overlap.'] : ['Skill bodies cannot be loaded in this request; do not claim to have read one.']),
       ...(available.has('skill_load') && available.has('skill_save')
@@ -307,7 +313,7 @@ export function createSkillTools(options: {
       }
       const text = result.skills.length === 0
         ? 'No Skills were discovered in this workspace.'
-        : `Available Skills:\n${result.skills.map(skill => `- ${skill.id} (${skill.source}${skill.writable ? ', writable' : ', read-only'}): ${cleanMessage(skill.description)}`).join('\n')}`
+        : `Available Skills:\n${result.skills.map(skill => `- ${skill.id} (${skill.source}${skill.writable ? ', writable' : ', read-only'}): ${cleanMessage(skill.description)}${skill.whenToUse === undefined ? '' : ` — when: ${cleanMessage(skill.whenToUse)}`}`).join('\n')}`
       return {
         output: output(text),
         structuredOutput: result as unknown as JsonValue,
@@ -381,7 +387,7 @@ export function createSkillTools(options: {
 
   const saveTool = defineTool({
     name: 'skill_save',
-    description: 'Create or update a workspace Skill at `.agents/skills/<name>/SKILL.md`. Writes only that file. A same-named Skill in a higher-precedence root (global or `.pi-web/skills`) will shadow the saved copy. For updates, pass the target file current version as expectedVersion; never reuse a read-only source Skill version. Requires workspace-write permission; never retries an uncertain write blindly.',
+    description: 'Create or update a workspace Skill at `.agents/skills/<name>/SKILL.md`. Writes only that file. Frontmatter supports name, description and an optional when_to_use. A same-named Skill in a higher-precedence root (global or `.pi-web/skills`) will shadow the saved copy. For updates, pass the target file current version as expectedVersion; never reuse a read-only source Skill version. Requires workspace-write permission; never retries an uncertain write blindly.',
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 64 }),
       content: Type.String({ minLength: 1 }),
