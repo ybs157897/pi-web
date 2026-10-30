@@ -756,6 +756,17 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **有意不实现：终端（后台 Bash）与工作流分区**。pi-web 的协议没有 `backgroundWorks` / `workflowRuns` 投影：Pi Durable 的 shell 工具是前台调用，`harness.inspect()` 只给任务记录而不区分可展示的终端/工作流；pi-web 也没有 CreateWorkflow 协议。没有真实数据源时不画空分区或伪造状态。因此这两项**从后续清单移除**，不算待办；若未来 Pi 增加后台 shell / workflow 投影，再按 ZCode 结构接入。
 - **验证**：`tests/git-worktree.test.ts`（临时仓库真实 commit/push）、`tests/git-commit-message.test.ts`（消息清洗与上下文）、`tests/status-panel.test.tsx`（进程窗口、智能体折叠、窄宽隐藏）、`tests/http.test.ts`（新路由）。实机截图：`artifacts/status-panel/panel-git-wide2.png`、`panel-git-changes.png`、`commit-modal-2.png`、`commit-ai-generated.png`、`ended-agents.png`、`process-live.png`。
 
+## 进程面板与左栏运行态对齐 ZCode（2026-10-30）
+
+对照 ZCode 源码 `packages/ui/src/v4/ConversationStatusPanel.tsx`（`PlanStatusIcon` / `StatusSectionHeader`）与 `TaskListItem.tsx`（`deriveTaskLeadingIndicator`）：
+
+- **行图标语义**：进行中从 `CircleDot`（蓝色实心点）改为 `ArrowRight` 14px 正文色——ZCode 用箭头表示「当前步」，蓝点在其词汇里是「未读」；未开始 `Circle`、已完成 `CircleCheck` 统一 14px（原 15px）。
+- **行度量**：`min-height: 32px`、`padding: 6px 8px`、文字 13→14px（ZCode `text-ui-base` 默认 14px）、保持 2 行截断；已完成项仍为弱化色 + 删除线。
+- **区块标题**：14px（原 12px）、整行 32px 高；计数改为紧跟标题的 12px 等宽数字（原先靠右），全部完成时转 success 绿；chevron 改为 hover / focus 才显示（ZCode `opacity-0 → group-hover:opacity-100`）。
+- **左栏运行态**：运行中从 6px 蓝点改为 16px `Loader` 旋转图标（`label-tertiary`，动画挂在外层 span 上让 SVG 保持静态样式，`prefers-reduced-motion` 关闭动画），与 ZCode 的 leading 16px 槽一致。
+- **有意未做**：面板右上「…」显示模式菜单 + 最小化胶囊；折叠组 HoverCard 悬浮预览；左栏「完成」标记。ZCode 的完成标记实为未读蓝点，pi-web 的 `ConversationSummary` 还没有 seen/unread 投影，需要先加「打开即已读」的持久状态，另开一轮。
+- **验证**：`tests/status-panel.test.tsx` 新增 2 条（箭头/圆圈语义、全完成时计数标记）；typecheck / build / 655 测试全绿；demo ego 实测截图 `artifacts/status-panel/process-zcode-parity-20261030.png`、`process-chevron-hover-20261030.png`、`session-spinner-20261030.png`。
+
 ## 运行中不再提前显示结束态（2026-10-28）
 
 Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，但会话仍在执行。此前 `AssistantResponse` 只读消息/run 状态，导致工具轮之间短暂显示「已工作 N 秒」、用量、时间和改动文件卡，`ProcessGroup` 也随之在展开/折叠之间切换。

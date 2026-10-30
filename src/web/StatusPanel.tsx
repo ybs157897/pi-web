@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Bot, ChevronDown, ChevronRight, Circle, CircleCheck, CircleDot, FileDiff, GitCommitHorizontal,
+  ArrowRight, Bot, ChevronDown, ChevronRight, Circle, CircleCheck, FileDiff, GitCommitHorizontal,
   Loader, Sparkles, Square, Upload,
 } from 'lucide-react'
 import { Button, Checkbox, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -85,10 +85,11 @@ function agentMetrics(agent: SubagentSummary, t: (zh: string, en: string) => str
   return parts.join(' · ')
 }
 
+/** ZCode marks the running step with a static arrow; a dot reads as "unread" in its vocabulary. */
 function todoIcon(status: TodoItem['status']) {
-  if (status === 'completed') return <CircleCheck size={15} aria-hidden="true" />
-  if (status === 'in_progress') return <CircleDot size={15} aria-hidden="true" />
-  return <Circle size={15} aria-hidden="true" />
+  if (status === 'completed') return <CircleCheck size={14} aria-hidden="true" />
+  if (status === 'in_progress') return <ArrowRight size={14} aria-hidden="true" />
+  return <Circle size={14} aria-hidden="true" />
 }
 
 /**
@@ -332,7 +333,8 @@ export default function StatusPanel({
 
       {todoItems.length > 0 && <section className={css.section} data-status-section="todo">
         <SectionHeader title={t('进程', 'Process')} open={open.todo} onToggle={() => { toggle('todo') }}
-          trailing={<span className={css.trailingCount}>{doneCount}/{todoItems.length}</span>} />
+          trailing={<span className={`${css.trailingCount} ${css.trailingNumeric}`}
+            data-complete={doneCount === todoItems.length || undefined}>{doneCount}/{todoItems.length}</span>} />
         {open.todo && <div className={`${css.sectionBody} ${css.todoBody}`}>
           {todoWindow.compact && !showAllTodos && todoWindow.preceding.length > 0 && <button type="button" className={css.foldRow}
             onClick={() => { setShowAllTodos(true) }}>
@@ -442,7 +444,7 @@ function SectionHeader({ title, open, onToggle, trailing }: {
   return <div className={css.sectionHeader}>
     <button type="button" className={css.sectionTrigger} aria-expanded={open} onClick={onToggle}>
       <span>{title}</span>
-      {open ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+      {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
     </button>
     {trailing !== undefined && <div className={css.sectionTrailing}>{trailing}</div>}
   </div>

@@ -106,4 +106,24 @@ describe('StatusPanel', () => {
     expect(document.querySelector('[data-status-panel]')?.getAttribute('style')).toContain('display: none')
     expect(onVisibilityChange).toHaveBeenLastCalledWith(false)
   })
+
+  // ZCode's vocabulary: an arrow marks the running step, a bare circle the untouched ones,
+  // and a filled dot would read as "unread". The count turns green only when nothing is left.
+  it('draws the running step as an arrow and keeps the count neutral until everything is done', () => {
+    renderPanel()
+    const iconOf = (content: string) => screen.getByText(content).closest('[data-status]')!
+      .querySelector('svg')?.getAttribute('class')?.split(' ') ?? []
+    expect(screen.getByText('修改实现').closest('[data-status]')?.getAttribute('data-status')).toBe('in_progress')
+    expect(iconOf('修改实现')).toContain('lucide-arrow-right')
+    expect(iconOf('补充测试')).toContain('lucide-circle')
+    expect(iconOf('补充测试')).not.toContain('lucide-circle-check')
+    expect(screen.getByText('2/7').getAttribute('data-complete')).toBeNull()
+  })
+
+  it('colors the count once every Todo is completed', () => {
+    renderPanel({ todos: [{ content: '定位问题', status: 'completed' }, { content: '读取源码', status: 'completed' }] })
+    const row = screen.getByText('读取源码').closest('[data-status]')
+    expect(row?.querySelector('svg')?.getAttribute('class')?.split(' ')).toContain('lucide-circle-check')
+    expect(screen.getByText('2/2').getAttribute('data-complete')).toBe('true')
+  })
 })

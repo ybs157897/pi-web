@@ -29,7 +29,7 @@
 .section { min-width: 0; flex: none; padding: 2px 0; }
 .section + .section { border-top: .5px solid var(--dsw-alias-border-l2); padding-top: 6px; }
 
-.sectionHeader { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.sectionHeader { display: flex; min-width: 0; min-height: 32px; align-items: center; gap: 6px; }
 .sectionTrigger {
   display: inline-flex;
   min-width: 0;
@@ -40,14 +40,20 @@
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   font: inherit;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 14px;
+  line-height: 20px;
   cursor: pointer;
 }
 .sectionTrigger:hover { color: var(--dsw-alias-label-primary); }
 .sectionTrigger:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: 2px; }
-.sectionTrailing { display: inline-flex; min-width: 0; align-items: center; gap: 6px; margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
+/* ZCode keeps the fold affordance quiet: the chevron only appears under the pointer. */
+.sectionTrigger > svg { opacity: 0; transition: opacity 120ms ease; }
+.sectionTrigger:hover > svg,
+.sectionTrigger:focus-visible > svg { opacity: 1; }
+.sectionTrailing { display: inline-flex; min-width: 0; align-items: center; gap: 6px; margin-left: 6px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
 .trailingCount { font-variant-numeric: tabular-nums; }
+.trailingNumeric { font-family: var(--ds-font-family-code); }
+.trailingCount[data-complete] { color: var(--dsw-alias-state-success-primary); }
 .trailingCounts { display: inline-flex; flex: none; gap: 5px; margin-left: auto; font-family: var(--ds-font-family-code); font-size: 11px; font-variant-numeric: tabular-nums; }
 .added { color: #16a34a; }
 .removed { color: #dc2626; }
@@ -120,12 +126,12 @@
 .changedRow:disabled { cursor: default; }
 .changedPath { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.todoRow { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 4px 6px; border-radius: 8px; }
+.todoRow { display: flex; min-width: 0; min-height: 32px; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 8px; }
 .todoRow:hover { background: var(--dsw-alias-bg-layer-2); }
 .todoIcon { display: inline-flex; flex: none; margin-top: 2px; color: var(--dsw-alias-label-tertiary); }
-.todoRow[data-status='in_progress'] .todoIcon { color: var(--dsw-alias-state-business-primary); }
+.todoRow[data-status='in_progress'] .todoIcon { color: var(--dsw-alias-label-primary); }
 .todoRow[data-status='completed'] .todoIcon { color: var(--dsw-alias-state-success-primary); }
-.todoText { min-width: 0; flex: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.todoText { min-width: 0; flex: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
 .todoRow[data-status='completed'] .todoText { color: var(--dsw-alias-label-tertiary); text-decoration: line-through; }
 
 .foldRow {
