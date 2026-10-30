@@ -4,6 +4,12 @@ import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it } from 'vitest'
+import {
+  resetRipgrepResolverForTests,
+  resolveRipgrep,
+  searchWithRipgrep,
+  setRipgrepForTests,
+} from '../src/server/native-search.ts'
 import { ResearchTools, RESEARCH_TOOL_NAMES } from '../src/server/research-tools.ts'
 
 const directories: string[] = []
@@ -31,7 +37,7 @@ async function outsideWorkspace(): Promise<string> {
 }
 
 function apiFor(path: string): ToolExecutionApi {
-  return { env: { cwd: path } } as unknown as ToolExecutionApi
+  return { env: { cwd: path }, diagnostic: () => undefined } as unknown as ToolExecutionApi
 }
 
 function registered(name: string) {
@@ -257,5 +263,99 @@ describe('ResearchTools', () => {
     const context = { ...TEST_CONTEXT, abortSignal: controller.signal } as Context
 
     await expect(callTool('list_files', {}, apiFor(root), context)).rejects.toThrow()
+  })
+})
+
+describe('native ripgrep search', () => {
+  it('finds matches with relative paths and one-based lines', async () => {
+    if (await resolveRipgrep() === undefined) return
+    const root = await workspace()
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'app.ts'), 'const a = 1\nconst needle = 2\n')
+
+    const outcome = await searchWithRipgrep({
+      root,
+      searchPath: root,
+      pattern: 'needle',
+      caseSensitive: false,
+      maxResults: 10,
+    })
+
+    expect(outcome.kind).toBe('ok')
+    if (outcome.kind !== 'ok') return
+    expect(outcome.matches).toHaveLength(1)
+    expect(outcome.matches[0]).toMatchObject({ path: 'src/app.ts', line: 2 })
+    expect(outcome.scannedFiles).toBeGreaterThan(0)
+  })
+
+  it('reports no matches without failing', async () => {
+    if (await resolveRipgrep() === undefined) return
+    const root = await workspace()
+    await writeFile(join(root, 'a.txt'), 'hello\n')
+
+    const outcome = await searchWithRipgrep({
+      root,
+      searchPath: root,
+      pattern: 'zzzz',
+      caseSensitive: false,
+      maxResults: 10,
+    })
+
+    expect(outcome.kind).toBe('ok')
+    if (outcome.kind === 'ok') expect(outcome.matches).toHaveLength(0)
+  })
+
+  it('skips generated trees and credential files', async () => {
+    if (await resolveRipgrep() === undefined) return
+    const root = await workspace()
+    await mkdir(join(root, 'node_modules', 'pkg'), { recursive: true })
+    await writeFile(join(root, 'node_modules', 'pkg', 'a.ts'), 'needle\n')
+    await writeFile(join(root, '.env'), 'needle\n')
+    await writeFile(join(root, 'credentials.json'), '{"needle":1}\n')
+    await writeFile(join(root, 'src.ts'), 'needle\n')
+
+    const outcome = await searchWithRipgrep({
+      root,
+      searchPath: root,
+      pattern: 'needle',
+      caseSensitive: false,
+      maxResults: 10,
+    })
+
+    expect(outcome.kind).toBe('ok')
+    if (outcome.kind !== 'ok') return
+    expect(outcome.matches.map(match => match.path)).toEqual(['src.ts'])
+  })
+
+  it('lets the native engine handle ripgrep-only syntax', async () => {
+    if (await resolveRipgrep() === undefined) return
+    const root = await workspace()
+    await writeFile(join(root, 'a.txt'), 'needle\n')
+
+    const result = toolText(await callTool('grep', { pattern: '(?P<word>needle)' }, apiFor(root)))
+
+    expect(result).toContain('a.txt')
+    expect(result).not.toContain('not a valid regular expression')
+  })
+
+  it('falls back for a JavaScript-only lookahead', async () => {
+    const root = await workspace()
+    await writeFile(join(root, 'a.txt'), 'needle\n')
+
+    const result = toolText(await callTool('grep', { pattern: 'need(?=le)' }, apiFor(root)))
+
+    expect(result).toContain('a.txt')
+  })
+
+  it('falls back to the JavaScript walker when ripgrep is unavailable', async () => {
+    const root = await workspace()
+    await writeFile(join(root, 'a.txt'), 'needle\n')
+    setRipgrepForTests(undefined)
+    try {
+      const result = toolText(await callTool('grep', { pattern: 'needle' }, apiFor(root)))
+      expect(result).toContain('a.txt')
+    } finally {
+      resetRipgrepResolverForTests()
+    }
   })
 })

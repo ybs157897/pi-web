@@ -57,6 +57,11 @@ export async function workspaceWriteSupported(workspace: string): Promise<boolea
   }
 }
 
+export interface LocalShellSpawn {
+  file: string
+  args: string[]
+}
+
 class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
   #roots: readonly string[]
   #profile: string
@@ -66,6 +71,11 @@ class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
     const workspaceRoot = resolve(cwd)
     this.#roots = [workspaceRoot, ...extraWriteRoots.map(root => resolve(root)).filter(root => root !== workspaceRoot)]
     this.#profile = profile(this.#roots)
+  }
+
+  /** The same sandboxed invocation the foreground tool uses, for a detached background run. */
+  sandboxSpawn(command: string): LocalShellSpawn {
+    return { file: SANDBOX_EXEC, args: ['-p', this.#profile, '--', '/bin/bash', '-c', command] }
   }
 
   override async exec(command: string | readonly string[], options: ShellExecOptions | undefined, context: Context): Promise<Result<ShellExecResult, import('@earendil-works/pi-durable/env').ExecutionError>> {
@@ -130,6 +140,13 @@ class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
     }
     return undefined
   }
+}
+
+/** Choose the invocation a detached shell needs, preserving the macOS write sandbox when present. */
+export function localShellSpawn(env: ExecutionEnv, command: string, fallbackShell: string): LocalShellSpawn {
+  return env instanceof WorkspaceWriteExecutionEnv
+    ? env.sandboxSpawn(command)
+    : { file: fallbackShell, args: ['-c', command] }
 }
 
 /** Creates the execution environment selected for a conversation. */

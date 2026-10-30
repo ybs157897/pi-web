@@ -4,6 +4,8 @@ import { isAbsolute, posix, relative, resolve, sep } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, type Extension, type ToolExecutionApi } from '@earendil-works/pi-durable'
+import { searchWithRipgrep } from './native-search.ts'
+import { boundedSearch, MAX_TOOL_OUTPUT_BYTES, makeExcerpt, type SearchMatch } from './search-format.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
 export const RESEARCH_TOOL_NAMES = ['list_files', 'search_files', 'glob', 'grep'] as const
@@ -19,8 +21,6 @@ const MAX_LIST_ENTRIES = 100
 const MAX_SEARCH_RESULTS = 50
 const MAX_GLOB_RESULTS = 100
 const MAX_RESULT_PATH_LENGTH = 512
-const MAX_EXCERPT_LENGTH = 200
-const MAX_TOOL_OUTPUT_BYTES = 48 * 1_024
 
 const OMITTED_DIRECTORIES = new Set(['.git', 'node_modules', '.data'])
 const GLOB_OMITTED_DIRECTORIES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl', 'node_modules', 'dist', '.data'])
@@ -28,7 +28,6 @@ const PRIVATE_FILE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.keyst
 const PRIVATE_FILE_NAME = /^(?:(?:credentials?|secrets?|tokens?|private[-_]?key)\.(?:json|ya?ml|toml|txt)|id_rsa|id_ed25519)$/i
 
 type ListedEntry = { path: string; type: 'file' | 'directory' }
-type SearchMatch = { path: string; line: number; excerpt: string }
 type GlobMatch = { path: string; mtimeMs: number }
 type WorkspacePath = { path: string; absolute: string; info: Awaited<ReturnType<typeof lstat>> }
 type WalkEntry = WorkspacePath & { type: 'file' | 'directory'; mtimeMs: number }
@@ -113,11 +112,16 @@ function includeMatcher(value: unknown): ((path: string) => boolean) | undefined
   return globMatcher(value)
 }
 
-function grepPattern(value: unknown, caseSensitive: boolean): RegExp {
+function validateGrepPattern(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_PATTERN_LENGTH
     || value.includes('\u0000') || /[\r\n]/.test(value)) {
     throw new RuntimeError('INVALID_INPUT', `grep patterns must be a single-line non-empty string no longer than ${MAX_PATTERN_LENGTH} characters.`)
   }
+  return value
+}
+
+/** Compile a pattern for the JavaScript fallback; the native path uses ripgrep syntax directly. */
+function grepPattern(value: string, caseSensitive: boolean): RegExp {
   try {
     return new RegExp(value, caseSensitive ? '' : 'i')
   } catch (error) {
@@ -282,22 +286,6 @@ function boundedGlob(scope: string, pattern: string, examined: number, entries: 
   }
 }
 
-function cleanExcerpt(value: string): string {
-  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
-}
-
-function makeExcerpt(line: string, matchIndex: number): string {
-  const clean = cleanExcerpt(line)
-  if (clean.length <= MAX_EXCERPT_LENGTH) return clean
-  const originalPrefix = line.slice(0, matchIndex)
-  const cleanIndex = cleanExcerpt(originalPrefix).length
-  const half = Math.floor((MAX_EXCERPT_LENGTH - 2) / 2)
-  let start = Math.max(0, cleanIndex - half)
-  let end = Math.min(clean.length, start + MAX_EXCERPT_LENGTH - 2)
-  if (end - start < MAX_EXCERPT_LENGTH - 2) start = Math.max(0, end - (MAX_EXCERPT_LENGTH - 2))
-  return `${start > 0 ? '…' : ''}${clean.slice(start, end)}${end < clean.length ? '…' : ''}`
-}
-
 async function yieldToAbort(): Promise<void> {
   await new Promise<void>(resolveNext => setImmediate(resolveNext))
 }
@@ -393,34 +381,6 @@ async function findRegexMatches(
     matches.push({ path, line: index + 1, excerpt: makeExcerpt(line, matchIndex) })
   }
   return { matches, hasMore: false }
-}
-
-function boundedSearch(
-  values: {
-    scope: string
-    query: string
-    kind: 'literal' | 'regex'
-    include?: string
-    scannedFiles: number
-    skippedOversize: number
-    skippedBinary: number
-    skippedUnreadable: number
-    matches: SearchMatch[]
-    truncated: boolean
-  },
-): string {
-  while (true) {
-    const lines = values.matches.map(match => `- ${JSON.stringify(match.path)}:${match.line}: ${match.excerpt}`)
-    const noun = values.kind === 'regex' ? 'regex match' : 'literal match'
-    const text = [
-      `Found ${values.matches.length} ${noun}${values.matches.length === 1 ? '' : 'es'} for ${JSON.stringify(values.query)} under ${JSON.stringify(values.scope)}${values.include ? ` in files matching ${JSON.stringify(values.include)}` : ''}; searched ${values.scannedFiles} files; skipped ${values.skippedUnreadable} unreadable, ${values.skippedBinary} binary, and ${values.skippedOversize} oversized files.`,
-      ...lines,
-      ...(values.truncated ? ['TRUNCATED: the search is incomplete or results were omitted by workspace limits.'] : []),
-    ].join('\n')
-    if (Buffer.byteLength(text) <= MAX_TOOL_OUTPUT_BYTES || values.matches.length === 0) return text
-    values.matches.pop()
-    values.truncated = true
-  }
 }
 
 const listFilesTool = defineTool({
@@ -576,7 +536,7 @@ const globTool = defineTool({
 
 const grepTool = defineTool({
   name: 'grep',
-  description: `Search workspace text files with a regular expression (JavaScript syntax; case-insensitive by default). Returns relative paths, one-based line numbers, and excerpts. path defaults to "."; include optionally filters files by glob (for example "*.ts"); maxResults is an integer from 1 to ${MAX_SEARCH_RESULTS} (default ${MAX_SEARCH_RESULTS}). Skips hidden paths, node_modules, common secret files, binary/oversized files and symlinks. Read-only; no shell. Prefer this over shell grep or rg.`,
+  description: `Search workspace text files with a regular expression (native ripgrep, with a JavaScript fallback; case-insensitive by default). Use this to find unknown content or file locations; use read directly when you know the file path. Do not run \`grep\` or \`rg\` via shell: they bypass workspace policy, output limits, and sensitive-file filtering. Patterns use ripgrep regex syntax when the native engine runs; if ripgrep rejects a pattern, the JavaScript fallback is tried. path defaults to "."; include optionally filters files by glob (for example "*.ts"); maxResults is an integer from 1 to ${MAX_SEARCH_RESULTS} (default ${MAX_SEARCH_RESULTS}). Skips hidden paths, node_modules, common secret files, binary/oversized files and symlinks. Read-only; no shell.`,
   parameters: Type.Object({
     pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
     path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
@@ -587,7 +547,7 @@ const grepTool = defineTool({
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
   execute: async (args, api, context) => {
     abortIfRequested(context)
-    const regex = grepPattern(args.pattern, args.caseSensitive === true)
+    const pattern = validateGrepPattern(args.pattern)
     const include = includeMatcher(args.include)
     const root = await workspaceRoot(api, context)
     const start = await checkedPath(root, args.path, context)
@@ -595,6 +555,45 @@ const grepTool = defineTool({
     const maxResults = args.maxResults === undefined
       ? MAX_SEARCH_RESULTS
       : Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.floor(args.maxResults)))
+    if (!start.info.isFile() && !start.info.isDirectory()) {
+      throw new RuntimeError('INVALID_INPUT', 'grep requires a regular file or workspace directory.')
+    }
+
+    const native = await searchWithRipgrep({
+      root,
+      searchPath: start.absolute,
+      pattern,
+      include: args.include,
+      caseSensitive: args.caseSensitive === true,
+      maxResults,
+      signal: context.abortSignal,
+    })
+    abortIfRequested(context)
+    if (native.kind === 'ok') {
+      return {
+        output: textOutput(boundedSearch({
+          scope: start.path || '.',
+          query: args.pattern,
+          kind: 'regex',
+          include: args.include,
+          scannedFiles: native.scannedFiles,
+          skippedOversize: 0,
+          skippedBinary: 0,
+          skippedUnreadable: 0,
+          matches: native.matches,
+          truncated: native.truncated,
+        })),
+      }
+    }
+    if (native.kind === 'failed') {
+      api.diagnostic({
+        severity: 'info',
+        code: 'native_search_fallback',
+        message: `Native ripgrep search failed (${native.reason}); used the JavaScript walker instead.`,
+      })
+    }
+
+    const regex = grepPattern(pattern, args.caseSensitive === true)
     const matches: SearchMatch[] = []
     let scannedFiles = 0
     let skippedOversize = 0

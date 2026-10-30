@@ -105,6 +105,23 @@ describe.runIf(process.platform !== 'win32')('workspace-aware bash', () => {
     await expect(bashTool().execute({ command: 'pwd', workdir: 'missing' }, apiFor(root), TEST_CONTEXT))
       .rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
+
+  it('treats grep exit 1 as no matches rather than an error', async () => {
+    const root = await workspace()
+
+    const result = await bashTool().execute({ command: 'printf "a\\n" | grep zzz' }, apiFor(root), TEST_CONTEXT)
+
+    expect(result.isError).not.toBe(true)
+    expect(result.diagnostics?.some(diagnostic => diagnostic.code === 'no_matches')).toBe(true)
+  })
+
+  it('keeps a real command failure an error', async () => {
+    const root = await workspace()
+
+    const result = await bashTool().execute({ command: 'exit 3' }, apiFor(root), TEST_CONTEXT)
+
+    expect(result.isError).toBe(true)
+  })
 })
 
 describe('workspace-aware pwsh', () => {

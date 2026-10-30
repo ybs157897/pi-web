@@ -124,6 +124,7 @@ import { GitBranches } from './git-branches.ts'
 import { GitWorktree } from './git-worktree.ts'
 import { commitMessageSystemPrompt, frameCommitContext, normalizeCommitMessage } from './git-commit-message.ts'
 import { createExecutionEnv, workspaceWriteSupported } from './execution-env.ts'
+import { disposeBackgroundShells } from './shell-runner.ts'
 
 export type ConversationMetadata = {
   [key: string]: JsonValue
@@ -2681,6 +2682,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         runtimeClosed = true
         automationScheduler.close()
         memoryExtraction.shutdown()
+        disposeBackgroundShells()
         unsubscribeModels()
         modelListeners.clear()
         modelRuntime.close()
