@@ -210,6 +210,7 @@
 .sessionPin { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-label-tertiary); }
 .sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
+.sessionUnread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
 .sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
 /* DSH's trailing action strip: hidden until the row is hovered, then the
    time cell and the strip swap places so nothing shifts. */

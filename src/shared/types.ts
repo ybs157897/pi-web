@@ -336,6 +336,8 @@ export interface ConversationSummary {
   archived: boolean
   pinned: boolean
   busy: boolean
+  /** An assistant reply newer than the last view; the sidebar renders it as a dot. */
+  unread?: boolean
   model?: ModelRef
   thinkingLevel: ThinkingLevel
   cwd: string

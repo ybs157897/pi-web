@@ -959,6 +959,11 @@ export function projectConversation(
     archived: metadata.archived,
     pinned: metadata.pinned,
     busy: live.run !== undefined,
+    // ZCode's sidebar dot: an assistant reply the reader has not looked at yet. Only settled turns
+    // count, so a streaming run never doubles as "unread".
+    ...(live.run === undefined && latestAssistant !== undefined && latestAssistant.timestamp > (metadata.seenAt ?? 0)
+      ? { unread: true }
+      : {}),
     // The owner edge is what keeps a subagent session out of the sidebar and control routes.
     ...(view.conversation.owner ? { origin: 'subagent' as const, parentId: String(view.conversation.owner.conversationId) } : {}),
     ...(metadata.workspaceId ? { workspaceId: metadata.workspaceId } : {}),

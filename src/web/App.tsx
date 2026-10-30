@@ -243,6 +243,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** ZCode shows the circular jump button as soon as the reader leaves the 48px bottom band. */
   const [jumpToBottomVisible, setJumpToBottomVisible] = useState(false)
   const [statusPanelVisible, setStatusPanelVisible] = useState(false)
+  const [statusPanelOccupied, setStatusPanelOccupied] = useState(false)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const sidebarRef = useRef<HTMLElement | null>(null)
@@ -420,6 +421,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
   }, [refreshCapabilities, refreshCatalog, refreshList, refreshPresets, refreshWorkspaces])
 
+  // Runs keep finishing in conversations this tab is not streaming, so the unread dots only refresh
+  // when the reader comes back to the window. One list read per return, never a poll.
+  useEffect(() => {
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') void refreshList()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenVisible)
+    }
+  }, [refreshList])
+
   // DSH re-reads its model directory when the host reports a settings or
   // adapter change. The server pushes the same signal for saves made here,
   // another instance's writes, and hand-edited provider files.
@@ -433,6 +448,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     wasAtBottom.current = true
     setJumpToBottomVisible(false)
     setStatusPanelVisible(false)
+    setStatusPanelOccupied(false)
     detailRef.current = null
     setDraftState({ scope, text: loadDraft(scope) })
     setDetail(null)
@@ -1969,11 +1985,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       refreshToken={`${activeDetail.messages.length}:${activeDetail.conversation.busy === true}`}
                       onOpenSubagent={(childId, title) => { openSubagentTab(childId, title) }}
                       onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
-                      onNotice={announce} onVisibilityChange={setStatusPanelVisible} />
+                      onNotice={announce} onVisibilityChange={setStatusPanelVisible}
+                      onContentChange={setStatusPanelOccupied} />
                     {catalogError !== '' && <div className={css.catalogNotice} role="status"><span>{catalogError}</span>
                       <button type="button" onClick={() => { void refreshCatalog() }}>{t('重试', 'Retry')}</button></div>}
                     <GoalBar goal={activeDetail.goal} onSetState={(action, payload) => { void updateGoal(action, payload) }} />
-                    {!statusPanelVisible && <TodoPanel todos={activeDetail.todos} />}
+                    {!statusPanelOccupied && <TodoPanel todos={activeDetail.todos} />}
                     <QuestionComposer conversationId={activeDetail.conversation.id} interactions={activeDetail.interactions}
                       onDismiss={focusComposer}
                       onOpenPlan={plan => { openPlan(plan) }}
@@ -2132,13 +2149,15 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
             </div>
             : <>
               <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
-                {/* ZCode spins a 16px loader in the leading cell instead of a dot; the animation sits on the
-                    wrapper so the SVG keeps one static style. */}
-                <span className={css.sessionSlot}>{item.busy && (
+                {/* ZCode's leading cell: a spinning loader while the turn runs, a blue dot for a
+                    finished reply the reader has not opened, nothing when idle. */}
+                <span className={css.sessionSlot}>{item.busy ? (
                   <span className={css.sessionSpinner} role="img" aria-label={t('正在运行', 'Running')}>
                     <Loader size={16} aria-hidden="true" />
                   </span>
-                )}</span>
+                ) : item.unread ? (
+                  <span className={css.sessionUnread} role="img" aria-label={t('有未读回复', 'Unread reply')} />
+                ) : null}</span>
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
               </button>
               <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>

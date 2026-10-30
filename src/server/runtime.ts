@@ -132,6 +132,8 @@ export type ConversationMetadata = {
   updatedAt: number
   archived: boolean
   pinned: boolean
+  /** Last time the client viewed the conversation; the sidebar's unread marker compares against it. */
+  seenAt: number
   titleSource: 'auto' | 'user'
   queueCreatedAt: Record<string, number>
   requestReceipts: Record<string, { fingerprint: string; submissionId: number | null; status: 'pending' | 'accepted' }>
@@ -160,6 +162,7 @@ const META = defineDoc<ConversationMetadata>({
     updatedAt: Date.now(),
     archived: false,
     pinned: false,
+    seenAt: Date.now(),
     titleSource: 'auto',
     queueCreatedAt: {},
     requestReceipts: {},
@@ -402,6 +405,9 @@ function cloneMetadata(value: Readonly<ConversationMetadata>): ConversationMetad
     updatedAt: value.updatedAt,
     archived: value.archived,
     pinned: value.pinned,
+    // Documents written before the unread marker existed read as seen at their last update,
+    // so upgrading does not light up every historical conversation at once.
+    seenAt: value.seenAt ?? value.updatedAt,
     titleSource: value.titleSource,
     queueCreatedAt: { ...value.queueCreatedAt },
     requestReceipts: structuredClone(value.requestReceipts),
@@ -844,6 +850,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       const metadata = await tx.doc(META, id)
       update(metadata)
       metadata.updatedAt = Date.now()
+    }, CTX)
+  }
+
+  /**
+   * Settle the unread marker when the client views a conversation. Unlike `withMetadata` this
+   * leaves `updatedAt` alone: reading a row must not reorder the sidebar.
+   */
+  const markConversationSeen = async (id: ConversationId, seenAt: number): Promise<void> => {
+    await harness.commit(async (tx) => {
+      const metadata = await tx.doc(META, id)
+      if ((metadata.seenAt ?? 0) >= seenAt) return
+      metadata.seenAt = seenAt
     }, CTX)
   }
 
@@ -2518,7 +2536,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   return {
     list,
     create,
-    detail: async (value) => currentDetail(parseConversationId(value)),
+    // Reading the detail is what "viewing a conversation" means for the client; the sidebar's
+    // unread dot clears on the next list refresh. Internal callers use `currentDetail` directly.
+    detail: async (value) => {
+      const id = parseConversationId(value)
+      const detail = await currentDetail(id)
+      if (detail.conversation.busy) return detail
+      await markConversationSeen(id, detail.conversation.updatedAt)
+      if (detail.conversation.unread !== true) return detail
+      // The reader is looking at it right now, so the response itself is already read.
+      const conversation = { ...detail.conversation }
+      delete conversation.unread
+      return { ...detail, conversation }
+    },
     update,
     submit,
     answerInteraction,

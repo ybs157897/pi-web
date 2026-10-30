@@ -26,8 +26,63 @@
   padding: 8px;
 }
 
+/* ZCode's collapsed shell: a 32px capsule that expands the full card when clicked. */
+.capsuleShell {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 30;
+  display: flex;
+  min-width: 0;
+  max-width: calc(100% - 32px);
+  justify-content: flex-end;
+}
+.capsule {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+.capsule:hover { background: var(--dsw-alias-bg-layer-2); }
+.capsule:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: 2px; }
+.capsule > svg { flex: none; color: var(--dsw-alias-label-secondary); }
+.capsuleText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.capsuleAdded { flex: none; color: #16a34a; font-family: var(--ds-font-family-code); font-size: 12px; }
+.capsuleRemoved { flex: none; color: #dc2626; font-family: var(--ds-font-family-code); font-size: 12px; }
+.capsuleCount { flex: none; color: var(--dsw-alias-label-tertiary); font-family: var(--ds-font-family-code); font-size: 12px; font-variant-numeric: tabular-nums; }
+
 .section { min-width: 0; flex: none; padding: 2px 0; }
 .section + .section { border-top: .5px solid var(--dsw-alias-border-l2); padding-top: 6px; }
+
+/* The top-right controls sit over the first section header, which keeps room for them. */
+.panelControls { position: absolute; top: 8px; right: 8px; z-index: 3; display: flex; align-items: center; gap: 2px; }
+.panelControl {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.panelControl:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.panelControl:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+.sections > .section:first-child .sectionHeader { padding-right: 56px; }
 
 .sectionHeader { display: flex; min-width: 0; min-height: 32px; align-items: center; gap: 6px; }
 .sectionTrigger {
@@ -152,6 +207,16 @@
 }
 .foldRow:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
 .foldChevron { font-size: 15px; line-height: 14px; }
+.foldLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ZCode's folded-group preview: hovering the label lists the hidden rows in a floating card. */
+.foldPreview { display: flex; max-height: 320px; flex-direction: column; gap: 2px; overflow-y: auto; padding: 10px 10px 8px; }
+.foldPreviewTitle { margin: 0 0 4px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+.foldPreviewList { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.foldPreviewRow { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 4px 6px; border-radius: 8px; }
+.foldPreviewRow[data-status='completed'] .foldPreviewText { color: var(--dsw-alias-label-tertiary); text-decoration: line-through; }
+.foldPreviewRow[data-status='in_progress'] .todoIcon { color: var(--dsw-alias-label-primary); }
+.foldPreviewText { min-width: 0; flex: 1; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
 
 .agentRow { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 5px 6px; border-radius: 8px; }
 .agentRow:hover { background: var(--dsw-alias-bg-layer-2); }

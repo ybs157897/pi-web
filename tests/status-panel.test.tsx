@@ -7,6 +7,8 @@ import { setupRenderingDom } from './rendering/setup.ts'
 
 beforeEach(() => {
   setupRenderingDom()
+  // The display mode persists in localStorage; each case starts from the default again.
+  window.localStorage.clear()
   // jsdom has no layout: give the panel's parent a wide conversation box.
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     width: 1440, height: 900, top: 0, left: 0, right: 1440, bottom: 900, x: 0, y: 0, toJSON: () => ({}),
@@ -99,12 +101,41 @@ describe('StatusPanel', () => {
     expect(document.querySelector('[data-status-panel]')?.getAttribute('style')).toContain('display: none')
   })
 
-  it('hides and releases layout room when the conversation column is narrow', () => {
+  it('falls back to the capsule and releases layout room when the conversation column is narrow', () => {
     const rect = (width: number) => ({ width, height: 900, top: 0, left: 0, right: width, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
     ;(HTMLElement.prototype.getBoundingClientRect as unknown as { mockReturnValue: (value: DOMRect) => void }).mockReturnValue(rect(900))
     const { onVisibilityChange } = renderPanel()
-    expect(document.querySelector('[data-status-panel]')?.getAttribute('style')).toContain('display: none')
+    expect(document.querySelector('[data-status-panel]')?.getAttribute('data-display-mode')).toBe('mini')
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('修改实现')
+    expect(document.querySelector('[data-status-section="todo"]')).toBeNull()
     expect(onVisibilityChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it('expands the capsule into the full card when clicked', () => {
+    const rect = (width: number) => ({ width, height: 900, top: 0, left: 0, right: width, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ;(HTMLElement.prototype.getBoundingClientRect as unknown as { mockReturnValue: (value: DOMRect) => void }).mockReturnValue(rect(900))
+    renderPanel()
+    fireEvent.click(document.querySelector('[data-status-capsule]') as HTMLElement)
+    expect(screen.getByText('进程')).toBeTruthy()
+    expect(document.querySelector('[data-status-capsule]')).toBeNull()
+  })
+
+  it('offers the display-mode menu and the collapse control on the expanded card', () => {
+    renderPanel()
+    expect(screen.getByLabelText('显示方式')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('收起为胶囊'))
+    expect(document.querySelector('[data-status-capsule]')).toBeTruthy()
+    expect(document.querySelector('[data-status-section="todo"]')).toBeNull()
+  })
+
+  it('previews a folded Todo group on hover', async () => {
+    vi.useFakeTimers()
+    renderPanel()
+    const fold = screen.getByText('已完成 2 项')
+    fireEvent.pointerEnter(fold.closest('span') as HTMLElement)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(screen.getAllByText('定位问题').length).toBeGreaterThan(0)
+    vi.useRealTimers()
   })
 
   // ZCode's vocabulary: an arrow marks the running step, a bare circle the untouched ones,

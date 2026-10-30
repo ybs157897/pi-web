@@ -764,8 +764,16 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - **行度量**：`min-height: 32px`、`padding: 6px 8px`、文字 13→14px（ZCode `text-ui-base` 默认 14px）、保持 2 行截断；已完成项仍为弱化色 + 删除线。
 - **区块标题**：14px（原 12px）、整行 32px 高；计数改为紧跟标题的 12px 等宽数字（原先靠右），全部完成时转 success 绿；chevron 改为 hover / focus 才显示（ZCode `opacity-0 → group-hover:opacity-100`）。
 - **左栏运行态**：运行中从 6px 蓝点改为 16px `Loader` 旋转图标（`label-tertiary`，动画挂在外层 span 上让 SVG 保持静态样式，`prefers-reduced-motion` 关闭动画），与 ZCode 的 leading 16px 槽一致。
-- **有意未做**：面板右上「…」显示模式菜单 + 最小化胶囊；折叠组 HoverCard 悬浮预览；左栏「完成」标记。ZCode 的完成标记实为未读蓝点，pi-web 的 `ConversationSummary` 还没有 seen/unread 投影，需要先加「打开即已读」的持久状态，另开一轮。
+- **有意未做**：~~面板右上「…」显示模式菜单 + 最小化胶囊；折叠组 HoverCard 悬浮预览；左栏「完成」标记~~——三项已在同日第二轮补齐，见下节。
 - **验证**：`tests/status-panel.test.tsx` 新增 2 条（箭头/圆圈语义、全完成时计数标记）；typecheck / build / 655 测试全绿；demo ego 实测截图 `artifacts/status-panel/process-zcode-parity-20261030.png`、`process-chevron-hover-20261030.png`、`session-spinner-20261030.png`。
+
+## 状态卡三态、折叠预览与未读点（2026-10-30，第二轮）
+
+- **显示模式三态（auto / panel / mini）**：对应 ZCode 的 `ChatViewSummaryPanelVariant`。`auto` 在会话列 ≥1120px 时展开卡片，否则收成 32px 胶囊；`panel` 常驻展开；`mini` 常驻胶囊。右上角「…」菜单在 auto / panel 之间切换，`Minimize2` 按钮收成胶囊，点胶囊回到 `panel`。选择写入 `localStorage`（`pi-web.status-panel-mode`）。胶囊摘要按「进行中的 Todo → 进程计数 → 运行中的智能体 → Git 更改 → 已结束智能体」取第一条可用的；Todo 排在 Git 之前是因为胶囊同时承担了底部 Todo dock 的职责（`onContentChange` 让 dock 在展开态与胶囊态都让位），不能让 Todo 进度因为分支有改动而消失。
+- **折叠组悬浮预览**：`TodoGroupFold` 用 primitives 的 `HoverCard variant="preview"`，悬停「已完成 N 项 / 前面 N 项 / 待处理 N 项 / 后面 N 项」弹出该组全部条目（同一套图标与删除线），点击仍然原地展开（ZCode 只有悬停；保留点击是对键盘/触屏的增强）。预览卡由浮层基元自动定位在锚点下方，窄面板里会盖住下方两三行——ZCode 用 Radix 的 `side="left"` 放在面板左侧，这个基元没有方向参数，暂按下方处理。
+- **左栏未读点**：`ConversationMetadata` 新增 `seenAt`（老文档读成 `updatedAt`，升级后不会把全部历史会话点亮）；投影在「有助手回复且时间晚于 seenAt、且当前没有 live run」时给出 `unread`；客户端在 `runtime.detail`（即客户端打开会话、SSE 取快照的入口）落 seenAt，且不碰 `updatedAt`，避免「读一下就把行顶到最前」。内部调用走 `currentDetail`，自动化任务的完成不会替用户清掉未读。左栏 leading 槽优先级：运行中转圈 > 未读 7px 蓝点 > 空。列表没有轮询，改为窗口重新可见 / 获焦时刷新一次。
+- **验证**：`tests/status-panel.test.tsx` 13 条（胶囊回落、点胶囊展开、显示菜单与收起、折叠组悬停预览）；`tests/projection.test.ts` 新增 2 条（未读判定、运行中不算未读）；`tests/runtime.test.ts` 新增 1 条（回复后未读、打开即已读）。typecheck / build / 663 测试全绿。ego demo 实测：`artifacts/status-panel/panel-controls-20261030.png`、`fold-preview-20261030.png`、`capsule-narrow-20261030.png`、`session-unread-20261030.png`。
+- **已知取舍**：胶囊展开后模式落成 `panel`（常驻展开），要回自动模式需从「…」菜单选「自动」——与 ZCode 一致。
 
 ## 运行中不再提前显示结束态（2026-10-28）
 

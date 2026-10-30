@@ -152,6 +152,22 @@ describe('Pi Durable runtime', () => {
     expect(await readFile(join(workspace, 'hello.txt'), 'utf8')).toBe('Hello from Pi Durable Web.\n')
   })
 
+  it('marks a finished reply unread until the conversation is viewed again', async () => {
+    const { runtime } = await fixture()
+    const created = await runtime.create({ title: 'Unread marker' })
+    const unreadOf = async () => (await runtime.list()).find(item => item.id === created.conversation.id)?.unread
+    // Creating a conversation counts as viewing it, so the empty row carries no dot.
+    expect(await unreadOf()).toBeUndefined()
+
+    await runtime.submit(created.conversation.id, { text: '给出一个简短回答', requestId: randomUUID() })
+    await waitForCompletedRun(runtime, created.conversation.id)
+    expect(await unreadOf()).toBe(true)
+
+    // Reading the detail is the client's "opened this conversation"; the dot stays cleared.
+    await runtime.detail(created.conversation.id)
+    expect(await unreadOf()).toBeUndefined()
+  })
+
   it('removes a queued submission and stop preserves remaining queued inputs', async () => {
     const gate = holdNextDemoResponse()
     const { runtime } = await fixture()

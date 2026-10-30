@@ -16,6 +16,8 @@ function metadata(overrides: Partial<ConversationMetadata> = {}): ConversationMe
     updatedAt: 150,
     archived: false,
     pinned: true,
+    // Read after every fixture message: the unread cases override this explicitly.
+    seenAt: 1_000,
     titleSource: 'user',
     queueCreatedAt: {},
     requestReceipts: {},
@@ -484,5 +486,27 @@ describe('assistant message identity', () => {
     // The scheduler's fault path writes its entry without a task scope, so there is
     // no streaming counterpart for it to keep the identity of.
     expect(result.messages[0]?.id).toBe('entry:9:0')
+  })
+
+  it('marks a settled reply newer than the last view as unread', () => {
+    const entries = [entry(9, 'pi.assistant', [assistant([{ type: 'text', text: 'Done' }], 900)])]
+    const unread = projectConversation(view(entries), metadata({ seenAt: 500 }), { workspace: WORKSPACE })
+    const read = projectConversation(view(entries), metadata({ seenAt: 900 }), { workspace: WORKSPACE })
+
+    expect(unread.conversation.unread).toBe(true)
+    expect(read.conversation.unread).toBeUndefined()
+  })
+
+  it('never marks a running turn as unread', () => {
+    const partial = assistant([{ type: 'text', text: 'Working' }], 900, 'pending')
+    const streaming = projectConversation(view([], {
+      'pi.live': persistedObject({
+        run: { taskId: 5, inputs: [1] },
+        generation: { attempt: 1, message: persistedJson(partial) },
+      }),
+    }), metadata({ seenAt: 10 }), { workspace: WORKSPACE })
+
+    expect(streaming.conversation.busy).toBe(true)
+    expect(streaming.conversation.unread).toBeUndefined()
   })
 })

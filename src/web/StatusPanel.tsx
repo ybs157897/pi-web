@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowRight, Bot, ChevronDown, ChevronRight, Circle, CircleCheck, FileDiff, GitCommitHorizontal,
-  Loader, Sparkles, Square, Upload,
+  Loader, Minimize2, Sparkles, Square, Upload,
 } from 'lucide-react'
-import { Button, Checkbox, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  Button, Checkbox, HoverCard, IconCheckOutlineRegular, IconEllipsisOutlineRegular, Menu, Modal,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { GitWorktreeFile, GitWorktreeStatus, SubagentSummary, TodoItem } from '../shared/types.ts'
 import { api } from './api.ts'
 import GitBranchSwitcher from './GitBranchSwitcher.tsx'
@@ -14,6 +16,16 @@ import css from './StatusPanel.module.css'
 const GIT_POLL_MS = 5_000
 const TODO_FOCUS_WINDOW_SIZE = 3
 const COMPACT_TODO_THRESHOLD = 6
+/** ZCode's auto/panel/mini override, kept per browser like the app's other view preferences. */
+const PANEL_MODE_STORAGE = 'pi-web.status-panel-mode'
+type PanelMode = 'auto' | 'panel' | 'mini'
+
+function readPanelMode(): PanelMode {
+  try {
+    const value = window.localStorage.getItem(PANEL_MODE_STORAGE)
+    return value === 'panel' || value === 'mini' ? value : 'auto'
+  } catch { return 'auto' }
+}
 
 export interface StatusPanelProps {
   workspaceId?: string
@@ -25,8 +37,10 @@ export interface StatusPanelProps {
   onOpenSubagent: (childId: string, title?: string) => void
   onInspectDiff: (diff: InspectorDiff) => void
   onNotice: (message: string, success?: boolean) => void
-  /** Lets the chat column reserve room for the expanded card. */
+  /** Expanded card only: it reserves room in the conversation column. */
   onVisibilityChange?: (visible: boolean) => void
+  /** Any content at all, expanded card or capsule; the bottom Todo dock steps aside for both. */
+  onContentChange?: (visible: boolean) => void
 }
 
 export interface TodoFocusWindow {
@@ -97,7 +111,8 @@ function todoIcon(status: TodoItem['status']) {
  * It stays inside the chat pane's right margin and only renders when it has something to say.
  */
 export default function StatusPanel({
-  workspaceId, conversationId, todos, subagents, refreshToken, onOpenSubagent, onInspectDiff, onNotice, onVisibilityChange,
+  workspaceId, conversationId, todos, subagents, refreshToken, onOpenSubagent, onInspectDiff, onNotice,
+  onVisibilityChange, onContentChange,
 }: StatusPanelProps) {
   const { t } = useUiPreferences()
   const [git, setGit] = useState<GitWorktreeStatus | null>(null)
@@ -117,6 +132,13 @@ export default function StatusPanel({
   const hostRef = useRef<HTMLElement | null>(null)
   const gitRequest = useRef(0)
   const [wide, setWide] = useState(false)
+  const [mode, setModeState] = useState<PanelMode>(readPanelMode)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
+
+  const setMode = useCallback((next: PanelMode): void => {
+    setModeState(next)
+    try { window.localStorage.setItem(PANEL_MODE_STORAGE, next) } catch { /* The panel still switches for this visit. */ }
+  }, [])
 
   const loadGit = useCallback(async (): Promise<void> => {
     if (workspaceId === undefined) {
@@ -182,9 +204,14 @@ export default function StatusPanel({
   const gitChanges = git !== null && git.isRepository && (git.dirtyFileCount > 0 || git.ahead > 0)
   const doneCount = todoItems.filter(item => item.status === 'completed').length
   const hasContent = gitChanges || todoItems.length > 0 || runningAgents.length > 0 || endedAgents.length > 0
-  const visible = hasContent && wide
-  useEffect(() => { onVisibilityChange?.(visible) }, [visible, onVisibilityChange])
+  // ZCode's display modes: `auto` expands on a wide conversation column and falls back to the
+  // capsule; `panel` always expands; `mini` is the capsule until the user expands it again.
+  const expanded = hasContent && (mode === 'panel' || (mode === 'auto' && wide))
+  const capsule = hasContent && !expanded
+  useEffect(() => { onVisibilityChange?.(expanded) }, [expanded, onVisibilityChange])
   useEffect(() => () => { onVisibilityChange?.(false) }, [onVisibilityChange])
+  useEffect(() => { onContentChange?.(hasContent) }, [hasContent, onContentChange])
+  useEffect(() => () => { onContentChange?.(false) }, [onContentChange])
 
   const inspectFile = async (file: GitWorktreeFile): Promise<void> => {
     if (workspaceId === undefined || busyKey !== undefined) return
@@ -293,10 +320,62 @@ export default function StatusPanel({
 
   const toggle = (key: keyof typeof open): void => { setOpen(current => ({ ...current, [key]: !current[key] })) }
   const visibleTodos = todoWindow.compact && !showAllTodos ? todoWindow.focus : todoItems
+  const activeTodo = todoItems.find(item => item.status === 'in_progress')
+  // ZCode's capsule leans on the most actionable fact first. Todos stay ahead of the Git summary
+  // because the capsule also replaces the bottom Todo dock here: nothing about Todo progress may
+  // become invisible just because a branch has uncommitted changes.
+  const capsuleSummary = (): ReactNode => {
+    if (activeTodo !== undefined) return <>
+      <ArrowRight size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{activeTodo.content}</span>
+    </>
+    if (todoItems.length > 0) return <>
+      <CircleCheck size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{t('进程', 'Process')}</span>
+      <span className={css.capsuleCount}>{doneCount}/{todoItems.length}</span>
+    </>
+    if (runningAgents.length > 0) return <>
+      <Bot size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{t(`${runningAgents.length} 个智能体运行中`, `${runningAgents.length} agents running`)}</span>
+    </>
+    if (gitChanges && git !== null) return <>
+      <FileDiff size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{t('更改', 'Changes')}</span>
+      <span className={css.capsuleAdded}>+{git.added}</span>
+      <span className={css.capsuleRemoved}>−{git.removed}</span>
+    </>
+    if (endedAgents.length > 0) return <>
+      <Bot size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{t('已结束的智能体', 'Ended agents')}</span>
+      <span className={css.capsuleCount}>{endedAgents.length}</span>
+    </>
+    return null
+  }
+  const capsuleContent = capsule ? capsuleSummary() : null
 
-  return <aside ref={hostRef} className={css.panel} aria-label={t('状态', 'Status')} data-status-panel
-    style={visible ? undefined : { display: 'none' }}>
-    {visible && <div className={css.sections}>
+  return <aside ref={hostRef} className={expanded ? css.panel : css.capsuleShell} aria-label={t('状态', 'Status')}
+    data-status-panel data-display-mode={expanded ? mode : 'mini'} data-capsule={capsule || undefined}
+    style={hasContent ? undefined : { display: 'none' }}>
+    {expanded && <div className={css.panelControls}>
+      <Menu open={modeMenuOpen} onClose={() => { setModeMenuOpen(false) }} portal
+        items={[
+          { id: 'auto', label: t('自动（宽屏展开）', 'Auto'), icon: mode === 'auto' ? <IconCheckOutlineRegular size={14} /> : undefined },
+          { id: 'panel', label: t('常驻展开', 'Always expanded'), icon: mode === 'panel' ? <IconCheckOutlineRegular size={14} /> : undefined },
+        ]}
+        onSelect={id => {
+          setModeMenuOpen(false)
+          if (id === 'auto' || id === 'panel') setMode(id)
+        }}
+        anchor={<button type="button" className={css.panelControl} aria-label={t('显示方式', 'Display mode')}
+          aria-haspopup="menu" aria-expanded={modeMenuOpen} onClick={() => { setModeMenuOpen(value => !value) }}>
+          <IconEllipsisOutlineRegular size={14} />
+        </button>} />
+      <button type="button" className={css.panelControl} aria-label={t('收起为胶囊', 'Collapse to capsule')}
+        onClick={() => { setMode('mini') }}>
+        <Minimize2 size={14} aria-hidden="true" />
+      </button>
+    </div>}
+    {expanded && <div className={css.sections}>
       {gitChanges && <section className={css.section} data-status-section="git">
         <SectionHeader title={t('Git 工具', 'Git tools')} open={open.git} onToggle={() => { toggle('git') }}
           trailing={open.git ? undefined : <span className={css.trailingCounts}>
@@ -336,22 +415,22 @@ export default function StatusPanel({
           trailing={<span className={`${css.trailingCount} ${css.trailingNumeric}`}
             data-complete={doneCount === todoItems.length || undefined}>{doneCount}/{todoItems.length}</span>} />
         {open.todo && <div className={`${css.sectionBody} ${css.todoBody}`}>
-          {todoWindow.compact && !showAllTodos && todoWindow.preceding.length > 0 && <button type="button" className={css.foldRow}
-            onClick={() => { setShowAllTodos(true) }}>
-            <ChevronLeft /> {todoWindow.preceding.every(item => item.status === 'completed')
+          {todoWindow.compact && !showAllTodos && todoWindow.preceding.length > 0 && <TodoGroupFold
+            group="preceding" items={todoWindow.preceding}
+            label={todoWindow.preceding.every(item => item.status === 'completed')
               ? t(`已完成 ${todoWindow.preceding.length} 项`, `${todoWindow.preceding.length} completed`)
               : t(`前面 ${todoWindow.preceding.length} 项`, `${todoWindow.preceding.length} earlier`)}
-          </button>}
+            onExpand={() => { setShowAllTodos(true) }} />}
           {visibleTodos.map((item, index) => <div key={`${item.content}:${index}`} className={css.todoRow} data-status={item.status}>
             <span className={css.todoIcon}>{todoIcon(item.status)}</span>
             <span className={css.todoText}>{item.content}</span>
           </div>)}
-          {todoWindow.compact && !showAllTodos && todoWindow.following.length > 0 && <button type="button" className={css.foldRow}
-            onClick={() => { setShowAllTodos(true) }}>
-            <ChevronRight size={12} aria-hidden="true" /> {todoWindow.following.every(item => item.status === 'pending')
+          {todoWindow.compact && !showAllTodos && todoWindow.following.length > 0 && <TodoGroupFold
+            group="following" items={todoWindow.following}
+            label={todoWindow.following.every(item => item.status === 'pending')
               ? t(`待处理 ${todoWindow.following.length} 项`, `${todoWindow.following.length} pending`)
               : t(`后面 ${todoWindow.following.length} 项`, `${todoWindow.following.length} later`)}
-          </button>}
+            onExpand={() => { setShowAllTodos(true) }} />}
           {todoWindow.compact && showAllTodos && <button type="button" className={css.foldRow} onClick={() => { setShowAllTodos(false) }}>
             <ChevronRight size={12} aria-hidden="true" /> {t('收起', 'Collapse')}
           </button>}
@@ -397,7 +476,12 @@ export default function StatusPanel({
       </section>}
     </div>}
 
-    {visible && <Modal open={commitOpen} onClose={() => { if (commitBusy === undefined) setCommitOpen(false) }}
+    {capsuleContent !== null && <button type="button" className={css.capsule} onClick={() => { setMode('panel') }}
+      aria-label={t('展开状态面板', 'Expand the status panel')} data-status-capsule>
+      {capsuleContent}
+    </button>}
+
+    {expanded && <Modal open={commitOpen} onClose={() => { if (commitBusy === undefined) setCommitOpen(false) }}
       title={t('提交或推送', 'Commit or push')}
       className={css.commitModal}
       description={git?.branchName === null || git === null
@@ -448,6 +532,28 @@ function SectionHeader({ title, open, onToggle, trailing }: {
     </button>
     {trailing !== undefined && <div className={css.sectionTrailing}>{trailing}</div>}
   </div>
+}
+
+/** A folded Todo group: the label expands in place, hovering previews the hidden rows (ZCode). */
+function TodoGroupFold({ group, items, label, onExpand }: {
+  group: 'preceding' | 'following'
+  items: readonly TodoItem[]
+  label: string
+  onExpand: () => void
+}) {
+  return <HoverCard variant="preview" openDelayMs={140}
+    content={<div className={css.foldPreview}>
+      <p className={css.foldPreviewTitle}>{label}</p>
+      <ul className={css.foldPreviewList}>{items.map((item, index) => <li key={`${item.content}:${index}`}
+        className={css.foldPreviewRow} data-status={item.status}>
+        <span className={css.todoIcon}>{todoIcon(item.status)}</span>
+        <span className={css.foldPreviewText}>{item.content}</span>
+      </li>)}</ul>
+    </div>}
+    anchor={<button type="button" className={css.foldRow} onClick={onExpand} aria-label={label}>
+      {group === 'preceding' ? <ChevronLeft /> : <ChevronRight size={12} aria-hidden="true" />}
+      <span className={css.foldLabel}>{label}</span>
+    </button>} />
 }
 
 /** A small chevron that only labels the folded Todo groups. */
