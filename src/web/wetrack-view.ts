@@ -8,8 +8,38 @@ export interface WetrackProjectGroup {
 
 const UNCATEGORIZED = '未分类'
 
+export function fieldText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return ''
+}
+
 function text(value: string | number | boolean | undefined): string {
-  return typeof value === 'string' ? value.trim() : ''
+  return fieldText(value)
+}
+
+/**
+ * WeTrack descriptions are HTML. The reader renders text instead of raw HTML, so images become a
+ * marker and block boundaries become line breaks — no sanitizer, no innerHTML, no XSS surface.
+ */
+export function defectDescriptionText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/giu, '')
+    .replace(/<img\b[^>]*>/giu, ' [图片] ')
+    .replace(/<br\s*\/?>/giu, '\n')
+    .replace(/<\/(?:p|div|li|tr|h[1-6]|blockquote)>/giu, '\n')
+    .replace(/<li\b[^>]*>/giu, '· ')
+    .replace(/<[^>]*>/gu, '')
+    .replace(/&nbsp;/giu, ' ')
+    .replace(/&lt;/giu, '<')
+    .replace(/&gt;/giu, '>')
+    .replace(/&quot;/giu, '"')
+    .replace(/&#(?:39|x27);/giu, "'")
+    .replace(/&amp;/giu, '&')
+    .replace(/[ \t\u00a0]+/gu, ' ')
+    .replace(/ *\n */gu, '\n')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim()
 }
 
 /** Group by project number when present; name-only rows still get their own stable bucket. */

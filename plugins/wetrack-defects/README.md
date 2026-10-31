@@ -29,11 +29,19 @@
 | --- | --- | --- |
 | `WETRACK_CLI_JSON` | `["python","C:\\tools\\wetrack.py"]` | 推荐；JSON 数组，路径含空格也安全 |
 | `WETRACK_SCRIPT` | `C:\\tools\\wetrack.py` | 配合 `WETRACK_PYTHON`（默认 `python`） |
-| `WETRACK_CLI` | `rd-cli` | 单个可执行文件；路径不要含空格 |
+| `WETRACK_CLI` | `rd-cli` | 单个可执行文件或完整路径；按 `PATH`/`PATHEXT` 查找，路径可以含空格 |
 | `WETRACK_CWD` | `C:\\work` | 可选，CLI 工作目录 |
 | `WETRACK_FIXTURE` | `fixtures/demo.json` | 仅离线演示；不让 CLI 运行 |
 
 未配置且 `rd-cli` 不在 PATH 时，工具会返回一段配置说明，不会伪造数据。也可以在 `.pi-plugin/plugin.json` 的 `mcpServers.wetrack.env` 里写死同样的变量再安装，例如 `"WETRACK_CLI_JSON": "[\"python\",\"C:\\\\tools\\\\wetrack.py\"]"`。
+
+调用约定（按 `rd-cli` 1.0.4 实测）：
+
+- 可执行文件名是 `rd-cli` 时自动补 `wetrack` 命名空间（`rd-cli wetrack pending --json`）；`wetrack.py` 直接收命令。
+- 过滤查询在 `rd-cli` 上是 `wetrack advanced-query`（没有 `query`），参数是 `--project-num` / `--cur-user-name` / `--defect-status`，且项目编号、产品线、问题单号、需求编号**至少要填一项**，否则 CLI 返回 `BIZ_400`；`wetrack.py` 用 `query --project/--owner/--status`。
+- 详情：`rd-cli` 用 `detail --defect-number <DTS…>`，`wetrack.py` 用位置参数。
+- 回复信封：`rd-cli` 成功是 `{ success: true, data }`（列表在 `data.items`，详情的 `data` 就是缺陷对象）；业务失败是 `{ success: false, error: { code, message, stage } }`，JSON 打在 **stdout**、退出码 1（认证失败 3），参数错误才是 stderr。`wetrack.py` 输出平铺、没有信封。
+- Windows 上不走 `shell`：`.cmd`/`.bat` 垫片经 `cmd.exe /d /s /c` 执行，路径含空格也安全。
 
 ## 数据约定
 

@@ -385,6 +385,16 @@ class FakeRuntime implements Runtime {
     }
   }
 
+  async wetrackDefect(defectNumber: string): Promise<Protocol.WetrackDefectDetail> {
+    this.calls.push(`wetrack-defect:${defectNumber}`)
+    return { configured: true, generatedAt: '2026-10-30 12:00:00', defect: { defectNumber, simpleDesc: '设备删除后无提示' } }
+  }
+
+  async wetrackReport(defectNumber: string): Promise<Protocol.WetrackDefectReport> {
+    this.calls.push(`wetrack-report:${defectNumber}`)
+    return { available: true, directory: '/tmp/reports', file: `${defectNumber}.md`, markdown: '# 结论' }
+  }
+
   async close(): Promise<void> {
     this.closeCount += 1
   }
@@ -992,6 +1002,17 @@ describe('management API', () => {
     expect(defects.status).toBe(200)
     expect(await defects.json()).toMatchObject({ configured: true, count: 1, items: [{ defectNumber: 'DTS006749813' }] })
     expect(runtime.calls).toContain('wetrack-defects')
+
+    const detail = await app.request('/api/wetrack/defects/DTS006749813')
+    expect(detail.status).toBe(200)
+    expect(await detail.json()).toMatchObject({ configured: true, defect: { defectNumber: 'DTS006749813' } })
+    const report = await app.request('/api/wetrack/defects/DTS006749813/report')
+    expect(report.status).toBe(200)
+    expect(await report.json()).toMatchObject({ available: true, file: 'DTS006749813.md' })
+    expect((await app.request('/api/wetrack/defects/not-a-defect')).status).toBe(400)
+    expect((await app.request('/api/wetrack/defects/not-a-defect/report')).status).toBe(400)
+    expect(runtime.calls).toContain('wetrack-defect:DTS006749813')
+    expect(runtime.calls).toContain('wetrack-report:DTS006749813')
   })
 
   it('opens the application configuration file and reports a missing file as NOT_FOUND', async () => {

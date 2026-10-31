@@ -43,7 +43,9 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceSummary,
+  WetrackDefectDetail,
   WetrackDefectList,
+  WetrackDefectReport,
 } from '../shared/types.ts'
 
 /** Runtime operations used by HTTP and deterministic integration tests. */
@@ -150,6 +152,10 @@ export interface Runtime {
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
   /** WeTrack issues for the standalone list page; this data never enters a conversation. */
   wetrackDefects(): Promise<WetrackDefectList>
+  /** One defect's full detail for the issues page modal. */
+  wetrackDefect(defectNumber: string): Promise<WetrackDefectDetail>
+  /** The operator's local analysis document for one defect, if one was written. */
+  wetrackReport(defectNumber: string): Promise<WetrackDefectReport>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import { dirname, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -10,6 +11,8 @@ const UI_URI = 'ui://wetrack/board'
 const MAX_REPORT_DEPTH = 5
 const MAX_REPORT_NODES = 200
 const CLI_TIMEOUT_MS = 45_000
+// `.bat`/`.cmd` 不能直接 spawn：要么经 cmd.exe，要么被 Node 的 CVE-2024-27980 加固直接拒绝。
+const WINDOWS_BATCH_FILE = /\.(?:bat|cmd)$/iu
 
 // SurveyJS 发行产物保存在 ui/vendor/，启动时内联进 board.html 的标记位。
 // 插件宿主的 CSP 只允许内联脚本/样式且禁止外链，页面必须自包含。
@@ -44,7 +47,7 @@ function configError() {
     'WeTrack CLI 未配置。请给插件进程设置以下任一环境变量：',
     '1. WETRACK_CLI_JSON：JSON 数组，例如 ["python","C:\\\\tools\\\\wetrack.py"] 或 ["rd-cli"]',
     '2. WETRACK_SCRIPT：wetrack.py 的绝对路径（可选 WETRACK_PYTHON，默认 python）',
-    '3. WETRACK_CLI：单个可执行文件（路径不要含空格，含空格请用 WETRACK_CLI_JSON）',
+    '3. WETRACK_CLI：单个可执行文件或完整路径（例如 rd-cli，按 PATH/PATHEXT 查找）',
     '4. WETRACK_FIXTURE：本地 JSON 夹具路径（仅用于离线演示）',
   ].join('\n')
 }
@@ -64,16 +67,60 @@ function commandBase() {
   return ['rd-cli']
 }
 
-function runCli(args) {
-  const base = commandBase()
-  const command = base[0]
-  const commandArgs = [...base.slice(1), ...args]
+/** rd-cli 把 WeTrack 命令收在 `wetrack` 命名空间下；wetrack.py 直接收命令。 */
+function isRdcli(base) {
+  if ((process.env.WETRACK_SCRIPT || '').trim() !== '') return false
+  return /^rd-cli(?:\.(?:exe|cmd|bat))?$/iu.test(basename(base[0]))
+}
+
+/** 命名空间紧跟程序名且只补一次：base 里已经写了 wetrack 就不再插。 */
+function cliArgs(base, args) {
+  const tail = [...base.slice(1), ...args]
+  if (!isRdcli(base) || tail.includes('wetrack')) return tail
+  return ['wetrack', ...tail]
+}
+
+/** Windows 上 spawn 只给裸命令名补 `.exe`，`.cmd`/`.bat` 垫片要自己按 PATHEXT 找。 */
+function findOnPath(program) {
+  if (process.platform !== 'win32') return undefined
+  if (program === '' || /[\\/]/u.test(program) || /\.[^.\\/]+$/u.test(program)) return undefined
+  const searchPath = process.env.PATH ?? process.env.Path ?? ''
+  const extensions = (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(extension => extension !== '')
+  for (const directory of searchPath.split(delimiter)) {
+    if (directory === '') continue
+    for (const extension of extensions) {
+      const candidate = join(directory, `${program}${extension}`)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return undefined
+}
+
+function resolveCommand(base) {
+  const program = findOnPath(base[0]) ?? base[0]
+  if (!WINDOWS_BATCH_FILE.test(program)) return { command: program, prefix: [], program, verbatim: false }
+  const comspec = (process.env.ComSpec || '').trim()
+  return { command: comspec === '' ? 'cmd.exe' : comspec, prefix: ['/d', '/s', '/c'], program, verbatim: true }
+}
+
+/** `/s` 会剥掉一层外层引号，所以整行和每一项都要预先加引号。 */
+function batchCommandLine(program, args) {
+  const parts = [program, ...args].map(value => `"${value.replaceAll('"', '\\"')}"`)
+  return `"${parts.join(' ')}"`
+}
+
+function runCli(base, args) {
+  const resolved = resolveCommand(base)
+  const argv = cliArgs(base, args)
+  const commandArgs = resolved.verbatim
+    ? [...resolved.prefix, batchCommandLine(resolved.program, argv)]
+    : [...resolved.prefix, ...argv]
   return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(command, commandArgs, {
+    const child = spawn(resolved.command, commandArgs, {
       cwd: process.env.WETRACK_CWD || ROOT,
       env: process.env,
       windowsHide: true,
-      shell: process.platform === 'win32',
+      windowsVerbatimArguments: resolved.verbatim,
     })
     let stdout = ''
     let stderr = ''
@@ -97,14 +144,26 @@ function runCli(args) {
       finish(error.code === 'ENOENT' ? new Error(configError()) : error)
     })
     child.on('close', code => {
-      if (code !== 0) {
-        finish(new Error((stderr.trim() || stdout.trim() || `WeTrack CLI 退出码 ${code}`).slice(0, 4000)))
+      // 业务失败是 stdout 上的 `{ success: false, error }` + 退出码 1/3；参数错误才是 stderr，
+      // 所以先尝试解析 stdout，再决定要不要拿退出码当结论。
+      let payload
+      try { payload = parseJsonOutput(stdout) } catch (error) {
+        if (code !== 0) {
+          finish(new Error((stderr.trim() || `WeTrack CLI 退出码 ${code}`).slice(0, 4000)))
+          return
+        }
+        finish(new Error(`WeTrack CLI 没有返回合法 JSON：${error instanceof Error ? error.message : String(error)}`))
         return
       }
       try {
-        finish(null, parseJsonOutput(stdout))
+        const value = unwrapEnvelope(payload)
+        if (code === 0) {
+          finish(null, value)
+          return
+        }
+        finish(new Error((stderr.trim() || `WeTrack CLI 退出码 ${code}`).slice(0, 4000)))
       } catch (error) {
-        finish(new Error(`WeTrack CLI 没有返回合法 JSON：${error instanceof Error ? error.message : String(error)}`))
+        finish(error instanceof Error ? error : new Error(String(error)))
       }
     })
   })
@@ -132,10 +191,28 @@ async function loadFixture() {
   return data
 }
 
-function fixtureListItems(fixture) {
-  const pending = fixture.pending
+/** rd-cli 的每条回复都包在 `{ success, data }` 里；wetrack.py 和夹具是平铺的。 */
+function unwrapEnvelope(payload) {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload) || !('success' in payload)) return payload
+  if (payload.success === false) {
+    const failure = payload.error && typeof payload.error === 'object' ? payload.error : {}
+    const code = typeof failure.code === 'string' ? failure.code : ''
+    const message = typeof failure.message === 'string' ? failure.message : (typeof payload.message === 'string' ? payload.message : '')
+    const hint = typeof failure.recover_hint === 'string' ? failure.recover_hint : ''
+    const head = [code, message].filter(part => part !== '').join('：') || '未给出原因'
+    throw new Error(`WeTrack CLI 返回失败：${head}${hint === '' ? '' : `（${hint}）`}`)
+  }
+  return 'data' in payload ? payload.data : payload
+}
+
+/** `{ pending: { items } }`、`{ pending: [] }`、`{ items: [] }` 和裸数组都可能出现。 */
+function listItems(payload) {
+  if (Array.isArray(payload)) return payload
+  if (typeof payload !== 'object' || payload === null) return []
+  const pending = payload.pending
   if (Array.isArray(pending)) return pending
-  if (pending && Array.isArray(pending.items)) return pending.items
+  if (pending && typeof pending === 'object' && Array.isArray(pending.items)) return pending.items
+  if (Array.isArray(payload.items)) return payload.items
   return []
 }
 
@@ -153,7 +230,7 @@ function filterFixtureItems(items, args) {
 }
 
 function normalizeList(source, payload) {
-  const items = Array.isArray(payload) ? payload : (payload && Array.isArray(payload.items) ? payload.items : [])
+  const items = listItems(unwrapEnvelope(payload))
   return {
     source,
     generatedAt: nowText(),
@@ -162,11 +239,12 @@ function normalizeList(source, payload) {
   }
 }
 
-function listArgs(args) {
-  const parts = ['query']
-  if (args.project) parts.push('--project', String(args.project))
-  if (args.owner) parts.push('--owner', String(args.owner))
-  if (args.status) parts.push('--status', String(args.status))
+/** rd-cli 没有 `query`：过滤查询走 `advanced-query`，且参数名与 wetrack.py 完全不同。 */
+function listArgs(args, rdcli) {
+  const parts = [rdcli ? 'advanced-query' : 'query']
+  if (args.project) parts.push(rdcli ? '--project-num' : '--project', String(args.project))
+  if (args.owner) parts.push(rdcli ? '--cur-user-name' : '--owner', String(args.owner))
+  if (args.status) parts.push(rdcli ? '--defect-status' : '--status', String(args.status))
   parts.push('--json')
   return parts
 }
@@ -174,11 +252,15 @@ function listArgs(args) {
 async function pending(args) {
   const fixture = await loadFixture()
   if (fixture) {
-    const items = filterFixtureItems(fixtureListItems(fixture), args)
+    const items = filterFixtureItems(listItems(fixture), args)
     return normalizeList(args.project || args.owner || args.status ? 'query' : 'pending', items)
   }
-  if (args.project || args.owner || args.status) return normalizeList('query', await runCli(listArgs(args)))
-  return normalizeList('pending', await runCli(['pending', '--json']))
+  const base = commandBase()
+  if (!args.project && !args.owner && !args.status) return normalizeList('pending', await runCli(base, ['pending', '--json']))
+  const rdcli = isRdcli(base)
+  // advanced-query 要求项目编号/产品线/问题单号/需求编号至少填一项，只按负责人或状态过滤会 BIZ_400。
+  if (rdcli && !args.project) throw new Error('rd-cli 的 advanced-query 至少要一个项目编号：请填写 project（--project-num）；只按负责人或状态过滤请改用 wetrack.py')
+  return normalizeList('query', await runCli(base, listArgs(args, rdcli)))
 }
 
 async function detail(args) {
@@ -191,7 +273,9 @@ async function detail(args) {
     if (!found) throw new Error(`夹具中没有 ${defectNumber}`)
     return { simpleDesc: '', ...found, defectNumber }
   }
-  return await runCli(['detail', defectNumber, '--json'])
+  const base = commandBase()
+  const parts = isRdcli(base) ? ['detail', '--defect-number', defectNumber, '--json'] : ['detail', defectNumber, '--json']
+  return unwrapEnvelope(await runCli(base, parts))
 }
 
 function cleanText(value, max) {
@@ -273,9 +357,9 @@ const tools = [
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目名称或项目编号，例如 DH3.RDA000902' },
-        owner: { type: 'string', description: '负责人/工号' },
-        status: { type: 'string', description: '状态名称或环节编码，例如 待开发解决问题 或 105' },
+        project: { type: 'string', description: '项目编号，例如 DH3.RDA000902（rd-cli 只接受编号）' },
+        owner: { type: 'string', description: '当前责任人工号，例如 340188' },
+        status: { type: 'string', description: '状态编码，例如 205=待开发解决问题（rd-cli 只接受编码，wetrack.py 也接受名称）' },
       },
     },
   },

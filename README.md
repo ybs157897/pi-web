@@ -227,12 +227,15 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 | --- | --- |
 | `WETRACK_CLI_JSON` | 推荐；JSON 数组，例如 `["python","C:\\tools\\wetrack.py"]` |
 | `WETRACK_SCRIPT` | `wetrack.py` 路径，可配 `WETRACK_PYTHON`（默认 `python`） |
-| `WETRACK_CLI` | 单个可执行文件，例如 `rd-cli`（路径不要含空格） |
+| `WETRACK_CLI` | 单个可执行文件或完整路径，例如 `rd-cli`（按 `PATH`/`PATHEXT` 查找，路径可以含空格） |
 | `WETRACK_FIXTURE` | 离线夹具路径，结构见 [`plugins/wetrack-defects/fixtures/demo.json`](plugins/wetrack-defects/fixtures/demo.json) |
+| `WETRACK_REPORT_DIR` | 本地结论目录，每个缺陷一份 `DTS….md`（默认 `<数据目录>/wetrack-reports/`，即 `~/.pi-web/wetrack-reports/`） |
 
-服务端执行 `<CLI> pending --json`，接受 `{ pending: { items } }`、`{ pending: [] }`、`{ items: [] }` 或裸数组，只保留行级标量字段（`defectNumber` / `severityName` / `defectStatusName` / `projectName` / `simpleDesc` / `submitTime` 等）；详情里的附件与内嵌图片不进列表。`PI_WEB_DEMO=1` 且没有配置任何 CLI/夹具时改用内置夹具，页面标记「演示数据」。
+服务端执行 `<CLI> pending --json`：被调方是 `rd-cli` 时自动补 `wetrack` 命名空间（即 `rd-cli wetrack pending --json`，base 里已写 `wetrack` 则不重复），`wetrack.py` 直接收命令。回复若是 `{ success, data }` 信封会先解包，`success: false` 按错误抛出而不是当成 0 条；列表本身接受 `{ pending: { items } }`、`{ pending: [] }`、`{ items: [] }` 或裸数组，只保留行级标量字段（`defectNumber` / `severityName` / `defectStatusName` / `projectName` / `simpleDesc` / `submitTime` 等）；详情里的附件与内嵌图片不进列表。`PI_WEB_DEMO=1` 且没有配置任何 CLI/夹具时改用内置夹具，页面标记「演示数据」。
 
-antd 只在这个页面使用，经 `lazy()` 单独打成 chunk（约 380 kB / 128 kB gzip），不影响首屏主包。
+点开任意一行会打开详情弹窗：**详情** tab 走 `GET /api/wetrack/defects/<编号>`（服务端执行 `<CLI> detail --defect-number … --json`，`wetrack.py` 用位置参数），显示基本信息、详细描述（HTML 转纯文本，`<img>` 记作 `[图片]`，不注入 HTML）、处理记录与附件/图片路径；**结论** tab 读 `WETRACK_REPORT_DIR/<编号>.md`，用页面同一套 Markdown 渲染，没有文件时直接显示应该放到哪个目录。详情和结论都不进会话、不调模型。
+
+antd 只在这个页面使用，经 `lazy()` 单独打成 chunk（约 420 kB / 140 kB gzip，含结论用的 Markdown 渲染），不影响首屏主包。
 
 ## 代码结构
 

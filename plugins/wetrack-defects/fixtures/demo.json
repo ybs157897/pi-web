@@ -45,16 +45,46 @@
       "submitTime": "2026-10-27 16:04:22",
       "simpleDesc": "【安保服务】在convert上解除安保服务，无法同步至care上",
       "description": "<p>步骤：</p><p>1. convert 上解除安保</p><p>2. care 端未同步状态</p>",
-      "modifyContent": "",
-      "threeLevelCause": "",
+      "modifyContent": "解除安保要删除站点",
+      "threeLevelCause": "解除安保要删除站点",
       "attachments": [
-        { "fileName": "log.txt", "fileSize": 20480 }
+        {
+          "fileName": "log.txt",
+          "fileSize": 20480
+        }
       ],
       "images": [
         "C:\\Users\\340188\\AppData\\Local\\Temp\\wetrack\\DTS006744740\\images\\1.jpg"
       ],
       "attachmentFiles": [
-        { "fileName": "log.txt", "path": "C:\\Users\\340188\\AppData\\Local\\Temp\\wetrack\\DTS006744740\\attachments\\log.txt", "size": 20480 }
+        {
+          "fileName": "log.txt",
+          "path": "C:\\Users\\340188\\AppData\\Local\\Temp\\wetrack\\DTS006744740\\attachments\\log.txt",
+          "size": 20480
+        }
+      ],
+      "twoLevelCauseName": "需求变更",
+      "processHistories": [
+        {
+          "createTime": "2026-10-29 21:01:59",
+          "startStatusName": "待开发解决问题",
+          "startStepName": "开发工程师问题修改",
+          "endStatusName": "待开发自验",
+          "endStepName": "开发工程师转测自验",
+          "userFromName": "李四(340189)",
+          "userToName": "李四(340189)",
+          "remark": "批准"
+        },
+        {
+          "createTime": "2026-10-30 15:29:39",
+          "startStatusName": "待开发自验",
+          "startStepName": "开发工程师转测自验",
+          "endStatusName": "待测试回归",
+          "endStepName": "测试工程师回归测试",
+          "userFromName": "李四(340189)",
+          "userToName": "张三(340188)",
+          "remark": "转测，请在第四轮回归之前确认"
+        }
       ]
     }
   }

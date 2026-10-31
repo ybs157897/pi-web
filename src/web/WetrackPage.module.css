@@ -8,7 +8,9 @@
 .search { width: min(280px, 100%); }
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
 .list { padding-right: 4px; }
-.defect { display: flex; box-sizing: border-box; flex-direction: column; gap: 7px; margin-bottom: 8px; padding: 12px 14px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 14px; background: var(--dsw-alias-bg-layer-1); }
+.defect { display: flex; box-sizing: border-box; flex-direction: column; gap: 7px; margin-bottom: 8px; padding: 12px 14px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 14px; background: var(--dsw-alias-bg-layer-1); cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.defect:hover { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
+.defect:focus-visible { outline: 1.5px solid var(--dsw-alias-border-l2); outline-offset: 2px; }
 .defectHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .number { margin-right: 2px; color: var(--dsw-alias-label-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 18px; letter-spacing: .2px; }
 .spacer { flex: 1; min-width: 8px; }
@@ -20,4 +22,28 @@
 .notice { margin: 10px 0 4px; }
 .hint { white-space: pre-line; }
 .empty { width: 100%; padding: 36px 16px 32px; }
-@media (max-width: 600px) { .page { padding: 0 16px 24px; gap: 14px; }.pageHead { padding-top: 18px; }.panel { padding: 12px 12px 4px; border-radius: 16px; } }
+.modalTitle { display: inline-flex; align-items: baseline; gap: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 20px; }
+.modalTitleHint { color: var(--dsw-alias-label-tertiary); font-family: inherit; font-size: 12px; }
+.modalLoading { padding: 8px 0; }
+.detail { display: flex; flex-direction: column; gap: 16px; }
+.detailHead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.detailSummary { margin: 0; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 20px; margin: 0; }
+.fields div { display: flex; gap: 10px; min-width: 0; }
+.fields dt { flex: none; width: 64px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 19px; }
+.fields dd { min-width: 0; margin: 0; font-size: 12px; line-height: 19px; overflow-wrap: anywhere; }
+.section h4 { margin: 0 0 8px; color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 500; line-height: 18px; }
+.description { padding: 10px 12px; border: .5px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-layer-1); font-size: 12px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.steps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.steps li { display: flex; gap: 12px; font-size: 12px; line-height: 19px; }
+.stepTime { flex: none; width: 128px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.stepBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stepBody em { color: var(--dsw-alias-label-secondary); font-style: normal; overflow-wrap: anywhere; }
+.stepUsers { color: var(--dsw-alias-label-tertiary); }
+.files { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 19px; }
+.files li { display: flex; flex-wrap: wrap; gap: 8px; }
+.files code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.files span { color: var(--dsw-alias-label-tertiary); }
+.report { display: flex; flex-direction: column; gap: 8px; }
+.reportMeta { color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
+@media (max-width: 600px) { .page { padding: 0 16px 24px; gap: 14px; }.pageHead { padding-top: 18px; }.panel { padding: 12px 12px 4px; border-radius: 16px; }.stepTime { width: 96px; }.fields dt { width: 56px; } }

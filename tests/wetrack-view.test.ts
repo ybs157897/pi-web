@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { WetrackDefectItem } from '../src/shared/types.ts'
 import {
-  filterDefects, groupDefectsByProject, projectKeyOf, projectLabelOf, severityTone, statusTone,
+  defectDescriptionText, fieldText, filterDefects, groupDefectsByProject, projectKeyOf, projectLabelOf, severityTone, statusTone,
 } from '../src/web/wetrack-view.ts'
 
 function defect(overrides: Partial<WetrackDefectItem> = {}): WetrackDefectItem {
@@ -61,6 +61,32 @@ describe('wetrack view filtering', () => {
     const result = filterDefects(items, '   ')
     expect(result).toEqual(items)
     expect(result).not.toBe(items)
+  })
+})
+
+describe('wetrack detail text', () => {
+  it('reads scalar fields and drops the rest', () => {
+    expect(fieldText('  严重 ')).toBe('严重')
+    expect(fieldText(3)).toBe('3')
+    expect(fieldText(true)).toBe('true')
+    expect(fieldText(null)).toBe('')
+    expect(fieldText({ a: 1 })).toBe('')
+    expect(fieldText(undefined)).toBe('')
+  })
+
+  it('turns WeTrack HTML into readable text without leaking markup', () => {
+    const html = '<p>【步骤】</p><p>1. convert 上解除安保<br />2. care 未同步</p>'
+      + '<p><img src="https://example.com/1.png" border="0" /></p>'
+      + '<script>alert(1)</script><p>a&nbsp;&amp;&nbsp;b&nbsp;&lt;tag&gt;</p>'
+    const text = defectDescriptionText(html)
+    expect(text).toBe('【步骤】\n1. convert 上解除安保\n2. care 未同步\n[图片]\na & b <tag>')
+    expect(text).not.toContain('<p>')
+    expect(text).not.toContain('alert(1)')
+  })
+
+  it('keeps list bullets and collapses blank runs', () => {
+    expect(defectDescriptionText('<ul><li>a</li><li>b</li></ul>')).toBe('· a\n· b')
+    expect(defectDescriptionText('<p>a</p><p></p><p></p><p>b</p>')).toBe('a\n\nb')
   })
 })
 

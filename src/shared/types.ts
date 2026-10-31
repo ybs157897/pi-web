@@ -345,6 +345,64 @@ export interface WetrackDefectList {
   notice?: string
 }
 
+/** One process-log row from `detail --json` (`processHistories`). */
+export interface WetrackProcessStep {
+  createTime?: string
+  startStatusName?: string | null
+  startStepName?: string | null
+  endStatusName?: string | null
+  endStepName?: string | null
+  userFromName?: string
+  userToName?: string
+  remark?: string
+}
+
+/** A defect as `detail --json` returns it; unknown fields survive so the reader never loses data. */
+export interface WetrackDefectFields {
+  defectNumber: string
+  simpleDesc?: string
+  defectStatusName?: string
+  severityName?: string
+  description?: string
+  categoryName?: string
+  testTypeName?: string
+  probabilityName?: string
+  fieldName?: string
+  moduleName?: string
+  projectName?: string
+  projectNumber?: string
+  projectLineName?: string
+  issueVerName?: string
+  creatorName?: string
+  createTime?: string
+  submitTime?: string
+  modifyContent?: string
+  threeLevelCause?: string
+  twoLevelCauseName?: string
+  processHistories?: WetrackProcessStep[]
+  attachmentFiles?: Array<{ fileName?: string; path?: string; size?: number; error?: string }>
+  images?: string[]
+  [field: string]: unknown
+}
+
+/** One defect opened in the issues page; `configured:false` means no CLI and no fixture. */
+export interface WetrackDefectDetail {
+  configured: boolean
+  generatedAt: string
+  defect?: WetrackDefectFields
+  notice?: string
+}
+
+/** The operator's analysis for one defect, read from `<报告目录>/<DTS编号>.md`. */
+export interface WetrackDefectReport {
+  available: boolean
+  /** Directory the page looks in; shown when the file is missing so the operator knows where to put it. */
+  directory: string
+  file: string
+  markdown?: string
+  updatedAt?: string
+}
+
 export interface DirectoryEntry { name: string; path: string; hidden: boolean }
 export interface DirectoryListing {
   path: string

@@ -11,11 +11,11 @@ import { CodemodeSandbox } from '@earendil-works/pi-codemode'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { Usage } from '@earendil-works/pi-ai'
 import type { Runtime, RuntimeOptions } from '../contracts.ts'
-import type { WetrackDefectList, WorkspaceSummary } from '../../shared/types.ts'
+import type { WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceSummary } from '../../shared/types.ts'
 import { createModelRuntime } from '../model/catalog.ts'
 import { createDemoModelRuntime } from '../model/demo.ts'
 import { RuntimeError } from '../runtime-errors.ts'
-import { builtinFixturePath, readWetrackDefects, wetrackConfigured } from '../automation/wetrack.ts'
+import { builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackReport, wetrackConfigured } from '../automation/wetrack.ts'
 import { TodoTools } from '../tools/todo.ts'
 import { createGoalExtension } from '../tools/goal.ts'
 import { InteractionTools } from '../tools/interaction.ts'
@@ -398,6 +398,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const wetrackDefects = async (): Promise<WetrackDefectList> => readWetrackDefects(
     options.demo === true && !wetrackConfigured() ? { fixture: builtinFixturePath() } : {},
   )
+  const wetrackDefect = async (defectNumber: string): Promise<WetrackDefectDetail> => readWetrackDefect(defectNumber,
+    options.demo === true && !wetrackConfigured() ? { fixture: builtinFixturePath() } : {},
+  )
+  const wetrackReport = async (defectNumber: string): Promise<WetrackDefectReport> => readWetrackReport(defectNumber, { dataDir: options.dataDir })
 
   // Submission recovery can start the scheduler itself. Install guards on every stored
   // conversation before any recovery path is allowed to submit or resume work.
@@ -506,6 +510,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     deleteAutomation: (id) => automationsFeature().remove(id),
     runAutomation: (id) => automationsFeature().run(id),
     wetrackDefects,
+    wetrackDefect,
+    wetrackReport,
     async close() {
       if (!closePromise) {
         runtimeClosed = true
