@@ -9,3 +9,7 @@ artifacts/
 .agent-tools/
 session-*.json
 start-*.txt
+skills/rd-cli-auth/
+skills/rd-cli-ops/
+skills/rd-cli-setup/
+skills/yunji-gateway/
