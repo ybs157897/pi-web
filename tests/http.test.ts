@@ -257,7 +257,7 @@ class FakeRuntime implements Runtime {
   settingsValue: Protocol.AppSettings = {
     theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
     transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp',
-    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false,
+    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false, showAnalysisConversations: false,
   }
   settings() { return this.settingsValue }
   mcp(): Protocol.McpView {
@@ -383,6 +383,33 @@ class FakeRuntime implements Runtime {
       configured: true, source: 'fixture', generatedAt: '2026-10-30 12:00:00', count: 1,
       items: [{ defectNumber: 'DTS006749813', defectStatusName: '待开发解决问题', severityName: '一般', simpleDesc: '设备删除后无提示' }],
     }
+  }
+  async wetrackAnalyses(): Promise<Protocol.WetrackAnalysisIndex> {
+    this.calls.push('wetrack-analyses')
+    return {
+      analyses: [{
+        defectNumber: 'DTS006749813', status: 'analyzed', title: 'DTS006749813 分析',
+        summary: '消息在设备删除后未失效', updatedAt: '2026-10-30 12:30:00',
+      }],
+    }
+  }
+  async wetrackAnalysis(defectNumber: string): Promise<Protocol.WetrackAnalysisRecord | null> {
+    this.calls.push('wetrack-analysis:' + defectNumber)
+    return {
+      defectNumber, status: 'analyzed', title: `${defectNumber} 分析`,
+      summary: '消息在设备删除后未失效', markdown: '## 根因\n\n设备删除后未失效消息。', updatedAt: '2026-10-30 12:30:00',
+    }
+  }
+
+  async wetrackAnalysisRuns(): Promise<Protocol.WetrackAnalysisRun[]> { return [] }
+  async startWetrackAnalysis(input: Protocol.WetrackAnalysisStartInput): Promise<Protocol.WetrackAnalysisRun> {
+    this.calls.push(`wetrack-analysis-start:${input.defectNumber}`)
+    return { defectNumber: input.defectNumber, workspaceId: 'ws-1', workspaceName: 'Code workspace', conversationId: 'analysis-conv-1', status: 'running', createdAt: NOW, updatedAt: NOW }
+  }
+  async wetrackAnalysisSettings(): Promise<Protocol.WetrackAnalysisSettings> { return { workspaceId: 'ws-1', model: { provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }, skillIds: ['agents:rd-cli-ops'] } }
+  async updateWetrackAnalysisSettings(input: { workspaceId?: string | null }): Promise<Protocol.WetrackAnalysisSettings> {
+    this.calls.push(`wetrack-workspace:${input.workspaceId}`)
+    return { workspaceId: input.workspaceId ?? undefined, skillIds: [] }
   }
 
   async wetrackDefect(defectNumber: string): Promise<Protocol.WetrackDefectDetail> {
@@ -1013,6 +1040,25 @@ describe('management API', () => {
     expect((await app.request('/api/wetrack/defects/not-a-defect/report')).status).toBe(400)
     expect(runtime.calls).toContain('wetrack-defect:DTS006749813')
     expect(runtime.calls).toContain('wetrack-report:DTS006749813')
+    const analyses = await app.request('/api/wetrack/analyses')
+    expect(analyses.status).toBe(200)
+    expect(await analyses.json()).toMatchObject({ analyses: [{ defectNumber: 'DTS006749813', status: 'analyzed' }] })
+
+    const analysis = await app.request('/api/wetrack/analysis/DTS006749813')
+    expect(analysis.status).toBe(200)
+    expect(await analysis.json()).toMatchObject({ analysis: { defectNumber: 'DTS006749813', markdown: expect.stringContaining('根因') } })
+
+    // A number that cannot be a DTS key is rejected before it reaches the store.
+    expect((await app.request('/api/wetrack/analysis/not-a-defect')).status).toBe(400)
+
+    const workspace = await app.request('/api/wetrack/workspace', json('PUT', { workspaceId: 'ws-1' }))
+    expect(workspace.status).toBe(200)
+    expect(await (await app.request('/api/wetrack/workspace')).json()).toMatchObject({ workspaceId: 'ws-1', skillIds: ['agents:rd-cli-ops'] })
+    const started = await app.request('/api/wetrack/analysis-runs/DTS006749813', json('POST', {}))
+    expect(started.status).toBe(202)
+    expect(await started.json()).toMatchObject({ defectNumber: 'DTS006749813', conversationId: 'analysis-conv-1', status: 'running' })
+    expect(runtime.calls).toContain('wetrack-analysis-start:DTS006749813')
+    expect((await app.request('/api/wetrack/analysis-runs/not-a-defect', json('POST', {}))).status).toBe(400)
   })
 
   it('opens the application configuration file and reports a missing file as NOT_FOUND', async () => {

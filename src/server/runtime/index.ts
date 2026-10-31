@@ -11,12 +11,17 @@ import { CodemodeSandbox } from '@earendil-works/pi-codemode'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import type { Usage } from '@earendil-works/pi-ai'
 import type { Runtime, RuntimeOptions } from '../contracts.ts'
-import type { WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceSummary } from '../../shared/types.ts'
+import type {
+  WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceSummary,
+} from '../../shared/types.ts'
 import { createModelRuntime } from '../model/catalog.ts'
 import { createDemoModelRuntime } from '../model/demo.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import { builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackReport, wetrackConfigured } from '../automation/wetrack.ts'
+import { listWetrackAnalyses, readWetrackAnalysis } from '../automation/wetrack-analysis.ts'
+import { createWetrackAnalysisRuns } from '../automation/wetrack-analysis-runs.ts'
 import { TodoTools } from '../tools/todo.ts'
+import { createWetrackAnalysisExtension } from '../tools/wetrack-analysis.ts'
 import { createGoalExtension } from '../tools/goal.ts'
 import { InteractionTools } from '../tools/interaction.ts'
 import { PlanExtension, Plans } from '../tools/plan.ts'
@@ -55,7 +60,7 @@ import { createConversations } from './conversations.ts'
 import { createCore } from './core.ts'
 import { createInteractionReplies } from './interactions.ts'
 
-import { CODEMODE_EXTENSION_NAME, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
+import { CODEMODE_EXTENSION_NAME, CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const dataDir = resolve(options.dataDir)
@@ -63,7 +68,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   if (requestedWorkspace !== undefined) await mkdir(requestedWorkspace, { recursive: true })
   const initialWorkspacePath = requestedWorkspace === undefined ? undefined : await realpath(requestedWorkspace)
-  const modelRuntime = options.demo ? createDemoModelRuntime() : await createModelRuntime({ dataDir, piDir: options.piDir })
+  const modelRuntime = options.demo ? createDemoModelRuntime(options.models) : await createModelRuntime({ dataDir, piDir: options.piDir })
   /** Catalog reloads (file edits, saves, another instance) fanned out to web clients. */
   const modelListeners = new Set<() => void>()
   const unsubscribeModels = modelRuntime.subscribe(() => {
@@ -108,6 +113,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // ZCode-style user-level root: read-only skills shared across every workspace.
     // Demo runs stay isolated from the real global home.
     globalRoot: options.demo ? join(dataDir, 'skills') : join(piWebHome(), 'skills'),
+    builtinRoot: resolve('skills'),
     pluginRoots: () => pluginStore.skillRoots(),
   })
   // Probe the sandbox against the default workspace at startup; with no workspace yet there is
@@ -167,6 +173,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(CodingTools)
   registry.install(ResearchTools)
   registry.install(TodoTools)
+  // Analysis records outlive the conversation that wrote them: the issues page reads them back
+  // with no conversation of its own, so the store lives on the app data directory.
+  registry.install(createWetrackAnalysisExtension({
+    dataDir,
+    readDefect: async defectNumber => (await wetrackDefect(defectNumber)).defect,
+  }))
   registry.install(createGoalExtension({
     canCreate: async (id, context) => {
       const record = await harness.commit(tx => tx.conversation(id), context)
@@ -402,13 +414,59 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     options.demo === true && !wetrackConfigured() ? { fixture: builtinFixturePath() } : {},
   )
   const wetrackReport = async (defectNumber: string): Promise<WetrackDefectReport> => readWetrackReport(defectNumber, { dataDir: options.dataDir })
+  /** Badges for the issues list; the body is fetched per defect so the list stays small. */
+  const wetrackAnalyses = async (): Promise<WetrackAnalysisIndex> => ({
+    analyses: await listWetrackAnalyses(dataDir),
+  })
+  const wetrackAnalysis = async (defectNumber: string): Promise<WetrackAnalysisRecord | null> =>
+    await readWetrackAnalysis(dataDir, defectNumber) ?? null
+  const analysisRuns = createWetrackAnalysisRuns({
+    dataDir,
+    create: conversationsService.create,
+    submit: conversationsService.submit,
+    requireConversation,
+    currentDetail: id => currentDetail(parseConversationId(id)),
+    selectedWorkspace: id => selectedWorkspace(id),
+    analysisModel: () => {
+      const modelId = 'deepseek-v4.1-flash'
+      for (const provider of modelRuntime.models.getProviders()) {
+        if (provider.id === 'codebuddy' && modelRuntime.models.getModel(provider.id, modelId) !== undefined) return { provider: provider.id, modelId }
+      }
+      return undefined
+    },
+    activateSkills: async workspace => {
+      const catalog = await skillStore.list(workspace.path)
+      const priority = { agents: 0, pi: 1, plugin: 2, global: 3, builtin: 4 }
+      const selected = catalog.skills.filter(skill => skill.name === 'rd-cli-ops')
+        .toSorted((left, right) => priority[left.source] - priority[right.source])[0]
+      if (selected === undefined) return { skillIds: [] }
+      return { skillIds: [selected.source === 'plugin' ? selected.id : selected.name] }
+    },
+  })
+  await analysisRuns.recover()
+  for (const run of await analysisRuns.list()) {
+    if (run.conversationId === undefined) continue
+    const id = parseConversationId(run.conversationId)
+    if ((await harness.snapshot(CONVERSATION_KIND, id, CTX))?.kind === 'defectAnalysis') continue
+    await harness.commit(async tx => {
+      const kind = await tx.doc(CONVERSATION_KIND, id)
+      kind.kind = 'defectAnalysis'
+    }, CTX)
+  }
 
   // Submission recovery can start the scheduler itself. Install guards on every stored
   // conversation before any recovery path is allowed to submit or resume work.
   let policyCursor: Cursor | undefined
   do {
     const page = await harness.commit(tx => tx.scanConversations({ order: 'ascending' }, 250, policyCursor), CTX)
-    for (const record of page.items) await harness.commit(tx => ensureRuntimePolicy(tx, record), CTX)
+    for (const record of page.items) await harness.commit(async tx => {
+      const metadata = await tx.doc(META, record.id)
+      if (/^WeTrack DTS\d{3,16} 代码分析$/u.test(metadata.title) || metadata.title.startsWith('问题分析 · DTS')) {
+        const kind = await tx.doc(CONVERSATION_KIND, record.id)
+        kind.kind = 'defectAnalysis'
+      }
+      await ensureRuntimePolicy(tx, record)
+    }, CTX)
     policyCursor = page.next
   } while (policyCursor)
   await queueService.recover()
@@ -512,6 +570,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     wetrackDefects,
     wetrackDefect,
     wetrackReport,
+    wetrackAnalyses,
+    wetrackAnalysis,
+    wetrackAnalysisRuns: analysisRuns.list,
+    startWetrackAnalysis: analysisRuns.start,
+    wetrackAnalysisSettings: analysisRuns.settings,
+    updateWetrackAnalysisSettings: async input => {
+      if (input.workspaceId === null || input.workspaceId === undefined) return analysisRuns.settings()
+      return analysisRuns.bindWorkspace(input.workspaceId)
+    },
     async close() {
       if (!closePromise) {
         runtimeClosed = true
@@ -529,6 +596,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
               await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
               await harness.close(CTX)
               await automationsService?.drain()
+              await analysisRuns.drain()
             } finally {
               await pluginRefreshTail.catch(() => undefined)
               await Promise.allSettled([codemodeSandbox.close(), mcp.close()])

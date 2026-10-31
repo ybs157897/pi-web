@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { WetrackDefectItem } from '../src/shared/types.ts'
 import {
-  defectDescriptionText, fieldText, filterDefects, groupDefectsByProject, projectKeyOf, projectLabelOf, severityTone, statusTone,
+  compareDefectsNewest, defectDescriptionText, fieldText, filterDefects, groupDefectsByProject, projectKeyOf, projectLabelOf, severityTone, statusTone, workflowOf,
 } from '../src/web/wetrack-view.ts'
 
 function defect(overrides: Partial<WetrackDefectItem> = {}): WetrackDefectItem {
@@ -61,6 +61,16 @@ describe('wetrack view filtering', () => {
     const result = filterDefects(items, '   ')
     expect(result).toEqual(items)
     expect(result).not.toBe(items)
+  })
+})
+
+describe('wetrack workflow and ordering', () => {
+  it('separates development and verification and puts the newest defect first', () => {
+    const older = defect({ defectNumber: 'DTS1', submitTime: '2026-10-01 10:00:00' })
+    const newest = defect({ defectNumber: 'DTS2', submitTime: '2026-10-31 10:00:00', defectStatusName: '待开发自验' })
+    expect(workflowOf(older)).toBe('development')
+    expect(workflowOf(newest)).toBe('verification')
+    expect([older, newest].sort(compareDefectsNewest).map(item => item.defectNumber)).toEqual(['DTS2', 'DTS1'])
   })
 })
 

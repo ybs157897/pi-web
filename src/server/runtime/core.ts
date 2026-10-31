@@ -26,7 +26,7 @@ import { MEMORY_EXTENSION_NAME } from '../memory/policy.ts'
 import { PLUGIN_REFERENCE_EXTENSION_NAME } from '../plugins/reference.ts'
 import { EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
 import {
-  CTX, META, SUPPORTED_THINKING, cloneMetadata, liveRunTaskId, parseConversationId, type ConversationMetadata,
+  CONVERSATION_KIND, CTX, META, SUPPORTED_THINKING, cloneMetadata, liveRunTaskId, parseConversationId, type ConversationMetadata,
 } from './helpers.ts'
 import { Todos } from '../tools/todo.ts'
 import { Goals } from '../tools/goal.ts'
@@ -121,6 +121,7 @@ export function createCore(deps: CoreDeps) {
       interactions: await harness.snapshot(Interactions, id, CTX),
       goal: await harness.snapshot(Goals, id, CTX),
       plan: await harness.snapshot(Plans, id, CTX),
+      kind: (await harness.snapshot(CONVERSATION_KIND, id, CTX))?.kind,
       // Only a conversation's own detail carries its children: the sidebar list (`list`) and a
       // child's own detail skip the walk, so the tree is one level and each load stays bounded.
       ...(options.subagents === true ? { subagents: await subagentSummaries(id) } : {}),
@@ -234,7 +235,7 @@ export function createCore(deps: CoreDeps) {
     const tools: ToolRegistration[] = registeredTools.flatMap(({ tool }) => {
       // Tools are always on; only a preset's tool list narrows them further.
       if (requestedTools && !requestedTools.has(tool.name)) return []
-      if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name)) return []
+      if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name) && !tool.name.startsWith('wetrack_analysis_')) return []
       return [tool]
     })
     if (requestedTools) {

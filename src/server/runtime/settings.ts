@@ -75,6 +75,7 @@ export function createSettings(deps: SettingsDeps) {
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
       if (input.codemodeMode !== undefined) state.settings.codemodeMode = input.codemodeMode
       if (input.memoryEnabled !== undefined) state.settings.memoryEnabled = input.memoryEnabled
+      if (input.showAnalysisConversations !== undefined) state.settings.showAnalysisConversations = input.showAnalysisConversations
       if (input.defaultModel === null) delete state.settings.defaultModel
       else if (input.defaultModel !== undefined) state.settings.defaultModel = { ...input.defaultModel }
       if (input.defaultPresetId === null) delete state.settings.defaultPresetId

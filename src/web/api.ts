@@ -3,7 +3,9 @@ import type {
   CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
-  UpdateAppSettingsInput, WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
+  UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
+  WetrackDefectDetail, WetrackDefectList, WetrackDefectReport,
+  WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
@@ -316,6 +318,26 @@ export const api = {
   },
   wetrackReport(defectNumber: string): Promise<WetrackDefectReport> {
     return request(`/api/wetrack/defects/${encodeURIComponent(defectNumber)}/report`)
+  },
+  wetrackAnalyses(): Promise<WetrackAnalysisIndex> {
+    return request('/api/wetrack/analyses')
+  },
+  wetrackAnalysis(defectNumber: string): Promise<{ analysis: WetrackAnalysisRecord | null }> {
+    return request(`/api/wetrack/analysis/${encodeURIComponent(defectNumber)}`)
+  },
+  wetrackAnalysisRuns(): Promise<{ runs: WetrackAnalysisRun[] }> {
+    return request('/api/wetrack/analysis-runs')
+  },
+  startWetrackAnalysis(input: WetrackAnalysisStartInput): Promise<WetrackAnalysisRun> {
+    return request(`/api/wetrack/analysis-runs/${encodeURIComponent(input.defectNumber)}`, {
+      method: 'POST', body: '{}',
+    })
+  },
+  wetrackAnalysisSettings(): Promise<WetrackAnalysisSettings> {
+    return request('/api/wetrack/workspace')
+  },
+  updateWetrackAnalysisSettings(input: { workspaceId?: string | null }): Promise<WetrackAnalysisSettings> {
+    return request('/api/wetrack/workspace', { method: 'PUT', body: JSON.stringify(input) })
   },
   updateQueued(id: string, submissionId: string, input: EditQueueInput): Promise<{ submissionId: string }> {
     return request(`/api/conversations/${encodeURIComponent(id)}/queue/${encodeURIComponent(submissionId)}`, {

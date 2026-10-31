@@ -1,4 +1,5 @@
 import type { GoalUpdateRequest } from '../shared/types.ts'
+import type { MutableModels } from '@earendil-works/pi-ai'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
 import type {
@@ -43,6 +44,11 @@ import type {
   WorkspaceFile,
   WorkspaceFileEntry,
   WorkspaceSummary,
+  WetrackAnalysisIndex,
+  WetrackAnalysisRecord,
+  WetrackAnalysisRun,
+  WetrackAnalysisSettings,
+  WetrackAnalysisStartInput,
   WetrackDefectDetail,
   WetrackDefectList,
   WetrackDefectReport,
@@ -156,7 +162,15 @@ export interface Runtime {
   wetrackDefect(defectNumber: string): Promise<WetrackDefectDetail>
   /** The operator's local analysis document for one defect, if one was written. */
   wetrackReport(defectNumber: string): Promise<WetrackDefectReport>
+  /** Stored analysis summaries for the list badges, newest first. */
+  wetrackAnalyses(): Promise<WetrackAnalysisIndex>
+  /** One defect's stored analysis body; null when it was never analyzed. */
+  wetrackAnalysis(defectNumber: string): Promise<WetrackAnalysisRecord | null>
+  wetrackAnalysisRuns(): Promise<WetrackAnalysisRun[]>
+  startWetrackAnalysis(input: WetrackAnalysisStartInput): Promise<WetrackAnalysisRun>
+  wetrackAnalysisSettings(): Promise<WetrackAnalysisSettings>
+  updateWetrackAnalysisSettings(input: { workspaceId?: string | null }): Promise<WetrackAnalysisSettings>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */
-export interface RuntimeOptions { dataDir: string; workspace?: string; piDir?: string; demo?: boolean; /** Override the imported Pi MCP file (tests and `PI_WEB_MCP_CONFIG`). */ mcpConfigPath?: string }
+export interface RuntimeOptions { dataDir: string; workspace?: string; piDir?: string; demo?: boolean; /** Override the imported Pi MCP file (tests and `PI_WEB_MCP_CONFIG`). */ mcpConfigPath?: string; models?: MutableModels }

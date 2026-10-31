@@ -27,7 +27,7 @@ import { Todos } from '../tools/todo.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import {
-  CTX, DEFAULT_TITLE, META, SUPPORTED_THINKING, assertSubmit, attachmentReferences, fingerprintSubmit,
+  CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, SUPPORTED_THINKING, assertSubmit, attachmentReferences, fingerprintSubmit,
   liveRunTaskId, objectValue, parseConversationId, parseEntryId, safeTitle, submissionContent,
   type ConversationMetadata,
 } from './helpers.ts'
@@ -105,9 +105,10 @@ export function createConversations(deps: ConversationsDeps) {
       throw new RuntimeError('INVALID_INPUT', '还没有工作区，请先添加一个工作区再创建会话')
     }
     const workspace = selectedWorkspace(input.workspaceId ?? settings.defaultWorkspaceId)
-    const presetId = input.presetId ?? settings.defaultPresetId ?? null
+    const analysis = input.kind === 'defectAnalysis'
+    const presetId = analysis ? null : input.presetId ?? settings.defaultPresetId ?? null
     const preset = selectedPreset(presetId)
-    const accessMode = input.accessMode ?? preset?.accessMode ?? settings.defaultAccessMode
+    const accessMode = analysis ? 'readOnly' : input.accessMode ?? preset?.accessMode ?? settings.defaultAccessMode
     if (accessMode === 'workspaceWrite' && !await workspaceWriteSupported(workspace.path)) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
@@ -116,6 +117,12 @@ export function createConversations(deps: ConversationsDeps) {
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
     const conversation = await harness().createConversation({ ownership: { kind: 'ownerless' }, agent }, CTX)
+    if (analysis) {
+      await harness().commit(async tx => {
+        const kind = await tx.doc(CONVERSATION_KIND, conversation.id)
+        kind.kind = 'defectAnalysis'
+      }, CTX)
+    }
     await withMetadata(conversation.id, (metadata) => {
       metadata.workspaceId = workspace.id
       metadata.presetId = presetId

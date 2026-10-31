@@ -81,6 +81,20 @@ export function filterDefects(items: readonly WetrackDefectItem[], query: string
   })
 }
 
+export type WetrackWorkflow = 'development' | 'verification' | 'other'
+
+export function workflowOf(item: WetrackDefectItem): WetrackWorkflow {
+  const status = `${text(item.defectStatusName)} ${text(item.defectStep)}`
+  if (/自验|verification|verify/iu.test(status)) return 'verification'
+  if (/待开发|开发解决|development|待.*解决/iu.test(status)) return 'development'
+  return 'other'
+}
+
+export function compareDefectsNewest(a: WetrackDefectItem, b: WetrackDefectItem): number {
+  const time = (item: WetrackDefectItem): string => text(item.submitTime) || text(item.updateTime) || text(item.createTime)
+  return time(b).localeCompare(time(a)) || b.defectNumber.localeCompare(a.defectNumber)
+}
+
 export type TagTone = 'red' | 'volcano' | 'gold' | 'blue' | 'cyan' | 'green' | 'default'
 
 const SEVERITY_TONES: ReadonlyArray<readonly [RegExp, TagTone]> = [

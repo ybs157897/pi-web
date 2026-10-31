@@ -117,6 +117,8 @@ export interface AppSettings {
   codemodeMode: CodemodeMode
   /** Cross-conversation project memory: index injection, memory writes, and background extraction. */
   memoryEnabled: boolean
+  /** Show defect-analysis sessions in the ordinary sidebar; they are list-only by default. */
+  showAnalysisConversations: boolean
   defaultPresetId?: string
   defaultWorkspaceId?: string
   shortcuts?: Partial<Record<ShortcutCommand, string>>
@@ -403,6 +405,67 @@ export interface WetrackDefectReport {
   updatedAt?: string
 }
 
+/**
+ * Where an analysis stands. `analyzing` is a conclusion still being checked; `analyzed` is a
+ * finished analysis nobody has acted on; `fixed` means the user approved the conclusion and the
+ * fix landed; `blocked` is a hard stop the model could not resolve on its own.
+ */
+export type WetrackAnalysisStatus = 'analyzing' | 'analyzed' | 'fixed' | 'blocked'
+
+/** The fields a conversation supplies when it records an analysis. */
+export interface WetrackAnalysisInput {
+  defectNumber: string
+  /** The model's answer body verbatim; the page renders it as Markdown, not as a report tree. */
+  markdown: string
+  status?: WetrackAnalysisStatus
+  title?: string
+  summary?: string
+}
+
+/** One stored analysis, as the reading page receives it. */
+export interface WetrackAnalysisRecord {
+  defectNumber: string
+  status: WetrackAnalysisStatus
+  title: string
+  summary: string
+  markdown: string
+  /** Local time the record was written, `YYYY-MM-DD HH:mm:ss`. */
+  updatedAt: string
+  conversationId?: string
+}
+
+/** List-row projection: everything but the body, so badges cost no large payload. */
+export type WetrackAnalysisSummary = Omit<WetrackAnalysisRecord, 'markdown' | 'conversationId'>
+
+export type WetrackAnalysisRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
+
+/** A background code-analysis conversation and its stable navigation target. */
+export interface WetrackAnalysisRun {
+  defectNumber: string
+  workspaceId: string
+  workspaceName: string
+  conversationId?: string
+  status: WetrackAnalysisRunStatus
+  createdAt: number
+  updatedAt: number
+  error?: string
+}
+
+export interface WetrackAnalysisStartInput {
+  defectNumber: string
+}
+
+export interface WetrackAnalysisSettings {
+  workspaceId?: string
+  model?: ModelRef
+  skillIds: string[]
+}
+
+/** `analyses` answers with summaries only; the body is fetched per defect on demand. */
+export interface WetrackAnalysisIndex {
+  analyses: WetrackAnalysisSummary[]
+}
+
 export interface DirectoryEntry { name: string; path: string; hidden: boolean }
 export interface DirectoryListing {
   path: string
@@ -427,6 +490,8 @@ export interface ConversationSummary {
   workspaceId?: string
   presetId?: string
   accessMode?: AccessMode
+  /** Analysis conversations belong to the issues page unless the settings opt into the sidebar. */
+  kind?: 'defectAnalysis'
   /** DSH's session origin: `subagent` marks a conversation another conversation's task created. */
   origin?: 'subagent'
   /** The parent conversation of a subagent session; the owner edge the control routes check. */
@@ -654,6 +719,7 @@ export interface CreateConversationInput {
   workspaceId?: string
   presetId?: string
   accessMode?: AccessMode
+  kind?: 'defectAnalysis'
 }
 export interface UpdateConversationInput {
   title?: string

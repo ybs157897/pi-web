@@ -593,6 +593,21 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       fauxText('直接工具调用演示完成。'),
     ])
   }
+  if (userText.includes('[wetrack-analysis:')) {
+    const defectNumber = /\[wetrack-analysis:(DTS\d+)\]/u.exec(userText)?.[1] ?? 'DTS000000001'
+    const saved = currentResults.some(message => message.toolName === 'wetrack_analysis_save' && !message.isError)
+    if (!saved) {
+      const evidence = currentResults.some(message => message.toolName === 'read' && !message.isError)
+      if (evidence) {
+        return fauxAssistantMessage(fauxToolCall('wetrack_analysis_save', {
+          defectNumber, status: 'analyzed', title: `${defectNumber} 代码分析`, summary: '已核对代码证据',
+          markdown: `## 根因\n\n已结合代码定位 ${defectNumber}。\n\n## 证据\n\n\`demo.ts:1\``,
+        }, { id: `demo-wetrack-save-${context.messages.length}` }), { stopReason: 'toolUse' })
+      }
+      return fauxAssistantMessage(fauxToolCall('read', { path: 'demo.ts' }, { id: `demo-wetrack-read-${context.messages.length}` }), { stopReason: 'toolUse' })
+    }
+    return fauxAssistantMessage(fauxText(`已保存 ${defectNumber} 的代码分析。`))
+  }
   const completedTools = new Set(currentResults.map((message) => message.toolName))
   const runToken = String(context.messages.length)
   const planSubmissions = context.messages.filter((message) => message.role === 'toolResult' && message.toolName === 'exit_plan_mode' && !message.isError).length
@@ -940,14 +955,14 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
 }
 
 /** Build an explicit deterministic demo catalog; production never falls back to it. */
-export function createDemoModelRuntime(): RuntimeModels {
+export function createDemoModelRuntime(modelsOverride?: RuntimeModels['models']): RuntimeModels {
   const faux = fauxProvider({
     provider: DEMO_MODEL.provider,
     models: [{ id: DEMO_MODEL.modelId, name: '演示模型（不调用真实模型）', reasoning: true, input: ['text', 'image'] }],
     tokenSize: { min: 4, max: 8 },
   })
   faux.setResponses(Array.from({ length: 512 }, () => scriptedResponse))
-  const models = createModels()
+  const models = modelsOverride ?? createModels()
   models.setProvider(faux.provider)
   return {
     models,

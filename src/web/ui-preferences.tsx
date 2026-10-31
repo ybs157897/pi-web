@@ -6,6 +6,7 @@ export const DEFAULT_UI_SETTINGS: AppSettings = {
   theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
   transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true,
   busySendMode: 'followUp', defaultThinkingLevel: 'off', defaultAccessMode: 'fullAccess', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false,
+  showAnalysisConversations: false,
 }
 
 interface UiPreferences {

@@ -74,6 +74,10 @@ export const META = defineDoc<ConversationMetadata>({
   }),
 })
 
+export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' }>({
+  kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({}),
+})
+
 export const CTX: Context = BACKGROUND_CONTEXT
 export const DEFAULT_TITLE = 'New conversation'
 export const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])

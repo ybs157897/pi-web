@@ -35,6 +35,7 @@ const createSchema = z.object({
   workspaceId: identifier.optional(),
   presetId: identifier.optional(),
   accessMode: z.enum(accessModes).optional(),
+  kind: z.literal('defectAnalysis').optional(),
 }).strict()
 
 const updateSchema = z.object({
@@ -122,6 +123,7 @@ const settingsSchema = z.object({
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
   codemodeMode: z.enum(CODEMODE_MODES).optional(),
   memoryEnabled: z.boolean().optional(),
+  showAnalysisConversations: z.boolean().optional(),
   defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 const workspaceSchema = z.object({ path: z.string().min(1).max(4096).refine(value => !value.includes('\0')), name: z.string().trim().min(1).max(120).optional() }).strict()
@@ -136,6 +138,7 @@ const automationSchema = z.object({
   model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
 }).strict()
 const automationPatchSchema = automationSchema.partial().extend({ intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional() }).refine(value => Object.keys(value).length > 0)
+const wetrackWorkspaceSchema = z.object({ workspaceId: identifier.nullable().optional() }).strict()
 const pluginMarketplaceSchema = z.object({ source: z.string().trim().min(1).max(4_096) }).strict()
 const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginNameSchema, requestId: z.string().min(1).max(256).optional() }).strict()
 const pluginEnabledSchema = z.object({ enabled: z.boolean() }).strict()
@@ -829,6 +832,24 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const defectNumber = c.req.param('defectNumber')
     if (!isDefectNumber(defectNumber)) throw new ApiFault(400, 'invalid_id', 'Defect number is invalid')
     return c.json(await runtime.wetrackReport(defectNumber))
+  })
+  app.get('/api/wetrack/analyses', async c => c.json(await runtime.wetrackAnalyses()))
+  app.get('/api/wetrack/analysis/:defectNumber', async c => {
+    const defectNumber = c.req.param('defectNumber')
+    if (!isDefectNumber(defectNumber)) throw new ApiFault(400, 'invalid_id', 'Defect number is invalid')
+    return c.json({ analysis: await runtime.wetrackAnalysis(defectNumber) })
+  })
+  app.get('/api/wetrack/analysis-runs', async c => c.json({ runs: await runtime.wetrackAnalysisRuns() }))
+  app.post('/api/wetrack/analysis-runs/:defectNumber', async c => {
+    const defectNumber = c.req.param('defectNumber')
+    if (!isDefectNumber(defectNumber)) throw new ApiFault(400, 'invalid_id', 'Defect number is invalid')
+    await readJson(c.req.raw, z.object({}).strict())
+    return c.json(await runtime.startWetrackAnalysis({ defectNumber }), 202)
+  })
+  app.get('/api/wetrack/workspace', async c => c.json(await runtime.wetrackAnalysisSettings()))
+  app.put('/api/wetrack/workspace', async c => {
+    const input = await readJson(c.req.raw, wetrackWorkspaceSchema)
+    return c.json(await runtime.updateWetrackAnalysisSettings(input))
   })
 
   app.onError((error, c) => {

@@ -6,3 +6,6 @@ workspace/
 artifacts/
 *.log
 .video_agent/
+.agent-tools/
+session-*.json
+start-*.txt

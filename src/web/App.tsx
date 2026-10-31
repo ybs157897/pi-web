@@ -1317,9 +1317,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, browseWorkspaceId, refreshList, refreshWorkspaces, t])
 
   const filteredConversations = useMemo(() => conversations
+    .filter(item => settings.showAnalysisConversations || item.kind !== 'defectAnalysis')
     .filter(item => item.archived === showArchived)
     .filter(item => `${item.title}\n${item.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort(compareConversations), [conversations, query, showArchived])
+    .sort(compareConversations), [conversations, query, settings.showAnalysisConversations, showArchived])
   const sortedWorkspaces = useMemo(() => [...workspaces].sort((a, b) => workspaceSort === 'name'
     ? a.name.localeCompare(b.name) : b.updatedAt - a.updatedAt), [workspaces, workspaceSort])
   const workspaceNeedle = query.trim().toLocaleLowerCase()
@@ -1798,7 +1799,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             const workspaceMatches = workspaceNeedle !== '' && `${workspace.name}\n${workspace.path}`.toLocaleLowerCase().includes(workspaceNeedle)
             const matchesWorkspace = (item: ConversationSummary): boolean => item.workspaceId === workspace.id || item.workspaceId === undefined && item.cwd === workspace.path
             const sessions = (workspaceMatches
-              ? conversations.filter(item => item.archived === showArchived && matchesWorkspace(item))
+              ? conversations.filter(item => (settings.showAnalysisConversations || item.kind !== 'defectAnalysis') && item.archived === showArchived && matchesWorkspace(item))
               : filteredConversations.filter(matchesWorkspace)).sort(compareConversations)
             const isExpanded = expandedWorkspaces.has(workspace.id) || workspaceNeedle !== ''
             const viewEntries = workspaceActions(workspace)
@@ -2067,7 +2068,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 </>}
             </>}
             {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
-              <WetrackPage />
+              <WetrackPage workspaces={workspaces} onOpenConversation={id => { void openConversation(id) }} />
             </Suspense>}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
               onOpenConversation={id => { void openConversation(id) }} />}

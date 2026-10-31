@@ -55,6 +55,7 @@ type ProjectOptions = {
   subagents?: unknown
   /** Runtime-computed team projection; only a conversation's own detail carries it. */
   team?: unknown
+  kind?: 'defectAnalysis'
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> | undefined {
@@ -972,6 +973,7 @@ export function projectConversation(
     ...(metadata.workspaceId ? { workspaceId: metadata.workspaceId } : {}),
     ...(metadata.presetId ? { presetId: metadata.presetId } : {}),
     accessMode: metadata.accessMode,
+    ...(options.kind === 'defectAnalysis' ? { kind: options.kind } : {}),
     ...(summaryRunId ? { runId: summaryRunId } : {}),
     ...(summaryRunStartedAt !== undefined ? { runStartedAt: summaryRunStartedAt } : {}),
     ...(summaryDuration !== undefined ? { durationMs: summaryDuration } : {}),
