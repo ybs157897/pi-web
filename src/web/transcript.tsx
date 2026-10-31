@@ -17,7 +17,7 @@ import { formatTokens, markdownLabels, type Translate } from './render-labels.ts
 import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
-import { dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows, lateAnswerSummary, type LateAnswer } from './tool-render-model.ts'
+import { lateAnswerOf, type LateAnswer } from './tool-render-model.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
 import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
@@ -239,7 +239,7 @@ function RunTranscript({
 }) {
   return (
     <section className={css.run} data-run-id={run.runId}>
-      {run.users[0] !== undefined && <UserEntryRow key={run.users[0].id} message={run.users[0]}
+      {run.users[0] !== undefined && <MessageRow key={run.users[0].id} message={run.users[0]}
         onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />}
       {(run.process.length > 0 || run.status === 'error' || run.status === 'cancelled') && (
         <ProcessGroup run={run} latest={latest} live={live} policy={policy} t={t} subagents={subagents}
@@ -317,145 +317,6 @@ function MessageRow({ message, onOpenFile, resolveFileImage, t }: {
         <Tooltip label={copied ? t('已复制', 'Copied') : t('复制', 'Copy')} side="bottom" portal>
           <button type="button" className={css.iconAction} aria-label={t('复制用户消息', 'Copy user message')} onClick={() => { void copy() }}>
             <IconCopyOutlineRegular size={14} />
-          </button>
-        </Tooltip>
-        <span className={css.visuallyHidden} aria-live="polite">{copied ? t('已复制', 'Copied') : ''}</span>
-      </div>
-    </div>
-  )
-}
-
-/**
- * Render one user-role transcript entry: a late answer to earlier questions
- * presents as DSH's reply bubble, a dismissal of a question set presents as the
- * compact "gave up the questions" bubble, and every other message stays the plain
- * bubble. A payload the reader cannot parse keeps its raw text, so a reply is
- * never shown as an empty row.
- */
-function UserEntryRow({ message, onOpenFile, resolveFileImage, t }: {
-  message: ChatMessage
-  onOpenFile?: TranscriptProps['onOpenFile']
-  resolveFileImage?: TranscriptProps['resolveFileImage']
-  t: Translate
-}) {
-  const text = useMemo(() => messageText(message), [message])
-  const reply = useMemo(() => lateAnswerOf(text), [text])
-  const dismissal = useMemo(() => reply === null ? dismissedQuestionOf(text) : null, [reply, text])
-  if (reply !== null) return <QuestionReplyRow message={message} data={reply} t={t} />
-  if (dismissal !== null) return <QuestionDismissedRow message={message} t={t} />
-  return <MessageRow message={message} onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} />
-}
-
-/**
- * DSH has no user message for a cancelled question set (its waterfall rejects with
- * `ASK_CANCELLED`), while Pi steers the dismissal so the model learns about it. The
- * transcript shows that steer as a compact bubble rather than the raw payload.
- */
-function QuestionDismissedRow({ message, t }: {
-  message: ChatMessage
-  t: Translate
-}) {
-  const { settings } = useUiPreferences()
-  const [copied, setCopied] = useState(false)
-  const label = t('放弃整组问题', 'Dismissed the questions')
-  const summary = t('未提交回答', 'No answers submitted')
-  const copy = (): void => {
-    if (copied) return
-    void writeClipboard(`${label} · ${summary}`).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      window.setTimeout(() => { setCopied(false) }, 1000)
-    })
-  }
-  return (
-    <div className={`${css.message} ${css.userMessage}`} id={transcriptMessageDomId(message.id)} data-message-id={message.id}
-      data-role="user" data-question-dismissed role="group" aria-label={label}>
-      <div className={css.replyBubble}>
-        <span className={css.replyLabelRow}>
-          <span className={css.replyLabel}>{label}</span>
-        </span>
-        <span className={css.replySummary}>{summary}</span>
-      </div>
-      <div className={css.userMeta}>
-        <time dateTime={safeIsoTime(message.timestamp)}>{formatClock(message.timestamp, settings.locale)}</time>
-        <Tooltip label={copied ? t('已复制', 'Copied') : t('复制', 'Copy')} side="bottom" portal>
-          <button type="button" className={css.iconAction} aria-label={t('复制问答放弃记录', 'Copy the dismissal')} onClick={copy}>
-            {copied ? <IconCheckOutlineRegular size={14} /> : <IconCopyOutlineRegular size={14} />}
-          </button>
-        </Tooltip>
-        <span className={css.visuallyHidden} aria-live="polite">{copied ? t('已复制', 'Copied') : ''}</span>
-      </div>
-    </div>
-  )
-}
-
-/**
- * DSH's right-aligned late-reply bubble: a label naming the earlier pending
- * questions, the answers as a one-line summary, and — once open — one question
- * and answer pair per question. What the payload cannot express falls back to
- * the model-facing text.
- */
-function QuestionReplyRow({ message, data, t }: {
-  message: ChatMessage
-  data: LateAnswer
-  t: Translate
-}) {
-  const { settings } = useUiPreferences()
-  const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const label = t('回答先前等待的问题', 'Reply to earlier pending questions')
-  const rows = useMemo(() => lateAnswerRows(data), [data])
-  const summary = lateAnswerSummary(data, t)
-  const copy = (): void => {
-    if (copied) return
-    void writeClipboard(lateAnswerClipboardText(data, t)).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      window.setTimeout(() => { setCopied(false) }, 1000)
-    })
-  }
-  return (
-    <div className={`${css.message} ${css.userMessage}`} id={transcriptMessageDomId(message.id)} data-message-id={message.id}
-      data-role="user" data-question-reply={data.callId} role="group" aria-label={label}>
-      <div className={css.replyBubble}>
-        <button type="button" className={css.replyToggle} aria-expanded={open}
-          aria-label={`${label} · ${t(open ? '收起问题详情' : '展开问题详情', open ? 'Close question details' : 'Open question details')}`}
-          onClick={() => { setOpen(value => !value) }}>
-          <span className={css.replyLabelRow}>
-            {/* The caret is the only sign the bubble opens; the label alone reads as plain text. */}
-            <span className={css.replyCaret} aria-hidden="true">
-              {open ? <IconChevronDownOutlineRegular size={12} /> : <IconChevronRightOutlineRegular size={12} />}
-            </span>
-            <span className={css.replyLabel}>{label}</span>
-          </span>
-          {!open && <span className={css.replySummary}>{summary === '' ? t('已跳过', 'Skipped') : summary}</span>}
-        </button>
-        {open && (rows.length === 0
-          ? <div className={css.replyText}>{data.text}</div>
-          : <dl className={css.replyDetails}>
-            {rows.map(({ question, answers }) => (
-              <div key={question.id}>
-                <dt className={css.replyQuestion}>
-                  {question.header !== undefined && question.header !== question.question && <span className={css.replyHeader}>{question.header}</span>}
-                  <span className={css.replyQuestionText}>{question.question}</span>
-                  {question.detail !== undefined && <span className={css.replyDetail}>{question.detail}</span>}
-                  {question.options !== undefined && question.options.length > 0 && <ul className={css.replyOptions}>
-                    {question.options.map(option => <li key={option.label}>{option.label}{option.description === undefined ? '' : ` — ${option.description}`}</li>)}
-                  </ul>}
-                </dt>
-                <dd className={css.replyAnswer}>
-                  <span className={css.replyAnswerLabel}>{t('回答：', 'Answer: ')}</span>
-                  {answers.length === 0 ? t('已跳过', 'Skipped') : answers.join(t('、', ', '))}
-                </dd>
-              </div>
-            ))}
-          </dl>)}
-      </div>
-      <div className={css.userMeta}>
-        <time dateTime={safeIsoTime(message.timestamp)}>{formatClock(message.timestamp, settings.locale)}</time>
-        <Tooltip label={copied ? t('已复制', 'Copied') : t('复制', 'Copy')} side="bottom" portal>
-          <button type="button" className={css.iconAction} aria-label={t('复制问答回答', 'Copy the question reply')} onClick={copy}>
-            {copied ? <IconCheckOutlineRegular size={14} /> : <IconCopyOutlineRegular size={14} />}
           </button>
         </Tooltip>
         <span className={css.visuallyHidden} aria-live="polite">{copied ? t('已复制', 'Copied') : ''}</span>
@@ -576,7 +437,7 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
-  if (part.kind === 'user') return <UserEntryRow message={part.message} onOpenFile={onOpenFile}
+  if (part.kind === 'user') return <MessageRow message={part.message} onOpenFile={onOpenFile}
     resolveFileImage={resolveFileImage} t={t} />
   if (part.kind === 'tool') return <ToolCard item={part.item} runRunning={runRunning} replies={replies} interactions={interactions}
     onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}

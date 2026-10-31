@@ -533,12 +533,6 @@ export interface LateAnswerEntry {
   readonly custom?: string
 }
 
-/** One question paired with the values its answer holds, in display order. */
-export interface LateAnswerRow {
-  readonly question: LateAnswerQuestion
-  readonly answers: readonly string[]
-}
-
 /**
  * A `answer_to_pending_question` payload: the question set echoed back with the
  * recorded answers. The runtime steers it as a plain user message, so the
@@ -621,49 +615,6 @@ function lateAnswerEntries(value: unknown): LateAnswerEntry[] {
   return answers
 }
 
-/** Answer values of one question in display order: the chosen labels, then a non-blank custom answer. */
-export function lateAnswerValues(data: LateAnswer, id: string): string[] {
-  const answer = data.answers.find(item => item.id === id)
-  const custom = answer?.custom?.trim() ?? ''
-  return [...(answer?.selected ?? []), ...(custom === '' ? [] : [custom])]
-}
-
-/** Pair every echoed question with the values of its answer; a skipped question holds none. */
-export function lateAnswerRows(data: LateAnswer): LateAnswerRow[] {
-  return data.questions.map(question => ({ question, answers: lateAnswerValues(data, question.id) }))
-}
-
-/**
- * Collapsed one-line summary: each question's values joined by 、, a skipped
- * question reads 已跳过, and a batch with no answer at all reads just 已跳过.
- * Empty when the payload echoed no readable question.
- */
-export function lateAnswerSummary(data: LateAnswer, t: Translate): string {
-  if (data.questions.length === 0) return ''
-  const rows = lateAnswerRows(data)
-  const separator = t('、', ', ')
-  if (rows.every(row => row.answers.length === 0)) return t('已跳过', 'Skipped')
-  return rows.map(row => row.answers.length === 0 ? t('已跳过', 'Skipped') : row.answers.join(separator)).join(separator)
-}
-
-/**
- * Clipboard text of one late reply: every question with the answer the user
- * gave, in the layout the open bubble shows, without the options nobody chose.
- * @returns One block per question, or the model-facing text when the payload was unreadable.
- */
-export function lateAnswerClipboardText(data: LateAnswer, t: Translate): string {
-  if (data.questions.length === 0) return data.text
-  return lateAnswerRows(data).map(({ question, answers }) => {
-    const heading = question.header !== undefined && question.header !== question.question
-      ? `${question.header} — ${question.question}`
-      : question.question
-    const answer = answers.length === 0
-      ? t('已跳过', 'Skipped')
-      : `${t('回答：', 'Answer: ')}${answers.join(t('、', ', '))}`
-    return `${heading}\n${answer}`
-  }).join('\n\n')
-}
-
 /** One question of a call's read-only record with the values the user chose. */
 export interface AskQuestionRecordItem {
   readonly id: string
@@ -671,22 +622,22 @@ export interface AskQuestionRecordItem {
   readonly answers: readonly string[]
 }
 
-/** What the `ask_user_question` row expands into: the asked questions, answered or still waiting. */
-export interface AskQuestionRecord {
-  /** True while the record holds no answers yet, so the list shows the questions alone. */
-  readonly waiting: boolean
-  readonly items: readonly AskQuestionRecordItem[]
-  /** DSH's record verdict line: present for continued, closed, and cancelled sets. */
-  readonly verdict?: string
+/** What the `ask_user_question` row expands into: one question with the values the user chose. */
+export interface AskQuestionRecordItem {
+  readonly id: string
+  readonly question: string
+  readonly answers: readonly string[]
 }
 
-/** Everything the `ask_user_question` row shows: its title, collapsed summary, and record. */
+export interface AskQuestionRecord {
+  readonly items: readonly AskQuestionRecordItem[]
+}
+
+/** Everything the `ask_user_question` row shows: ZCode's kind label, its count line, and the record. */
 export interface AskQuestionRowModel {
-  /** Row title in DSH's wording. */
   readonly title: string
-  /** Collapsed summary: the answered progress and status, or the failure wording. */
   readonly summary: string
-  /** Read-only question record; null when pairing the recorded answers would be ambiguous. */
+  /** Read-only question record; null while asking, or when pairing the recorded answers would be ambiguous. */
   readonly record: AskQuestionRecord | null
 }
 
@@ -703,6 +654,8 @@ export function askQuestionRowModel(input: {
   readonly args: Readonly<Record<string, unknown>>
   readonly details: unknown
   readonly failed: boolean
+  /** The tool itself still runs; a pending interaction is the other "asking" signal. */
+  readonly running?: boolean | undefined
   readonly reply?: LateAnswer | undefined
   /** The projected interaction status of this call, when the transcript was given the list. */
   readonly status?: InteractionStatus | undefined
@@ -711,38 +664,20 @@ export function askQuestionRowModel(input: {
   const details = asRecord(input.details)
   const questions = askedQuestions(input.args.questions) ?? askedQuestions(details?.questions)
   const answers = input.reply !== undefined ? input.reply.answers : recordedAnswers(details?.answers)
-  const title = t('提问', 'Ask question')
-  if (input.failed) return { title, summary: t('提问失败', 'Question failed'), record: null }
-  const answered = input.reply !== undefined || details?.status === 'answered' || answers !== null || input.status === 'answered'
-  const waitingRecord = (verdict?: string): AskQuestionRecord | null => questions === null
+  const title = t('已询问', 'Asked')
+  const waitingRecord = (): AskQuestionRecord | null => questions === null
     ? null
-    : { waiting: true, items: questions.map(question => ({ ...question, answers: [] })), ...(verdict === undefined ? {} : { verdict }) }
-  if (!answered) {
-    const progress = questions === null ? '' : `0 / ${String(questions.length)} · `
-    // DSH's row states: still waiting, or continued but still answerable; expired and
-    // cancelled rows carry a verdict instead of the progress prefix.
-    if (input.status === 'continued') {
-      return { title, summary: t('已继续工作，仍可回答', 'continued; answer still available'), record: waitingRecord(t('等待中的问题仍可在输入框中回答', 'These pending questions remain answerable from the composer.')) }
-    }
-    if (input.status === 'expired') {
-      return { title, summary: t('已结束', 'closed'), record: waitingRecord(t('该问题已结束，结果见下方对话', 'This question is closed; its outcome is in the conversation below.')) }
-    }
-    if (input.status === 'cancelled') {
-      return { title, summary: t('已取消', 'cancelled'), record: waitingRecord(t('本轮已取消，未提交回答', 'This question set was cancelled before answers were submitted.')) }
-    }
-    return {
-      title,
-      summary: `${progress}${t('等待回答', 'waiting')}`,
-      record: waitingRecord(),
-    }
-  }
-  // Strict pairing needs stable ids and valid visible fields; the legacy
-  // best-effort count still reports what the batch answered when it is unsafe.
+    : { items: questions.map(question => ({ ...question, answers: [] })) }
+  if (input.failed) return { title, summary: t('提问失败', 'Question failed'), record: waitingRecord() }
+  // ZCode's row stays 「正在询问」 with no body until the question settles.
+  const asking = input.running === true || input.status === 'pending'
+    || input.status === undefined && details?.status === 'pending' && input.reply === undefined && answers === null
+  if (asking) return { title: t('正在询问', 'Asking questions'), summary: '', record: null }
+  const answered = input.reply !== undefined || details?.status === 'answered' || answers !== null || input.status === 'answered'
+  const count = questions === null ? '' : t(`${questions.length} 个问题`, `${questions.length} questions`)
+  if (!answered) return { title, summary: t('未回答，已自动继续', 'No answer; continued automatically'), record: waitingRecord() }
   const paired = questions === null || answers === null ? null : pairAskedAnswers(questions, answers)
-  const summary = answers === null
-    ? t('已回答', 'Answered')
-    : `${String(answeredCount(answers))} / ${String(answers.length)} · ${t('已回答', 'Answered')}`
-  return { title, summary, record: paired === null ? null : { waiting: false, items: paired } }
+  return { title, summary: count, record: paired === null ? null : { items: paired } }
 }
 
 /** Question ids and texts from one arguments or details field; null when the set is ambiguous. */
@@ -796,39 +731,6 @@ function pairAskedAnswers(
     paired.push({ id: question.id, question: question.question, answers: [...answer.selected, ...(custom === '' ? [] : [custom])] })
   }
   return paired
-}
-
-/** Answers a batch actually holds, counted the way DSH counts them on the row. */
-function answeredCount(answers: readonly LateAnswerEntry[]): number {
-  return answers.filter(answer => answer.selected.length > 0 || (answer.custom ?? '').trim() !== '').length
-}
-
-/**
- * A `dismissed_pending_question` payload: the runtime's record that the user gave up a
- * pending question set. DSH has no user message for this (its waterfall rejects with
- * `ASK_CANCELLED`), so the transcript recognizes the steered payload and shows a compact
- * bubble instead of the raw JSON; the tool row carries the cancelled record.
- */
-export interface QuestionDismissal {
-  readonly callId: string
-  /** The model-facing payload text, kept for the session-log reader. */
-  readonly text: string
-}
-
-/** Read one dismissal payload out of a user message's text; null when the text is not one. */
-export function dismissedQuestionOf(text: string): QuestionDismissal | null {
-  // Cheap guard before parsing, so ordinary prompts never reach JSON.parse.
-  if (!text.includes(DISMISSAL_REPLY_KIND)) return null
-  let value: unknown
-  try {
-    value = JSON.parse(text)
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error
-    return null
-  }
-  const record = asRecord(value)
-  if (record === undefined || record.kind !== DISMISSAL_REPLY_KIND) return null
-  return { callId: typeof record.callId === 'string' ? record.callId : '', text }
 }
 
 /** Everything the `subagent` call row shows: DSH's `started subagent <id>` receipt. */

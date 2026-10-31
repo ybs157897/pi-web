@@ -805,3 +805,11 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 修订同日 spec.md「子智能体执行渲染」里「彩色 SubagentRunStrip 不再用于主转录」的旧决策：单行 `ToolCard` 摘要保留给**单个** `subagent` 调用（已验收形态不退）；同一回合 ≥2 个连续顶层调用折成一条 `source:'calls'` 条带，`codemode` 脚本内的嵌套调用即使 1 个也折（`source:'codemode'`，条带在脚本卡之前）——`ToolCard`/`CodemodeBody` 对 nested 行的既有过滤保留，与条带互补。chip 点击开右侧只读 `SubagentPane` tab，不替换主列；颜色 6 色循环按子会话下标（未匹配时哈希兜底），创建中/运行中转圈、完成 ✓+tokens、失败红 ×。实现 `src/web/subagent-run-model.ts` + `SubagentRunStrip.tsx`，分组接在 `ProcessGroup` 的 inline 上，`useLiveSubagents` 1.5s 轮询补父流不含子会话的缝隙。
 
 **验证**：`tests/subagent-run-model.test.ts` 14 项（分组/状态/兜底/截断 args 前缀还原/抬头/时长/颜色）+ 全量 vitest 66 文件 651 通过；真实模型 `deepseek-v4.1-flash` codemode 并行 5 个 `tools.subagent`：5 chip 颜色互异、抬头「子智能体运行中 0/5 结束」→「5 个子智能体已完成」、嵌套行 0、点 chip 开只读 tab 且主列不变，截图 `artifacts/subagent-strip-check/`。计划与验收细节见 `docs/subagent-inline-strip-plan.md`。
+
+## 问题答复的 run 连续性与问答应答的 ZCode 渲染（2026-10-31）
+
+「回答先前等待的问题」之后，工作过程曾裂成「已工作 N 秒」+「工作中」两块。原因不是分组开合判断，而是 live 尾部与落盘条目的 runId 不一致：答复 entry 走 `conversation.submit` 直提、没有 `requestReceipts` 也没有 `data.requestId`，落盘按 `run:<entryId>`、live 按 `run:<taskId>`。
+
+- 服务端（`src/server/conversation/projection.ts`、`src/server/runtime/interactions.ts`）：`runIdForLive` 在找不到 receipt 时回退当前 durable run；三类交互答复统一 `submitReply`，写 receipt 并在 entry.data 带 `requestId`，两端都得到 `run:<requestId>`。
+- 前端（`src/web/ToolCard.tsx`、`tool-render-model.ts`、`render-model.ts`、`conversation` 投影）：删除迟到回答气泡与「放弃整组问题」气泡（`isInteractionPayloadText` 让 payload 只作为 run 边界），`ask_user_question` 行对齐 ZCode `ToolCallBlocks/renderers/ask-question.tsx`：`正在询问`/`已询问` + `N 个问题`，展开为左竖线的问题/回答，未回答「未提供回答」，抑制原始 JSON 载荷。
+- 判据：全量 vitest 713 通过；demo `[ask]` 实机答复期间只有两个 run、无答复气泡、亮/暗渲染与 ZCode 版式一致（`artifacts/ask-render/`）。

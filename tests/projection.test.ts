@@ -97,6 +97,42 @@ describe('Pi Durable conversation projection', () => {
     expect(projected.messages.map(message => message.runId)).toEqual(['run:start', 'run:start', 'run:start', 'run:start', 'run:next'])
   })
 
+  it('keeps an answer reply and its live continuation in one run', () => {
+    const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', questions: [], answers: [] })
+    const base = [
+      entry(1, 'pi-web.user', [{ role: 'user', content: 'Start', timestamp: 100 }], { requestId: 'start' }),
+      { ...entry(2, 'pi.assistant', [assistant([{ type: 'toolCall', id: 'a1', name: 'ask_user_question', arguments: {} }], 150, 'toolUse')]), byTaskId: 20 as TaskId },
+    ]
+    const live = {
+      run: { taskId: 30, inputs: [999] },
+      tools: [{ callId: 't1', name: 'bash', status: 'running', taskId: 30 }],
+    }
+    const continuation = { ...entry(3, 'pi.assistant', [assistant([{ type: 'toolCall', id: 't1', name: 'bash', arguments: { command: 'pwd' } }], 250, 'toolUse')]), byTaskId: 30 as TaskId }
+
+    // The reply entry carries the request id, so both sides name the run after it.
+    const withReceipt = [
+      ...base,
+      entry(4, 'pi-web.user-question-reply', [{ role: 'user', content: replyText, timestamp: 200 }], { requestId: 'question-reply:call-1', callId: 'call-1' }),
+      continuation,
+    ]
+    const projected = projectConversation(view(withReceipt, { 'pi.live': persistedObject(live) }), metadata({
+      requestReceipts: { 'question-reply:call-1': { fingerprint: 'x', status: 'accepted', submissionId: 999 } },
+    }), { workspace: WORKSPACE })
+    expect(new Set(projected.messages.map(message => message.runId))).toEqual(new Set(['run:start', 'run:question-reply:call-1']))
+    expect(projected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:question-reply:call-1')
+
+    // Legacy entries without the request id still hold one run: the live tail falls back to
+    // the durable run instead of inventing a task-id run.
+    const legacy = [
+      ...base,
+      entry(4, 'pi-web.user-question-reply', [{ role: 'user', content: replyText, timestamp: 200 }], { callId: 'call-1' }),
+      continuation,
+    ]
+    const legacyProjected = projectConversation(view(legacy, { 'pi.live': persistedObject(live) }), metadata(), { workspace: WORKSPACE })
+    expect(new Set(legacyProjected.messages.map(message => message.runId))).toEqual(new Set(['run:start', 'run:4']))
+    expect(legacyProjected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:4')
+  })
+
   it('projects settled user, assistant and tool messages with stable ids and hides system prompts and redacted thinking', () => {
     const user: UserMessage = { role: 'user', content: [
       { type: 'text', text: 'Check this image' },

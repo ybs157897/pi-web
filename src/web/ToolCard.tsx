@@ -117,6 +117,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
     args: model.args,
     details: model.details,
     failed: model.failed,
+    running: model.running,
     reply: callId === undefined ? undefined : replies?.get(callId),
     ...(interactionStatus === undefined ? {} : { status: interactionStatus }),
   }, t), [model, callId, replies, interactionStatus, t])
@@ -170,7 +171,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const readOnlySummary = /^(find_files|find|glob|grep|ripgrep|search)$/u.test(model.name.toLocaleLowerCase())
   const listingRow = model.name.toLocaleLowerCase() === 'list_files'
   const summaryOnly = fileRead || subagent !== null || (model.search !== undefined || model.web !== undefined || readOnlySummary) && !model.failed && !model.cancelled && !hasChildren
-  const expandable = !summaryOnly && (hasResult || hasArgs || hasDetails || hasChildren || model.artifacts.length > 0)
+  const expandable = ask !== null ? ask.record !== null : !summaryOnly && (hasResult || hasArgs || hasDetails || hasChildren || model.artifacts.length > 0)
   const icon = ask !== null ? <CircleHelp size={16} />
     : codemode !== null ? <Braces size={16} /> : skill !== null ? <WandSparkles size={16} /> : toolIcon(model.name)
   const summary = ask !== null ? ask.summary : subagent !== null ? (subagentPrimary ?? subagent.summary)
@@ -207,7 +208,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A recorded question pair replaces the row's own I/O card the way DSH's
   // transcript card does; the raw arguments and details stay available below.
   const record = ask?.record ?? null
-  const resultText = !hasOutputCard && record === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && model.output !== '' ? model.output : ''
+  const resultText = !hasOutputCard && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && model.output !== '' ? model.output : ''
   const sourceMessage = item.call === undefined ? item.result ?? item.message : item.message
   const toolImages = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image') ?? []
   const toolFiles = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'file' }> => block.type === 'file') ?? []
@@ -215,7 +216,9 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A plan call's arguments hold the whole plan, which the row already summarizes by its heading.
   // A subagent call's arguments hold the whole delegated task, shown by the receipt instead.
   // A code-mode call's argument is the script, shown by its own card instead of raw JSON.
-  const argsPayload = hasArgs && unknownPayload && plan === undefined && subagent === null && codemode === null && skill === null && !pluginUiPresented
+  // The question row's record replaces its raw I/O the way ZCode's ask row does; the
+  // arguments and details stay available through the inspect button.
+  const argsPayload = hasArgs && unknownPayload && plan === undefined && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented
     ? model.args : undefined
   // DSH's plan card is one button: icon, plan title, "计划 · Markdown", and "打开"
   // (`ui-plan/src/client/PlanCard.tsx:48-57`, copy `locales.ts:7-11`).
@@ -291,11 +294,11 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
           ))}
           {!hasResult && model.running && <div className={css.inProgress}><StateDot state="ongoing" size={10} />{t('等待工具结果', 'Waiting for tool result')}</div>}
           {!hasResult && !model.running && <div className={css.empty}>{t('没有可显示的工具结果', 'No tool result was recorded')}</div>}
-          {hasResult && model.output === '' && !hasOutputCard && codemode === null && skill === null && !pluginUiPresented && toolImages.length === 0 && toolFiles.length === 0
+          {hasResult && model.output === '' && ask === null && !hasOutputCard && codemode === null && skill === null && !pluginUiPresented && toolImages.length === 0 && toolFiles.length === 0
             && <div className={css.empty}>{t('工具没有返回可显示的内容', 'The tool returned no displayable content')}</div>}
           {argsPayload !== undefined && <JsonBlock label={t('调用参数', 'Call arguments')} payload={argsPayload}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
-          {hasDetails && !hasOutputCard && subagent === null && codemode === null && skill === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
+          {hasDetails && !hasOutputCard && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
           {model.failed && <div className={css.errorLabel} role="alert">{t('工具执行失败', 'Tool failed')}</div>}
           {model.cancelled && <div className={css.stoppedLabel} role="status">{t('工具已停止', 'Tool stopped')}</div>}
@@ -319,15 +322,16 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
  * DSH's verdict line closes a continued, closed, or cancelled record.
  */
 function QuestionRecord({ record, t }: { record: AskQuestionRecord; t: Translate }) {
+  // ZCode's answered-question block: each question, then the chosen values (or the
+  // no-answer line) in the secondary color, hung off the row's left rule.
   return (
-    <dl className={css.questionRecord} data-question-record={record.waiting ? 'waiting' : 'answered'}>
-      {record.verdict !== undefined && <div className={css.questionVerdict}>{record.verdict}</div>}
+    <dl className={css.questionRecord} data-question-record>
       {record.items.map(item => (
         <div key={item.id}>
           <dt className={css.questionText}>{item.question}</dt>
-          {!record.waiting && <dd className={css.questionAnswer} data-skipped={item.answers.length === 0 || undefined}>
-            {item.answers.length === 0 ? t('已跳过', 'Skipped') : item.answers.join(t('、', ', '))}
-          </dd>}
+          <dd className={css.questionAnswer} data-answered={item.answers.length > 0 || undefined}>
+            {item.answers.length === 0 ? t('未提供回答', 'No answer provided') : item.answers.join(t('，', ', '))}
+          </dd>
         </div>
       ))}
     </dl>

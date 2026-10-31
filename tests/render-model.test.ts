@@ -6,9 +6,9 @@ import {
 } from '../src/web/render-model.ts'
 import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
 import {
-  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, dismissedQuestionOf, lateAnswerClipboardText, lateAnswerOf, lateAnswerRows,
-  lateAnswerSummary, lateAnswerValues, subagentRowModel, toolLiveDetail, toolRowTitle,
+  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, lateAnswerOf, subagentRowModel, toolLiveDetail, toolRowTitle,
 } from '../src/web/tool-render-model.ts'
+import { isInteractionPayloadText } from '../src/web/interaction-payload.ts'
 import type { ToolItem } from '../src/web/render-model.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from '../src/web/inspector-document.ts'
 
@@ -46,6 +46,21 @@ describe('transcript render model', () => {
     expect(result.runs[0]?.process[1]).toMatchObject({ kind: 'tool', item: { key: 'tool:call-1', result: { id: 'tool-1' } } })
     expect(result.runs[0]?.responses.map(response => response.key)).toEqual(['assistant-2:response'])
     expect(result.runs[1]?.users.map(message => message.id)).toEqual(['user-2'])
+  })
+
+  it('starts a run at an answer payload but renders no user row for it', () => {
+    const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', questions: [], answers: [] })
+    const messages: ChatMessage[] = [
+      user('user-1', 'request-1'),
+      assistant('assistant-1', [{ type: 'text', text: 'Before the question' }], { runId: 'run-1', status: 'completed' }),
+      { id: 'reply-1', role: 'user', blocks: [{ type: 'text', text: replyText }], timestamp: 250, runId: 'run-2' },
+      assistant('assistant-2', [{ type: 'text', text: 'After the answer' }], { runId: 'run-2', status: 'completed' }),
+    ]
+    const result = buildRenderModel(messages)
+    expect(result.runs).toHaveLength(2)
+    expect(result.runs[1]?.users).toEqual([])
+    expect(result.runs[1]?.process.some(part => part.kind === 'user')).toBe(false)
+    expect(result.runs[1]?.responses.map(response => response.key)).toEqual(['assistant-2:response'])
   })
 
   it('keeps the streaming process and settled answer on stable render keys without duplicating tool results', () => {
@@ -205,7 +220,7 @@ describe('late question answers', () => {
     ],
   }
 
-  it('reads a reply payload, pairs every question, and summarizes the values', () => {
+  it('reads a reply payload and keeps every echoed question and answer', () => {
     const data = lateAnswerOf(payload(reply))
     expect(data).not.toBeNull()
     if (data === null) throw new Error('Expected a late answer')
@@ -213,35 +228,10 @@ describe('late question answers', () => {
     expect(data.questions.map(question => question.id)).toEqual(['scope', 'notes'])
     expect(data.questions[0]).toMatchObject({ header: '演示范围', options: [{ label: '前端交互 (Recommended)', description: '卡片、选项与只读摘要' }, { label: '后端接口' }] })
     expect(data.questions[1]?.multiSelect).toBe(true)
-    // Values keep DSH's display order: chosen labels first, then a non-blank custom answer.
-    expect(lateAnswerValues(data, 'scope')).toEqual(['前端交互 (Recommended)'])
-    expect(lateAnswerValues(data, 'notes')).toEqual(['补充一点', '再补充一点', '自定义说明'])
-    expect(lateAnswerRows(data).map(row => row.answers)).toEqual([['前端交互 (Recommended)'], ['补充一点', '再补充一点', '自定义说明']])
-    expect(lateAnswerSummary(data, zh)).toBe('前端交互 (Recommended)、补充一点、再补充一点、自定义说明')
-    expect(lateAnswerClipboardText(data, zh)).toBe([
-      '演示范围 — 这次问答演示要覆盖哪一层？',
-      '回答：前端交互 (Recommended)',
-      '',
-      '还有什么补充要求？（可跳过）',
-      '回答：补充一点、再补充一点、自定义说明',
-    ].join('\n'))
-  })
-
-  it('marks a skipped question and a fully skipped batch with 已跳过', () => {
-    const partial = lateAnswerOf(payload({
-      ...reply,
-      answers: [{ id: 'scope', selected: ['后端接口'] }, { id: 'notes', selected: [], custom: '   ' }],
-    }))
-    expect(partial).not.toBeNull()
-    if (partial === null) throw new Error('Expected a late answer')
-    expect(lateAnswerValues(partial, 'notes')).toEqual([])
-    expect(lateAnswerRows(partial).map(row => row.answers)).toEqual([['后端接口'], []])
-    expect(lateAnswerSummary(partial, zh)).toBe('后端接口、已跳过')
-    expect(lateAnswerClipboardText(partial, zh)).toContain('还有什么补充要求？（可跳过）\n已跳过')
-
-    const allSkipped = lateAnswerOf(payload({ ...reply, answers: [{ id: 'scope', selected: [] }, { id: 'notes', selected: [] }] }))
-    if (allSkipped === null) throw new Error('Expected a late answer')
-    expect(lateAnswerSummary(allSkipped, zh)).toBe('已跳过')
+    expect(data.answers).toEqual([
+      { id: 'scope', selected: ['前端交互 (Recommended)'] },
+      { id: 'notes', selected: ['补充一点', '再补充一点'], custom: '自定义说明' },
+    ])
   })
 
   it('drops malformed question and answer entries without losing the rest', () => {
@@ -254,7 +244,6 @@ describe('late question answers', () => {
     if (data === null) throw new Error('Expected a late answer')
     expect(data.questions.map(question => question.id)).toEqual(['a'])
     expect(data.answers).toEqual([{ id: 'a', selected: ['x'] }])
-    expect(lateAnswerValues(data, 'a')).toEqual(['x'])
   })
 
   it('keeps an option label the question never offered', () => {
@@ -265,11 +254,10 @@ describe('late question answers', () => {
       answers: [{ id: 'a', selected: ['手写的外部选项'] }],
     }))
     if (data === null) throw new Error('Expected a late answer')
-    expect(lateAnswerValues(data, 'a')).toEqual(['手写的外部选项'])
-    expect(lateAnswerSummary(data, zh)).toBe('手写的外部选项')
+    expect(data.answers[0]?.selected).toEqual(['手写的外部选项'])
   })
 
-  it('reads only its own payload kind and keeps raw text when the payload is unreadable', () => {
+  it('reads only its own payload kind', () => {
     expect(lateAnswerOf('请继续')).toBeNull()
     expect(lateAnswerOf(payload({ kind: 'other', callId: 'call-ask' }))).toBeNull()
     expect(lateAnswerOf('{"kind":"answer_to_pending_question", oops')).toBeNull()
@@ -278,9 +266,6 @@ describe('late question answers', () => {
     if (data === null) throw new Error('Expected a late answer')
     expect(data.questions).toEqual([])
     expect(data.answers).toEqual([])
-    expect(lateAnswerSummary(data, zh)).toBe('')
-    // Nothing readable to copy from the pairs, so the model-facing text is the fallback.
-    expect(lateAnswerClipboardText(data, zh)).toBe(bare)
   })
 })
 
@@ -297,43 +282,41 @@ describe('ask_user_question row model', () => {
     questions: args.questions,
     answers: [{ id: 'scope', selected: ['前端交互 (Recommended)'] }, { id: 'notes', selected: [] }],
   }))
+  const base = { name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }
 
-  it('reports waiting progress and the question list while the call is pending', () => {
-    const model = askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }, zh)
-    expect(model).toMatchObject({ title: '提问', summary: '0 / 2 · 等待回答' })
-    expect(model?.record).toMatchObject({ waiting: true, items: [{ id: 'scope' }, { id: 'notes' }] })
-    expect(model?.record?.items.every(item => item.answers.length === 0)).toBe(true)
+  it('stays one asking line with no body while the question waits', () => {
+    expect(askQuestionRowModel(base, zh)).toEqual({ title: '正在询问', summary: '', record: null })
+    expect(askQuestionRowModel({ ...base, status: 'pending' }, zh)).toEqual({ title: '正在询问', summary: '', record: null })
+    expect(askQuestionRowModel({ ...base, running: true }, zh)).toEqual({ title: '正在询问', summary: '', record: null })
   })
 
-  it('settles the row with the late answer and pairs the skipped question', () => {
-    const model = askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false, reply: reply ?? undefined }, zh)
-    expect(model).toMatchObject({ title: '提问', summary: '1 / 2 · 已回答' })
-    expect(model?.record).toMatchObject({
-      waiting: false,
-      items: [
-        { id: 'scope', answers: ['前端交互 (Recommended)'] },
-        { id: 'notes', answers: [] },
-      ],
+  it('settles into ZCode\'s asked line: the question count plus the paired record', () => {
+    const model = askQuestionRowModel({ ...base, reply: reply ?? undefined }, zh)
+    expect(model).toEqual({
+      title: '已询问',
+      summary: '2 个问题',
+      record: {
+        items: [
+          { id: 'scope', question: '这次问答演示要覆盖哪一层？', answers: ['前端交互 (Recommended)'] },
+          { id: 'notes', question: '还有什么补充要求？（可跳过）', answers: [] },
+        ],
+      },
     })
   })
 
   it('answers from the result when the call recorded its own batch', () => {
     const model = askQuestionRowModel({
-      name: 'ask_user_question',
-      args,
+      ...base,
       details: { status: 'answered', questions: args.questions, answers: [{ id: 'scope', selected: ['后端接口'] }, { id: 'notes', selected: [], custom: '补充' }] },
-      failed: false,
     }, zh)
-    expect(model?.summary).toBe('2 / 2 · 已回答')
+    expect(model?.title).toBe('已询问')
+    expect(model?.summary).toBe('2 个问题')
     expect(model?.record?.items.map(item => item.answers)).toEqual([['后端接口'], ['补充']])
   })
 
-  it('falls back to the answered count when pairing the batch would be ambiguous', () => {
+  it('keeps a count line without a record when pairing would be ambiguous', () => {
     const mismatched = askQuestionRowModel({
-      name: 'ask_user_question',
-      args,
-      details: { status: 'pending', questions: args.questions },
-      failed: false,
+      ...base,
       reply: lateAnswerOf(JSON.stringify({
         kind: 'answer_to_pending_question',
         callId: 'call-ask',
@@ -341,75 +324,58 @@ describe('ask_user_question row model', () => {
         answers: [{ id: 'scope', selected: ['后端接口'] }],
       })) ?? undefined,
     }, zh)
-    expect(mismatched).toMatchObject({ summary: '1 / 1 · 已回答', record: null })
+    expect(mismatched).toEqual({ title: '已询问', summary: '2 个问题', record: null })
 
     const duplicated = askQuestionRowModel({
-      name: 'ask_user_question',
-      args,
+      ...base,
       details: { status: 'answered', questions: args.questions, answers: [{ id: 'scope', selected: [] }, { id: 'scope', selected: ['后端接口'] }] },
-      failed: false,
     }, zh)
-    expect(duplicated).toMatchObject({ summary: '1 / 2 · 已回答', record: null })
+    expect(duplicated).toEqual({ title: '已询问', summary: '2 个问题', record: null })
   })
 
-  it('keeps the count summary when the call records answers but no readable questions', () => {
+  it('has no question line when neither the arguments nor the result carry readable questions', () => {
     const model = askQuestionRowModel({
-      name: 'ask_user_question',
+      ...base,
       args: { questions: [{ id: 'scope', question: 7 }] },
       details: { status: 'answered', answers: [{ id: 'scope', selected: ['后端接口'] }] },
-      failed: false,
     }, zh)
-    expect(model).toMatchObject({ summary: '1 / 1 · 已回答', record: null })
+    expect(model).toEqual({ title: '已询问', summary: '', record: null })
   })
 
   it('reads the questions from the result when the arguments lost them', () => {
-    const model = askQuestionRowModel({ name: 'ask_user_question', args: {}, details: { status: 'pending', questions: args.questions }, failed: false, reply: reply ?? undefined }, zh)
+    const model = askQuestionRowModel({ ...base, args: {}, reply: reply ?? undefined }, zh)
     expect(model?.record?.items).toHaveLength(2)
-    expect(model?.summary).toBe('1 / 2 · 已回答')
+    expect(model?.summary).toBe('2 个问题')
   })
 
-  it('names the failure and ignores every other tool', () => {
-    expect(askQuestionRowModel({ name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: true }, zh))
-      .toEqual({ title: '提问', summary: '提问失败', record: null })
+  it('names the failure, keeps its questions, and ignores every other tool', () => {
+    const failed = askQuestionRowModel({ ...base, failed: true }, zh)
+    expect(failed?.title).toBe('已询问')
+    expect(failed?.summary).toBe('提问失败')
+    expect(failed?.record?.items.map(item => item.answers)).toEqual([[], []])
     expect(askQuestionRowModel({ name: 'bash', args, details: undefined, failed: false }, zh)).toBeNull()
     expect(askQuestionRowModel({ name: 'request_user_input', args, details: { status: 'pending' }, failed: false }, zh))
-      .toMatchObject({ title: '提问', summary: '0 / 2 · 等待回答' })
+      .toEqual({ title: '正在询问', summary: '', record: null })
   })
 
-  it('reads the projected interaction state: waiting, continued, closed, cancelled', () => {
-    const base = { name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }
-    // The live call still waits for its answer.
-    expect(askQuestionRowModel({ ...base, status: 'pending' }, zh))
-      .toMatchObject({ summary: '0 / 2 · 等待回答', record: { waiting: true } })
-    // Continued: the agent moved on but the row still takes an answer (DSH `ask.pending`).
-    expect(askQuestionRowModel({ ...base, status: 'continued' }, zh)).toMatchObject({
-      summary: '已继续工作，仍可回答',
-      record: { waiting: true, verdict: '等待中的问题仍可在输入框中回答' },
-    })
-    // Closed: the question expired without an answer (DSH `ask.closed`).
-    expect(askQuestionRowModel({ ...base, status: 'expired' }, zh)).toMatchObject({
-      summary: '已结束',
-      record: { waiting: true, verdict: '该问题已结束，结果见下方对话' },
-    })
-    // Cancelled: the user gave up the whole set (DSH `ASK_CANCELLED`).
-    expect(askQuestionRowModel({ ...base, status: 'cancelled' }, zh)).toMatchObject({
-      summary: '已取消',
-      record: { waiting: true, verdict: '本轮已取消，未提交回答' },
-    })
-    // Answered settles regardless of the result text still reading as pending.
-    expect(askQuestionRowModel({ ...base, status: 'answered' }, zh)).toMatchObject({ summary: '已回答', record: null })
-    // Without the projected list the row keeps its result-only reading.
-    expect(askQuestionRowModel(base, zh)).toMatchObject({ summary: '0 / 2 · 等待回答' })
+  it('treats a settled set without answers as continued, and an answered set as asked', () => {
+    for (const status of ['continued', 'expired', 'cancelled'] as const) {
+      const model = askQuestionRowModel({ ...base, status }, zh)
+      expect(model).toMatchObject({ title: '已询问', summary: '未回答，已自动继续' })
+      expect(model?.record?.items.every(item => item.answers.length === 0)).toBe(true)
+    }
+    expect(askQuestionRowModel({ ...base, status: 'answered' }, zh))
+      .toEqual({ title: '已询问', summary: '2 个问题', record: null })
   })
 })
 
-describe('dismissed question payloads', () => {
-  it('recognizes only its own kind and keeps the model-facing text', () => {
-    const payload = JSON.stringify({ kind: 'dismissed_pending_question', callId: 'call-ask', questions: [], instruction: 'Do not ask again.' })
-    expect(dismissedQuestionOf(payload)).toMatchObject({ callId: 'call-ask', text: payload })
-    expect(dismissedQuestionOf('普通消息')).toBeNull()
-    expect(dismissedQuestionOf(JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-ask' }))).toBeNull()
-    expect(dismissedQuestionOf('{"kind":"dismissed_pending_question", oops')).toBeNull()
+describe('interaction payload detection', () => {
+  it('recognizes only the runtime\'s serialized answer and dismissal payloads', () => {
+    expect(isInteractionPayloadText(JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-ask' }))).toBe(true)
+    expect(isInteractionPayloadText(JSON.stringify({ kind: 'dismissed_pending_question', callId: 'call-ask' }))).toBe(true)
+    expect(isInteractionPayloadText('普通消息')).toBe(false)
+    expect(isInteractionPayloadText('{"kind":"other","callId":"call-ask"}')).toBe(false)
+    expect(isInteractionPayloadText('帮我看看 {"kind":"answer_to_pending_question"}')).toBe(false)
   })
 })
 

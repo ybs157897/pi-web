@@ -660,8 +660,11 @@ function runIdForLive(live: LiveState, metadata: ConversationMetadata, fallback?
   const inputIds = live.run?.inputs
   if (!inputIds?.length) return fallback
   const request = Object.entries(metadata.requestReceipts).find(([, receipt]) => receipt.submissionId !== null && inputIds.some(id => id === receipt.submissionId))?.[0]
-  const requestId = request?.startsWith('queue-edit:') ? request.slice('queue-edit:'.length) : request
-  return `run:${requestId ?? live.run?.taskId ?? inputIds[0]}`
+  // Submissions that bypass the receipt log (question and plan replies) still run inside the
+  // conversation's current run. Falling back to the task id there would give the live tail a
+  // different run id than its settled entries, so the transcript would split one turn in two.
+  if (request === undefined) return fallback
+  return `run:${request.startsWith('queue-edit:') ? request.slice('queue-edit:'.length) : request}`
 }
 
 function messageUsage(value: unknown): MessageUsage | undefined {

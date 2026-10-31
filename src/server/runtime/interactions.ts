@@ -4,13 +4,14 @@
  * The reply is submitted before the stored call is settled, so a rejected submission
  * leaves the call answerable; a retry after a restart reuses the call-derived request id.
  */
-import type { Conversation, ConversationId, Harness } from '@earendil-works/pi-durable'
+import { createHash } from 'node:crypto'
+import type { Conversation, ConversationId, Harness, InputSubmissionDraft } from '@earendil-works/pi-durable'
 import type { AskUserQuestionAnswerItem, ConversationDetail } from '../../shared/types.ts'
 import { validateAnswers } from '../conversation/interactions.ts'
 import { Plans, decidePlanReview, interactionTable, planReviewOf, type StoredPlanReview } from '../tools/plan.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
-import { CTX } from './helpers.ts'
+import { CTX, META } from './helpers.ts'
 
 export interface InteractionsDeps {
   harness: () => Harness
@@ -22,6 +23,44 @@ export interface InteractionsDeps {
 export function createInteractionReplies(deps: InteractionsDeps) {
   const { requireConversation, currentDetail, assertConversationModelAllowed } = deps
   const harness = (): Harness => deps.harness()
+
+  /**
+   * Submit one reply and record the same request receipt a typed message gets.
+   *
+   * The receipt is what the live projection reads to give in-flight messages the same run
+   * id as the settled entries (`runIdForLive`); without it, an answer looked like a second
+   * run while it streamed. The entry also carries `requestId` so the durable side computes
+   * that id from the request rather than from the entry's row number.
+   */
+  const submitReply = async (
+    conversation: Conversation,
+    requestId: string,
+    content: string,
+    entry: InputSubmissionDraft['entry'],
+  ): Promise<void> => {
+    const existing = await harness().snapshot(META, conversation.id, CTX)
+    const receipt = existing?.requestReceipts[requestId]
+    if (receipt?.submissionId !== null && receipt?.submissionId !== undefined) return
+    const request = await conversation.submit({
+      type: 'input',
+      content,
+      requestId,
+      ...(entry === undefined ? {} : { entry }),
+      whenBusy: 'steer',
+    }, CTX)
+    const status = await request.status(CTX)
+    await harness().commit(async (tx) => {
+      const metadata = await tx.doc(META, conversation.id)
+      metadata.requestReceipts[requestId] = {
+        fingerprint: createHash('sha256').update(content).digest('hex'),
+        status: 'accepted',
+        submissionId: Number(request.id),
+      }
+      if (status.status === 'queued') metadata.queueCreatedAt[String(request.id)] = Date.now()
+      metadata.updatedAt = Date.now()
+    }, CTX)
+  }
+
 
   const answerPlanReview = async (
     conversation: Awaited<ReturnType<typeof requireConversation>>,
@@ -51,21 +90,17 @@ export function createInteractionReplies(deps: InteractionsDeps) {
         ? 'The user approved the plan and plan mode is now off: execute the approved plan in this turn.'
         : 'The user asked for changes and plan mode is still on: revise the plan and submit it again with exit_plan_mode.',
     }
-    await conversation.submit({
-      type: 'input',
-      content: JSON.stringify(reply),
-      requestId: `plan-review-reply:${callId}`,
-      entry: {
-        kind: 'pi-web.plan-review-reply',
-        data: {
-          callId,
-          approved: decision.approved,
-          answers: settledAnswers,
-          ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
-        },
+    const requestId = `plan-review-reply:${callId}`
+    await submitReply(conversation, requestId, JSON.stringify(reply), {
+      kind: 'pi-web.plan-review-reply',
+      data: {
+        requestId,
+        callId,
+        approved: decision.approved,
+        answers: settledAnswers,
+        ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
       },
-      whenBusy: 'steer',
-    }, CTX)
+    })
     await harness().commit(async (tx) => {
       const table = interactionTable(await tx.doc(Interactions, id))
       const stored = planReviewOf(table[callId])
@@ -118,13 +153,11 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       })),
       answers: settledAnswers,
     }
-    await conversation.submit({
-      type: 'input',
-      content: JSON.stringify(reply),
-      requestId: `question-reply:${callId}`,
-      entry: { kind: 'pi-web.user-question-reply', data: { callId, answers: settledAnswers } },
-      whenBusy: 'steer',
-    }, CTX)
+    const requestId = `question-reply:${callId}`
+    await submitReply(conversation, requestId, JSON.stringify(reply), {
+      kind: 'pi-web.user-question-reply',
+      data: { requestId, callId, answers: settledAnswers },
+    })
     await harness().commit(async (tx) => {
       const doc = await tx.doc(Interactions, id)
       const stored = doc[callId]
@@ -167,13 +200,11 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       })),
       instruction: 'The user dismissed these questions without answering. Do not ask them again; continue with work that does not depend on the answers, or wrap up.',
     }
-    await conversation.submit({
-      type: 'input',
-      content: JSON.stringify(dismissal),
-      requestId: `question-dismiss:${callId}`,
-      entry: { kind: 'pi-web.user-question-dismissed', data: { callId } },
-      whenBusy: 'steer',
-    }, CTX)
+    const requestId = `question-dismiss:${callId}`
+    await submitReply(conversation, requestId, JSON.stringify(dismissal), {
+      kind: 'pi-web.user-question-dismissed',
+      data: { requestId, callId },
+    })
     await harness().commit(async (tx) => {
       const doc = await tx.doc(Interactions, id)
       const stored = doc[callId]

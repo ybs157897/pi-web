@@ -1,3 +1,4 @@
+import { isInteractionPayloadText } from './interaction-payload.ts'
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, MessageUsage } from '../shared/types.ts'
 import { groupProcessParts, type ProcessToolGroupKind } from './process-grouping.ts'
 
@@ -144,16 +145,19 @@ export function buildRenderModel(messages: readonly ChatMessage[]): RenderModel 
       continue
     }
     if (message.role === 'user') {
+      // Answer/dismissal payloads start a run but have no bubble: the ask_user_question row
+      // carries their content, so they must not become a user row or an interleaved part.
+      const hidden = isInteractionPayloadText(messageText(message))
       const existing = message.runId === undefined ? undefined : byRunId.get(message.runId)
       if (existing !== undefined) {
-        existing.users.push(message)
+        if (!hidden) existing.users.push(message)
         existing.messages.push(message)
         active = existing
       } else {
         const run: MutableRun = {
           key: stableRunKey(message),
           ...(message.runId === undefined ? {} : { runId: message.runId }),
-          users: [message],
+          users: hidden ? [] : [message],
           messages: [message],
           firstIndex: index,
         }
@@ -326,7 +330,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
   const responses: ResponsePart[] = []
   const finalResponse = finalResponseOf(run.messages)
   for (const [messageIndex, message] of run.messages.entries()) {
-    if (message.role === 'user' && message.id !== run.users[0]?.id) {
+    if (message.role === 'user' && message.id !== run.users[0]?.id && !isInteractionPayloadText(messageText(message))) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
     }
     // A turn that is still streaming owns the answer area: it has not settled yet, and a
