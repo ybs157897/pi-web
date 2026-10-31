@@ -4,7 +4,7 @@ import {
   buildRenderModel, conversationStats, interactionBlocksTurnLoading, reasoningDisplay, toolActivity, turnChatLoadingVisible,
   visibleTranscriptMessages,
 } from '../src/web/render-model.ts'
-import { latestPlan, planTitle } from '../src/web/plan-preview.ts'
+import { latestPlan, planTitle, sessionPlans } from '../src/web/plan-preview.ts'
 import {
   askQuestionRowModel, buildToolRenderModel, codemodeRowModel, lateAnswerOf, subagentRowModel, toolLiveDetail, toolRowTitle,
 } from '../src/web/tool-render-model.ts'
@@ -569,6 +569,27 @@ describe('plan preview model', () => {
     expect(planTitle('前言\n\n# 标题 A\n\n## 小节')).toBe('标题 A')
     expect(planTitle('## 只有二级标题')).toBeUndefined()
     expect(planTitle('#   ')).toBeUndefined()
+  })
+
+  it('lists every submitted plan newest first and marks the pending review', () => {
+    const messages: ChatMessage[] = [
+      assistant('a-1', [{ type: 'toolCall', id: 'call-old', name: 'exit_plan_mode', arguments: { plan: '# 旧计划\n\n第一步' } }], { timestamp: 10 }),
+      assistant('a-2', [{ type: 'toolCall', id: 'call-new', name: 'exit_plan_mode', arguments: { plan: '# 新计划\n\n第二步' } }], { timestamp: 30 }),
+      assistant('a-3', [{ type: 'toolCall', id: 'call-bash', name: 'bash', arguments: { plan: '# 不是计划' } }], { timestamp: 40 }),
+    ]
+    const interactions: InteractionRequest[] = [review('call-new', '# 新计划\n\n第二步', 31)]
+    expect(sessionPlans(interactions, messages)).toEqual([
+      { markdown: '# 新计划\n\n第二步', title: '新计划', key: 'call-new', pending: true },
+      { markdown: '# 旧计划\n\n第一步', title: '旧计划', key: 'call-old' },
+    ])
+  })
+
+  it('keeps a review whose plan call was compacted away and dedupes the same plan', () => {
+    const plans = sessionPlans([review('call-gone', '# 压缩前的计划', 50, 'continued')], [])
+    expect(plans).toEqual([{ markdown: '# 压缩前的计划', title: '压缩前的计划', key: 'call-gone' }])
+    expect(sessionPlans([review('call-old', '# 同一份', 10, 'continued')], [
+      assistant('a-1', [{ type: 'toolCall', id: 'call-old', name: 'exit_plan_mode', arguments: { plan: '# 同一份' } }], { timestamp: 11 }),
+    ])).toEqual([{ markdown: '# 同一份', title: '同一份', key: 'call-old' }])
   })
 })
 

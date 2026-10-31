@@ -813,3 +813,13 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 - 服务端（`src/server/conversation/projection.ts`、`src/server/runtime/interactions.ts`）：`runIdForLive` 在找不到 receipt 时回退当前 durable run；三类交互答复统一 `submitReply`，写 receipt 并在 entry.data 带 `requestId`，两端都得到 `run:<requestId>`。
 - 前端（`src/web/ToolCard.tsx`、`tool-render-model.ts`、`render-model.ts`、`conversation` 投影）：删除迟到回答气泡与「放弃整组问题」气泡（`isInteractionPayloadText` 让 payload 只作为 run 边界），`ask_user_question` 行对齐 ZCode `ToolCallBlocks/renderers/ask-question.tsx`：`正在询问`/`已询问` + `N 个问题`，展开为左竖线的问题/回答，未回答「未提供回答」，抑制原始 JSON 载荷。
 - 判据：全量 vitest 713 通过；demo `[ask]` 实机答复期间只有两个 run、无答复气泡、亮/暗渲染与 ZCode 版式一致（`artifacts/ask-render/`）。
+
+## 右侧状态卡补强（2026-10-30）
+
+按 ZCode `packages/ui/src/v4/ConversationStatusPanel.tsx` 补齐了四块（分区此前只有 Git / 进程 / 智能体）：
+
+- **目标**：`GoalStatusSection` 的简化版——逐迭代历史不做，头部「进行中/已暂停/受阻 · x/y 轮」+ 暂停/恢复（`onGoalAction` → `POST /api/conversations/:id/goal`），主体是 objective 与受阻原因。ZCode 的逐迭代行需要 goal 迭代记录，Pi 的 `pi-web.goal` 只有 `roundsStarted`，暂不追平。
+- **计划**：ZCode 的「计划」分区是已接受计划文档的目录；pi-web 从 transcript 的 `exit_plan_mode` 与 `plan-review` 交互合并出 `sessionPlans()`（按时间排序、按 Markdown 去重、压缩后残留的 review 仍保留），行点开复用 `PlanPreview`，最新待批行带「待批」。ZCode 的行是打开计划详情侧页，pi-web 是右侧检查器的计划 tab——入口语义一致，承载面不同。
+- **已结束智能体**：从卡内折叠列表改为分区页脚行「已结束的智能体 · N ›」，点击打开 `SubagentDirectory`（ZCode `SubagentDirectorySidePane.tsx` 的三分之二：正在运行/已结束分组、标题+状态+摘要+指标、点行开子会话 tab；ZCode 的「再显示 20 个」分页与相对时间未做，Pi 的子智能体列表一次全给）。
+- **胶囊摘要链**：ZCode 的 10 条链取了 8 条——`进行中 Todo → 第一条待处理 → 最后完成项 → 目标 → 运行中智能体 → Git 更改 → 已结束智能体 → 最新计划`。`运行中工作流` 与 `会话计划` 分支对应能力在前两者里没有/形态不同；Todo 仍排在目标与 Git 之前（pi-web 的胶囊兼作底部 Todo dock 的替代品，见「有意差异」）。三条 Todo 分支都带 `已完成/总数`，避免胶囊换成条目文案后丢掉进度。
+- **验收**：`npm run check`（72 文件 725 通过 / 1 跳过）；demo 4319 的 `[plan]`/`[goal]`/`[subagent]`/`[todo]` 会话实机走通分区顺序、暂停/恢复、计划预览、目录页与纯计划胶囊，截图 `artifacts/status-panel/`（gitignored）。仍未做：终端分区（需要 shell runner 暴露 workId/标题/开始时间/取消）、工作流分区（没有 workflow 运行模型）、已结束目录的分页。

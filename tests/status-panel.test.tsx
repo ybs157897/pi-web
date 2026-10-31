@@ -81,18 +81,108 @@ describe('StatusPanel', () => {
     expect(screen.getByText('停止')).toBeTruthy()
   })
 
-  it('keeps ended agents behind their own fold and opens them from there', () => {
+  it('sends ended agents to the directory page instead of listing them in the card', () => {
     const ended: SubagentSummary = {
       id: 'child-2', label: 'writer', title: '整理验收记录', status: 'inactive', answer: 'done',
       durationMs: 65_000, tokens: 12_345, createdAt: 1, updatedAt: 2,
     }
-    renderPanel({ subagents: [ended] })
+    const onOpenSubagentDirectory = vi.fn()
+    renderPanel({ subagents: [ended], onOpenSubagentDirectory })
     expect(screen.getByText('1 已结束')).toBeTruthy()
     fireEvent.click(screen.getByText('智能体'))
     expect(screen.queryByText('整理验收记录')).toBeNull()
-    fireEvent.click(screen.getByText('已结束的智能体 · 1'))
-    expect(screen.getByText('整理验收记录')).toBeTruthy()
-    expect(screen.getByText('12.3K tok · 1 分 05 秒')).toBeTruthy()
+    fireEvent.click(screen.getByText('已结束的智能体'))
+    expect(onOpenSubagentDirectory).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the goal section with its phase, round budget and pause control', () => {
+    const onGoalAction = vi.fn()
+    renderPanel({
+      goal: { id: 'goal-1', revision: 3, objective: '把右侧状态卡补齐', phase: 'active', maxGoalRounds: 10, roundsStarted: 2, createdAt: 1, updatedAt: 2 },
+      onGoalAction,
+    })
+    expect(screen.getByText('目标')).toBeTruthy()
+    expect(screen.getByText('把右侧状态卡补齐')).toBeTruthy()
+    expect(screen.getByText('进行中')).toBeTruthy()
+    expect(screen.getByText('2/10 轮')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('暂停目标'))
+    expect(onGoalAction).toHaveBeenCalledWith('pause')
+  })
+
+  it('switches the goal control to resume once the goal is paused or blocked', () => {
+    const onGoalAction = vi.fn()
+    renderPanel({
+      goal: {
+        id: 'goal-1', revision: 3, objective: '补齐胶囊', phase: 'blocked', maxGoalRounds: 8, roundsStarted: 1,
+        blockedReason: '缺少验收环境', createdAt: 1, updatedAt: 2,
+      },
+      onGoalAction,
+    })
+    expect(screen.getByText('受阻')).toBeTruthy()
+    expect(screen.getByText('缺少验收环境')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('恢复目标'))
+    expect(onGoalAction).toHaveBeenCalledWith('resume')
+  })
+
+  it('hides a completed goal from both the section and the capsule', () => {
+    renderPanel({
+      todos: [],
+      subagents: [],
+      goal: { id: 'goal-1', revision: 4, objective: '已经完成', phase: 'complete', maxGoalRounds: 5, roundsStarted: 5, createdAt: 1, updatedAt: 2 },
+    })
+    expect(document.querySelector('[data-status-section="goal"]')).toBeNull()
+    expect(document.querySelector('[data-status-capsule]')).toBeNull()
+  })
+
+  it('lists submitted plans newest first and opens one on click', () => {
+    const onOpenPlan = vi.fn()
+    renderPanel({
+      plans: [
+        { markdown: '# 第二版计划', title: '第二版计划', key: 'call-b', pending: true },
+        { markdown: '# 第一版计划', title: '第一版计划', key: 'call-a' },
+      ],
+      onOpenPlan,
+    })
+    expect(screen.getByText('计划')).toBeTruthy()
+    const rows = screen.getAllByRole('button').filter(button => button.textContent?.includes('版计划'))
+    expect(rows.map(row => row.textContent)).toEqual(['第二版计划待批', '第一版计划'])
+    fireEvent.click(rows[0]!)
+    expect(onOpenPlan).toHaveBeenCalledWith(expect.objectContaining({ key: 'call-b', pending: true }))
+  })
+
+  it('capsules the latest plan so a plan-only conversation keeps its entry point', () => {
+    const rect = (width: number) => ({ width, height: 900, top: 0, left: 0, right: width, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ;(HTMLElement.prototype.getBoundingClientRect as unknown as { mockReturnValue: (value: DOMRect) => void }).mockReturnValue(rect(900))
+    render(<StatusPanel conversationId="parent-1" todos={[]} subagents={[]}
+      plans={[{ markdown: '# 演示计划', title: '演示计划', key: 'call-a', pending: true }]}
+      onOpenSubagent={() => {}} onInspectDiff={() => {}} onNotice={() => {}} />)
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('演示计划')
+  })
+
+  it('capsules the first pending Todo item and the last completed one', () => {
+    const rect = (width: number) => ({ width, height: 900, top: 0, left: 0, right: width, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ;(HTMLElement.prototype.getBoundingClientRect as unknown as { mockReturnValue: (value: DOMRect) => void }).mockReturnValue(rect(900))
+    const pendingPanel = render(<StatusPanel conversationId="parent-1"
+      todos={[{ content: '定位问题', status: 'completed' }, { content: '补充测试', status: 'pending' }]}
+      subagents={[]} onOpenSubagent={() => {}} onInspectDiff={() => {}} onNotice={() => {}} />)
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('补充测试')
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('1/2')
+    pendingPanel.unmount()
+    render(<StatusPanel conversationId="parent-1"
+      todos={[{ content: '定位问题', status: 'completed' }, { content: '补充测试', status: 'completed' }]}
+      subagents={[]} onOpenSubagent={() => {}} onInspectDiff={() => {}} onNotice={() => {}} />)
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('补充测试')
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('2/2')
+  })
+
+  it('falls back to the goal after the Todo branches and keeps the Git summary below agents', () => {
+    const rect = (width: number) => ({ width, height: 900, top: 0, left: 0, right: width, bottom: 900, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ;(HTMLElement.prototype.getBoundingClientRect as unknown as { mockReturnValue: (value: DOMRect) => void }).mockReturnValue(rect(900))
+    render(<StatusPanel conversationId="parent-1" todos={[]} subagents={[subagent]}
+      goal={{ id: 'goal-1', revision: 1, objective: '补齐右侧状态卡', phase: 'active', maxGoalRounds: 10, roundsStarted: 0, createdAt: 1, updatedAt: 2 }}
+      onOpenSubagent={() => {}} onInspectDiff={() => {}} onNotice={() => {}} />)
+    expect(document.querySelector('[data-status-capsule]')?.textContent).toContain('补齐右侧状态卡')
+    expect(document.querySelector('[data-status-capsule]')?.textContent).not.toContain('个智能体运行中')
   })
 
   it('renders nothing while there is no Git, Todo or agent content', () => {

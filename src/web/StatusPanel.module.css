@@ -256,42 +256,71 @@
 .stopButton:hover:enabled { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
 .stopButton:disabled { opacity: .55; cursor: default; }
 
-.endedFold {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 6px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-  font: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  text-align: left;
-  cursor: pointer;
-}
-.endedFold:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
-.endedRow {
+.endedDirectory {
   display: flex;
   width: 100%;
   min-width: 0;
-  align-items: flex-start;
+  min-height: 30px;
+  align-items: center;
   gap: 8px;
-  padding: 5px 6px;
+  margin-top: 1px;
+  padding: 4px 6px;
   border: 0;
+  border-top: .5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
   font: inherit;
+  font-size: 13px;
+  line-height: 20px;
   text-align: left;
   cursor: pointer;
 }
-.endedRow:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
-.endedRow > svg:first-child { flex: none; margin-top: 3px; color: var(--dsw-alias-state-success-primary); }
-.endedRow > svg:last-child { flex: none; margin-top: 3px; color: var(--dsw-alias-label-tertiary); }
-.endedRow .agentOpen { pointer-events: none; }
+.endedDirectory:hover:enabled { background: var(--dsw-alias-bg-layer-2); }
+.endedDirectory:disabled { cursor: default; }
+.endedDirectory:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+.endedDirectory > svg:first-child { flex: none; color: var(--dsw-alias-label-tertiary); }
+.endedDirectory > svg:last-child { flex: none; color: var(--dsw-alias-label-tertiary); }
+
+/* ZCode's goal section: the objective under a phase + round-budget header. */
+.goalTrailing { display: inline-flex; align-items: center; gap: 5px; }
+.goalSeparator { color: var(--dsw-alias-label-caption); }
+.trailingCount[data-goal-phase='active'] { color: var(--dsw-alias-state-business-primary); }
+.trailingCount[data-goal-phase='blocked'] { color: var(--dsw-alias-state-warn-label); }
+.goalControl {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.goalControl:hover { background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-primary); }
+.goalControl:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+.goalRow { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 4px 6px; }
+.goalIcon { flex: none; margin-top: 2px; color: var(--dsw-alias-label-tertiary); }
+.goalRow[data-goal-phase='active'] .goalIcon { color: var(--dsw-alias-state-business-primary); }
+.goalRow[data-goal-phase='blocked'] .goalIcon { color: var(--dsw-alias-state-warn-primary); }
+.goalObjective { min-width: 0; flex: 1; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.goalReason { margin: 0; padding: 0 6px 4px 29px; color: var(--dsw-alias-state-warn-label); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+
+.planPending {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* ZCode caps the plan directory at four rows so a long history cannot push the Todo away. */
+.planBody { max-height: 8.5rem; overflow-x: hidden; overflow-y: auto; }
 
 .error { margin: 2px 6px; color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
 .spin { animation: spin .9s linear infinite; }

@@ -10,7 +10,8 @@ import PlanPreview, { type PlanDocument } from './PlanPreview.tsx'
 import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
 import { PluginUiPane } from './PluginUiPane.tsx'
 import SubagentPane from './SubagentPane.tsx'
-import type { WorkspaceSummary } from '../shared/types.ts'
+import SubagentDirectory from './SubagentDirectory.tsx'
+import type { SubagentSummary, WorkspaceSummary } from '../shared/types.ts'
 import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
 
@@ -30,12 +31,18 @@ export interface InspectorFile {
 export type { InspectorDiff } from './transcript.tsx'
 
 /** The inspector's views: a workspace browser beside file, diff, plan, plugin and subagent documents. */
-export type InspectorView = 'file' | 'diff' | 'plan' | 'browse' | 'plugin' | 'subagent'
+export type InspectorView = 'file' | 'diff' | 'plan' | 'browse' | 'plugin' | 'subagent' | 'subagents'
 
 /** One read-only child conversation the inspector keeps mounted as a tab. */
 export interface InspectorSubagentTab {
   id: string
   title: string
+}
+
+/** The subagent directory tab: every child of the open parent, live and ended. */
+export interface InspectorSubagentDirectory {
+  subagents: readonly SubagentSummary[]
+  onOpen: (childId: string, title?: string) => void
 }
 
 export interface InspectorBrowse {
@@ -82,6 +89,9 @@ export interface InspectorProps {
   activeSubagentId?: string
   onSelectSubagentTab?: (id: string) => void
   onCloseSubagentTab?: (id: string) => void
+  /** The subagent directory page, opened from the status card's ended-agents footer. */
+  subagentDirectory?: InspectorSubagentDirectory | null
+  onCloseSubagentDirectory?: () => void
   onClose: () => void
 }
 
@@ -116,6 +126,7 @@ export default function Inspector({
   onPluginContext, onPluginMessage, onPluginOpenLink,
   pluginSurfaces = [], onOpenPluginSurface, onRefreshPluginSurfaces, onClose,
   subagentTabs = [], activeSubagentId, onSelectSubagentTab, onCloseSubagentTab,
+  subagentDirectory = null, onCloseSubagentDirectory,
 }: InspectorProps) {
   const { t } = useUiPreferences()
   const [surfacesOpen, setSurfacesOpen] = useState(false)
@@ -124,19 +135,23 @@ export default function Inspector({
   const planView = view === 'plan'
   const pluginView = view === 'plugin' && pluginPages.length > 0
   const subagentView = view === 'subagent' && subagentTabs.length > 0
+  const directoryView = view === 'subagents' && subagentDirectory !== null
   const browseView = browse !== null && view === 'browse'
   const activePluginPage = pluginPages.find(page => page.id === activePluginPageId)
   const activeSubagentTab = subagentTabs.find(tab => tab.id === activeSubagentId)
-  const path = subagentView
-    ? activeSubagentTab?.title ?? t('子智能体', 'Subagent')
-    : pluginView
-      ? activePluginPage?.title ?? activePluginPage?.pluginId ?? t('插件', 'Plugin')
-      : browse !== null && view === 'browse'
-        ? browse.workspace.name
-        : planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
+  const path = directoryView
+    ? t('子智能体目录', 'Subagent directory')
+    : subagentView
+      ? activeSubagentTab?.title ?? t('子智能体', 'Subagent')
+      : pluginView
+        ? activePluginPage?.title ?? activePluginPage?.pluginId ?? t('插件', 'Plugin')
+        : browse !== null && view === 'browse'
+          ? browse.workspace.name
+          : planView ? t('计划', 'Plan') : diff?.path ?? file?.path ?? t('文件检查器', 'File inspector')
   const hasDocument = plan !== null || diff !== null || file !== null
   const showTabs = onView !== undefined
-    && (browse !== null || hasDocument || pluginPages.length > 0 || subagentTabs.length > 0 || onRefreshPluginSurfaces !== undefined)
+    && (browse !== null || hasDocument || pluginPages.length > 0 || subagentTabs.length > 0
+      || subagentDirectory !== null || onRefreshPluginSurfaces !== undefined)
   useEffect(() => {
     if (!surfacesOpen) return
     const close = (event: MouseEvent): void => {
@@ -158,6 +173,10 @@ export default function Inspector({
     else setSurfacesLoading(false)
   }
   const closeActive = (): void => {
+    if (directoryView && onCloseSubagentDirectory !== undefined) {
+      onCloseSubagentDirectory()
+      return
+    }
     if (subagentView && onCloseSubagentTab !== undefined) {
       const target = activeSubagentId ?? subagentTabs[0]?.id
       if (target !== undefined) {
@@ -174,28 +193,32 @@ export default function Inspector({
     }
     onClose()
   }
-  const closeLabel = subagentView
-    ? t('关闭子智能体会话', 'Close subagent session')
-    : pluginView
-      ? t('关闭插件页面', 'Close plugin page')
-      : browseView
-        ? t('关闭文件浏览器', 'Close file browser')
-        : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')
-  return (
-    <aside className={css.root} aria-label={subagentView
-      ? t('子智能体会话', 'Subagent session')
+  const closeLabel = directoryView
+    ? t('关闭子智能体目录', 'Close subagent directory')
+    : subagentView
+      ? t('关闭子智能体会话', 'Close subagent session')
       : pluginView
-        ? t('插件面板', 'Plugin panel')
+        ? t('关闭插件页面', 'Close plugin page')
         : browseView
-          ? t('文件浏览器', 'File browser')
-          : planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
+          ? t('关闭文件浏览器', 'Close file browser')
+          : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')
+  return (
+    <aside className={css.root} aria-label={directoryView
+      ? t('子智能体目录', 'Subagent directory')
+      : subagentView
+        ? t('子智能体会话', 'Subagent session')
+        : pluginView
+          ? t('插件面板', 'Plugin panel')
+          : browseView
+            ? t('文件浏览器', 'File browser')
+            : planView ? t('计划检查器', 'Plan inspector') : t('文件检查器', 'File inspector')}>
       <header className={css.header}>
         <div className={css.fileIcon} aria-hidden="true"><IconBrowseOutlineRegular size={15} /></div>
         <div className={css.path} title={path}>{path}</div>
         {showTabs && <div className={css.viewTabs} role="group" aria-label={t('检查器视图', 'Inspector view')}>
           {browse !== null && <button type="button" data-browse-view aria-pressed={browseView}
             onClick={() => { setSurfacesOpen(false); onView('browse') }}>{t('浏览', 'Browse')}</button>}
-          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView && !browseView && !pluginView && !subagentView}
+          {(diff !== null || file !== null) && <button type="button" aria-pressed={!planView && !browseView && !pluginView && !subagentView && !directoryView}
             onClick={() => { setSurfacesOpen(false); onView(diff !== null ? 'diff' : 'file') }}>{diff !== null ? t('差异', 'Diff') : t('文件', 'File')}</button>}
           {plan !== null && <button type="button" data-plan-view aria-pressed={planView}
             onClick={() => { setSurfacesOpen(false); onView('plan') }}>{t('计划', 'Plan')}</button>}
@@ -226,6 +249,13 @@ export default function Inspector({
                   </button>)}
             </div>}
           </span>}
+          {subagentDirectory !== null && <span className={css.pluginTab} data-subagent-directory-tab>
+            <button type="button" className={css.pluginTabButton} aria-pressed={directoryView}
+              onClick={() => { setSurfacesOpen(false); onView?.('subagents') }}>{t('子智能体目录', 'Subagents')}</button>
+            {onCloseSubagentDirectory !== undefined && <button type="button" className={css.pluginTabClose}
+              aria-label={t('关闭子智能体目录', 'Close subagent directory')}
+              onClick={() => { onCloseSubagentDirectory() }}><IconCloseOutlineRegular size={11} /></button>}
+          </span>}
           {subagentTabs.map(tab => {
             const title = tab.title
             return <span key={tab.id} className={css.pluginTab} data-subagent-tab={tab.id}>
@@ -253,6 +283,9 @@ export default function Inspector({
               onContext={onPluginContext ?? noop} onMessage={onPluginMessage ?? noop} onOpenLink={onPluginOpenLink ?? noop} />
         })}
       </div>}
+      {subagentDirectory !== null && <div className={css.subagentSurfaces} data-subagent-directory-surface hidden={!directoryView}>
+        <SubagentDirectory subagents={subagentDirectory.subagents} onOpen={subagentDirectory.onOpen} />
+      </div>}
       {subagentTabs.length > 0 && <div className={css.subagentSurfaces} data-subagent-surfaces hidden={!subagentView}>
         {subagentTabs.map(tab => <SubagentPane key={tab.id} childId={tab.id} title={tab.title}
           hidden={!subagentView || tab.id !== activeSubagentId} />)}
@@ -260,7 +293,7 @@ export default function Inspector({
       {browse !== null && <div className={css.browseSurface} hidden={!browseView}>
         <WorkspaceBrowserPage workspace={browse.workspace} path={browse.path ?? ''} onOpenFile={browse.onOpenFile} compact />
       </div>}
-      {!pluginView && !browseView && !subagentView && (planView
+      {!pluginView && !browseView && !subagentView && !directoryView && (planView
         ? <PlanPreview plan={plan} loading={loading} error={error} />
         : <>
           {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}

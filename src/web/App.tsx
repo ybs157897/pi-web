@@ -29,7 +29,7 @@ import SettingsDialog from './SettingsDialog.tsx'
 import Transcript, { type PendingMessage } from './transcript.tsx'
 import StatusPanel from './StatusPanel.tsx'
 import { conversationStats, visibleTranscriptMessages } from './render-model.ts'
-import { latestPlan, type PlanDocument } from './plan-preview.ts'
+import { latestPlan, sessionPlans, type PlanDocument } from './plan-preview.ts'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
 import { PluginPageHostContext } from './plugin-page-pool.tsx'
@@ -215,6 +215,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** Read-only child conversations kept mounted as inspector tabs. */
   const [subagentTabs, setSubagentTabs] = useState<InspectorSubagentTab[]>([])
   const [activeSubagentId, setActiveSubagentId] = useState<string | undefined>(undefined)
+  /** The subagent directory tab opened from the status card's ended-agents footer. */
+  const [subagentDirectoryOpen, setSubagentDirectoryOpen] = useState(false)
   /** Inline cards hand their page host to the inspector here, so the side pane moves the iframe. */
   const [pluginPageHosts, setPluginPageHosts] = useState<Record<string, HTMLElement>>({})
   /** `ui/update-model-context` chips, scoped like drafts so switching sessions keeps each one. */
@@ -1331,11 +1333,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  const showInspector = inspectorOpen || pluginPages.length > 0 || subagentTabs.length > 0 || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
+  const showInspector = inspectorOpen || pluginPages.length > 0 || subagentTabs.length > 0 || subagentDirectoryOpen
+    || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
   const conversationPlan = useMemo(() => activeDetail === null
     ? undefined
     : latestPlan(activeDetail.interactions, activeDetail.messages), [activeDetail])
+  /** Every plan in the transcript, newest first: the status card's plan directory. */
+  const conversationPlans = useMemo(() => activeDetail === null
+    ? []
+    : sessionPlans(activeDetail.interactions, activeDetail.messages), [activeDetail])
 
   const startRename = (item: ConversationSummary): void => {
     setEditingId(item.id)
@@ -1483,6 +1490,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setPluginPageHosts({})
     setSubagentTabs([])
     setActiveSubagentId(undefined)
+    setSubagentDirectoryOpen(false)
     setInspectorError('')
     setInspectorLoading(false)
   }
@@ -1506,12 +1514,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (activePluginPageId !== id) return
     setActivePluginPageId(next[index]?.id ?? next[index - 1]?.id)
     if (next.length > 0) return
-    if (inspectorPlan !== undefined || conversationPlan !== undefined) setInspectorView('plan')
+    if (subagentDirectoryOpen) setInspectorView('subagents')
+    else if (inspectorPlan !== undefined || conversationPlan !== undefined) setInspectorView('plan')
     else if (inspectorDiff !== undefined) setInspectorView('diff')
     else if (inspectorFile !== undefined) setInspectorView('file')
     else if (browseWorkspace !== undefined) setInspectorView('browse')
     else closeInspector()
-  }, [activePluginPageId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages])
+  }, [activePluginPageId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentDirectoryOpen])
   /**
    * Open or focus one plugin page tab; the id keeps one page per plugin call site. An inline card
    * passes its host, so the inspector moves the mounted page instead of opening a second iframe.
@@ -1559,6 +1568,29 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [activeDetail, t])
 
   /**
+   * The status card's 「已结束的智能体」 footer opens ZCode's directory page: every child of the
+   * parent in one tab, each row opening the read-only session beside it.
+   */
+  const openSubagentDirectory = useCallback((): void => {
+    setSubagentDirectoryOpen(true)
+    setInspectorOpen(true)
+    setInspectorView('subagents')
+    setSidebarOpen(false)
+  }, [])
+
+  /** Close the directory tab; a neighbour tab takes over, else the panel falls back or closes. */
+  const closeSubagentDirectory = useCallback((): void => {
+    setSubagentDirectoryOpen(false)
+    if (subagentTabs.some(tab => tab.id === activeSubagentId)) { setInspectorView('subagent'); return }
+    if (pluginPages.length > 0) { setInspectorView('plugin'); return }
+    if (inspectorPlan !== undefined || conversationPlan !== undefined) { setInspectorView('plan'); return }
+    if (inspectorDiff !== undefined) { setInspectorView('diff'); return }
+    if (inspectorFile !== undefined) { setInspectorView('file'); return }
+    if (browseWorkspace !== undefined) { setInspectorView('browse'); return }
+    closeInspector()
+  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentTabs])
+
+  /**
    * Close one child conversation tab. The tab's neighbour takes over when it was active; with no
    * child left, the panel falls back to a document or plugin tab and only then closes entirely.
    */
@@ -1571,13 +1603,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     const replacement = next[index]?.id ?? next[index - 1]?.id
     setActiveSubagentId(replacement)
     if (replacement !== undefined) return
+    if (subagentDirectoryOpen) { setInspectorView('subagents'); return }
     if (pluginPages.length > 0) { setInspectorView('plugin'); return }
     if (inspectorPlan !== undefined || conversationPlan !== undefined) { setInspectorView('plan'); return }
     if (inspectorDiff !== undefined) { setInspectorView('diff'); return }
     if (inspectorFile !== undefined) { setInspectorView('file'); return }
     if (browseWorkspace !== undefined) { setInspectorView('browse'); return }
     closeInspector()
-  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentTabs])
+  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentDirectoryOpen, subagentTabs])
 
   /** Page ids whose host the inspector owns; an inline card shows a placeholder for those. */
   const sidePageIds = useMemo(() => new Set(Object.keys(pluginPageHosts)), [pluginPageHosts])
@@ -1681,6 +1714,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setPluginSurfaces([])
     setSubagentTabs([])
     setActiveSubagentId(undefined)
+    setSubagentDirectoryOpen(false)
   }, [selectedId])
   useEffect(() => {
     if (selectedId === null || conversationPlan === undefined || conversationPlan.pending !== true) return
@@ -1988,8 +2022,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     </div>
                     <StatusPanel workspaceId={currentWorkspaceId} conversationId={activeDetail.conversation.id}
                       todos={activeDetail.todos} subagents={activeDetail.subagents}
+                      goal={activeDetail.goal} plans={conversationPlans}
                       refreshToken={`${activeDetail.messages.length}:${activeDetail.conversation.busy === true}`}
                       onOpenSubagent={(childId, title) => { openSubagentTab(childId, title) }}
+                      onOpenSubagentDirectory={openSubagentDirectory}
+                      onOpenPlan={plan => { openPlan(plan) }}
+                      onGoalAction={action => { void updateGoal(action) }}
                       onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
                       onNotice={announce} onVisibilityChange={setStatusPanelVisible}
                       onContentChange={setStatusPanelOccupied} />
@@ -2064,6 +2102,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 onRefreshPluginSurfaces={refreshPluginSurfaces}
                 subagentTabs={subagentTabs} activeSubagentId={activeSubagentId}
                 onSelectSubagentTab={setActiveSubagentId} onCloseSubagentTab={closeSubagentTab}
+                subagentDirectory={subagentDirectoryOpen ? {
+                  subagents: activeDetail?.subagents ?? [],
+                  onOpen: (childId, title) => { openSubagentTab(childId, title) },
+                } : null}
+                onCloseSubagentDirectory={closeSubagentDirectory}
                 onClose={closeInspector} />
             </aside>
           </>}

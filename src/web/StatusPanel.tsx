@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowRight, Bot, ChevronDown, ChevronRight, Circle, CircleCheck, FileDiff, GitCommitHorizontal,
-  Loader, Minimize2, Sparkles, Square, Upload,
+  ListChecks, Loader, Minimize2, Sparkles, Square, Upload,
 } from 'lucide-react'
 import {
-  Button, Checkbox, HoverCard, IconCheckOutlineRegular, IconEllipsisOutlineRegular, Menu, Modal,
+  Button, Checkbox, HoverCard, IconCheckOutlineRegular, IconEllipsisOutlineRegular, IconGoalOutlineRegular,
+  IconPauseOutlineRegular, IconPlayOutlineRegular, Menu, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { GitWorktreeFile, GitWorktreeStatus, SubagentSummary, TodoItem } from '../shared/types.ts'
+import type { GitWorktreeFile, GitWorktreeStatus, GoalView, SubagentSummary, TodoItem } from '../shared/types.ts'
+import type { PlanDocument } from './plan-preview.ts'
 import { api } from './api.ts'
 import GitBranchSwitcher from './GitBranchSwitcher.tsx'
 import type { InspectorDiff } from './transcript.tsx'
@@ -32,9 +34,17 @@ export interface StatusPanelProps {
   conversationId: string
   todos?: readonly TodoItem[] | null
   subagents?: readonly SubagentSummary[]
+  /** The conversation's goal; a completed goal leaves both the section and the capsule. */
+  goal?: GoalView | null
+  /** Every submitted plan, newest first (`sessionPlans`); a row opens the plan in the inspector. */
+  plans?: readonly PlanDocument[]
   /** Changes whenever the conversation snapshot advances; used to re-read Git promptly. */
   refreshToken?: string | number
   onOpenSubagent: (childId: string, title?: string) => void
+  /** The status footer's door to the subagent directory page. */
+  onOpenSubagentDirectory?: () => void
+  onOpenPlan?: (plan: PlanDocument) => void
+  onGoalAction?: (action: 'pause' | 'resume') => void
   onInspectDiff: (diff: InspectorDiff) => void
   onNotice: (message: string, success?: boolean) => void
   /** Expanded card only: it reserves room in the conversation column. */
@@ -86,19 +96,6 @@ function subagentElapsed(subagent: SubagentSummary, now: number): number | undef
   return subagent.durationMs + Math.max(0, now - subagent.metricsAt)
 }
 
-function formatTokens(value: number): string {
-  if (value < 1_000) return String(value)
-  if (value < 1_000_000) return `${Math.round(value / 100) / 10}K`
-  return `${Math.round(value / 100_000) / 10}M`
-}
-
-function agentMetrics(agent: SubagentSummary, t: (zh: string, en: string) => string): string {
-  const parts: string[] = []
-  if (agent.tokens !== undefined) parts.push(t(`${formatTokens(agent.tokens)} tok`, `${formatTokens(agent.tokens)} tok`))
-  if (agent.durationMs !== undefined) parts.push(formatElapsed(agent.durationMs, t))
-  return parts.join(' · ')
-}
-
 /** ZCode marks the running step with a static arrow; a dot reads as "unread" in its vocabulary. */
 function todoIcon(status: TodoItem['status']) {
   if (status === 'completed') return <CircleCheck size={14} aria-hidden="true" />
@@ -106,22 +103,32 @@ function todoIcon(status: TodoItem['status']) {
   return <Circle size={14} aria-hidden="true" />
 }
 
+function goalPhaseLabel(phase: GoalView['phase'], t: (zh: string, en: string) => string): string {
+  switch (phase) {
+    case 'active': return t('进行中', 'Active')
+    case 'paused': return t('已暂停', 'Paused')
+    case 'blocked': return t('受阻', 'Blocked')
+    case 'complete': return t('已完成', 'Complete')
+  }
+}
+
 /**
- * ZCode's floating status card: Git worktree, the active Todo snapshot and live subagents.
- * It stays inside the chat pane's right margin and only renders when it has something to say.
+ * ZCode's floating status card: Git worktree, the active goal, submitted plans, the active Todo
+ * snapshot and live subagents. It stays inside the chat pane's right margin and only renders when
+ * it has something to say.
  */
 export default function StatusPanel({
-  workspaceId, conversationId, todos, subagents, refreshToken, onOpenSubagent, onInspectDiff, onNotice,
+  workspaceId, conversationId, todos, subagents, goal, plans, refreshToken,
+  onOpenSubagent, onOpenSubagentDirectory, onOpenPlan, onGoalAction, onInspectDiff, onNotice,
   onVisibilityChange, onContentChange,
 }: StatusPanelProps) {
   const { t } = useUiPreferences()
   const [git, setGit] = useState<GitWorktreeStatus | null>(null)
   const [gitError, setGitError] = useState('')
-  const [open, setOpen] = useState({ git: true, todo: true, agent: false })
+  const [open, setOpen] = useState({ git: true, goal: true, plans: true, todo: true, agent: false })
   const [showAllTodos, setShowAllTodos] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [busyKey, setBusyKey] = useState<string>()
-  const [endedAgentsOpen, setEndedAgentsOpen] = useState(false)
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
   const [includeUnstaged, setIncludeUnstaged] = useState(true)
@@ -166,7 +173,6 @@ export default function StatusPanel({
     setCommitError('')
     setGenerating(false)
     setShowAllTodos(false)
-    setEndedAgentsOpen(false)
   }, [workspaceId, conversationId])
 
   useEffect(() => {
@@ -182,6 +188,8 @@ export default function StatusPanel({
   }, [workspaceId, wide, loadGit])
 
   const todoItems = todos ?? []
+  const planRows = plans ?? []
+  const activeGoal = goal !== undefined && goal !== null && goal.phase !== 'complete' ? goal : null
   const runningAgents = useMemo(() => (subagents ?? []).filter(item => item.status === 'running'), [subagents])
   const endedAgents = useMemo(() => (subagents ?? []).filter(item => item.status !== 'running'), [subagents])
   const todoWindow = useMemo(() => todoFocusWindow(todoItems), [todoItems])
@@ -203,7 +211,8 @@ export default function StatusPanel({
 
   const gitChanges = git !== null && git.isRepository && (git.dirtyFileCount > 0 || git.ahead > 0)
   const doneCount = todoItems.filter(item => item.status === 'completed').length
-  const hasContent = gitChanges || todoItems.length > 0 || runningAgents.length > 0 || endedAgents.length > 0
+  const hasContent = gitChanges || todoItems.length > 0 || planRows.length > 0 || activeGoal !== null
+    || runningAgents.length > 0 || endedAgents.length > 0
   // ZCode's display modes: `auto` expands on a wide conversation column and falls back to the
   // capsule; `panel` always expands; `mini` is the capsule until the user expands it again.
   const expanded = hasContent && (mode === 'panel' || (mode === 'auto' && wide))
@@ -321,18 +330,33 @@ export default function StatusPanel({
   const toggle = (key: keyof typeof open): void => { setOpen(current => ({ ...current, [key]: !current[key] })) }
   const visibleTodos = todoWindow.compact && !showAllTodos ? todoWindow.focus : todoItems
   const activeTodo = todoItems.find(item => item.status === 'in_progress')
-  // ZCode's capsule leans on the most actionable fact first. Todos stay ahead of the Git summary
-  // because the capsule also replaces the bottom Todo dock here: nothing about Todo progress may
-  // become invisible just because a branch has uncommitted changes.
+  const firstPendingTodo = todoItems.find(item => item.status === 'pending')
+  const lastCompletedTodo = [...todoItems].reverse().find(item => item.status === 'completed')
+  const todoProgress = <span className={css.capsuleCount}>{doneCount}/{todoItems.length}</span>
+  // ZCode's capsule leans on the most actionable fact first. Todos stay ahead of the goal and the
+  // Git summary because the capsule also replaces the bottom Todo dock here: nothing about Todo
+  // progress may become invisible just because a goal or a branch has something to say.
   const capsuleSummary = (): ReactNode => {
     if (activeTodo !== undefined) return <>
       <ArrowRight size={14} aria-hidden="true" />
       <span className={css.capsuleText}>{activeTodo.content}</span>
+      {todoProgress}
     </>
-    if (todoItems.length > 0) return <>
+    if (firstPendingTodo !== undefined) return <>
+      <Circle size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{firstPendingTodo.content}</span>
+      {todoProgress}
+    </>
+    if (lastCompletedTodo !== undefined) return <>
       <CircleCheck size={14} aria-hidden="true" />
-      <span className={css.capsuleText}>{t('进程', 'Process')}</span>
-      <span className={css.capsuleCount}>{doneCount}/{todoItems.length}</span>
+      <span className={css.capsuleText}>{lastCompletedTodo.content}</span>
+      {todoProgress}
+    </>
+    if (activeGoal !== null) return <>
+      <IconGoalOutlineRegular size={14} />
+      <span className={css.capsuleText}>{activeGoal.phase === 'blocked' && activeGoal.blockedReason !== undefined
+        ? activeGoal.blockedReason
+        : activeGoal.objective}</span>
     </>
     if (runningAgents.length > 0) return <>
       <Bot size={14} aria-hidden="true" />
@@ -348,6 +372,12 @@ export default function StatusPanel({
       <Bot size={14} aria-hidden="true" />
       <span className={css.capsuleText}>{t('已结束的智能体', 'Ended agents')}</span>
       <span className={css.capsuleCount}>{endedAgents.length}</span>
+    </>
+    // A plan-only conversation must still have something to click: ZCode's last fallback is the
+    // latest session plan, and without it the capsule renders as an empty 32px shell.
+    if (planRows[0] !== undefined) return <>
+      <ListChecks size={14} aria-hidden="true" />
+      <span className={css.capsuleText}>{planRows[0].title ?? t('计划', 'Plan')}</span>
     </>
     return null
   }
@@ -410,6 +440,45 @@ export default function StatusPanel({
         </div>}
       </section>}
 
+      {activeGoal !== null && <section className={css.section} data-status-section="goal">
+        <SectionHeader title={t('目标', 'Goal')} open={open.goal} onToggle={() => { toggle('goal') }}
+          trailing={<span className={css.goalTrailing}>
+            <span className={css.trailingCount} data-goal-phase={activeGoal.phase}>{goalPhaseLabel(activeGoal.phase, t)}</span>
+            <span className={css.goalSeparator} aria-hidden="true">·</span>
+            <span className={css.trailingNumeric}>{t(`${activeGoal.roundsStarted}/${activeGoal.maxGoalRounds} 轮`, `${activeGoal.roundsStarted}/${activeGoal.maxGoalRounds} rounds`)}</span>
+            {onGoalAction !== undefined && <button type="button" className={css.goalControl}
+              aria-label={activeGoal.phase === 'active' ? t('暂停目标', 'Pause goal') : t('恢复目标', 'Resume goal')}
+              title={activeGoal.phase === 'active' ? t('暂停目标', 'Pause goal') : t('恢复目标', 'Resume goal')}
+              onClick={() => { onGoalAction(activeGoal.phase === 'active' ? 'pause' : 'resume') }}>
+              {activeGoal.phase === 'active'
+                ? <IconPauseOutlineRegular size={13} />
+                : <IconPlayOutlineRegular size={13} />}
+            </button>}
+          </span>} />
+        {open.goal && <div className={css.sectionBody}>
+          <div className={css.goalRow} data-goal-phase={activeGoal.phase}>
+            <IconGoalOutlineRegular size={15} className={css.goalIcon} />
+            <span className={css.goalObjective}>{activeGoal.objective}</span>
+          </div>
+          {activeGoal.phase === 'blocked' && activeGoal.blockedReason !== undefined
+            && <p className={css.goalReason}>{activeGoal.blockedReason}</p>}
+        </div>}
+      </section>}
+
+      {planRows.length > 0 && <section className={css.section} data-status-section="plans">
+        <SectionHeader title={t('计划', 'Plans')} open={open.plans} onToggle={() => { toggle('plans') }}
+          trailing={<span className={`${css.trailingCount} ${css.trailingNumeric}`}>{planRows.length}</span>} />
+        {open.plans && <div className={`${css.sectionBody} ${css.planBody}`}>
+          {planRows.map((plan, index) => <button key={plan.key ?? `${index}:${plan.markdown.slice(0, 32)}`} type="button"
+            className={css.row} title={plan.title ?? t('计划', 'Plan')}
+            disabled={onOpenPlan === undefined} onClick={() => { onOpenPlan?.(plan) }}>
+            <ListChecks size={15} aria-hidden="true" />
+            <span className={css.rowLabel}>{plan.title ?? t('计划', 'Plan')}</span>
+            {plan.pending === true && <span className={css.planPending}>{t('待批', 'Pending')}</span>}
+          </button>)}
+        </div>}
+      </section>}
+
       {todoItems.length > 0 && <section className={css.section} data-status-section="todo">
         <SectionHeader title={t('进程', 'Process')} open={open.todo} onToggle={() => { toggle('todo') }}
           trailing={<span className={`${css.trailingCount} ${css.trailingNumeric}`}
@@ -458,20 +527,14 @@ export default function StatusPanel({
               </button>
             </div>
           })}
-          {endedAgents.length > 0 && <button type="button" className={css.endedFold} aria-expanded={endedAgentsOpen}
-            onClick={() => { setEndedAgentsOpen(value => !value) }}>
-            {endedAgentsOpen ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
-            {t(`已结束的智能体 · ${endedAgents.length}`, `Ended agents · ${endedAgents.length}`)}
-          </button>}
-          {endedAgentsOpen && endedAgents.map(agent => <button key={agent.id} type="button" className={css.endedRow}
-            onClick={() => { onOpenSubagent(agent.id, agent.title || agent.label) }}>
+          {endedAgents.length > 0 && <button type="button" className={css.endedDirectory}
+            disabled={onOpenSubagentDirectory === undefined}
+            onClick={() => { onOpenSubagentDirectory?.() }}>
             <CircleCheck size={15} aria-hidden="true" />
-            <span className={css.agentOpen}>
-              <span className={css.agentTitle}>{agent.title || agent.label}</span>
-              <span className={css.agentElapsed}>{agentMetrics(agent, t)}</span>
-            </span>
+            <span className={css.rowLabel}>{t('已结束的智能体', 'Ended agents')}</span>
+            <span className={css.trailingCount}>{endedAgents.length}</span>
             <ChevronRight size={13} aria-hidden="true" />
-          </button>)}
+          </button>}
         </div>}
       </section>}
     </div>}
