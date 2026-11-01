@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -131,7 +131,8 @@ describe('WeTrack background analysis', () => {
       await started
       const active = await runtime.detail(run.conversationId!)
       expect(active.conversation.busy).toBe(true)
-      expect(active.conversation.cwd).toBe(workspace.path)
+      // The runtime registers the workspace under its realpath; on macOS /var is a symlink to /private/var.
+      expect(active.conversation.cwd).toBe(await realpath(workspace.path))
       expect(active.conversation.accessMode).toBe('readOnly')
       expect(active.conversation.kind).toBe('defectAnalysis')
       expect(active.conversation.model?.modelId).toBe('deepseek-v4.1-flash')
