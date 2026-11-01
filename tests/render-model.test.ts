@@ -48,6 +48,34 @@ describe('transcript render model', () => {
     expect(result.runs[1]?.users.map(message => message.id)).toEqual(['user-2'])
   })
 
+  it('demotes the settled answer while a newer generation streams its thinking', () => {
+    const base: ChatMessage[] = [
+      user('user-1', 'request-1'),
+      assistant('assistant-1', [{ type: 'text', text: 'Working on it.' }], { runId: 'run-1', status: 'completed', timestamp: 200 }),
+    ]
+    // The live turn has only thinking so far: the previous body must read BEFORE the live
+    // reasoning row, so the transcript never shows an active thinking above a finished answer.
+    const streaming = buildRenderModel([
+      ...base,
+      assistant('assistant-2', [{ type: 'thinking', text: 'I will structure the answer next.' }],
+        { runId: 'run-1', streaming: true, status: 'running', timestamp: 300 }),
+    ])
+    const run = streaming.runs[0]!
+    expect(run.process.map(part => part.kind)).toEqual(['content', 'reasoning'])
+    expect(run.responses).toEqual([])
+
+    // Once the live turn writes its text it owns the answer area; the older body stays process.
+    const writing = buildRenderModel([
+      ...base,
+      assistant('assistant-2', [
+        { type: 'thinking', text: 'I will structure the answer next.' },
+        { type: 'text', text: 'Here is the answer.' },
+      ], { runId: 'run-1', streaming: true, status: 'running', timestamp: 300 }),
+    ])
+    expect(writing.runs[0]!.responses.map(response => response.message.id)).toEqual(['assistant-2'])
+    expect(writing.runs[0]!.process.map(part => part.kind)).toEqual(['content', 'reasoning'])
+  })
+
   it('starts a run at an answer payload but renders no user row for it', () => {
     const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', questions: [], answers: [] })
     const messages: ChatMessage[] = [

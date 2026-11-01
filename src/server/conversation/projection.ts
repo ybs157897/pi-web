@@ -572,6 +572,7 @@ function todoItems(value: unknown): TodoItem[] | null | undefined {
 }
 
 const QUESTION_TOOL = 'ask_user_question'
+const PLAN_REVIEW_TOOL = 'exit_plan_mode'
 
 /** Parse a question list from tool arguments or the `pi-web.interactions` document; malformed entries are dropped. */
 function askQuestionList(value: unknown): AskUserQuestionItem[] | undefined {
@@ -675,14 +676,34 @@ function thinkingLevel(value: string | undefined): ThinkingLevel {
   return thinkingLevels.find(level => level === value) ?? 'medium'
 }
 
-function runIdForLive(live: LiveState, metadata: ConversationMetadata, fallback?: string): string | undefined {
+/** Reply entries that resume a turn an interaction paused: answers, dismissals, plan reviews. */
+const INTERACTION_REPLY_ENTRY_KINDS = new Set(['pi-web.user-question-reply', 'pi-web.user-question-dismissed', 'pi-web.plan-review-reply'])
+
+const INTERACTION_REPLY_PREFIXES = ['question-reply:', 'question-dismiss:', 'plan-review-reply:']
+
+/** The call id a reply request names, or undefined for any other request id. */
+function interactionReplyCallId(request: string): string | undefined {
+  const prefix = INTERACTION_REPLY_PREFIXES.find(candidate => request.startsWith(candidate))
+  return prefix === undefined ? undefined : request.slice(prefix.length)
+}
+
+/** The run a reply entry joins: the one whose tool call asked the question or submitted the plan. */
+function interactionReplyRunId(entry: ConversationView['entries'][number], interactionRuns: ReadonlyMap<string, string>): string | undefined {
+  if (!INTERACTION_REPLY_ENTRY_KINDS.has(entry.kind)) return undefined
+  const data = jsonRecord(entry.data)
+  const callId = data && isString(data.callId) ? data.callId : undefined
+  return callId === undefined ? undefined : interactionRuns.get(callId)
+}
+
+function runIdForLive(live: LiveState, metadata: ConversationMetadata, fallback: string | undefined, interactionRuns: ReadonlyMap<string, string>): string | undefined {
   const inputIds = live.run?.inputs
   if (!inputIds?.length) return fallback
   const request = Object.entries(metadata.requestReceipts).find(([, receipt]) => receipt.submissionId !== null && inputIds.some(id => id === receipt.submissionId))?.[0]
-  // Submissions that bypass the receipt log (question and plan replies) still run inside the
-  // conversation's current run. Falling back to the task id there would give the live tail a
-  // different run id than its settled entries, so the transcript would split one turn in two.
   if (request === undefined) return fallback
+  // An interaction reply's live tail joins the run whose call it answers — the same run its
+  // settled entries carry, so answering a question never splits the turn in two on screen.
+  const callId = interactionReplyCallId(request)
+  if (callId !== undefined) return interactionRuns.get(callId) ?? fallback
   return `run:${request.startsWith('queue-edit:') ? request.slice('queue-edit:'.length) : request}`
 }
 
@@ -791,6 +812,8 @@ export function projectConversation(
   const questionReplies: QuestionReply[] = []
   const runStartedAt = new Map<string, number>()
   const finalAssistantByRun = new Map<string, ChatMessage>()
+  /** The run each interaction call belongs to, so its reply and continuation stay in that run. */
+  const interactionRunByCallId = new Map<string, string>()
   let currentRunId: string | undefined
   let previousAssistantTask: number | undefined
   let previousAssistantCallsTools = false
@@ -805,17 +828,21 @@ export function projectConversation(
     const entryMessages = entry.model ?? []
     const statusText = entry.kind === 'pi.reset' ? '上下文已重置' : entry.kind === 'pi.compaction' ? '已完成上下文压缩' : undefined
     const settlementText = settlementStatusText(entry)
+    // An interaction reply continues a turn the ask/plan tools paused, so it joins the run
+    // whose call asked instead of opening one named after the reply request (ZCode's shape).
+    const replyRunId = interactionReplyRunId(entry, interactionRunByCallId)
     for (const [index, message] of entryMessages.entries()) {
       lastTimestamp = message.timestamp
       latestEntryTimestamp = Math.max(latestEntryTimestamp, message.timestamp)
       if (message.role === 'system' || statusText !== undefined) continue
       if (message.role === 'user') {
         const placedDuringToolRound = entry.byTaskId !== undefined && entry.byTaskId === previousAssistantTask && previousAssistantCallsTools
-        if (!placedDuringToolRound || !currentRunId) currentRunId = `run:${requestId ?? id}`
+        if (replyRunId !== undefined) currentRunId = replyRunId
+        else if (!placedDuringToolRound || !currentRunId) currentRunId = `run:${requestId ?? id}`
         if (!runStartedAt.has(currentRunId)) runStartedAt.set(currentRunId, message.timestamp)
-        // A settlement input has no bubble of its own: the entry's status row below carries
-        // it. The run bookkeeping above still applies, so the row and the answer it triggers
-        // land in one run, named after the entry when its data holds no request id.
+        // A settlement input has no bubble of its own: the entry's status row below carries it.
+        // The run bookkeeping above still applies, so the row lands inside the run it belongs
+        // to — an interaction reply inside the run whose call it answers.
         if (settlementText !== undefined) continue
       } else if (!currentRunId) {
         currentRunId = `run:${requestId ?? id}`
@@ -863,6 +890,9 @@ export function projectConversation(
             if (part.name === QUESTION_TOOL) {
               const questions = askQuestionList(jsonRecord(part.arguments)?.questions)
               if (questions) questionCalls.set(part.id, { callId: part.id, questions, askedAt: message.timestamp })
+            }
+            if ((part.name === QUESTION_TOOL || part.name === PLAN_REVIEW_TOOL) && currentRunId !== undefined) {
+              interactionRunByCallId.set(part.id, currentRunId)
             }
           }
         }
@@ -927,7 +957,7 @@ export function projectConversation(
   ].sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
 
   const partial = live.generation?.message
-  const activeRunId = runIdForLive(live, metadata, currentRunId)
+  const activeRunId = runIdForLive(live, metadata, currentRunId, interactionRunByCallId)
   if (partial) {
     latestEntryTimestamp = Math.max(latestEntryTimestamp, partial.timestamp)
     if (!settledAssistantMessages.some(message => sameAssistant(message, partial))) {

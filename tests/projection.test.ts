@@ -97,11 +97,12 @@ describe('Pi Durable conversation projection', () => {
     expect(projected.messages.map(message => message.runId)).toEqual(['run:start', 'run:start', 'run:start', 'run:start', 'run:next'])
   })
 
-  it('keeps an answer reply and its live continuation in one run', () => {
+  it('keeps an answer reply and its live continuation in the run that asked', () => {
     const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', questions: [], answers: [] })
     const base = [
       entry(1, 'pi-web.user', [{ role: 'user', content: 'Start', timestamp: 100 }], { requestId: 'start' }),
-      { ...entry(2, 'pi.assistant', [assistant([{ type: 'toolCall', id: 'a1', name: 'ask_user_question', arguments: {} }], 150, 'toolUse')]), byTaskId: 20 as TaskId },
+      // The reply names the tool call id, so the ask call carries the same id it answers.
+      { ...entry(2, 'pi.assistant', [assistant([{ type: 'toolCall', id: 'call-1', name: 'ask_user_question', arguments: {} }], 150, 'toolUse')]), byTaskId: 20 as TaskId },
     ]
     const live = {
       run: { taskId: 30, inputs: [999] },
@@ -109,7 +110,8 @@ describe('Pi Durable conversation projection', () => {
     }
     const continuation = { ...entry(3, 'pi.assistant', [assistant([{ type: 'toolCall', id: 't1', name: 'bash', arguments: { command: 'pwd' } }], 250, 'toolUse')]), byTaskId: 30 as TaskId }
 
-    // The reply entry carries the request id, so both sides name the run after it.
+    // ZCode's shape: the reply, the settled continuation and the live tail all stay inside the
+    // asking run, so answering never opens a second worked-block after the question row.
     const withReceipt = [
       ...base,
       entry(4, 'pi-web.user-question-reply', [{ role: 'user', content: replyText, timestamp: 200 }], { requestId: 'question-reply:call-1', callId: 'call-1' }),
@@ -118,19 +120,43 @@ describe('Pi Durable conversation projection', () => {
     const projected = projectConversation(view(withReceipt, { 'pi.live': persistedObject(live) }), metadata({
       requestReceipts: { 'question-reply:call-1': { fingerprint: 'x', status: 'accepted', submissionId: 999 } },
     }), { workspace: WORKSPACE })
-    expect(new Set(projected.messages.map(message => message.runId))).toEqual(new Set(['run:start', 'run:question-reply:call-1']))
-    expect(projected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:question-reply:call-1')
+    expect(new Set(projected.messages.map(message => message.runId))).toEqual(new Set(['run:start']))
+    expect(projected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:start')
 
-    // Legacy entries without the request id still hold one run: the live tail falls back to
-    // the durable run instead of inventing a task-id run.
+    // The mapping keys on the call id, so a reply entry whose data lost the request id still joins.
     const legacy = [
       ...base,
       entry(4, 'pi-web.user-question-reply', [{ role: 'user', content: replyText, timestamp: 200 }], { callId: 'call-1' }),
       continuation,
     ]
     const legacyProjected = projectConversation(view(legacy, { 'pi.live': persistedObject(live) }), metadata(), { workspace: WORKSPACE })
-    expect(new Set(legacyProjected.messages.map(message => message.runId))).toEqual(new Set(['run:start', 'run:4']))
-    expect(legacyProjected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:4')
+    expect(new Set(legacyProjected.messages.map(message => message.runId))).toEqual(new Set(['run:start']))
+    expect(legacyProjected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:start')
+
+    // Once the asking entry is gone (compaction), the call id is unknown: the reply opens its
+    // own run and the live tail follows that settled side instead of inventing a third run.
+    const forgotten = [
+      entry(1, 'pi-web.user', [{ role: 'user', content: 'Start', timestamp: 100 }], { requestId: 'start' }),
+      entry(4, 'pi-web.user-question-reply', [{ role: 'user', content: replyText, timestamp: 200 }], { requestId: 'question-reply:call-1', callId: 'call-1' }),
+      continuation,
+    ]
+    const forgottenProjected = projectConversation(view(forgotten, { 'pi.live': persistedObject(live) }), metadata({
+      requestReceipts: { 'question-reply:call-1': { fingerprint: 'x', status: 'accepted', submissionId: 999 } },
+    }), { workspace: WORKSPACE })
+    expect(new Set(forgottenProjected.messages.map(message => message.runId))).toEqual(new Set(['run:start', 'run:question-reply:call-1']))
+    expect(forgottenProjected.messages.find(message => message.role === 'tool' && message.toolCallId === 't1')?.runId).toBe('run:question-reply:call-1')
+  })
+
+  it('joins a plan-review reply to the run that submitted the plan', () => {
+    const reviewReply = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'p1', approved: true, answers: [] })
+    const entries = [
+      entry(1, 'pi-web.user', [{ role: 'user', content: 'Plan it', timestamp: 100 }], { requestId: 'start' }),
+      { ...entry(2, 'pi.assistant', [assistant([{ type: 'toolCall', id: 'p1', name: 'exit_plan_mode', arguments: { plan: '# Plan' } }], 150, 'toolUse')]), byTaskId: 20 as TaskId },
+      entry(3, 'pi-web.plan-review-reply', [{ role: 'user', content: reviewReply, timestamp: 200 }], { requestId: 'plan-review-reply:p1', callId: 'p1' }),
+      { ...entry(4, 'pi.assistant', [assistant([{ type: 'text', text: 'Executing the approved plan' }], 250)]), byTaskId: 30 as TaskId },
+    ]
+    const projected = projectConversation(view(entries), metadata(), { workspace: WORKSPACE })
+    expect(new Set(projected.messages.map(message => message.runId))).toEqual(new Set(['run:start']))
   })
 
   it('projects settled user, assistant and tool messages with stable ids and hides system prompts and redacted thinking', () => {

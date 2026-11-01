@@ -863,3 +863,32 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
   - **bg 全链路 ✅**：显式 `run_in_background` 委派后 turn1 工具序列 `subagent → read → list_files`（委派完立刻做自己的事，不空等）；子会话独立跑完，结算系统行「后台子智能体「…」已完成」实时出现（截图 `07-bg-settlement.png`），后续回合转述结论。一条回复并行两个 bg 委派（Explore + general-purpose）：两个调用同回合发出、各自完成、两条结算、模型合并摘要。
   - **团队④ ✅**：`spawn_teammate` fresh+显式 model 真实建队运行（roster 回显 researcher 的 deepseek 模型，Lead 在队友沉默时自发 `send_message` 唤醒取报告）；`fork`+model 被校验拒绝且不建成员，Lead 原样转述拒绝文案。
   - **清单过滤 ✅（推断项）**：delegation-policy 的模型行当前只回显有凭据模型（checkAuth 同源判据），demo/真实实例均为单模型故该行不渲染，行为符合「仅 1 个不渲染」设计；unit 覆盖过滤逻辑。
+
+## 问答应答并入提问的 run（2026-11-01，ZCode 对齐）
+
+用户对照截图指出：回答完追问后，pi-web 会新开一个「已工作 0 秒」分段，ZCode 则把回答后的思考与最终回答继续留在原来那个「已工作」分段里（一次采访多轮只有一个分段）。这是对「问题答复的 run 连续性（2026-10-31）」一节 run 命名决策的推翻：当时让答复与续跑共用 `run:<requestId>`（两端一致但自成新 run），现在改为**并回提问的 run**。
+
+- **根因**：pi-web 的 `ask_user_question`/`exit_plan_mode` 是非阻塞形态（立即结算，回答以 steer 提交、开新任务），落盘上答复 entry 自成一条，projection 按 `run:<requestId>`（`question-reply:<callId>` 等）给它起了新 runId，`buildRenderModel` 按此切段。
+- **改法**（全在 `src/server/conversation/projection.ts`）：① assistant 声明 `ask_user_question`/`exit_plan_mode` 调用时把「callId → 当前 runId」记入 `interactionRunByCallId`（生产约定：reply 的 callId 就是工具调用 id，Interactions 文档同键）；② `interactionReplyRunId` 对三类 reply entry（`pi-web.user-question-reply`/`user-question-dismissed`/`plan-review-reply`）按 data.callId 查表命中则强制 `currentRunId`，未命中（提问 entry 已被压缩）回退旧行为，live 与 settled 仍一致；③ `runIdForLive` 收同一张表，`question-reply:`/`question-dismiss:`/`plan-review-reply:` 前缀的 request 改映射到提问 run，查不到回退 `currentRunId`。续跑 entry、live 工具行、live 尾部消息全部随 `currentRunId`/`activeRunId` 并入原 run；多次追问链（问→答→再问→再答）因每次提问都记入当前（同一个）run，仍只有一个分段。
+- **测试**：`tests/projection.test.ts` 重写「keeps an answer reply…」——有 receipt、无 requestId（callId 兜底）、提问 entry 被压缩三个场景 + 新增 plan-review reply 并 run 用例；夹具坑：原夹具提问调用 id（`a1`）与 reply callId（`call-1`）不一致，生产中二者同 id，夹具已对齐。门禁：`npm test` 85 文件 918 通过/4 跳过，`npm run typecheck` 干净。
+- **未做**：真实模型 ego 复拍（demo `[ask]` 脚本无 run 数断言，行为由 unit 钉住）；「已工作 N 秒」时长现取原 run 起点到续跑末条 assistant 的时间差（`finalAssistantByRun` 同键覆盖），与 ZCode 的整段时长口径一致。
+
+### ego 实测与 ZCode 对照（2026-11-01 续）
+
+用户以截图反馈「回答完问题后的间距还是很大」，要求 ego 实测并与 ZCode 对照。结论：截图间距来自**旧构建**（4317 是周六启动的 tsx 进程，不热重载），不是投影修复本身的问题。
+
+- **间距解剖**（截图 131 逻辑px）：run1 底 padding 20 + **旧投影切出的空 run2 分段**（`.run` padding 56+20 = 76px，含隐藏回答消息的 run 渲染成裸 section）+ 回答区余量。投影并 run 后该分段不存在。
+- **ZCode 对照**（`packages/ui/src/v4/ConversationTurnGroup.tsx`）：turn group 为 `flex flex-col gap-5`（20px），尾部 `TurnChatLoadingSlot` 是 `min-h-5`（20px）一行，spinner（`chat-loading.tsx`，`size-4`）紧随段内容。
+- **实测（4317 重启后）**：内容→spinner = **22px**（`.run` padding-bottom 20 + spinner 16px 高、无外边距），与 ZCode 20px 同级；合并 run 段内行距 16–20px（已询问→正文 16、正文→思考 16、思考→回答 20）；旧会话 3018 重投影即合并为单 run「已工作 1 分 29 秒」，durable 数据无需迁移。
+- **运维**：4317 进程无任何 `PI_WEB_*` env（默认端口 4317、默认 `~/.pi-web`），已原样 kill + `npm run dev` 重启并验证。
+- **ego 流程坑**：驱动问答卡必须等 `[data-question-card] [role=radio]` 真挂载，过早的页面内 click 会静默落空（这次假提交骗了一轮测量）；ego `waitForSelector` 对多匹配元素直接报歧义，页面内循环等待更稳；demo 实例结算 <0.6s 抓不到 spinner 窗口，流式几何只能用真实模型实例量。
+- **遗留**：4317 侧栏新增 3062/3083/3102 三个本轮测试会话（无删除 API），留待用户自行处理。
+
+### 流式思考行压在旧正文上的时序倒置（2026-11-01 晚，会话 3128，ZCode 对齐）
+
+用户截图（3128，新构建）：一轮多段生成里，新一条消息只流到 thinking 时，「正在思考」行出现在**上一条消息已写完的正文上面**——时间线倒置（该思考发生在那段正文之后）。根因是 render-model 的双区结构：`answer = finalResponse || isLiveAnswer`，当活消息尚无内容块时 `finalResponseOf` 仍选中旧正文 → 旧正文留在下方回答区，活 thinking 行进上方过程区。
+
+- **改法**（`src/web/render-model.ts`）：进入循环前先 `findLast(isLiveAnswer)`；存在活消息时回答区**只**归它，其余 assistant 内容一律降级为过程内容（按 messageIndex 保持时间线）——旧正文于是排在活思考行**之前**，等活消息写出正文再接管回答区。结算后行为不变（finalResponse=最后一条有内容的消息）。
+- **测试**：`tests/render-model.test.ts` 新增用例（thinking-only 活消息窗口：process=['content','reasoning']、responses=[]；正文开始后 responses 归活消息）；全量 919 过 + typecheck 干净（runtime-policy 的 rmdir ENOTEMPTY 偶发单跑通过）。
+- **实测**（4317 真实模型，text→tool→text 提示）：6100ms 帧出现「正在思考」行@628px、其下 0 个 `assistantBody`（旧正文全部在 -501 以上）；6606ms 活消息正文在 625px 接管回答区。倒置消除；工具轮窗口（活消息含 toolCall）同样正确清空回答区。
+- ZCode 参照：行按时间线排（`ConversationTurnGroup` flowItems），思考行永远在被它跟随的正文之后；结算态思考行在回答上方是两边一致的正常形态。

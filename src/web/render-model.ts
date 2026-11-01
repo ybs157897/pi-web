@@ -329,6 +329,11 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
   const process: ProcessPart[] = []
   const responses: ResponsePart[] = []
   const finalResponse = finalResponseOf(run.messages)
+  // A generation that is still streaming displaces the settled answer: until it writes its own
+  // text, the previous answer demotes to process content so the timeline stays chronological —
+  // the live reasoning row must read after the body it was written after (ZCode's strict
+  // order), not float above a finished paragraph.
+  const liveAnswer = run.messages.findLast(message => isLiveAnswer(message))
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role === 'user' && message.id !== run.users[0]?.id && !isInteractionPayloadText(messageText(message))) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
@@ -336,7 +341,9 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     // A turn that is still streaming owns the answer area: it has not settled yet, and a
     // block that moved between the two areas mid-stream would jump on screen.
     const answer = message.role === 'assistant'
-      && (message.id === finalResponse?.id || isLiveAnswer(message))
+      && (liveAnswer !== undefined
+        ? message.id === liveAnswer.id
+        : message.id === finalResponse?.id)
     // The model writes the tail of its message last, so only that block is still streaming.
     const tail = liveTailIndex(message.blocks)
     for (const [blockIndex, block] of message.blocks.entries()) {
