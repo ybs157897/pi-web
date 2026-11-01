@@ -294,6 +294,53 @@ describe('team tool prompt policy', () => {
       expect(description).toContain('preserve')
     }
   })
+
+  it('renders the DSH coordination additions once their tools are routable', async () => {
+    const lead = await renderTeamPolicy({
+      offered: [
+        'spawn_teammate', 'send_message', 'list_agents', 'wait_agent', 'interrupt_agent',
+        'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update',
+      ],
+    })
+    expect(lead).toContain('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上')
+    expect(lead).toContain('写域重叠只是警示不是锁')
+    expect(lead).toContain('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+    expect(lead).toContain('wait_agent 只观测调用之后的变化、不会唤醒任何人')
+    expect(lead).toContain('Lead 在给出最终答案前必须等齐所有必需的队友。')
+
+    const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
+    expect(teammate).toContain('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+    expect(teammate).not.toContain('写域重叠')
+  })
+
+  it('keeps the coordination additions off when their tools are not routable', async () => {
+    const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
+    expect(prompt).not.toContain('send_message')
+    expect(prompt).not.toContain('wait_agent')
+    expect(prompt).not.toContain('写域重叠')
+    // The wait guidance names send_message, so a Lead without messaging must not see it either.
+    const noMessaging = await renderTeamPolicy({ offered: ['spawn_teammate', 'list_agents', 'wait_agent'] })
+    expect(noMessaging).toContain('Call `wait_agent({ timeout_ms: 30000 })` directly.')
+    expect(noMessaging).not.toContain('send_message')
+    expect(noMessaging).not.toContain('Lead 在给出最终答案前必须等齐所有必需的队友。')
+  })
+
+  it('refuses a fork teammate with an explicit model', async () => {
+    const api = {
+      conversationId: 1 as ConversationId,
+      snapshot: vi.fn(async () => null),
+    }
+    await expect(registeredTool(createTeamTools({
+      ...teamOptions,
+      resolveChildModel: () => { throw new Error('must not resolve a fork model') },
+    }), 'spawn_teammate').execute(
+      { name: 'forker', prompt: 'inherit the Lead turn', context: 'fork', model: { provider: 'p', modelId: 'fast' } },
+      api, {} as Context,
+    )).rejects.toMatchObject({
+      code: 'invalid-argument',
+      message: expect.stringContaining('fork 上下文继承 Lead 的对话与模型'),
+    })
+  })
 })
 
 describe('team task board', () => {

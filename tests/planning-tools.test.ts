@@ -137,6 +137,19 @@ describe('planning tool prompt policy', () => {
     expect(prompt).toContain('命令式语言要求实施时')
     expect(prompt).toContain('不结束计划模式')
     expect(prompt).toContain('不要把计划当普通回复粘贴')
+    expect(prompt).toContain('工作顺序：先探索仓库')
+    expect(prompt).toContain('定稿前如仍有未决')
+    expect(prompt).toContain('不要用提问征求"计划可以吗"')
+  })
+
+  it('gates plan submission on code-writing work and upfront clarification', () => {
+    const description = tool(PlanExtension, 'exit_plan_mode').description
+
+    expect(description).toContain('research tasks')
+    expect(description).toContain('do not submit a plan')
+    expect(description).toContain('ask_user_question')
+    expect(description).toContain('approval request')
+    expect(description).toContain('implement yank mode for vim')
   })
 
   it('keeps pending questions unauthorized and asks in user-facing terms', () => {

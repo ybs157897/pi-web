@@ -317,6 +317,19 @@ function entryRequestId(entry: ConversationView['entries'][number]): string | un
   return data && isString(data.requestId) ? data.requestId : undefined
 }
 
+/**
+ * The status line of a background subagent settlement entry, or undefined for every other
+ * kind (and for entries a foreign writer left without a label). The entry's user input
+ * carries the full settlement text, but the transcript renders it as this quiet host line
+ * instead of a user bubble.
+ */
+function settlementStatusText(entry: ConversationView['entries'][number]): string | undefined {
+  if (entry.kind !== 'pi-web.subagent-settlement') return undefined
+  const data = jsonRecord(entry.data)
+  if (!data || !isString(data.label)) return undefined
+  return data.status === 'failed' ? `后台子智能体「${data.label}」失败` : `后台子智能体「${data.label}」已完成`
+}
+
 function entryFiles(entry: ConversationView['entries'][number]): Array<{ name: string; path: string; mimeType: string; size: number }> {
   const data = jsonRecord(entry.data)
   const files = data?.files
@@ -375,6 +388,10 @@ function queueItems(view: ConversationView, metadata: ConversationMetadata, opti
     const text = inputText(item.content)
     const images = typeof item.content === 'string' ? [] : item.content.flatMap(part => part.type === 'image' ? [{ data: part.data, mimeType: part.mimeType }] : [])
     const entry = jsonRecord(item.entry)
+    // A background settlement sits in the inbox while the parent is busy, but it is a
+    // runtime notification, not a user draft: surfacing it would offer editing or
+    // withdrawal of a message the user never wrote, so the queue never shows it.
+    if (entry?.kind === 'pi-web.subagent-settlement') return []
     const data = entry ? jsonRecord(entry.data) : undefined
     const files = Array.isArray(data?.files) ? data.files.flatMap(value => {
       const file = jsonRecord(value)
@@ -482,6 +499,7 @@ function subagentSummaries(value: unknown): SubagentSummary[] | undefined {
       ...(isNumber(row.tokens) ? { tokens: row.tokens } : {}),
       ...(isNumber(row.durationMs) ? { durationMs: row.durationMs } : {}),
       ...(isNumber(row.metricsAt) ? { metricsAt: row.metricsAt } : {}),
+      ...(isString(row.model) ? { model: row.model } : {}),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     }]
@@ -786,6 +804,7 @@ export function projectConversation(
     const requestId = entryRequestId(entry)
     const entryMessages = entry.model ?? []
     const statusText = entry.kind === 'pi.reset' ? '上下文已重置' : entry.kind === 'pi.compaction' ? '已完成上下文压缩' : undefined
+    const settlementText = settlementStatusText(entry)
     for (const [index, message] of entryMessages.entries()) {
       lastTimestamp = message.timestamp
       latestEntryTimestamp = Math.max(latestEntryTimestamp, message.timestamp)
@@ -794,6 +813,10 @@ export function projectConversation(
         const placedDuringToolRound = entry.byTaskId !== undefined && entry.byTaskId === previousAssistantTask && previousAssistantCallsTools
         if (!placedDuringToolRound || !currentRunId) currentRunId = `run:${requestId ?? id}`
         if (!runStartedAt.has(currentRunId)) runStartedAt.set(currentRunId, message.timestamp)
+        // A settlement input has no bubble of its own: the entry's status row below carries
+        // it. The run bookkeeping above still applies, so the row and the answer it triggers
+        // land in one run, named after the entry when its data holds no request id.
+        if (settlementText !== undefined) continue
       } else if (!currentRunId) {
         currentRunId = `run:${requestId ?? id}`
         runStartedAt.set(currentRunId, message.timestamp)
@@ -863,6 +886,19 @@ export function projectConversation(
         role: 'system',
         systemKind: entry.kind === 'pi.compaction' ? 'compaction' : 'reset',
         blocks: [{ type: 'text', text: statusText }],
+        timestamp: lastTimestamp,
+        ...(currentRunId ? { runId: currentRunId } : {}),
+      })
+    }
+    if (settlementText !== undefined) {
+      // The settlement row keeps the plain system shape without a host systemKind: the
+      // transcript renders any system row by its text, and the wire union in shared types
+      // has no settlement member.
+      messages.push({
+        id: `entry:${id}:status`,
+        entryId: id,
+        role: 'system',
+        blocks: [{ type: 'text', text: settlementText }],
         timestamp: lastTimestamp,
         ...(currentRunId ? { runId: currentRunId } : {}),
       })

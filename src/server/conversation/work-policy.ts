@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { defineExtension, section, type Extension } from '@earendil-works/pi-durable'
 import { Plans } from '../tools/plan.ts'
+import { Subagents } from '../tools/subagent.ts'
 import { loadProjectInstructions, renderProjectInstructions } from '../workspace/instructions.ts'
 import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
 
@@ -115,7 +116,11 @@ function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undef
 const runtimeCoreSection = section('runtime-core', () => RUNTIME_CORE_PROMPT)
 
 // Re-read on every request so edits to the workspace's root instructions take effect immediately.
-const projectInstructionsSection = section('project-instructions', async (input) => {
+const projectInstructionsSection = section('project-instructions', async (input, context) => {
+  // Explore subagents are read-only retrieval agents (ZCode's injectAgentsMd: false): the project's
+  // AGENTS.md stays out of their requests while every other conversation keeps it.
+  const identity = await input.read.snapshot(Subagents, input.conversationId, context)
+  if (identity?.record?.profile === 'Explore') return undefined
   return renderProjectInstructions(await loadProjectInstructions(input.env?.cwd))
 })
 
@@ -131,6 +136,7 @@ const workPolicySection = section('work-policy', async (input, context) => {
   return [
     sessionFacts(input),
     '用户想走计划审阅流程时，提示其打开计划模式（输入框计划按钮或 /plan）。',
+    '非平凡实现任务建议用户先开计划模式（输入框计划按钮或 /plan）再动手：新增功能、存在多种合理方案、涉及架构或选型决策、预计改动超过两三个文件、需求不明需要先探索，命中任一条即建议；用户指令已明确详细、或只是单点小改和明显 bug 修复时直接做，不建议计划。',
     toolGuidance(input),
     todoPolicy(todoRoute(input)),
   ].filter(Boolean).join('\n\n')

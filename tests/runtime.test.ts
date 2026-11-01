@@ -2,10 +2,19 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
+import { Harness, createRegistry, defineTask, type Conversation, type ConversationId, type TaskId } from '@earendil-works/pi-durable'
+import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createRuntime } from '../src/server/runtime/index.ts'
-import { holdNextDemoResponse } from '../src/server/model/demo.ts'
-import { SUBAGENT_TOOL } from '../src/server/tools/subagent.ts'
+import { CTX, META } from '../src/server/runtime/helpers.ts'
+import { SUBAGENT_SETTLEMENT_MARKER, createSubagentSettlement } from '../src/server/runtime/subagent-settle.ts'
+import { holdNextDemoResponse, observeDemoRequests, createDemoModelRuntime } from '../src/server/model/demo.ts'
+import { CodingTools } from '../src/server/tools/shell/tools.ts'
+import { createSubagentTools, Subagents, SUBAGENT_TOOL } from '../src/server/tools/subagent.ts'
+import { createExecutionEnv } from '../src/server/conversation/execution-env.ts'
+import { getCurrentSystemMessage, getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { ConversationDetail } from '../src/shared/types.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
@@ -800,6 +809,69 @@ describe('Pi Durable runtime', () => {
     expect(detail.subagents?.[0]?.answer).toContain('子智能体一期机制小结')
   })
 
+  it('delegates an Explore subagent with narrowed tools and the profile prompt', async () => {
+    const { runtime } = await fixture()
+    // The provider boundary is the only place the child's resolved agent is observable: its
+    // request carries the offered tools and the system sections the profile instructions replaced.
+    const childRequests: Array<{ sections: string; tools: string[] }> = []
+    const stopObserving = observeDemoRequests(request => {
+      const messages = normalizeContext(request).messages
+      const user = [...messages].reverse().find(message => message.role === 'user')
+      const text = typeof user?.content === 'string' ? user.content
+        : Array.isArray(user?.content) ? user.content.flatMap(part => part?.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
+        : ''
+      if (!text.includes('[subagent-child]')) return
+      childRequests.push({
+        sections: Object.values(getCurrentSystemMessage(messages)?.sections ?? {}).join('\n'),
+        tools: getCurrentTools(messages).map(tool => tool.name),
+      })
+    })
+    try {
+      const parent = await runtime.create({ title: 'Explore delegation' })
+      await runtime.submit(parent.conversation.id, { text: '[subagent-explore] 演示', requestId: randomUUID() })
+      const detail = await waitForCompletedRun(runtime, parent.conversation.id)
+
+      const toolResult = detail.messages.find(message => message.role === 'tool' && message.toolName === SUBAGENT_TOOL)
+      expect(toolResult?.isError).not.toBe(true)
+      expect(textOf(toolResult)).toContain('子智能体一期机制小结')
+      expect(detail.subagents?.[0]?.label).toBe('机制归纳')
+
+      expect(childRequests.length).toBeGreaterThan(0)
+      const readOnly = new Set(['read', 'glob', 'grep', 'list_files', 'search_files'])
+      for (const request of childRequests) {
+        expect(request.tools.length, 'the Explore child keeps at least the read tool').toBeGreaterThan(0)
+        for (const name of request.tools) expect(readOnly.has(name), name).toBe(true)
+      }
+      expect(childRequests.some(request => request.sections.includes('只读检索专家'))).toBe(true)
+    } finally {
+      stopObserving()
+    }
+  })
+
+  it('overrides the child model on delegation and refuses a model outside the catalog', async () => {
+    const { runtime } = await fixture()
+    const parent = await runtime.create({ title: 'Model delegation' })
+    await runtime.submit(parent.conversation.id, { text: '[subagent-model] 演示', requestId: randomUUID() })
+    const detail = await waitForCompletedRun(runtime, parent.conversation.id)
+
+    const toolResult = detail.messages.find(message => message.role === 'tool' && message.toolName === SUBAGENT_TOOL)
+    expect(toolResult?.isError).not.toBe(true)
+    expect(textOf(toolResult)).toContain('子智能体一期机制小结')
+    // The children route answers with the runtime's own rows, which carry the selected model.
+    const rows = await runtime.children(parent.conversation.id)
+    expect(rows[0]?.model).toBe('pi-web-demo/demo-model')
+    expect((await runtime.detail(rows[0]?.id ?? '')).conversation.model).toEqual({ provider: 'pi-web-demo', modelId: 'demo-model' })
+
+    // A pick that is not in the catalog is rejected before any child conversation exists.
+    const other = await runtime.create({ title: 'Unavailable model delegation' })
+    await runtime.submit(other.conversation.id, { text: '[subagent-bad-model] 演示', requestId: randomUUID() })
+    const failed = await waitForCompletedRun(runtime, other.conversation.id)
+    const refused = failed.messages.find(message => message.role === 'tool' && message.toolName === SUBAGENT_TOOL)
+    expect(refused?.isError).toBe(true)
+    expect(textOf(refused)).toContain('未出现在 Pi 模型目录中')
+    expect(await runtime.children(other.conversation.id)).toEqual([])
+  })
+
   it('delivers follow-ups to one child and stops a running child, refusing every other target', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Subagent control' })
@@ -898,4 +970,152 @@ describe('Pi Durable runtime', () => {
     // A failing MCP server never keeps the runtime from creating conversations.
     expect((await broken.runtime.create({ title: 'Still up' })).conversation.id).toBeTruthy()
   })
+})
+
+/**
+ * The background delegation chain driven directly against the harness instead of through a demo
+ * marker: the real `subagent` tool (wired to the real settlement channel) launches a child, the
+ * call returns an activation at once, and the child's finished answer lands in the parent as a
+ * `[subagent-settlement]` follow-up message that starts a new run.
+ */
+describe('background subagent delegation', () => {
+  // The tool's child conversation is task-owned, and the owner task must exist. A parked
+  // background anchor stands in for the ToolTask a real invocation would run (team.ts precedent).
+  const BgOwnerAnchor = defineTask<{ name: string }, { phase: 'anchor' }, null, object>({
+    name: 'pi-web.bg-owner-anchor',
+    version: 1,
+    initial: () => ({ phase: 'anchor' }),
+    phases: {
+      anchor: async (_task, runtime, context) => {
+        if (!runtime.signal.aborted) {
+          await new Promise<void>((resolve) => {
+            runtime.signal.addEventListener('abort', () => resolve(), { once: true })
+          })
+        }
+        try {
+          await runtime.commit(() => ({
+            status: 'terminal' as const,
+            outcome: { status: 'aborted' as const, reason: 'bg owner released' },
+          }), context)
+        } catch {
+          // The Harness is closing: the parked boundary has nothing left to record.
+        }
+      },
+    },
+    abort: async (_task, runtime, context) => {
+      await runtime.commit(() => ({
+        status: 'terminal' as const,
+        outcome: { status: 'aborted' as const, reason: 'bg owner aborted' },
+      }), context)
+    },
+  })
+
+  /** The visible text of every message of one role, straight off the raw context view. */
+  async function textsOf(handle: Conversation): Promise<{ user: string[]; assistant: string[] }> {
+    const view = await handle.context(CTX)
+    const flat = view.contributions.flat()
+    const of = (role: 'user' | 'assistant') => flat
+      .filter(message => message.role === role)
+      .map(message => typeof message.content === 'string'
+        ? message.content
+        : message.content.flatMap(part => part?.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n'))
+    return { user: of('user'), assistant: of('assistant') }
+  }
+
+  it('returns an activation at once, then settles the answer into the parent as a follow-up run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-runtime-bg-'))
+    const workspace = join(root, 'workspace')
+    await mkdir(workspace, { recursive: true })
+    const demo = createDemoModelRuntime()
+    const registry = createRegistry()
+    registry.install(CodingTools)
+    const storage = await openNodeSqliteStorage(join(root, 'state.sqlite'))
+    const harness = await Harness.open(storage, {
+      models: demo.models,
+      registry,
+      env: async () => await createExecutionEnv(workspace, 'fullAccess'),
+    }, CTX)
+    harness.resume()
+    fixtures.push({ root, closers: [async () => { await harness.close(CTX) }] })
+    const settlement = createSubagentSettlement({ harness: () => harness })
+
+    const parentRecord = await harness.commit(async (tx) => tx.createConversation({ ownership: { kind: 'ownerless' } }), CTX)
+    const parent = await harness.conversation(parentRecord.id, CTX)
+    if (!parent) throw new Error('parent conversation is missing')
+    await parent.configure({ model: { ...demo.defaultModel! } }, CTX)
+    const parentId = parentRecord.id
+    // The parked task the delegation's child conversation is owned by.
+    const ownerTask = await harness.commit((tx) => tx.createTask(BgOwnerAnchor, { name: 'bg-owner' }, {
+      ownership: { kind: 'conversation' },
+      conversationId: parentId,
+      background: true,
+    }), CTX)
+    const taskIdLabel = String(ownerTask as TaskId)
+
+    // The real tool over this harness, with the runtime's settlement injection in place.
+    const tool = createSubagentTools({
+      prepareChild: async () => undefined,
+      settleWhenAnswered: settlement.settleWhenAnswered,
+    }).tools?.find(candidate => candidate.name === SUBAGENT_TOOL)
+    if (!tool) throw new Error(`Missing ${SUBAGENT_TOOL} tool`)
+    const details: Array<Record<string, unknown>> = []
+    const api = {
+      conversationId: parentId,
+      taskId: ownerTask,
+      commit: (change: unknown) => harness.commit(change as Parameters<typeof harness.commit>[0], CTX),
+      details: async (value: Record<string, unknown>) => { details.push(value) },
+      diagnostic: () => undefined,
+      conversation: async (id: ConversationId) => await harness.conversation(id, CTX),
+    }
+    const execute = (tool as unknown as {
+      execute(args: Record<string, unknown>, api: unknown, context: Context): Promise<{
+        output?: Array<{ type: string; text: string }>
+        isError?: boolean
+      }>
+    }).execute
+
+    const result = await execute({ task: '[subagent-child] 归纳一期机制', label: '机制归纳', run_in_background: true }, api, CTX)
+
+    // The call returns an activation, not the answer, and the parent holds no settlement yet.
+    expect(result.isError).not.toBe(true)
+    const activation = result.output?.[0]?.text ?? ''
+    expect(activation).toContain('机制归纳')
+    expect(activation).toContain('follow-up')
+    expect(details.at(-1)).toMatchObject({ status: 'running', label: '机制归纳', background: true })
+    expect((await textsOf(parent)).user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))).toHaveLength(0)
+
+    // The child finishes, and its answer arrives as exactly one tagged follow-up message.
+    const deadline = Date.now() + 20_000
+    let settledTexts: { user: string[]; assistant: string[] }
+    for (;;) {
+      settledTexts = await textsOf(parent)
+      if (settledTexts.user.some(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))) break
+      if (Date.now() > deadline) throw new Error('the settlement never reached the parent')
+      await delay(25)
+    }
+    const childRecord = await harness.commit(async (tx) => tx.scanConversations({ ownerTaskId: ownerTask }, 1), CTX)
+    const childId = childRecord.items[0]?.id
+    expect(childId).toBeDefined()
+    const childHandle = await harness.conversation(childId!, CTX)
+    if (!childHandle) throw new Error('child conversation is missing')
+    const childAnswer = (await textsOf(childHandle)).assistant.at(-1) ?? ''
+    expect(childAnswer).toContain('子智能体一期机制小结')
+    const delivered = settledTexts.user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toContain('子智能体「机制归纳」已完成任务')
+    expect(delivered[0]).toContain(childAnswer)
+
+    // The injected message starts a new run on the parent, which answers and goes idle.
+    await parent.waitForIdle(CTX)
+    const after = await textsOf(parent)
+    expect(after.user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))).toHaveLength(1)
+    expect(after.assistant.length).toBeGreaterThan(0)
+
+    // The durable markers: a receipt on the parent, a delivered delegation on the child.
+    const metadata = await harness.snapshot(META, parentId, CTX)
+    expect(typeof metadata?.requestReceipts[`subagent-settle:${taskIdLabel}`]?.submissionId).toBe('number')
+    const identity = await harness.snapshot(Subagents, childId!, CTX)
+    expect(identity?.record?.delegation).toMatchObject({ background: true, parent: parentId, requestId: `subagent-settle:${taskIdLabel}` })
+    expect(typeof identity?.record?.delegation?.deliveredAt).toBe('number')
+  }, 30_000)
 })

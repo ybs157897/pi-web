@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import type { Context } from '@earendil-works/chord/context'
 import {
+  configure,
   defineDoc,
   defineExtension,
   defineTask,
@@ -20,6 +21,8 @@ import type { TeamMemberPhase, TeamMemberView, TeamTaskStatus, TeamTaskView, Tea
 import { resolveToolRoute, toolRouteInstruction, type ToolCatalog, type ToolRoute } from '../conversation/tool-routing.ts'
 import { Plans } from './plan.ts'
 import { inheritPlanConstraint } from '../conversation/execution-policy.ts'
+import type { AgentChange } from '@earendil-works/pi-durable'
+import type { ChildModelRef, ChildModelResolver } from '../agents/builtins.ts'
 
 /**
  * Agent Teams, following DSH `packages/experimental/agent-team`.
@@ -677,6 +680,8 @@ export type TeamToolOptions = {
    * (`docs/families.md` A6), so the runtime answers them from the conversation table.
    */
   memberSession: MemberSessionProbe
+  /** Validate and clamp an explicit teammate model pick (fresh context only) against the catalog. */
+  resolveChildModel?: ChildModelResolver
 }
 
 type TeamScope = { leadId: ConversationId; role: 'lead' | 'teammate'; name: string }
@@ -898,7 +903,10 @@ const teamSection = section('team-policy', async (input, context) => {
         : 'Follow only the assigned task; report the outcome and concrete verification evidence to the Team Lead. The Lead coordinates the team and owns task assignment.',
     ]
     const message = teamCall('send_message', routes, '{ target: "lead", message: "..." }')
-    if (message) lines.push(`To contact the Lead, ${message}`)
+    if (message) {
+      lines.push(`To contact the Lead, ${message}`)
+      lines.push('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+    }
     const list = teamCall('list_agents', routes)
     if (list) lines.push(`To inspect teammate names and availability, ${list}`)
     if (planActive && routes.team_task_list !== 'unavailable' && routes.team_task_get !== 'unavailable') {
@@ -907,6 +915,9 @@ const teamSection = section('team-policy', async (input, context) => {
       lines.push('For your assigned shared task, inspect its latest revision, claim it if it is pending and unowned, then mark it complete only after its work and requested verification are done.')
     } else if (routes.team_task_update !== 'unavailable') {
       lines.push('Use only task identifiers and revisions supplied in the assignment; do not guess either value.')
+    }
+    if (routes.team_task_list !== 'unavailable' && routes.team_task_update !== 'unavailable') {
+      lines.push('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上；必须有序的工作用任务依赖（blocked_by）表达。写域重叠只是警示不是锁。')
     }
     const taskCalls = (['team_task_list', 'team_task_get', 'team_task_update'] as const)
       .map(name => teamCall(name, routes)).filter((line): line is string => line !== undefined)
@@ -930,12 +941,18 @@ const teamSection = section('team-policy', async (input, context) => {
   const list = teamCall('list_agents', routes)
   if (list) lines.push(`Use the roster to check each member’s availability; inactive means no turn is running, not task completion. ${list}`)
   const message = teamCall('send_message', routes)
-  if (message) lines.push(`Use a message to steer a running member or start/resume an inactive one; a successful send does not mean it was processed. ${message}`)
+  if (message) {
+    lines.push(`Use a message to steer a running member or start/resume an inactive one; a successful send does not mean it was processed. ${message}`)
+    lines.push('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+  }
   const interrupt = teamCall('interrupt_agent', routes)
   if (interrupt) lines.push(`Interrupt only a member whose current turn should stop. ${interrupt}`)
 
   const createTask = teamCall('team_task_create', routes)
-  if (createTask) lines.push(`Use shared tasks for work that needs ownership or dependencies; record write scopes and blockers when relevant. ${createTask}`)
+  if (createTask) {
+    lines.push(`Use shared tasks for work that needs ownership or dependencies; record write scopes and blockers when relevant. ${createTask}`)
+    lines.push('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上；必须有序的工作用任务依赖（blocked_by）表达。写域重叠只是警示不是锁。')
+  }
   const taskList = teamCall('team_task_list', routes)
   const taskGet = teamCall('team_task_get', routes)
   const taskUpdate = teamCall('team_task_update', routes)
@@ -951,6 +968,10 @@ const teamSection = section('team-policy', async (input, context) => {
   const wait = teamCall('wait_agent', routes)
   if (wait && list) {
     lines.push(`Wait only after the roster shows another required member running or provisioning; this observes later changes and never wakes a member. Re-list after wakeup or timeout. Wait for required teammates before the final answer. ${wait}`)
+  }
+  if (wait && list && message) {
+    lines.push('wait_agent 只观测调用之后的变化、不会唤醒任何人；调用前先 list_agents 确认相关成员在运行或 provisioning，不在就用 send_message 唤醒，等待结束或超时后重新 list。')
+    lines.push('Lead 在给出最终答案前必须等齐所有必需的队友。')
   }
   return lines.join('\n')
 })
@@ -987,13 +1008,19 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       'Create one named, durable teammate in a separate child conversation; it runs in the background and this call returns without waiting for its answer.',
       'Only the Team Lead may call this tool. The name must be unique lower-kebab-case, at most 64 characters, and never "lead"; a name is never reused, even after a failed creation.',
       'The prompt is the teammate\'s complete, self-contained initial task: it inherits your agent configuration, tools, model and working directory, but not your messages. Include the task, assigned scope, applicable constraints and authorization, acceptance criteria, and required result evidence.',
+      'context picks the seed: fresh starts an empty child, fork continues from your last completed turn. model optionally selects a fresh teammate\'s model as {provider, modelId}, validated against the catalog and allowlist; a fork keeps your model to preserve the prefix it reuses, so model is rejected with context: "fork".',
       'Members share the working directory. Assign disjoint write scopes and require the teammate to preserve edits outside its assigned scope.',
+      'Spawn several teammates in one response for independent read-only research or disjoint write scopes; each prompt must stay self-contained.',
     ].join(' '),
     parameters: Type.Object({
       name: Type.String(),
       description: Type.Optional(Type.String()),
       prompt: Type.String(),
       context: Type.Optional(Type.Union([Type.Literal('fresh'), Type.Literal('fork')])),
+      model: Type.Optional(Type.Object({
+        provider: Type.String(),
+        modelId: Type.String(),
+      })),
     }),
     // A rerun after a crash must reuse the child it already created instead of spawning twice.
     replay: 'safe',
@@ -1004,6 +1031,12 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       const prompt = requiredText(args.prompt, 'prompt', 20_000)
       const label = memberLabel(args.description, name)
       const mode = args.context ?? 'fresh'
+      if (mode === 'fork' && args.model !== undefined) {
+        throw new TeamRuleError(
+          'fork 上下文继承 Lead 的对话与模型，不支持另行指定模型（保持前缀缓存复用）；需要另选模型请用 fresh。',
+          'invalid-argument',
+        )
+      }
       const leadId = scope.leadId
       // Settle members an earlier crash left in `provisioning` before this call adds another
       // (DSH reconciles at Lead start, `roster.ts:175-179,375-417`).
@@ -1045,6 +1078,17 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 
       // 2. Create the task-owned child and its identity link in one commit (docs/families.md A6).
       //    A replayed call reuses the child already recorded for this name.
+      // A fresh spawn with an explicit model overrides only model/thinkingLevel — never tools or
+      // instructions, which keep cloning the Lead's composition (DSH teammates are Lead copies).
+      let agent: AgentChange | undefined
+      if (plan.kind === 'create' && mode === 'fresh' && args.model !== undefined && options.resolveChildModel !== undefined) {
+        const lead = await api.agent(context)
+        const resolved = options.resolveChildModel(args.model, { thinkingLevel: lead.thinkingLevel })
+        agent = {
+          model: resolved.model,
+          ...(resolved.thinkingLevel === undefined ? {} : { thinkingLevel: resolved.thinkingLevel }),
+        }
+      }
       let childId: ConversationId
       try {
         childId = plan.kind === 'reuse'
@@ -1062,6 +1106,9 @@ export function createTeamTools(options: TeamToolOptions): Extension {
             const record = mode === 'fork'
               ? await forkLeadConversation(tx, leadId, cutoff, anchorId)
               : await tx.createConversation({ ownership: { kind: 'task', taskId: anchorId } })
+            // The Tx creation call takes no agent options; `configure` writes the model pick to the
+            // cloned `pi.agent` document in the same commit.
+            if (agent !== undefined) await configure(tx, record.id, agent)
             await options.prepareChild(tx, record.id, leadId, label)
             const link = await tx.doc(TeamLink, record.id)
             link.leadConversationId = String(leadId)

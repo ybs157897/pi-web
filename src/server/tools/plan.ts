@@ -141,12 +141,14 @@ const planSection = section('plan-policy', async (input, context) => {
     submission === undefined
       ? '对话中的同意或对某个问题的确认不结束计划模式；本请求没有计划提交工具，把计划放在最终回复里并结束本轮，等待用户明确决定。'
       : '对话中的同意或对某个问题的确认不结束计划模式；必须通过 `exit_plan_mode` 提交计划并由用户批准。',
+    '工作顺序：先探索仓库、理解现有模式与约定，再设计方案；有分歧先问，最后成稿提交。',
     `先探索：用当前可用的只读工具（${readTools.length > 0 ? readTools.join('、') : '读取与检索工具'}、静态分析和检查）把计划落在真实仓库上。不要写文件、改配置、运行会改写文件的格式化或代码生成、提交，也不要执行计划。优先复用现有函数和模式，不要为新机制而新机制。`,
     'Host 会拒绝写入、shell 和外部 MCP 调用；当前请求可能只列出只读工具。这些计划模式规则优先于后续任何建议使用写入工具的说明。',
     submission === undefined
       ? '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施；计划直接在最终回复里给出。'
       : '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施，计划本身属于 `exit_plan_mode`。',
     '能通过检查确定的事实自己去查。只有用户拥有的选择或检查无法回答的重大歧义才用 `ask_user_question`；不要问代码在哪、当前行为是什么。',
+    '计划定稿前如仍有未决的需求或方案分歧，先用 `ask_user_question` 问清再成稿；提交计划本身就是请求批准，不要用提问征求"计划可以吗"。',
     '计划要决策完整：写明目标与验收标准；按子系统分组改动；列出公共 API、schema 和数据流变化；覆盖边界情况、失败模式、测试、验收标准和显式假设。简洁到可审阅，详细到另一位工程师不用再做设计决策。',
     `把计划写成 Markdown，第一行是一级标题（"${HEADING_PREFIX}<标题>"），后面是步骤和要执行的验证。`,
     ...(submission === undefined
@@ -167,12 +169,15 @@ const planSection = section('plan-policy', async (input, context) => {
 const exitPlanModeTool = defineTool({
   name: 'exit_plan_mode',
   description: [
-    'Submit the plan you wrote in plan mode and end this turn without waiting for the review.',
-    'Make this the only and final tool call in that assistant response; do not start implementation in the same turn.',
-    `The plan must be Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>"), followed by the steps and the verification you will run.`,
+    'Submit the plan you wrote in plan mode for the user\'s approval, ending this turn without waiting for the review.',
+    'Use it only when the task is code-writing work whose implementation steps need planning; for research tasks — gathering information, searching or reading files, understanding the codebase — answer directly instead and do not submit a plan.',
+    'Before calling, make sure the plan is complete and unambiguous: if questions about the requirements or the approach remain, resolve them with `ask_user_question` first, then submit.',
+    'Do not use `ask_user_question` to ask "Is this plan okay?" or "Should I proceed?" — submitting the plan is itself the approval request.',
+    `Make this the only and final tool call in that assistant response, and make the plan Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>") followed by the steps and the verification you will run.`,
     'Only call this while plan mode is active: the user turns it on with the composer plan chip or the /plan command.',
     'The user reviews the plan in the transcript; approval turns plan mode off and their confirmation arrives as a follow-up message.',
     'If they ask for changes, revise the plan and call exit_plan_mode again instead of starting the work.',
+    'Examples: "search for and understand how vim mode is implemented" → report the findings, do not submit a plan; "implement yank mode for vim" → submit the implementation plan; "add authentication, auth method undecided" → ask which auth method first, then submit.',
   ].join(' '),
   parameters: Type.Object({ plan: Type.String() }),
   execute: async (args, api, context) => {

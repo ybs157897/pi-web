@@ -244,6 +244,11 @@ function demoCompactionResponse(context: Parameters<FauxResponseFactory>[0]) {
 /** The fixed delegation the `[subagent]` script submits, and the answer its child writes back. */
 const DEMO_SUBAGENT_CHILD_MARKER = '[subagent-child]'
 const DEMO_SUBAGENT_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 归纳子智能体一期机制：子会话如何创建、答案如何取回、面板如何挂上去。`
+/** The background delegation the `[subagent-bg]` script submits, and the marker its settlement turn arrives with. */
+const DEMO_SUBAGENT_BG_MARKER = '[subagent-bg]'
+const DEMO_SUBAGENT_BG_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 后台调研任务：总结 demo 会话继承语义。`
+const DEMO_SUBAGENT_BG_LABEL = '后台机制归纳'
+const DEMO_SUBAGENT_SETTLEMENT_MARKER = '[subagent-settlement]'
 /** The parallel delegations the `[subagents]` script submits, so the one-line strip can be checked. */
 const DEMO_PARALLEL_SUBAGENT_TASKS = [
   { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于春天的小作文，500 字左右。`, label: 'spring' },
@@ -328,7 +333,8 @@ function demoMemoryExtractionResponse(context: Parameters<FauxResponseFactory>[0
   return fauxAssistantMessage(fauxText('已保存。'))
 }
 
-const scriptedResponse: FauxResponseFactory = async (context, options) => {
+/** Exported for the demo-script unit tests: script branches are asserted against hand-built transcripts. */
+export const scriptedResponse: FauxResponseFactory = async (context, options) => {
   for (const observer of requestObservers) observer(context)
   await waitAtGate(options?.signal)
   const skillResponse = skillsDemoResponse(context)
@@ -408,24 +414,30 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
   if (userText.includes('[ask]')) {
     switch (currentResults.length) {
       case 0:
-        return fauxAssistantMessage(fauxToolCall('ask_user_question', {
-          questions: [
-            {
-              id: 'scope',
-              header: '演示范围',
-              question: '这次问答演示要覆盖哪一层？',
-              options: [
-                { label: '前端交互 (Recommended)', description: '卡片、选项与只读摘要' },
-                { label: '后端接口', description: '校验与持久化' },
-                { label: '全链路', description: '从工具调用到收尾回复' },
-              ],
-            },
-            {
-              id: 'notes',
-              question: '还有什么补充要求？（可跳过）',
-            },
-          ],
-        }, { id: `demo-ask-${String(context.messages.length)}` }), { stopReason: 'toolUse' })
+        // The lead-in shares the message with the question call, so a settled turn folds it
+        // into the work group — the shape the collapsed header's prose preview has to name.
+        return fauxAssistantMessage([
+          fauxThinking('先把演示范围问清楚，再决定后续步骤。'),
+          fauxText('先确认这次演示覆盖哪一层：选前端交互会重点看卡片与选项，选全链路会一直跑到收尾回复。\n\n补充要求可以留空，我会按默认顺序演示。'),
+          fauxToolCall('ask_user_question', {
+            questions: [
+              {
+                id: 'scope',
+                header: '演示范围',
+                question: '这次问答演示要覆盖哪一层？',
+                options: [
+                  { label: '前端交互 (Recommended)', description: '卡片、选项与只读摘要' },
+                  { label: '后端接口', description: '校验与持久化' },
+                  { label: '全链路', description: '从工具调用到收尾回复' },
+                ],
+              },
+              {
+                id: 'notes',
+                question: '还有什么补充要求？（可跳过）',
+              },
+            ],
+          }, { id: `demo-ask-${String(context.messages.length)}` }),
+        ], { stopReason: 'toolUse' })
       default:
         return fauxAssistantMessage([
           fauxThinking('问题已经交给用户，回答会以消息形式到达。'),
@@ -890,6 +902,33 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       ].join('\n')),
     ])
   }
+  // The `[subagent-bg]` script: submit the background delegation, then close the turn as
+  // soon as the spawn receipt lands — the whole point is not waiting for the child.
+  if (userText.includes(DEMO_SUBAGENT_BG_MARKER)) {
+    if (currentResults.length === 0) {
+      return fauxAssistantMessage(fauxToolCall(SUBAGENT_TOOL, {
+        task: DEMO_SUBAGENT_BG_TASK,
+        label: DEMO_SUBAGENT_BG_LABEL,
+        run_in_background: true,
+      }, { id: `demo-subagent-bg-${runToken}` }), { stopReason: 'toolUse' })
+    }
+    return fauxAssistantMessage([
+      fauxThinking('任务已转后台运行，本轮立即收尾，不空等结果。'),
+      fauxText('已把调研任务交给后台子智能体：本轮到此结束，不等它跑完；它完成后会以一条结算消息开启下一轮。'),
+    ])
+  }
+  // The settlement notification arrives as a later user message in the parent conversation.
+  // Checked before every delegation script: the settlement body quotes the child's answer,
+  // so its 子智能体 wording must never fall into a delegation branch.
+  if (userText.includes(DEMO_SUBAGENT_SETTLEMENT_MARKER)) {
+    return fauxAssistantMessage([
+      fauxThinking('后台子智能体的结算通知已到，据此收尾。'),
+      fauxText([
+        `后台子智能体「${DEMO_SUBAGENT_BG_LABEL}」已完成，结论随结算一起送达。`,
+        '结算通知是完成后注入本轮的后续消息，不是上一轮的等待结果——上一轮提交任务后立即收尾，没有空等。',
+      ].join('\n')),
+    ])
+  }
   // The child's own marker, so a delegated task answers with text instead of delegating again.
   if (userText.includes(DEMO_SUBAGENT_CHILD_MARKER)) {
     return fauxAssistantMessage([
@@ -918,22 +957,28 @@ const scriptedResponse: FauxResponseFactory = async (context, options) => {
       ].join('\n')),
     ])
   }
-  if (userText.includes('[subagent]')) {
+  if (userText.includes('[subagent]') || userText.includes('[subagent-explore]') || userText.includes('[subagent-model]') || userText.includes('[subagent-bad-model]')) {
     if (currentResults.length === 0) {
       return fauxAssistantMessage(fauxToolCall(SUBAGENT_TOOL, {
         task: DEMO_SUBAGENT_TASK,
         label: '机制归纳',
+        ...(userText.includes('[subagent-explore]') ? { agent_type: 'Explore' as const } : {}),
+        ...(userText.includes('[subagent-model]') ? { model: DEMO_MODEL } : {}),
+        ...(userText.includes('[subagent-bad-model]') ? { model: { provider: 'missing-provider', modelId: 'missing-model' } } : {}),
       }, { id: `demo-subagent-${runToken}` }), { stopReason: 'toolUse' })
     }
+    const failed = [...currentResults].reverse().find((message) => message.toolName === SUBAGENT_TOOL)?.isError === true
     return fauxAssistantMessage([
-      fauxThinking('子智能体已返回结论，据此收尾。'),
-      fauxText([
-        '子智能体已完成委派任务并返回结论：',
-        '',
-        '- 子会话由 `subagent` 工具创建，继承父会话的工具、模型与工作目录',
-        '- 工具在前台等待子会话的回答，并把答案作为本次调用的结果返回',
-        '- 会话头右上角的「1 个子智能体」可以展开它、打开完整执行记录或停止运行',
-      ].join('\n')),
+      fauxThinking(failed ? '子智能体调用被拒绝，本轮收尾。' : '子智能体已返回结论，据此收尾。'),
+      fauxText(failed
+        ? '子智能体调用被拒绝：所选模型没有通过校验，本轮到此结束。'
+        : [
+            '子智能体已完成委派任务并返回结论：',
+            '',
+            '- 子会话由 `subagent` 工具创建，继承父会话的工具、模型与工作目录',
+            '- 工具在前台等待子会话的回答，并把答案作为本次调用的结果返回',
+            '- 会话头右上角的「1 个子智能体」可以展开它、打开完整执行记录或停止运行',
+          ].join('\n')),
     ])
   }
   if (!completedTools.has('write')) {

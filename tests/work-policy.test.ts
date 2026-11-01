@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/conversation/work-policy.ts'
+import { Subagents, type SubagentProfile } from '../src/server/tools/subagent.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 
@@ -11,6 +12,7 @@ function promptInput(options: {
   callable?: string[]
   planActive?: boolean
   cwd?: string
+  subagentProfile?: SubagentProfile
 } = {}) {
   return {
     conversationId: 1,
@@ -21,7 +23,14 @@ function promptInput(options: {
       callable: (options.callable ?? []).map(name => ({ name })),
     },
     read: {
-      snapshot: async () => ({ active: options.planActive ?? false, updatedAt: 1 }),
+      snapshot: async (document: unknown) => {
+        if (document === Subagents) {
+          return options.subagentProfile === undefined
+            ? undefined
+            : { record: { label: 'delegated task', createdAt: 1, profile: options.subagentProfile } }
+        }
+        return { active: options.planActive ?? false, updatedAt: 1 }
+      },
     },
   }
 }
@@ -32,6 +41,13 @@ async function renderPolicy(options: Parameters<typeof promptInput>[0] = {}): Pr
   if (sections.length === 0) throw new Error('Runtime policy extension has no sections')
   const rendered = await Promise.all(sections.map(policy => policy.render(promptInput(options) as never, {} as never)))
   return rendered.filter((value): value is string => typeof value === 'string').join('\n\n')
+}
+
+async function renderSection(key: string, options: Parameters<typeof promptInput>[0] = {}): Promise<string | undefined> {
+  const extension = createWorkPolicyExtension()
+  const policy = extension.sections?.find(candidate => candidate.key === key)
+  if (!policy) throw new Error(`Missing ${key} section`)
+  return await (policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>)(promptInput(options) as never, {} as never)
 }
 
 describe('default runtime work policy', () => {
@@ -119,6 +135,15 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('调研→形成计划→等待确认')
   })
 
+  it('suggests turning plan mode on before non-trivial implementation work', async () => {
+    const prompt = await renderPolicy({ tools: ['todo_write'] })
+
+    expect(prompt).toContain('建议用户先开计划模式')
+    expect(prompt).toContain('命中任一条即建议')
+    expect(prompt).toContain('需求不明需要先探索')
+    expect(prompt).toContain('直接做，不建议计划')
+  })
+
   it('keeps proactive-asking rules in the stable core', async () => {
     const prompt = await renderPolicy()
 
@@ -152,6 +177,22 @@ describe('default runtime work policy', () => {
       expect(prompt).toContain('Keep this request scoped.')
       expect(prompt).toContain('</project_instructions>')
       expect(prompt).not.toContain('todo_write')
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('omits project instructions for an Explore subagent while other profiles keep them', async () => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-')))
+    const body = '# Root project rules\nKeep this request scoped.\n'
+    try {
+      await writeFile(join(cwd, 'AGENTS.md'), body, 'utf8')
+      const explore = await renderSection('project-instructions', { cwd, subagentProfile: 'Explore' })
+      expect(explore).toBeUndefined()
+
+      const general = await renderSection('project-instructions', { cwd, subagentProfile: 'general-purpose' })
+      expect(general).toContain('<project_instructions>')
+      expect(general).toContain('Root project rules')
     } finally {
       await rm(cwd, { recursive: true, force: true })
     }

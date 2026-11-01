@@ -518,6 +518,7 @@ export default function StatusPanel({
               <Bot size={15} aria-hidden="true" />
               <button type="button" className={css.agentOpen} onClick={() => { onOpenSubagent(agent.id, agent.title || agent.label) }}>
                 <span className={css.agentTitle}>{agent.title || agent.label}</span>
+                {agent.model !== undefined && <span className={css.agentElapsed}>{agent.model}</span>}
                 {elapsed !== undefined && <span className={css.agentElapsed}>{formatElapsed(elapsed, t)}</span>}
               </button>
               <button type="button" className={css.stopButton} aria-label={t('停止子智能体', 'Stop subagent')}

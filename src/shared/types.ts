@@ -600,6 +600,8 @@ export type SubagentSummary = {
   title: string
   /** `running` while the child has a live run, `inactive` otherwise — DSH's `list_agents` vocabulary. */
   status: 'running' | 'inactive'
+  /** The child's model as `provider/modelId`; present when it resolved one (inherited or selected). */
+  model?: string
   /** Collapsed latest assistant text; empty when the child has not answered yet. */
   answer: string
   /**

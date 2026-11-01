@@ -223,6 +223,10 @@ export function createTeam(deps: TeamDeps) {
         title: detail.conversation.title,
         status: detail.conversation.busy ? 'running' : 'inactive',
         answer: latestOwnAnswer(detail.messages, SUBAGENT_ANSWER_CHARS),
+        // `provider/modelId`, the same string the team roster shows for a member's model.
+        ...(detail.conversation.model === undefined ? {} : {
+          model: `${detail.conversation.model.provider}/${detail.conversation.model.modelId}`,
+        }),
         ...(tokens === undefined ? {} : { tokens }),
         ...(durationMs === undefined ? {} : { durationMs }),
         metricsAt,

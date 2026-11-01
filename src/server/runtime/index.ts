@@ -16,6 +16,8 @@ import type {
 } from '../../shared/types.ts'
 import { createModelRuntime } from '../model/catalog.ts'
 import { createDemoModelRuntime } from '../model/demo.ts'
+import { createChildModelResolver } from '../agents/builtins.ts'
+import { modelWithinAllowlist } from '../model/allowlist.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import { builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackReport, wetrackConfigured } from '../automation/wetrack.ts'
 import { listWetrackAnalyses, readWetrackAnalysis } from '../automation/wetrack-analysis.ts'
@@ -25,7 +27,7 @@ import { createWetrackAnalysisExtension } from '../tools/wetrack-analysis.ts'
 import { createGoalExtension } from '../tools/goal.ts'
 import { InteractionTools } from '../tools/interaction.ts'
 import { PlanExtension, Plans } from '../tools/plan.ts'
-import { createSubagentTools } from '../tools/subagent.ts'
+import { createSubagentTools, type ChildModelList, SUBAGENT_MODEL_LIST_LIMIT } from '../tools/subagent.ts'
 import { createTeamTools } from '../tools/team.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
 import { SkillStore } from '../skills/store.ts'
@@ -36,6 +38,10 @@ import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME } from 
 import { createRuntimeCodemodeExtension } from '../codemode-policy.ts'
 import { ResearchTools } from '../tools/research.ts'
 import { COMPACTION_POLICY, createCompactionExtension } from '../conversation/compaction.ts'
+import {
+  TRAJECTORY_CAPTURE_DIR, TRAJECTORY_EXTENSION_NAME, assembleTrajectory, createTrajectoryExtension,
+  wrapModelsWithTrajectory,
+} from '../conversation/trajectory.ts'
 import { MEMORY_EXTRACTION_DRAIN_MS, createMemoryExtraction } from '../memory/extraction.ts'
 import { createMemoryExtension } from '../memory/policy.ts'
 import { ensureMemoryDirectory, resolveMemoryRoot } from '../memory/store.ts'
@@ -59,6 +65,7 @@ import { createQueue } from './queue.ts'
 import { createConversations } from './conversations.ts'
 import { createCore } from './core.ts'
 import { createInteractionReplies } from './interactions.ts'
+import { createSubagentSettlement } from './subagent-settle.ts'
 
 import { CODEMODE_EXTENSION_NAME, CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
 
@@ -164,6 +171,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const registry = createRegistry()
   registry.install(createWorkPolicyExtension())
   registry.install(createCompactionExtension({ harness: () => harness }))
+  // After the compaction extension, so a captured request is the exact post-prune payload.
+  registry.install(createTrajectoryExtension({
+    dir: join(dataDir, TRAJECTORY_CAPTURE_DIR),
+    enabled: process.env.PI_WEB_TRAJECTORY !== '0',
+    harness: () => harness,
+  }))
   // Installed before the execution policy so its sections are covered by the plan-mode filter and
   // its write/edit wraps sit inside the plan guard.
   registry.install(createMemoryExtension({
@@ -203,12 +216,43 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       return metadata !== undefined && (metadata.accessMode === 'fullAccess' || metadata.accessMode === 'workspaceWrite') && plan?.active !== true
     },
   }))
-  registry.install(createSubagentTools({ prepareChild: teamService.prepareChild }))
+  /** Delegation model picks are validated here, where the catalog, allowlist, and level support live. */
+  const resolveChildModel = createChildModelResolver({
+    models: modelRuntime.models,
+    allowlist: () => appState.snapshot().settings.modelAllowlist,
+    supportedThinkingLevels: (provider, modelId) => modelRuntime.supportedThinkingLevels(provider, modelId),
+  })
+  /**
+   * Catalog models the allowlist covers and whose provider holds credentials; the delegation
+   * section lists up to `SUBAGENT_MODEL_LIST_LIMIT` of them, ending with 「等 N 个」 when truncated.
+   */
+  const availableChildModels = async (): Promise<ChildModelList> => {
+    const listed = modelRuntime.models.getModels()
+      .filter(model => modelWithinAllowlist(appState.snapshot().settings.modelAllowlist, { provider: model.provider, modelId: model.id }))
+      .map(model => ({ provider: model.provider, modelId: model.id }))
+    const configured = new Map<string, boolean>()
+    for (const pick of listed) {
+      if (configured.has(pick.provider)) continue
+      try { configured.set(pick.provider, await modelRuntime.models.checkAuth(pick.provider) !== undefined) }
+      catch { configured.set(pick.provider, false) }
+    }
+    const usable = listed.filter(pick => configured.get(pick.provider) === true)
+    return { models: usable.slice(0, SUBAGENT_MODEL_LIST_LIMIT), total: usable.length }
+  }
+  /** Settles background delegations: detached waits that inject the child's result into the parent. */
+  const subagentSettlement = createSubagentSettlement({ harness: () => harness })
+  registry.install(createSubagentTools({
+    prepareChild: teamService.prepareChild,
+    resolveChildModel,
+    availableChildModels,
+    settleWhenAnswered: subagentSettlement.settleWhenAnswered,
+  }))
   registry.install(createTeamTools({
     prepareChild: teamService.prepareChild,
     conversationInfo: teamService.conversationInfo,
     watchMembers: teamService.watchMembers,
     memberSession: teamService.memberSession,
+    resolveChildModel,
   }))
   // Tool-free: it only appends a per-request reminder from the live plugin projection.
   registry.install(createPluginReferenceExtension({
@@ -277,7 +321,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
   harness = await Harness.open(storage, {
-    models: modelRuntime.models,
+    // Every provider stream gets `ttftMs` stamped on its final message.
+    models: wrapModelsWithTrajectory(modelRuntime.models),
     registry,
     settings: { compaction: COMPACTION_POLICY },
     env: async (target) => {
@@ -472,6 +517,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await queueService.recover()
   await automationsFeature().recover()
   await teamService.reconcileRosters()
+  // Before resume: a background delegation lost to a crash settles now, and the injected message
+  // starts its parent's follow-up run once the scheduler is back.
+  await subagentSettlement.reconcileBackgroundDelegations()
   harness.resume()
   // Upgrades add code mode to an existing registry, and the stored agent selection is
   // per conversation: bring idle conversations onto the current presentation before serving.
@@ -495,6 +543,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     editQueued: (value, submissionId, input) => queueService.editQueued(value, submissionId, input),
     stop: (value) => conversationsService.stop(value),
     compact: (value) => conversationsService.compact(value),
+    trajectory: async (value) => {
+      const conversation = await requireConversation(value)
+      return await assembleTrajectory({
+        dbPath: resolve(dataDir, 'pi-durable.sqlite'),
+        captureDir: join(dataDir, TRAJECTORY_CAPTURE_DIR),
+        conversationId: String(conversation.id),
+      })
+    },
     goal: (value, input) => conversationsService.goal(value, input),
     setPlan: (value, active) => conversationsService.setPlan(value, active),
     team: (value) => teamService.team(value),
@@ -594,6 +650,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           } finally {
             try {
               await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
+              await subagentSettlement.drain()
               await harness.close(CTX)
               await automationsService?.drain()
               await analysisRuns.drain()

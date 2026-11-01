@@ -87,7 +87,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
       answers: settledAnswers,
       instruction: decision.approved
-        ? 'The user approved the plan and plan mode is now off: execute the approved plan in this turn.'
+        ? 'The user approved the plan and plan mode is now off: execute the approved plan in this turn, starting with todo_write if the work is multi-step.'
         : 'The user asked for changes and plan mode is still on: revise the plan and submit it again with exit_plan_mode.',
     }
     const requestId = `plan-review-reply:${callId}`
