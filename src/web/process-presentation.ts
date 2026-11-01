@@ -52,3 +52,50 @@ export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t:
   if (run.status === 'running') return time === undefined ? t('工作中', 'Working') : t(`工作中 ${time}`, `Working ${time}`)
   return time === undefined ? t('已工作', 'Worked') : t(`已工作 ${time}`, `Worked ${time}`)
 }
+
+/**
+ * The prose a folded work group would swallow. A run's process holds every text block the
+ * model wrote beside a tool call — the lead-in to a question, the explanation before a
+ * verification step — so the collapsed header names the longest one instead of only the
+ * duration. A run that wrote no prose returns undefined and keeps the bare header.
+ */
+export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120): string | undefined {
+  let longest = ''
+  for (const part of run.process) {
+    if (part.kind !== 'content' || part.block.type !== 'text') continue
+    const text = part.block.text.trim()
+    if (text.length > longest.length) longest = text
+  }
+  if (longest === '') return undefined
+  const line = firstProseLine(longest)
+  if (line === '') return undefined
+  const characters = [...line]
+  return characters.length > limit ? `${characters.slice(0, limit).join('')}…` : line
+}
+
+/** The first readable line of a markdown block, skipping fenced code and lines without prose. */
+function firstProseLine(markdown: string): string {
+  let fenced = false
+  for (const source of markdown.split('\n')) {
+    const line = source.trim()
+    if (line.startsWith('```')) { fenced = !fenced; continue }
+    if (fenced) continue
+    const prose = plainProse(line)
+    if (prose !== '') return prose
+  }
+  return ''
+}
+
+/** Strip the markers a one-line preview would otherwise read as punctuation. */
+function plainProse(line: string): string {
+  const text = line
+    .replace(/^#{1,6}\s+/u, '')
+    .replace(/^>\s*/u, '')
+    .replace(/^[-*+]\s+/u, '')
+    .replace(/^\d+[.)]\s+/u, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/\*\*|__|~~|`/gu, '')
+  if (/^[-*_:| ]+$/u.test(text)) return ''
+  return text.replace(/\s+/gu, ' ').trim()
+}

@@ -197,6 +197,8 @@
 .processTitle[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
 .processChevron { flex: none; color: var(--message-muted); transition: transform .2s ease-out; }
 .processChevron[data-open] { transform: rotate(90deg); }
+.processHeader[data-preview] .processTitle { max-width: 50%; }
+.processPreview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--message-muted); text-overflow: ellipsis; white-space: nowrap; }
 .processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }

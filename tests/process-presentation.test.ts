@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { ChatMessage } from '../src/shared/types.ts'
+import { buildRenderModel } from '../src/web/render-model.ts'
 import {
-  defaultProcessOpen, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, workGroupTitle,
+  defaultProcessOpen, foldedProsePreview, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, workGroupTitle,
 } from '../src/web/process-presentation.ts'
 import { presentationPolicyFor } from '../src/web/presentation-policy.ts'
 
@@ -131,5 +133,54 @@ describe('work group open state machine', () => {
       open = processGroupAutoOpen(open, 'none', index % 2 === 0)
     }
     expect(open).toBe(false)
+  })
+})
+
+describe('folded work group preview', () => {
+  /** One settled run whose process carries `blocks` and whose answer is a plain reply. */
+  function runOf(blocks: ChatMessage['blocks']) {
+    const run = buildRenderModel([
+      { id: 'user', role: 'user', requestId: 'req', timestamp: 1, blocks: [{ type: 'text', text: '问题' }] },
+      { id: 'work', role: 'assistant', runId: 'run', timestamp: 2, status: 'completed', blocks },
+      { id: 'answer', role: 'assistant', runId: 'run', timestamp: 3, status: 'completed', blocks: [{ type: 'text', text: '完成。' }] },
+    ]).runs[0]
+    if (run === undefined) throw new Error('render model dropped the run')
+    return run
+  }
+  const read = { type: 'toolCall' as const, id: 'read', name: 'read', arguments: { path: 'a.ts' } }
+
+  it('names the longest folded block instead of the shortest narration', () => {
+    const run = runOf([
+      { type: 'text', text: '我先看一眼代码。' },
+      read,
+      { type: 'text', text: '我倾向方案 A：改动面最小，且语义最准。' },
+    ])
+    expect(foldedProsePreview(run)).toBe('我倾向方案 A：改动面最小，且语义最准。')
+  })
+
+  it('keeps the preview a plain line, skipping fences and reading headings as prose', () => {
+    const run = runOf([
+      { type: 'text', text: '```ts\nconst hidden = 1\n```\n## 结论：**方案 A**' },
+      read,
+    ])
+    expect(foldedProsePreview(run)).toBe('结论：方案 A')
+  })
+
+  it('unwraps a markdown link target into its label', () => {
+    const run = runOf([
+      { type: 'text', text: '详见 [设计文档](https://example.test/design.md)，其余不变。' },
+      read,
+    ])
+    expect(foldedProsePreview(run)).toBe('详见 设计文档，其余不变。')
+  })
+
+  it('truncates to the character budget with an ellipsis', () => {
+    const run = runOf([{ type: 'text', text: '一二三四五六七八九十'.repeat(3) }, read])
+    expect(foldedProsePreview(run, 10)).toBe('一二三四五六七八九十…')
+  })
+
+  it('has nothing to preview for a run that only used tools or a blank block', () => {
+    expect(foldedProsePreview(runOf([read]))).toBeUndefined()
+    expect(foldedProsePreview(runOf([{ type: 'text', text: '   \n  ' }, read]))).toBeUndefined()
   })
 })

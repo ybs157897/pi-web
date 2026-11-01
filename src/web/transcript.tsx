@@ -25,7 +25,7 @@ import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-br
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
+import { defaultProcessOpen, foldedProsePreview, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -369,6 +369,9 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
+  // A folded group also hides the prose the model wrote beside its tool calls; naming that
+  // prose in the header keeps the substance one click away instead of behind a duration.
+  const preview = open || live ? undefined : foldedProsePreview(run)
   // ZCode keeps a successful tool row with an inline plugin page outside the folded
   // history region. Otherwise the page would disappear when the work group collapses
   // and the final answer would take its place.
@@ -406,10 +409,13 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   return <>
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
+        data-preview={preview === undefined ? undefined : ''}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
         <span className={css.processTitle} data-running={live || undefined}>{title}</span>
         <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
+        {/* Decorative hint: the header keeps its duration as the accessible name. */}
+        {preview !== undefined && <span className={css.processPreview} data-process-preview="" aria-hidden="true">{preview}</span>}
       </button>
       <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
     </div>}

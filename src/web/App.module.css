@@ -312,7 +312,9 @@
 }
 .withStatusPanel { padding-right: 336px; }
 .messagesPane { position: relative; display: flex; width: 100%; min-width: 0; min-height: 0; flex: 1; }
-.messagesViewport { width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-gutter: stable; }
+/* The transcript's absolutely positioned jump anchors must be contained by this scroller; otherwise
+   they extend the pane and the outer primary panel, and a wheel over the right card scrolls the composer. */
+.messagesViewport { position: relative; width: 100%; min-width: 0; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-gutter: stable; }
 .jumpToBottom {
   position: absolute;
   bottom: 12px;
