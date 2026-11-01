@@ -479,6 +479,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }
       return undefined
     },
+    supportedThinkingLevels: () => {
+      const modelId = 'deepseek-v4.1-flash'
+      for (const provider of modelRuntime.models.getProviders()) {
+        if (provider.id === 'codebuddy' && modelRuntime.models.getModel(provider.id, modelId) !== undefined) {
+          return modelRuntime.supportedThinkingLevels(provider.id, modelId) ?? []
+        }
+      }
+      return []
+    },
     activateSkills: async workspace => {
       const catalog = await skillStore.list(workspace.path)
       const priority = { agents: 0, pi: 1, plugin: 2, global: 3, builtin: 4 }
@@ -633,7 +642,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     wetrackAnalysisSettings: analysisRuns.settings,
     updateWetrackAnalysisSettings: async input => {
       if (input.workspaceId === null || input.workspaceId === undefined) return analysisRuns.settings()
-      return analysisRuns.bindWorkspace(input.workspaceId)
+      return analysisRuns.bindWorkspace(input.workspaceId, input.thinkingLevel)
     },
     async close() {
       if (!closePromise) {

@@ -47,7 +47,7 @@ describe('WeTrack background analysis', () => {
       currentDetail: async () => detail(),
     })
     const run = await runs.start({ defectNumber: 'DTS006680988' })
-    expect(createInput).toMatchObject({ workspaceId: workspace.id, accessMode: 'readOnly', kind: 'defectAnalysis', model: { provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' } })
+    expect(createInput).toMatchObject({ workspaceId: workspace.id, accessMode: 'readOnly', kind: 'defectAnalysis', model: { provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }, thinkingLevel: 'high' })
     expect(submitted).not.toContain('rd-cli-ops')
     expect(submitted).not.toContain('遵循工作区分析规范')
     expect(submitted).not.toContain('skill_load')
@@ -56,13 +56,63 @@ describe('WeTrack background analysis', () => {
     expect(submitted).toContain('wetrack_analysis_save')
     expect(submitted).toContain('分析这个 bug 单：DTS006680988')
     expect(submitted).toContain('按任务匹配到的 Skill 规则执行只读分析')
-    expect(submitted).toContain('立即在同一轮发出两个 `subagent` 调用')
+    expect(submitted).toContain('在同一轮发出两个 `subagent` 调用')
     expect(submitted).toContain('定向证据核对者')
     expect(submitted).toContain('禁止用 `...` 省略路径')
     expect(submitted).toContain('证据不足时明确说明缺失的信息')
     expect(submitted).not.toContain('不需要你执行 rd-cli')
     expect(submitted).not.toContain('"defect"')
+    // The search budget is what keeps a background analysis from sweeping the repository:
+    // a hard cap before the first delegation, plus rules that forbid the slow grep shapes.
+    expect(submitted).toContain('你的工具检索轮次最多 3 轮')
+    expect(submitted).toContain('第 4 轮必须派发')
+    expect(submitted).toContain('禁止对仓库根 `.` 做中文自然语言的宽匹配')
+    expect(submitted).toContain('禁止逐模块横扫式 `grep`')
+    expect(submitted).toContain('子 Agent 返回后最多再补查 1 轮')
+    // Evidence must stay machine-checkable: full paths, no ellipsis.
+    expect(submitted).toContain('正文里提到的任何路径都必须完整写出，不得用 `...` 省略')
     expect(wetrackAnalysisRunPrompt(run.defectNumber)).toBe(submitted)
+    await runs.drain()
+  })
+
+  it('pins the thinking level the workspace binding asks for', async () => {
+    let createInput: CreateConversationInput | undefined
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id, thinkingLevel: 'off' }))
+    const runs = createWetrackAnalysisRuns({
+      dataDir,
+      selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      supportedThinkingLevels: () => ['off', 'high', 'max'],
+      activateSkills: async () => ({ skillIds: [] }),
+      create: async input => { createInput = input; return detail() },
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => undefined }),
+      currentDetail: async () => detail(),
+    })
+    await runs.start({ defectNumber: 'DTS006680988' })
+    expect(createInput).toMatchObject({ thinkingLevel: 'off' })
+    expect(await runs.settings()).toMatchObject({ thinkingLevel: 'off', supportedThinkingLevels: ['off', 'high', 'max'] })
+    await runs.drain()
+  })
+
+  it('keeps the pinned thinking level when the workspace is rebound', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id, thinkingLevel: 'off' }))
+    const runs = createWetrackAnalysisRuns({
+      dataDir,
+      selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      supportedThinkingLevels: () => ['off', 'high', 'max'],
+      activateSkills: async () => ({ skillIds: [] }),
+      create: async () => detail(),
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => undefined }),
+      currentDetail: async () => detail(),
+    })
+    const rebound = await runs.bindWorkspace(workspace.id)
+    expect(rebound.thinkingLevel).toBe('off')
+    expect(JSON.parse(await readFile(join(dataDir, 'wetrack', 'workspace.json'), 'utf8'))).toMatchObject({ workspaceId: workspace.id, thinkingLevel: 'off' })
     await runs.drain()
   })
 
@@ -105,7 +155,8 @@ describe('WeTrack background analysis', () => {
     const faux = fauxProvider({ provider: 'codebuddy', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek test', reasoning: true }] })
     models.setProvider(faux.provider)
     faux.setResponses([
-      fauxAssistantMessage(fauxText('问题分析')),
+      // A defect analysis conversation is named by the host, so no title call competes for
+      // the provider queue: the first scripted response is the one the analysis turn gets.
       async (_context, options) => {
         markStarted()
         if (options?.signal?.aborted !== true) await released

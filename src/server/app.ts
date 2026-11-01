@@ -138,7 +138,7 @@ const automationSchema = z.object({
   model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
 }).strict()
 const automationPatchSchema = automationSchema.partial().extend({ intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional() }).refine(value => Object.keys(value).length > 0)
-const wetrackWorkspaceSchema = z.object({ workspaceId: identifier.nullable().optional() }).strict()
+const wetrackWorkspaceSchema = z.object({ workspaceId: identifier.nullable().optional(), thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional() }).strict()
 const pluginMarketplaceSchema = z.object({ source: z.string().trim().min(1).max(4_096) }).strict()
 const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginNameSchema, requestId: z.string().min(1).max(256).optional() }).strict()
 const pluginEnabledSchema = z.object({ enabled: z.boolean() }).strict()

@@ -37,6 +37,7 @@ import type {
   SubagentSummary,
   SwitchGitBranchInput,
   TeamView,
+  ThinkingLevel,
   UpdateAgentPresetInput,
   UpdateAppSettingsInput,
   UpdateAutomationInput,
@@ -171,7 +172,7 @@ export interface Runtime {
   wetrackAnalysisRuns(): Promise<WetrackAnalysisRun[]>
   startWetrackAnalysis(input: WetrackAnalysisStartInput): Promise<WetrackAnalysisRun>
   wetrackAnalysisSettings(): Promise<WetrackAnalysisSettings>
-  updateWetrackAnalysisSettings(input: { workspaceId?: string | null }): Promise<WetrackAnalysisSettings>
+  updateWetrackAnalysisSettings(input: { workspaceId?: string | null; thinkingLevel?: ThinkingLevel }): Promise<WetrackAnalysisSettings>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */

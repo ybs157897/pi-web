@@ -2,7 +2,7 @@ import type {
   AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
   CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
-  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
+  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
   WetrackDefectDetail, WetrackDefectList, WetrackDefectReport,
   WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
@@ -336,7 +336,7 @@ export const api = {
   wetrackAnalysisSettings(): Promise<WetrackAnalysisSettings> {
     return request('/api/wetrack/workspace')
   },
-  updateWetrackAnalysisSettings(input: { workspaceId?: string | null }): Promise<WetrackAnalysisSettings> {
+  updateWetrackAnalysisSettings(input: { workspaceId?: string | null; thinkingLevel?: ThinkingLevel }): Promise<WetrackAnalysisSettings> {
     return request('/api/wetrack/workspace', { method: 'PUT', body: JSON.stringify(input) })
   },
   updateQueued(id: string, submissionId: string, input: EditQueueInput): Promise<{ submissionId: string }> {

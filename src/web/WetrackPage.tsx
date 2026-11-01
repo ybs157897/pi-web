@@ -8,7 +8,7 @@ import { IconRefreshOutlineRegular, IconSearchOutlineRegular, IconSettingsOutlin
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 import type {
-  WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStatus, WetrackAnalysisSummary,
+  ThinkingLevel, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStatus, WetrackAnalysisSummary,
   WetrackDefectDetail, WetrackDefectItem, WetrackDefectList, WetrackDefectReport, WorkspaceSummary,
 } from '../shared/types.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
@@ -154,6 +154,14 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     finally { setSavingWorkspace(false) }
   }
 
+  const bindThinkingLevel = async (thinkingLevel: ThinkingLevel): Promise<void> => {
+    setSavingWorkspace(true)
+    setActionError('')
+    try { setAnalysisSettings(await api.updateWetrackAnalysisSettings({ workspaceId: analysisSettings.workspaceId, thinkingLevel })) }
+    catch (cause) { setActionError(messageOf(cause)) }
+    finally { setSavingWorkspace(false) }
+  }
+
   const startAnalysis = async (): Promise<void> => {
     const defectNumber = latest.current
     if (defectNumber === undefined) return
@@ -197,8 +205,16 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
           options={workspaces.map(workspace => ({ value: workspace.id, label: `${workspace.name} · ${workspace.path}` }))} />
         <div className={css.settingFacts}>
           <span>{t('分析模型', 'Analysis model')}</span><Tag color={analysisSettings.model === undefined ? 'red' : 'blue'}>{analysisSettings.model?.modelId ?? 'deepseek-v4.1-flash'}</Tag>
+          <span>{t('思考等级', 'Thinking level')}</span>
+          <Select size="small" value={analysisSettings.thinkingLevel} loading={savingWorkspace} disabled={analysisSettings.workspaceId === undefined}
+            onChange={value => { void bindThinkingLevel(value) }}
+            options={(analysisSettings.supportedThinkingLevels ?? []).map(level => ({
+              value: level,
+              label: level === 'off' ? t('关闭（最快）', 'Off (fastest)') : level,
+            }))} />
           <span>{t('权限', 'Access')}</span><span>{t('只读代码，不修改、提交或推送', 'Read-only; no code edits, commits or pushes')}</span>
         </div>
+        <p className={css.hint}>{t('思考等级越高，推理越充分、耗时越长；关闭思考最快，但复杂因果链的结论可能变浅。', 'A higher thinking level reasons more deeply and costs more time; off is fastest but may weaken conclusions on complex causal chains.')}</p>
       </Card>
       <Card className={css.settingsCard} title={t('激活的工作区 Skills', 'Active workspace Skills')}>
         {analysisSettings.workspaceId === undefined

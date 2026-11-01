@@ -231,7 +231,10 @@ export function createConversations(deps: ConversationsDeps) {
         todos.updatedAt = Date.now()
       }
     }, CTX)
-    if (input.text.trim()) scheduleTitleRevision(conversation.id, input.text)
+    // A defect analysis conversation is named by the host ("问题分析 · DTS…") and its title is
+    // pinned, so a model title would only be discarded — skip the call instead of spending it.
+    const kind = (await harness().snapshot(CONVERSATION_KIND, conversation.id, CTX))?.kind
+    if (kind !== 'defectAnalysis' && input.text.trim()) scheduleTitleRevision(conversation.id, input.text)
     memoryExtraction.scheduleAfterSubmission(conversation, request)
     return { submissionId: String(request.id) }
   }

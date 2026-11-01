@@ -458,6 +458,10 @@ export interface WetrackAnalysisStartInput {
 export interface WetrackAnalysisSettings {
   workspaceId?: string
   model?: ModelRef
+  /** Thinking level for the background analysis conversation; unset means the app default. */
+  thinkingLevel?: ThinkingLevel
+  /** The levels the analysis model actually honours; other levels are clamped server-side. */
+  supportedThinkingLevels?: ThinkingLevel[]
   skillIds: string[]
 }
 
