@@ -137,8 +137,9 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     ]) {
       expect(prompt.split(marker).length - 1, marker).toBe(1)
     }
-    // The routing rule lives once in the core; the skill catalog also names the skill.
+    // The routing rules live once in the core; the skill catalog also names the skills.
     expect(prompt).toContain('builtin:plugin-creator')
+    expect(prompt).toContain('builtin:statechart')
 
     // Scenario details live in the owning skills, not the global prompt.
     for (const marker of ['设置 → 插件市场', '不得声称已安装', '只会被标为不支持', '工具调用过程复盘']) {

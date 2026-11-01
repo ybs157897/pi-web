@@ -928,6 +928,27 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 - **共享组件**：新建 `src/web/PlanExcerptCard.tsx`（「计划」头部+复制态 ✓、256px 渐隐摘要、居中胶囊、整卡可点+子控件守卫；props `{markdown,onOpen,t,ariaLabel,className,dataStatus?,children?}`，children 给审阅卡反馈条）。QuestionComposer 的 PlanReviewCard 改用它（`css.card` + dataStatus），内部重复 JSX 删除；随迁清理无用的 icons/MarkdownText/ArrowRight 导入与 copied 态。
 - **ToolCard**：exit_plan_mode 行正文换 `<PlanExcerptCard className={planCardCss.planOutputCard}>`；行内有计划时自动展开一次（照插件卡的做法，effect 移到 plan 声明后避免 TDZ）；折叠态头部的「打开」accessory 保留；ToolCard.module.css 的旧 .planCard* 块删除；`.planOutputCard`（全圆角、100% 宽、bg-base）进 QuestionComposer.module.css 供两处共享。
 - **验证**：全量 927 过 + typecheck 干净；ego 实测 demo 会话两张转录卡均 848×311、摘要 256px、胶囊与 aria（「打开计划：<标题>」）就位（截图 14）。
+
+## 内置 statechart skill：状态机穷举标准 + 分析/实现工作流（2026-11-01 深夜 5，用户点名）
+
+用户要求把 pstack 的 statechart skill（cursor/plugins 仓库，TLA+/TLC 反例循环）内置进 pi-web，让所有用户开箱即用：分析问题时按状态机推断结论，实现代码前先用穷举法罗列全部场景、经用户调整后再动手，从提示词+skill+UI 交互三层落地，做完用 ego + 轨迹 + 页面表单填写验证。
+
+- **三层形态**：
+  - **Skill 层**：新增内置 `skills/statechart/`（`SKILL.md` + `references/method.md` + `ORIGIN.md`）。builtin 根在 `store.ts` 静态解析到仓库 `skills/` 目录，无需代码改动即自动进 `skills-policy` 目录与提示词清单。内容为**纯方法 skill**（零依赖、零脚本）：提取/设计状态机（状态互斥、事件任意时刻到达、初态、转移、不变式）→ 穷举「状态 × 事件」矩阵（每格 = 合法转移 / 有意忽略 / 禁止并说明）→ 转移表 + ```mermaid stateDiagram-v2```（pi-web 页面原生渲染 Diagram.tsx）→ **实现前审阅门**：把有争议/承载策略的行整理成 `ask_user_question`（1–3 问、每问 ≤12 选项、多选 + 自定义），回答到达后按调整重穷举受影响部分再实现 → 转移表逐行映射实现与测试（合法行断言终态、忽略行断言无变化、禁止行断言守卫）。`references/method.md` 承载完整方法（boolean 标志→状态归纳、矩阵枚举程序、表格/图模板、ask 协议、测试推导、时序倒置等常见坑）；`ORIGIN.md` 记录改编自 pstack（省去 TLA+/TLC/mise/Java 常驻依赖：矩阵+人工审阅已覆盖产品级场景，设计级穷举留给用户自带环境）。
+  - **提示词层**：`runtime-core.md`「插件与技能」段新增一行路由：分析流程/协议/生命周期行为问题、实现状态/事件驱动功能时加载 `builtin:statechart`（穷举→审阅→按表实现→逐行映射测试；纯计算、静态问题不加载）。
+  - **UI 层**：**复用 ask_user_question 表单管线（QuestionComposer），不新增交互类型**。矩阵本体进回答正文（GFM 表 + mermaid 图直渲），表单只承载「哪些行要调整」的决策。新交互类型需平行复制 reply 幂等（requestId 派生）、放弃/取消、投影并 run、压缩生存一整套管线（plan-review 先例约 6 文件），而 ask_user_question 已具备全部能力——收益不成比例，属过度设计。
+  - **demo 集成**：`src/server/model/demo.ts` 新增 `[statechart]` 场景（确定性验证表单闭环）：`skill_load(builtin:statechart)` → 矩阵表 + mermaid + `ask_user_question`（多选「勾选要调整的转移行」+ 补充问）→ 回答到达后按调整收尾。回答分支插在通用 answerReply 处理器之前，按问题 id（`sc-adjust`）分流。
+- **验收判据**：① 分析场景（真实模型）：回答含矩阵/转移表/mermaid/基于机器的可达性结论，轨迹见 `skill_load(builtin:statechart)`；② 实现场景（真实模型）：先穷举+表单，页面填写提交后按调整后的表实现并给测试映射；③ demo 场景（临时实例）：表单出现→填写→收尾引用调整行；④ 门禁：`npm run check` 全绿，prompt 快照基线对照仅预期增量（skill 目录项 + 路由行）。
+- **新增单测**：`tests/statechart-skill.test.ts`——真实仓库 bundle（`builtinRoot = <repo>/skills`）下 `builtin:statechart` 可发现、frontmatter 校验零错误零警告、正文含关键工作流要素、`references/method.md` 可按资源加载。
+- **验证**：
+  - **门禁**：`npm run check` exit 0（87 文件 933 通过/4 跳过 + build）；快照基线对照仅预期增量（runtime-core 3120→3272 = 路由行、skills-policy 3431→3784 = statechart 目录项）；跑门禁前先确认基线（唯一失败为已知的 runtime-policy rmdir ENOTEMPTY 偶发，单跑通过）。守护测试（runtime-core ≤3300）逼路由行压缩措辞进预算，唯一性用例新增 `builtin:statechart` 只出现一次的断言。本批与并行会话的「会话 3431 团队路由」批次同树进行，两批改动互不触碰（本批只动 skills/、runtime-core.md、demo.ts、快照、snapshot 守护测试）。
+  - **新增单测**：`tests/statechart-skill.test.ts` 2 用例——真实仓库 bundle 下 `builtin:statechart` 可发现、frontmatter 校验零错误零警告、`references/method.md` 可按资源加载、正文含工作流要素。
+  - **ego①（demo 4336，`[statechart]`）**：`skill_load(builtin:statechart)` 技能行 → 回答含转移表（GFM 渲染）+ mermaid 状态图（Diagram.tsx 实时渲出 SVG）+ `ask_user_question`（多选 3 选项 + 补充问）；页面勾选 2 行 + 自定义补充提交，卡片消失，收尾消息精确引用调整行（`sc-adjust: …、补充：…`，`sc-missing: 已跳过`）；轨迹面板 5 次调用。截图 `01–03`（/tmp/pi-ego-statechart/shots/）。
+  - **ego②（4317 真实模型 deepseek-v4.1-flash Max，会话 3792）**：无提示的纯分析问题自动加载 `builtin:statechart`（转录技能行 + 读取 `references/method.md`），回答 6 张表 + mermaid 图 + 52 处合法/非法/∅ 判定，含争议行「默认/候选/影响」表格、事件集缺口结论（无 reset = 终态死锁、缺取消）与「正确性取决于 6 个必须静默丢弃的异步非法组合」的机器式推断。截图 `04`。
+  - **ego③（4317 真实模型，会话 3988，workspace 沙箱）**：API 建会话（`workspaceId` 直传，避开用户仓库）+ API 发消息（`requestId` 必填，缺了 400）；t=210s 模型提出真实争议行问题（「progress完成」按合并/拆分哪种事件模型）；**页面表单**故意选非推荐项（拆分 `complete` 事件）+ 自定义两点调整（cancel 仅 下载中/已暂停 合法；已失败 × retry 回 下载中 且重试计数清零）→ 模型重穷举后按表实现：单一状态联合 + 5×8=40 格 `TRANSITION_MATRIX`（legal/ignored/forbidden 逐格判定与注记），三处调整全部落进实现与测试；模型自跑 `node --test` 18/18 pass（含「40 格矩阵一致性」扫掠用例）+ `tsc --noEmit --strict` 通过，收尾给行→测试映射表（L/N/F/I 行号锚点直链测试行）。1 轮 27 步 669K tok。截图 `05–08`。
+  - **运维与坑**：① 4336 被上一批 ego 的旧 demo 进程占用（新实例 EADDRINUSE 静默退出），旧代码服务导致 `[statechart]` 首次走了默认写文件场景——kill 旧进程重跑即好；② mermaid SVG 异步渲染，ego 要 `waitForFunction` 等 `[data-message-diagram] svg` 出现再截图；③ ego② 期间 4317 的「消失/500」由并行会话的两次重启解释（见下一节运维条），pi-durable 续跑让 3792 无损完成；④ 侧栏新增测试会话 3764/3792/3961/3988（无删除 API）留待用户处理，3961（误落 deepseek-harness 的实现任务）已 stop、未写文件；`.ego-statechart/` 实现产物留在 workspace 沙箱作验收证据。
+  - **未做**：未提交（工作树承载本批 + 并行会话批次的交叉改动，拆批提交留给用户）；设计级 TLA+/TLC 穷举按 ORIGIN.md 约定留给用户自带环境；UI 未新增交互组件（复用 ask_user_question 表单是有意决策，见三层形态一节）。
+
 ### 会话 3431 诊断与团队/委派路由修复（2026-11-01 深夜 5，用户报告 + ZCode 会话对照）
 
 用户报告 3431 三件事：子 agent 内容无法回传、子智能体渲染和 ZCode 不一样（8 行裸「工具调用 {」）、内置两个智能体不被使用。**诊断**（会话数据 + ZCode 会话库 `~/.zcode/cli/db/db.sqlite` 对照）：3431 的模型没有用内置 `subagent`（general-purpose/Explore），而是用了 team 工具族 `spawn_teammate×8 + send_message×17 + wait_agent×5`——因为 ① `spawn_teammate` 描述里写着 "Spawn several teammates in one response for independent read-only research"，把独立并行任务直接引向 team；② `wait_agent` 的结果只有 `{"timedOut":false}`，**不带任何成员状态与答案**（成员结论不回流，模型只能发明 /tmp 文件接力，27 分钟）；③ team 工具行没有友好渲染，落到「工具调用 {」兜底。ZCode 只有一条 `Agent` 工具（`{subagent_type, description, prompt}`，8 连发、阻塞返回子会话最终报告，行渲染「子智能体 general-purpose · description」），没有 team 概念。

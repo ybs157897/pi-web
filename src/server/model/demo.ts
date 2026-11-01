@@ -398,6 +398,17 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       ].join('\n')),
     ])
   }
+  // The statechart review answers before the generic question reply: the wrap-up names the
+  // adjusted rows, the shape the review gate has to produce.
+  const statechartReply = answerReply !== undefined && answerReply.answers.some(answer => answer.id === 'sc-adjust' || answer.id === 'sc-missing')
+    ? answerReply
+    : undefined
+  if (statechartReply) {
+    return fauxAssistantMessage([
+      fauxThinking('用户调整了转移表，按调整后的行收尾。'),
+      fauxText(`已按你的选择更新状态机转移表：\n\n${answerSummary(statechartReply)}\n\n未勾选的行按原表执行；实现会逐行对照这张表，并为每一行落一条测试。`),
+    ])
+  }
   if (answerReply) {
     return fauxAssistantMessage([
       fauxThinking('用户通过问答卡片提交了回答，现在据此收尾。'),
@@ -442,6 +453,74 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
         return fauxAssistantMessage([
           fauxThinking('问题已经交给用户，回答会以消息形式到达。'),
           fauxText('问题已交给用户。回答后会以消息形式送达，我会据此继续或收尾。'),
+        ])
+    }
+  }
+  if (userText.includes('[statechart]')) {
+    switch (currentResults.length) {
+      case 0:
+        return fauxAssistantMessage([
+          fauxThinking('先加载内置 statechart skill，按它的方法穷举状态机。'),
+          fauxToolCall('skill_load', { skill: 'builtin:statechart' }, { id: `demo-sc-load-${String(context.messages.length)}` }),
+        ], { stopReason: 'toolUse' })
+      case 1:
+        // The review-gate shape: matrix + table + diagram in the reply, disputed rows in the form.
+        return fauxAssistantMessage([
+          fauxThinking('按 skill 方法穷举「状态 × 事件」矩阵，把待定的转移行交给用户调整。'),
+          fauxText([
+            '## 播放卡状态机',
+            '',
+            '状态：`Idle` / `Playing` / `Paused`；事件：`play` / `pause` / `ended`。穷举如下：',
+            '',
+            '| 当前状态 | 事件 | 下一状态 | 动作 | 判定 |',
+            '| --- | --- | --- | --- | --- |',
+            '| Idle | play | Playing | 开始播放 | 合法 |',
+            '| Idle | pause | Idle | — | 空操作（未在播放） |',
+            '| Idle | ended | Idle | — | 禁止（结构性不可达） |',
+            '| Playing | pause | Paused | 暂停并记录进度 | 合法 |',
+            '| Playing | play | 待定 | 待定 | **待你调整** |',
+            '| Playing | ended | Idle | 重置进度 | 合法 |',
+            '| Paused | play | Playing | 从进度续播 | 合法 |',
+            '| Paused | ended | Idle | 重置进度 | 合法 |',
+            '',
+            '不变式：`ended` 到达时状态必为 `Playing` 或 `Paused`；同一时刻只有一个状态。',
+            '',
+            '```mermaid',
+            'stateDiagram-v2',
+            '    [*] --> Idle',
+            '    Idle --> Playing: play',
+            '    Playing --> Paused: pause',
+            '    Paused --> Playing: play',
+            '    Playing --> Idle: ended',
+            '    Paused --> Idle: ended',
+            '```',
+            '',
+            '唯一待定的行是 `Playing × play`：忽略（保持播放）还是从头重播？请在下方表单勾选调整。',
+          ].join('\n')),
+          fauxToolCall('ask_user_question', {
+            questions: [
+              {
+                id: 'sc-adjust',
+                header: '转移行审阅',
+                question: '勾选需要调整的转移行（可多选；其余按表执行）',
+                multiSelect: true,
+                options: [
+                  { label: 'Playing × play 改为忽略', description: '重复点击不重置进度，保持播放' },
+                  { label: 'Playing × play 改为从头重播', description: '重置进度并重新开始' },
+                  { label: 'Idle × ended 改为合法', description: '允许 Idle 收到 ended，停留在 Idle' },
+                ],
+              },
+              {
+                id: 'sc-missing',
+                question: '还有哪些场景要补进矩阵？（可跳过）',
+              },
+            ],
+          }, { id: `demo-sc-ask-${String(context.messages.length)}` }),
+        ], { stopReason: 'toolUse' })
+      default:
+        return fauxAssistantMessage([
+          fauxThinking('问题已在用户手上，本轮不再推进。'),
+          fauxText('转移表与审阅问题已交给用户，回答到达后按调整继续。'),
         ])
     }
   }
