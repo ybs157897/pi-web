@@ -535,6 +535,12 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     await runtime.compact(id.data)
     return c.json({ ok: true }, 202)
   })
+  app.get('/api/conversations/:id/trajectory', async c => {
+    const id = identifier.safeParse(c.req.param('id'))
+    if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)
+    const text = await runtime.trajectory(id.data)
+    return new Response(text, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' } })
+  })
   app.delete('/api/conversations/:id/queue/:submissionId', async c => {
     const id = identifier.safeParse(c.req.param('id'))
     const submissionId = identifier.safeParse(c.req.param('submissionId'))

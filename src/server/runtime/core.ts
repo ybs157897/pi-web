@@ -22,6 +22,7 @@ import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { CODEMODE_EXTENSION_NAME, READ_ONLY_TOOLS } from './helpers.ts'
 import { WORK_POLICY_EXTENSION_NAME } from '../conversation/work-policy.ts'
 import { COMPACTION_EXTENSION_NAME } from '../conversation/compaction.ts'
+import { TRAJECTORY_EXTENSION_NAME } from '../conversation/trajectory.ts'
 import { MEMORY_EXTENSION_NAME } from '../memory/policy.ts'
 import { PLUGIN_REFERENCE_EXTENSION_NAME } from '../plugins/reference.ts'
 import { EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
@@ -221,7 +222,7 @@ export function createCore(deps: CoreDeps) {
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
     // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)

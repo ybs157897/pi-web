@@ -20,6 +20,7 @@ import type { AppStateStore } from '../state/app-state.ts'
 import type { RuntimeModels } from '../model/catalog.ts'
 import type { AttachmentReference, WorkspaceFiles } from '../workspace/files.ts'
 import { workspaceWriteSupported } from '../conversation/execution-env.ts'
+import { captureSideCall } from '../conversation/trajectory.ts'
 import { fallbackSessionTitle, frameTitleMessages, normalizeSessionTitle, titleSystemPrompt, TITLE_POLICY } from '../conversation/session-title.ts'
 import { Goals, applyGoalCreate, applyGoalUpdate } from '../tools/goal.ts'
 import { Plans } from '../tools/plan.ts'
@@ -265,15 +266,23 @@ export function createConversations(deps: ConversationsDeps) {
         if (model === undefined) return
         const framed = frameTitleMessages([{ seq: 0, text }])
         if (Buffer.byteLength(framed, 'utf8') > TITLE_POLICY.maxInputBytes) return
-        const result = await modelRuntime.models.completeSimple(model, {
+        const titleInput = {
           systemPrompt: titleSystemPrompt(),
-          messages: [{ role: 'user', content: framed, timestamp: Date.now() }],
-        }, {
+          messages: [{ role: 'user' as const, content: framed, timestamp: Date.now() }],
+        }
+        const titleOptions = {
           maxTokens: TITLE_POLICY.titleMaxOutputTokens,
           timeoutMs: TITLE_POLICY.timeoutMs,
           sessionId: `title-${randomUUID()}`,
           signal: controller.signal,
-        })
+        }
+        const result = await captureSideCall(
+          { conversationId: id, purpose: 'session-title' },
+          route,
+          titleInput,
+          () => modelRuntime.models.completeSimple(model, titleInput, titleOptions),
+          titleOptions,
+        )
         if (controller.signal.aborted || result.stopReason !== 'stop') return
         const title = normalizeSessionTitle(result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n'))
         if (title === '') return

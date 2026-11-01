@@ -17,6 +17,7 @@ import type {
 import type { Conversation, ConversationId, EntryId, Harness, ModelRef, Submission } from '@earendil-works/pi-durable'
 import type { AccessMode, ThinkingLevel } from '../../shared/types.ts'
 import { estimateMessagesTokens } from '../conversation/compaction.ts'
+import { captureSideCall } from '../conversation/trajectory.ts'
 import { memoryInstructions } from './policy.ts'
 import {
   argumentPath,
@@ -757,7 +758,13 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
           ...(reasoning === undefined || reasoning === 'off' ? {} : { reasoning }),
         },
         {
-          complete: (context, options) => deps.models().complete(input.model, context, options),
+          complete: (context, options) => captureSideCall(
+            { conversationId, purpose: 'memory-extraction' },
+            input.modelRef,
+            context,
+            () => deps.models().complete(input.model, context, options),
+            options,
+          ),
           execute: async (call, toolSignal) => {
             const outcome = await executeExtractionTool(call, {
               root: input.root,

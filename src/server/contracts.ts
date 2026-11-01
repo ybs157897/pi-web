@@ -68,6 +68,8 @@ export interface Runtime {
   editQueued(id: string, submissionId: string, input: EditQueueInput): Promise<{ submissionId: string }>
   stop(id: string): Promise<void>
   compact(id: string): Promise<void>
+  /** The conversation's full trajectory as chronological JSONL: entries, tasks, captured requests. */
+  trajectory(id: string): Promise<string>
   goal(id: string, input: GoalUpdateRequest): Promise<ConversationDetail>
   /** Turn plan mode on or off; approving a plan review turns it off as well. */
   setPlan(id: string, active: boolean): Promise<ConversationDetail>

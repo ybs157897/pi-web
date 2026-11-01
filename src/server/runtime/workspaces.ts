@@ -18,6 +18,7 @@ import type { WorkspaceFiles } from '../workspace/files.ts'
 import { GitBranches } from '../workspace/git/branches.ts'
 import { GitWorktree } from '../workspace/git/worktree.ts'
 import { commitMessageSystemPrompt, frameCommitContext, normalizeCommitMessage } from '../workspace/git/commit-message.ts'
+import { captureSideCall } from '../conversation/trajectory.ts'
 import { createDirectory as createHostDirectory, listDirectories as listHostDirectories, pickNativeDirectory } from '../workspace/directory-picker.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 
@@ -118,10 +119,16 @@ export function createWorkspaces(deps: WorkspacesDeps) {
     const model = modelRuntime.models.getModel(route.provider, route.modelId)
     if (model === undefined) throw new RuntimeError('MODEL_UNAVAILABLE', '会话模型不在 Pi 模型目录中')
     const locale = appState.snapshot().settings.locale
-    const result = await modelRuntime.models.completeSimple(model, {
+    const commitInput = {
       systemPrompt: commitMessageSystemPrompt(locale),
-      messages: [{ role: 'user', content: frameCommitContext({ branchName: status.branchName, files: status.files, diff, locale }), timestamp: Date.now() }],
-    }, { maxTokens: 512, timeoutMs: 30_000, sessionId: `git-commit-${randomUUID()}` })
+      messages: [{ role: 'user' as const, content: frameCommitContext({ branchName: status.branchName, files: status.files, diff, locale }), timestamp: Date.now() }],
+    }
+    const result = await captureSideCall(
+      { conversationId: input.conversationId, purpose: 'commit-message' },
+      route,
+      commitInput,
+      () => modelRuntime.models.completeSimple(model, commitInput, { maxTokens: 512, timeoutMs: 30_000, sessionId: `git-commit-${randomUUID()}` }),
+    )
     if (result.stopReason !== 'stop') throw new RuntimeError('PROVIDER_ERROR', '模型没有返回提交信息')
     const message = normalizeCommitMessage(result.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n'))
     if (message === '') throw new RuntimeError('PROVIDER_ERROR', '模型没有返回提交信息')

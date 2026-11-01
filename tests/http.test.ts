@@ -131,6 +131,11 @@ class FakeRuntime implements Runtime {
     this.calls.push(`compact:${id}`)
   }
 
+  async trajectory(id: string): Promise<string> {
+    this.calls.push(`trajectory:${id}`)
+    return ''
+  }
+
   async goal(id: string, input: GoalUpdateRequest): Promise<ConversationDetail> {
     this.calls.push(`goal:${id}:${input.action}`)
     return this.details.get(id) ?? makeDetail(id)
@@ -509,6 +514,11 @@ describe('HTTP API', () => {
     expect(await (await app.request('/api/conversations/conv-1/stop', { method: 'POST' })).json()).toEqual({ ok: true })
     expect((await app.request('/api/conversations/conv-1/compact', { method: 'POST' })).status).toBe(202)
     expect(await (await app.request('/api/conversations/conv-1/queue/sub-1', { method: 'DELETE' })).json()).toEqual({ ok: true })
+
+    const trajectory = await app.request('/api/conversations/conv-1/trajectory')
+    expect(trajectory.status).toBe(200)
+    expect(trajectory.headers.get('content-type')).toContain('application/x-ndjson')
+    expect(runtime.calls).toContain('trajectory:conv-1')
 
     const forked = await app.request('/api/conversations/conv-1/fork', {
       method: 'POST',

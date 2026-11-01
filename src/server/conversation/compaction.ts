@@ -25,6 +25,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { Api, AssistantMessage, Message, Model, Usage, UserMessage } from '@earendil-works/pi-ai'
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
+import { captureSideCall } from './trajectory.ts'
 
 export const COMPACTION_EXTENSION_NAME = 'pi-web-compaction'
 
@@ -699,13 +700,21 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
       model,
     })
     let answer: AssistantMessage
+    const summaryOptions = {
+      maxTokens: request.maxTokens,
+      ...(provider?.sessionId === undefined ? {} : { sessionId: provider.sessionId }),
+      ...(agent.thinkingLevel === 'off' ? {} : { reasoning: agent.thinkingLevel }),
+      ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
+    }
+    const summaryInput = { messages: request.messages }
     try {
-      answer = await api.models.completeSimple(model, { messages: request.messages }, {
-        maxTokens: request.maxTokens,
-        ...(provider?.sessionId === undefined ? {} : { sessionId: provider.sessionId }),
-        ...(agent.thinkingLevel === 'off' ? {} : { reasoning: agent.thinkingLevel }),
-        ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
-      })
+      answer = await captureSideCall(
+        { conversationId: api.conversationId, purpose: 'compaction-summary' },
+        agent.model,
+        summaryInput,
+        () => api.models.completeSimple(model, summaryInput, summaryOptions),
+        summaryOptions,
+      )
     } catch (error) {
       if (context.abortSignal?.aborted === true) throw error
       await api.memo<SummaryMemo>(SUMMARY_MEMO, { failed: error instanceof Error ? error.message : String(error) }, context)

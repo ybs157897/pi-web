@@ -192,6 +192,29 @@ Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
 - 只读会话只注入索引，不提供记忆写入与后台提取；`workspaceWrite` 额外放行记忆目录内的写入；计划模式在工具面上仍只提供计划工具，执行边界对安全记忆 `.md` 的写入例外放行、其他工作区修改一律拒绝。
 - 演示模式发送 `[memory-demo] I prefer Chinese replies for every answer.` 可触发脚本化提取；`[memory-write]` 验证主会话直写后跳过提取。它们是脚本化验收，不是真实模型证明。
 
+## 轨迹导出与调优
+
+每个会话有一条**完整轨迹**：durable 库里的转录与计时加上实时采集的模型请求，按时间序合并成单文件 JSONL，一行一个事件。用途是把轨迹整份喂给模型做离线分析——先采集完整，再让 AI 据此分析问题、调优提示词与流程。
+
+```bash
+curl http://127.0.0.1:4317/api/conversations/<会话id>/trajectory -o traj.jsonl
+```
+
+会话 id 就是页面 URL 里的 id。历史会话同样可以导出，只是没有下表里来自实时采集的行。
+
+| 行 | 内容 |
+| --- | --- |
+| `conversation` | 会话元信息，固定首行 |
+| `entry` | 转录正文：用户 / 助手 / 系统提示与工具变更 / 工具结果（含 codemode 嵌套调用耗时）/ 重置 / 压缩摘要；助手行含 content blocks、provider/model、五类 token 与成本、stopReason、durationMs、重试诊断 |
+| `task` | 每轮生成与每次工具调用的 `startedAt` / `endedAt` 墙钟耗时 |
+| `catalog` | 工具目录，仅在变化时出现：model、thinkingLevel、全部工具的 name / description / parameters schema |
+| `request` | 实际发给 provider 的完整 messages（经过压缩裁剪与代码模式包装后的形态），带请求序号 |
+| `response` | 每条终态 provider 消息（含失败与重试的尝试），带 `ttftMs`（开始到首个可见内容）；`AssistantMessage` 上由采集层注入 |
+| `tools` | 工具轮边界（本轮调用与结果的 entry 关联） |
+| `sidecall` | 旁路模型调用：会话标题（`session-title`）、压缩摘要（`compaction-summary`）、AI 提交信息（`commit-message`）、记忆提取每轮（`memory-extraction`），含 input / answer / options / 耗时 |
+
+采集默认开启，按会话实时追加到 `<数据目录>/trajectories/<会话id>.jsonl`（默认 `~/.pi-web/trajectories/`）；写入失败只告警一次并停止该会话的采集，绝不影响模型调用。`PI_WEB_TRAJECTORY=0` 关闭采集，导出仍可用（只是没有来自采集的行）。边界：provider 连通性测试不采集；deferred 未加载的工具不进 `catalog`，被 `tool_search` 加载后体现为一次新的目录变更行。
+
 ## 插件市场
 
 设置 → 扩展 → 插件市场，添加一个包含 `marketplace.json` 的本地目录，或一个 HTTPS 地址（本机回环可用 HTTP）。市场目录示例：
@@ -265,7 +288,7 @@ antd 只在这个页面使用，经 `lazy()` 单独打成 chunk（约 420 kB / 1
 
 - `src/server/index.ts` 启动进程，`app.ts` 是 HTTP 路由，`contracts.ts` 定义 `Runtime` 接口。
 - `src/server/runtime/`：`createRuntime` 装配点 + 功能模块——`conversations`（会话读写/提交/标题/分叉/订阅）、`queue`、`interactions`、`team`（团队与子会话目录）、`automations`、`workspaces`、`presets`、`settings`（设置与模型目录）、`plugins`（市场与页面桥）、`core`（元数据/详情投影/模型策略）、`helpers`（纯函数）。
-- `src/server/<功能>/`：`conversation`（投影、压缩、执行与计划策略、提示词）、`tools`（shell/search 与各工具扩展）、`model`、`plugins`、`skills`、`memory`、`workspace`（文件与 `git/`）、`mcp`、`automation`、`platform`（Windows 原生对话框）、`state`（全局目录与 app-state）。
+- `src/server/<功能>/`：`conversation`（投影、压缩、轨迹采集与导出、执行与计划策略、提示词）、`tools`（shell/search 与各工具扩展）、`model`、`plugins`、`skills`、`memory`、`workspace`（文件与 `git/`）、`mcp`、`automation`、`platform`（Windows 原生对话框）、`state`（全局目录与 app-state）。
 - 功能模块只接收依赖、不反向导入装配点；跨模块环（详情投影 ↔ 团队目录）用晚绑定回调解开。
 
 ## 验证
