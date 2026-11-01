@@ -209,7 +209,7 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
       `- Explore：${profileByName('Explore').summary}`,
       '何时委派：调研、检索、盘点类子任务默认委派——预计要读超过三个文件、或范围不确定时，先派 Explore 再综合它的结论，不要自己逐个翻文件；互不依赖的工作值得并行委派。只有已知路径/符号的单点事实才直接查。',
       '委派了检索就不要自己再跑同一搜索，等结果；子智能体只回结论，需要你转述给用户。',
-      '效率：互不依赖的委派放在同一条回复里一起发起；短平快的独立任务用 `subagent`，需要长时间后台运行或多成员协调用 `spawn_teammate` 开团队（仅 Lead）。',
+      '独立并行的子任务（无论几个、是否要互相交叉校验）一律用 `subagent` 在同一条回复里并行发起：每个子智能体在独立会话里求解，结论直接随工具结果回传。`spawn_teammate` 只用于真正需要共享任务板与成员消息往来的长时协作（仅 Lead），注意队友的结论文本不会自动回流，需要靠任务板、消息或文件自行收集。',
       '计划模式开启期间只委派只读调研，并在任务里明确只读约束。',
     ]
     const catalog = options.availableChildModels === undefined ? undefined : await options.availableChildModels()

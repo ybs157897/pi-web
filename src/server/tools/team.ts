@@ -20,6 +20,7 @@ import { Type } from '@earendil-works/pi-ai'
 import type { TeamMemberPhase, TeamMemberView, TeamTaskStatus, TeamTaskView, TeamView } from '../../shared/types.ts'
 import { resolveToolRoute, toolRouteInstruction, type ToolCatalog, type ToolRoute } from '../conversation/tool-routing.ts'
 import { Plans } from './plan.ts'
+import { answerText } from './subagent.ts'
 import { inheritPlanConstraint } from '../conversation/execution-policy.ts'
 import type { AgentChange } from '@earendil-works/pi-durable'
 import type { ChildModelRef, ChildModelResolver } from '../agents/builtins.ts'
@@ -796,6 +797,51 @@ async function statusDigest(info: TeamToolOptions['conversationInfo'], ids: read
   return rows.join('|')
 }
 
+/** One teammate's collected state for the `wait_agent` result: status plus the last answer text. */
+type WaitAgentMember = { name: string; status: string; answer?: string }
+type WaitAgentResult = { timedOut: boolean; noProgress?: { reason: 'no-active-peer'; message: string }; members?: WaitAgentMember[] }
+
+const MAX_MEMBER_ANSWER_CHARS = 2_000
+
+/**
+ * Collect the roster the Lead sees after a wait: each teammate's live status and, once it has
+ * finished, its last assistant answer. Without this the tool result carried only a timedOut
+ * flag, so the Lead could never see a teammate's conclusions and had to relay through files.
+ */
+async function teamRosterWithAnswers(
+  api: ToolExecutionApi,
+  doc: TeamDocValue,
+  info: (conversationId: string) => Promise<TeamConversationInfo>,
+  context: Context,
+): Promise<{ members: WaitAgentMember[] }> {
+  const members: WaitAgentMember[] = []
+  for (const member of doc.members) {
+    if (member.role !== 'teammate') continue
+    const status = member.phase === 'failed'
+      ? 'failed'
+      : member.phase === 'provisioning'
+        ? 'provisioning'
+        : member.conversationId === undefined ? 'inactive' : (await info(member.conversationId)).status
+    let answer: string | undefined
+    if (status !== 'running' && member.conversationId !== undefined) {
+      try {
+        answer = await api.commit(async (tx) => {
+          const page = await tx.scanEntries({ conversationId: toConversationId(member.conversationId!), order: 'descending' }, 8)
+          for (const entry of page.items) {
+            const text = answerText(entry.model)
+            if (text !== '') return text.slice(0, MAX_MEMBER_ANSWER_CHARS)
+          }
+          return undefined
+        }, context)
+      } catch {
+        answer = undefined
+      }
+    }
+    members.push({ name: member.name, status, ...(answer === undefined ? {} : { answer }) })
+  }
+  return { members }
+}
+
 /** Bounded `wait_agent`: doc changes plus member busy transitions, aborted with the call. */
 export async function waitForTeamChange(
   api: ToolExecutionApi,
@@ -971,6 +1017,7 @@ const teamSection = section('team-policy', async (input, context) => {
   }
   if (wait && list && message) {
     lines.push('wait_agent 只观测调用之后的变化、不会唤醒任何人；调用前先 list_agents 确认相关成员在运行或 provisioning，不在就用 send_message 唤醒，等待结束或超时后重新 list。')
+    lines.push('wait_agent 的结果带每个队友的最新状态；已结束的队友附带其最终回答文本——先读它，再决定是否需要向队友要更多证据。')
     lines.push('Lead 在给出最终答案前必须等齐所有必需的队友。')
   }
   return lines.join('\n')
@@ -1010,7 +1057,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       'The prompt is the teammate\'s complete, self-contained initial task: it inherits your agent configuration, tools, model and working directory, but not your messages. Include the task, assigned scope, applicable constraints and authorization, acceptance criteria, and required result evidence.',
       'context picks the seed: fresh starts an empty child, fork continues from your last completed turn. model optionally selects a fresh teammate\'s model as {provider, modelId}, validated against the catalog and allowlist; a fork keeps your model to preserve the prefix it reuses, so model is rejected with context: "fork".',
       'Members share the working directory. Assign disjoint write scopes and require the teammate to preserve edits outside its assigned scope.',
-      'Spawn several teammates in one response for independent read-only research or disjoint write scopes; each prompt must stay self-contained.',
+      'Teammates are for genuine collaboration that needs the shared task board or member-to-member messaging over time. Independent one-shot subtasks — even many in parallel, even cross-checking each other — belong to subagent instead: its tool result returns the subagent\'s answer directly, while a teammate\'s final text never flows back to the Lead on its own (collect it through tasks, messages, or files).',
     ].join(' '),
     parameters: Type.Object({
       name: Type.String(),
@@ -1228,11 +1275,12 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     name: 'wait_agent',
     description: [
       'Wait for the next teammate status, message, or shared-task change after this call starts.',
+      'The result names every teammate with its latest status, and a teammate that has finished carries its last answer text, so the Lead can collect work without file relays.',
       'This never wakes inactive members and returns noProgress immediately when no other member is running or provisioning. Re-list after wakeup or timeout instead of polling.',
       `timeout_ms is an integer from ${MIN_WAIT_MS} through ${MAX_WAIT_MS}; it defaults to ${DEFAULT_WAIT_MS}.`,
     ].join(' '),
     parameters: Type.Object({ timeout_ms: Type.Optional(Type.Number()) }),
-    execute: async (args, api, context): Promise<ToolExecutionResult<{ timedOut: boolean; noProgress?: { reason: 'no-active-peer'; message: string } }>> => {
+    execute: async (args, api, context): Promise<ToolExecutionResult<WaitAgentResult>> => {
       const timeoutMs = args.timeout_ms ?? DEFAULT_WAIT_MS
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs < MIN_WAIT_MS || timeoutMs > MAX_WAIT_MS) {
         throw new TeamRuleError(`timeout_ms must be an integer from ${MIN_WAIT_MS} through ${MAX_WAIT_MS}`, 'invalid-timeout')
@@ -1244,10 +1292,12 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         member.conversationId !== String(api.conversationId) && isActiveStatus(member.status))
       if (!hasActivePeer) {
         const noProgress = { reason: 'no-active-peer' as const, message: NO_ACTIVE_PEER_MESSAGE }
-        return { output: jsonText({ timedOut: false, noProgress }), details: { timedOut: false, noProgress } }
+        const roster = await teamRosterWithAnswers(api, doc, options.conversationInfo, context)
+        return { output: jsonText({ timedOut: false, noProgress, ...roster }), details: { timedOut: false, noProgress, ...roster } }
       }
       const timedOut = await waitForTeamChange(api, options, scope.leadId, timeoutMs, context)
-      return { output: jsonText({ timedOut }), details: { timedOut } }
+      const roster = await teamRosterWithAnswers(api, await readDoc(api, scope.leadId, context), options.conversationInfo, context)
+      return { output: jsonText({ timedOut, ...roster }), details: { timedOut, ...roster } }
     },
   })
 

@@ -126,6 +126,16 @@ export function toolRowTitle(name: string, t: Translate): string {
   if (id === 'skill_save') return t('保存技能', 'Save skill')
   if (id === 'skill_validate') return t('校验技能', 'Validate skill')
   if (id === 'task_stop') return t('停止任务', 'Stop task')
+  // The team family: ZCode has no counterpart, but the rows must not fall back to raw JSON titles.
+  if (id === 'spawn_teammate') return t('组建队友', 'Spawn teammate')
+  if (id === 'wait_agent') return t('等待队友', 'Wait for teammate')
+  if (id === 'send_message') return t('发消息', 'Message')
+  if (id === 'list_agents') return t('成员名册', 'Team roster')
+  if (id === 'interrupt_agent') return t('中断队友', 'Interrupt teammate')
+  if (id === 'team_task_create') return t('新建团队任务', 'New team task')
+  if (id === 'team_task_list') return t('团队任务板', 'Team task board')
+  if (id === 'team_task_get') return t('查看团队任务', 'Team task detail')
+  if (id === 'team_task_update') return t('更新团队任务', 'Update team task')
   switch (toolActivity(id)) {
     case 'read': case 'readImage': return t('读取', 'Read')
     case 'search': case 'webSearch': return t('搜索', 'Search')
@@ -173,6 +183,7 @@ interface ToolDetails {
 }
 
 const COMMAND_NAMES = new Set(['bash', 'shell', 'exec', 'terminal', 'run_command'])
+const TEAM_NAMES = new Set(['spawn_teammate', 'wait_agent', 'send_message', 'list_agents', 'interrupt_agent', 'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update'])
 const READ_NAMES = new Set(['read', 'read_file', 'readfile', 'cat', 'read_text_file'])
 const WRITE_NAMES = new Set(['write', 'write_file', 'writefile', 'create_file'])
 const EDIT_NAMES = new Set(['edit', 'edit_file', 'apply_patch', 'patch'])
@@ -435,6 +446,15 @@ function summaryFor(
   t: (chinese: string, english: string) => string,
 ): string {
   if (command !== undefined) return firstLine(description ?? command)
+  // Team rows name the member or message instead of dumping the result JSON.
+  if (TEAM_NAMES.has(normalizedName)) {
+    const member = stringField(args, ['name', 'target'])
+    const text = stringField(args, ['description', 'message', 'subject'])
+    const parts = [member, firstLine(text ?? '')].filter(part => part !== undefined && part !== '')
+    if (parts.length > 0) return parts.join(' · ')
+    if (normalizedName === 'wait_agent') return t('等待队友状态变化', 'Wait for teammate changes')
+    if (normalizedName === 'list_agents') return t('查看成员名册', 'Team roster')
+  }
   // A code-mode call's whole argument is the script; its first line is the live detail.
   if (normalizedName === CODEMODE_TOOL_NAME) {
     const script = typeof args.code === 'string' ? firstLine(args.code) : ''

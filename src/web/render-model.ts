@@ -35,6 +35,9 @@ export interface ResponsePart {
 export type ToolActivity = 'read' | 'readImage' | 'search' | 'write' | 'edit' | 'commands' | 'code'
   | 'webSearch' | 'webFetch' | 'subagents' | 'plan' | 'questions' | 'tools'
 
+/** The team family renders under the subagent activity: same multi-agent work, friendlier rows. */
+const TEAM_TOOL_NAMES = new Set(['spawn_teammate', 'wait_agent', 'send_message', 'list_agents', 'interrupt_agent', 'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update'])
+
 /** DSH's tool-name to category map; the row's own title stays separate. */
 export function toolActivity(name: string): ToolActivity {
   const id = name.toLocaleLowerCase()
@@ -47,7 +50,7 @@ export function toolActivity(name: string): ToolActivity {
   if (id === 'run_code' || id === 'codemode') return 'code'
   if (id === 'web_search') return 'webSearch'
   if (id === 'web_fetch') return 'webFetch'
-  if (id === 'subagent' || id.startsWith('subagent_')) return 'subagents'
+  if (id === 'subagent' || id.startsWith('subagent_') || TEAM_TOOL_NAMES.has(id)) return 'subagents'
   if (['todo_write', 'create_goal', 'update_goal', 'get_goal', 'exit_plan_mode', 'enter_plan_mode'].includes(id)) return 'plan'
   if (id === 'ask_user_question' || id === 'request_user_input') return 'questions'
   return 'tools'
