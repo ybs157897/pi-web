@@ -1,0 +1,121 @@
+.root {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+}
+
+.toolbar {
+  display: flex;
+  min-height: 40px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.iconButton {
+  display: inline-flex;
+  width: 26px;
+  min-height: 26px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: 2px;
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 地址栏沿用 PluginsPanel 搜索框的圆角输入形态。 */
+.address {
+  min-width: 0;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-height: 26px;
+  padding: 4px 9px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 9px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.address::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.address:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+.content {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* onLoad 前的细进度条：宽度动画到 90% 停住，真实加载完成由 loading 状态收掉。 */
+.progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 90%;
+  height: 2px;
+  background: var(--dsw-alias-state-business-primary);
+  animation: browserProgress 8s ease-out forwards;
+}
+
+@keyframes browserProgress {
+  from { width: 0; }
+  to { width: 90%; }
+}
+
+.frame {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  border: 0;
+  background: #fff;
+}
+
+.empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+}

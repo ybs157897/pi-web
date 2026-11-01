@@ -6,6 +6,7 @@ export type MessageStatus = 'running' | 'completed' | 'error' | 'cancelled'
 /** Commands with user-configurable keyboard bindings. Shared by the browser and persisted settings validators. */
 export const SHORTCUT_COMMANDS = [
   'newConversation', 'search', 'settings', 'toggleSidebar', 'rename', 'fork', 'archive', 'send', 'newline', 'alternateSend',
+  'toggleInspector', 'toggleInspectorFullView',
 ] as const
 export type ShortcutCommand = typeof SHORTCUT_COMMANDS[number]
 
@@ -234,7 +235,14 @@ export interface GitWorktreeFile {
   status: GitWorktreeFileStatus
   added: number
   removed: number
+  /** The path is part of the index (`git diff --cached`); true also when the worktree adds more edits. */
+  staged: boolean
 }
+/**
+ * ZCode's review source list. `last-turn` never reaches the server: the browser renders it
+ * from the conversation's own before/after artifacts.
+ */
+export type GitChangeSourceId = 'unstaged' | 'staged' | 'branch' | 'last-turn'
 /** ZCode's `GitRepositorySummary` + worktree line counts, flattened for the status card. */
 export interface GitWorktreeStatus {
   isGitAvailable: boolean
@@ -248,6 +256,10 @@ export interface GitWorktreeStatus {
   added: number
   removed: number
   files: GitWorktreeFile[]
+  /** `origin/main` when the current branch has an upstream, otherwise null. */
+  trackingBranchName: string | null
+  /** Local commits versus the upstream, listed for the review pane's branch source. */
+  branchFiles?: GitWorktreeFile[]
 }
 export interface GitCommitInput {
   message: string
@@ -275,7 +287,10 @@ export interface GitCommitMessageResult {
 export interface GitWorktreeDiff {
   path: string
   diff?: string
+  oldText?: string
   newText?: string
+  /** Set when nothing renderable came back, so the review pane can explain why. */
+  availability?: 'binary' | 'truncated' | 'unavailable'
 }
 
 

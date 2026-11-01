@@ -17,6 +17,7 @@ import type {
   CreateConversationInput,
   CreateGitBranchInput,
   GitCommitInput,
+  GitChangeSourceId,
   GitCommitMessageInput,
   GitCommitMessageResult,
   GitCommitResult,
@@ -120,8 +121,8 @@ export interface Runtime {
   createGitBranch(id: string, input: CreateGitBranchInput): Promise<GitBranchMutation>
   /** Worktree changes, branch position and line counts for the status card. */
   gitWorktreeStatus(id: string): Promise<GitWorktreeStatus>
-  /** One file's current worktree diff, or its text when it is untracked. */
-  gitWorktreeDiff(id: string, path: string): Promise<GitWorktreeDiff>
+  /** One file's current worktree diff, or its text when it is untracked; `sourceId` picks the review source. */
+  gitWorktreeDiff(id: string, path: string, sourceId?: GitChangeSourceId): Promise<GitWorktreeDiff>
   /** Commit the index, optionally staging every worktree change first. */
   gitCommit(id: string, input: GitCommitInput): Promise<GitCommitResult>
   /** Push the current branch to its configured upstream. */

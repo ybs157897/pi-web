@@ -600,7 +600,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     switchGitBranch: (id, input) => workspacesService.switchGitBranch(id, input),
     createGitBranch: (id, input) => workspacesService.createGitBranch(id, input),
     gitWorktreeStatus: (id) => workspacesService.gitWorktreeStatus(id),
-    gitWorktreeDiff: (id, path) => workspacesService.gitWorktreeDiff(id, path),
+    gitWorktreeDiff: (id, path, sourceId) => workspacesService.gitWorktreeDiff(id, path, sourceId),
     gitCommit: (id, input) => workspacesService.gitCommit(id, input),
     gitPush: (id) => workspacesService.gitPush(id),
     gitCommitMessage: (id, input) => workspacesService.gitCommitMessage(id, input),

@@ -12,6 +12,322 @@
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 
+/* The shell's tab bar (ZCode side pane): tab strip, `+`, full-view toggle, close. */
+.tabBar {
+  display: flex;
+  min-height: 40px;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.tabStrip {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: stretch;
+  gap: 2px;
+  overflow: hidden;
+}
+
+/* One tab, shrinking like ZCode's SidePaneTabTrigger: equal flex, min 60px, max 156px. */
+.tab {
+  position: relative;
+  display: flex;
+  min-width: 60px;
+  max-width: 156px;
+  flex: 1 1 156px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.tab[data-active="true"] {
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.tabButton {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 6px 0;
+  border: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tabButton:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabButton[aria-pressed="true"] {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}
+
+.tabButton:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+/* The close affordance stays on the active tab and appears on hover/focus elsewhere. */
+.tabClose {
+  display: inline-flex;
+  width: 18px;
+  min-height: 18px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.tab:hover .tabClose,
+.tab:focus-within .tabClose,
+.tab[data-active="true"] .tabClose {
+  opacity: 1;
+}
+
+.tabClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The `+` launcher and full-view toggle share the header icon-button look. */
+.tabBarAction {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.tabBarAction:hover {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tabBarAction:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: 2px;
+}
+
+.tabBarAction[aria-pressed="true"] {
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Right-click menu, portaled to the body so the pane's overflow cannot clip it. */
+.tabMenu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  min-width: 168px;
+  flex-direction: column;
+  padding: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-base));
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.tabMenuItem {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tabMenuItem:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.tabMenuItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: -2px;
+}
+
+.tabMenuItem:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Every tab's content stays mounted; hidden surfaces keep iframes and scroll state alive. */
+.tabSurfaces {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tabSurface {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tabSurface[hidden] { display: none; }
+
+/* Full view: the pane overlays the whole main row with an opaque background; the app toggles it. */
+.fullscreen {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: var(--dsw-alias-bg-base);
+}
+
+/* The new-tab launcher: built-in entries above, recommended plugin apps below a short rule. */
+.launcher {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 4px 16px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  container-type: inline-size;
+}
+
+.launcherTitle {
+  margin: 14px 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.launcherGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+/* Two columns once the pane is wide enough, measured against the launcher itself. */
+@container (min-width: 576px) {
+  .launcherGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.launcherItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.launcherItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.launcherItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-link);
+  outline-offset: 2px;
+}
+
+.launcherIcon {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.launcherText {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.launcherLabel {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcherDescription {
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launcherPill {
+  flex: none;
+  padding: 2px 10px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.launcherDivider {
+  width: 1px;
+  height: 24px;
+  margin: 18px auto;
+  background: var(--dsw-alias-border-l2);
+}
+
+.launcherSectionTitle {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.launcherEmpty {
+  padding: 12px 2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
 .header {
   display: flex;
   min-height: 43px;

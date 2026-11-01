@@ -13,7 +13,7 @@ describe('commit message helpers', () => {
     const framed = frameCommitContext({
       branchName: 'main',
       locale: 'en',
-      files: [{ path: 'src/a.ts', status: 'modified', added: 2, removed: 1 }],
+      files: [{ path: 'src/a.ts', status: 'modified', added: 2, removed: 1, staged: false }],
       diff: '- old\n+ new',
     })
     expect(framed).toContain('Branch: main')
@@ -23,7 +23,7 @@ describe('commit message helpers', () => {
 
   it('explains an empty diff and caps the file list at 120 rows', () => {
     const files = Array.from({ length: 130 }, (_, index) => ({
-      path: `file-${index}.ts`, status: 'modified' as const, added: 1, removed: 0,
+      path: `file-${index}.ts`, status: 'modified' as const, added: 1, removed: 0, staged: false,
     }))
     const framed = frameCommitContext({ branchName: null, files, diff: '', locale: 'zh' })
     expect(framed).toContain('detached HEAD')

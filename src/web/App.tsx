@@ -33,7 +33,16 @@ import { latestPlan, sessionPlans, type PlanDocument } from './plan-preview.ts'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
 import { PluginPageHostContext } from './plugin-page-pool.tsx'
-import type { InspectorDiff, InspectorFile, InspectorSubagentTab, InspectorView } from './Inspector.tsx'
+import type { InspectorDiff, InspectorFile } from './Inspector.tsx'
+import { activateTab, closeAllTabs, closeOtherTabs, closeTabs, nextSelectionChatOrdinal, normalizePaneState,
+  openFromLauncher, readPaneMemory, stripConversationScoped, upsertTab, writePaneMemory,
+  type InspectorTab, type PaneState } from './inspector-tabs.ts'
+import type { GitChangeSourceId, LastTurnChange } from './GitPane.tsx'
+import { collectChangeFiles } from './ChangedFiles.tsx'
+import SelectionAskPopover from './SelectionAskPopover.tsx'
+import { useSideConversation } from './use-side-conversation.ts'
+import type { SideChatMessage } from './SelectionChatPane.tsx'
+import { buildSideChatPrompt } from './selection-quote.ts'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
@@ -193,30 +202,33 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [page, setPage] = useState<MainPage>('chat')
-  const [browseWorkspaceId, setBrowseWorkspaceId] = useState<string | null>(null)
-  /** The directory the inspector's file browser opens at. */
-  const [browsePath, setBrowsePath] = useState('')
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
   const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
   const [renameWorkspace, setRenameWorkspace] = useState<WorkspaceSummary | null>(null)
-  const [inspectorFile, setInspectorFile] = useState<InspectorFile | undefined>()
-  const [inspectorDiff, setInspectorDiff] = useState<InspectorDiff | undefined>()
-  const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
-  const [inspectorView, setInspectorView] = useState<InspectorView>('file')
+  /**
+   * ZCode's side pane state: one tab array with a single active id, remembered per workspace in a
+   * module memory bucket (no localStorage, like ZCode's taskSidePaneMemory). Document payloads ride
+   * on the tab itself, so opening a second file no longer evicts the first.
+   */
+  const [pane, setPaneState] = useState<PaneState>(() => ({ tabs: [], activeTabId: null }))
+  /** ZCode's full view: the pane overlays the whole main row until toggled back. */
+  const [inspectorFullView, setInspectorFullView] = useState(false)
+  /** The review pane's active source, kept across tab switches like ZCode's activeGitSourceId. */
+  const [gitSource, setGitSource] = useState<GitChangeSourceId>('unstaged')
+  /** Live message feeds for selection side chats, pumped by SideConversationPump mounts. */
+  const [sideFeeds, setSideFeeds] = useState<Record<string, { messages: SideChatMessage[]; busy: boolean }>>({})
+  /** A selection quote waiting to ride the side chat's first message. */
+  const [sideQuotes, setSideQuotes] = useState<Record<string, string>>({})
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  /** The plan document the reader explicitly opened; falls back to the conversation's latest. */
+  const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
   const [inspectorWidth, setInspectorWidth] = useState(360)
   const [inspectorLoading, setInspectorLoading] = useState(false)
   const [inspectorError, setInspectorError] = useState('')
-  /** Plugin pages the inspector keeps mounted, one per plugin call site. */
+  /** Plugin pages the inspector keeps mounted, one per plugin call site. The tab itself lives in `pane`. */
   const [pluginPages, setPluginPages] = useState<PluginUiPage[]>([])
-  const [activePluginPageId, setActivePluginPageId] = useState<string | undefined>(undefined)
-  /** Read-only child conversations kept mounted as inspector tabs. */
-  const [subagentTabs, setSubagentTabs] = useState<InspectorSubagentTab[]>([])
-  const [activeSubagentId, setActiveSubagentId] = useState<string | undefined>(undefined)
-  /** The subagent directory tab opened from the status card's ended-agents footer. */
-  const [subagentDirectoryOpen, setSubagentDirectoryOpen] = useState(false)
   /** Inline cards hand their page host to the inspector here, so the side pane moves the iframe. */
   const [pluginPageHosts, setPluginPageHosts] = useState<Record<string, HTMLElement>>({})
   /** `ui/update-model-context` chips, scoped like drafts so switching sessions keeps each one. */
@@ -257,6 +269,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** Real row rects keep a workspace menu anchored when its ellipsis hides on hover-out. */
   const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>())
   const messagesViewport = useRef<HTMLDivElement | null>(null)
+  /** Hosts the transcript selection popover's anchor area. */
+  const selectionHostRef = useRef<HTMLDivElement | null>(null)
   const inspectorRequestId = useRef(0)
   const inspectorResize = useRef<{ startX: number; startWidth: number } | null>(null)
   /** DSH's `markOpened` (`PlanCard.tsx:72-80`): the one conversation whose plan already opened by itself. */
@@ -323,7 +337,45 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     ? activeConversation.conversation.workspaceId ?? inferredConversationWorkspace ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
     : newWorkspaceId ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
   const currentWorkspace = workspaces.find(workspace => workspace.id === currentWorkspaceId)
-  const browseWorkspace = browseWorkspaceId === null ? undefined : workspaces.find(workspace => workspace.id === browseWorkspaceId)
+  /** The browse tab carries its own workspace and folder, so a restored bucket reopens in place. */
+  const browseTab = pane.tabs.find(tab => tab.type === 'browse')
+  const browseWorkspace = browseTab?.workspaceId === undefined ? undefined
+    : workspaces.find(workspace => workspace.id === browseTab.workspaceId)
+  const currentWorkspaceIdRef = useRef(currentWorkspaceId)
+  currentWorkspaceIdRef.current = currentWorkspaceId
+  const paneRef = useRef(pane)
+  paneRef.current = pane
+  /** Every pane mutation goes through here so the workspace memory bucket stays in sync. */
+  const commitPane = useCallback((next: PaneState): void => {
+    setPaneState(next)
+    const workspaceId = currentWorkspaceIdRef.current
+    if (workspaceId !== undefined) writePaneMemory(workspaceId, next)
+  }, [])
+  /** Open one tab (ZCode's open semantics: an active launcher tab is consumed in place). */
+  const openPaneTab = useCallback((tab: InspectorTab): void => {
+    commitPane(openFromLauncher(paneRef.current, tab))
+    setInspectorOpen(true)
+  }, [commitPane])
+  /** Close tabs; an emptied pane collapses, like ZCode's commitSidePaneState. */
+  const closePaneTabs = useCallback((ids: readonly string[]): void => {
+    const { state } = closeTabs(paneRef.current, ids)
+    commitPane(state)
+    if (state.tabs.length === 0) {
+      setInspectorOpen(false)
+      setInspectorFullView(false)
+    }
+  }, [commitPane])
+  const closeOtherPaneTabs = useCallback((id: string): void => {
+    commitPane(closeOtherTabs(paneRef.current, id))
+  }, [commitPane])
+  const closeAllPaneTabs = useCallback((): void => {
+    commitPane(closeAllTabs(paneRef.current))
+    setInspectorOpen(false)
+    setInspectorFullView(false)
+  }, [commitPane])
+  const selectPaneTab = useCallback((id: string): void => {
+    commitPane(activateTab(paneRef.current, id))
+  }, [commitPane])
   // Switching to a workspace expands it once; afterwards its own chevron may
   // collapse it, including while it is the selected/current workspace.
   useLayoutEffect(() => {
@@ -1133,16 +1185,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   const openWorkspaceBrowser = useCallback((workspaceId: string, path = ''): void => {
     inspectorRequestId.current += 1
-    setBrowseWorkspaceId(workspaceId)
-    setBrowsePath(path)
-    setInspectorOpen(true)
-    setInspectorView('browse')
+    const workspace = workspaces.find(item => item.id === workspaceId)
+    openPaneTab({ id: 'browse', type: 'browse', title: workspace?.name ?? t('文件', 'Files'), openedAt: Date.now(), workspaceId, path })
     setInspectorError('')
     setInspectorLoading(false)
     setSidebarOpen(false)
-  }, [])
+  }, [openPaneTab, workspaces, t])
 
-  const openWorkspaceFile = useCallback(async (path: string, workspaceId = currentWorkspaceId): Promise<void> => {
+  const openWorkspaceFile = useCallback(async (path: string, workspaceId = currentWorkspaceId, line?: number): Promise<void> => {
     if (workspaceId === undefined) {
       announce(t('请先选择工作区', 'Choose a workspace first'))
       return
@@ -1150,10 +1200,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     inspectorRequestId.current += 1
     const requestId = inspectorRequestId.current
     setInspectorOpen(true)
-    setInspectorView('file')
-    setInspectorFile(undefined)
-    setInspectorDiff(undefined)
-    setInspectorPlan(undefined)
     setInspectorError('')
     setInspectorLoading(true)
     try {
@@ -1167,12 +1213,34 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         ? `/api/workspaces/${encodeURIComponent(workspaceId)}/asset?${new URLSearchParams({ path: file.path }).toString()}`
         : undefined
       if (requestId === inspectorRequestId.current) {
-        setInspectorFile({ path: file.path, content: file.content ?? '', mimeType: file.mimeType, size: file.size, workspaceId, ...(assetUrl === undefined ? {} : { url: assetUrl }) })
+        const payload: InspectorFile = { path: file.path, content: file.content ?? '', mimeType: file.mimeType, size: file.size, workspaceId, ...(line === undefined ? {} : { line }), ...(assetUrl === undefined ? {} : { url: assetUrl }) }
+        openPaneTab({
+          id: `doc:file:${workspaceId}:${file.path}`,
+          type: 'document',
+          title: file.path.split(/[\\/]/u).pop() ?? file.path,
+          openedAt: Date.now(),
+          doc: { kind: 'file', file: payload },
+        })
       }
     } catch (cause) {
       if (requestId === inspectorRequestId.current) setInspectorError(errorText(cause, t('无法打开此文件', 'Could not open this file')))
     } finally { if (requestId === inspectorRequestId.current) setInspectorLoading(false) }
-  }, [announce, currentWorkspaceId, openWorkspaceBrowser, t])
+  }, [announce, currentWorkspaceId, openPaneTab, openWorkspaceBrowser, t])
+
+  /** One diff document per workspace+path; repeated opens focus and refresh the same tab. */
+  const inspectDiff = useCallback((diff: InspectorDiff): void => {
+    inspectorRequestId.current += 1
+    const workspaceId = currentWorkspaceIdRef.current
+    openPaneTab({
+      id: `doc:diff:${workspaceId ?? 'new'}:${diff.path}`,
+      type: 'document',
+      title: diff.path.split(/[\\/]/u).pop() ?? diff.path,
+      openedAt: Date.now(),
+      doc: { kind: 'diff', diff },
+    })
+    setInspectorError('')
+    setInspectorLoading(false)
+  }, [openPaneTab])
 
   const searchWorkspaceFiles = useCallback(async (needle: string): Promise<WorkspaceFileEntry[]> => {    const workspaceId = currentWorkspaceId
     if (workspaceId === undefined) return []
@@ -1309,12 +1377,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       // The server rebound this workspace's sessions and its default; reload both views.
       await refreshWorkspaces()
       await refreshList()
-      if (browseWorkspaceId === workspace.id) {
-        setBrowseWorkspaceId(null)
+      if (browseTab?.workspaceId === workspace.id) {
+        closePaneTabs(['browse'])
         setInspectorOpen(false)
       }
     } catch (cause) { announce(errorText(cause, t('无法删除工作区', 'Could not delete the workspace'))) }
-  }, [announce, browseWorkspaceId, refreshList, refreshWorkspaces, t])
+  }, [announce, browseTab?.workspaceId, closePaneTabs, refreshList, refreshWorkspaces, t])
 
   const filteredConversations = useMemo(() => conversations
     .filter(item => settings.showAnalysisConversations || item.kind !== 'defectAnalysis')
@@ -1334,8 +1402,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  const showInspector = inspectorOpen || pluginPages.length > 0 || subagentTabs.length > 0 || subagentDirectoryOpen
-    || inspectorFile !== undefined || inspectorDiff !== undefined || inspectorPlan !== undefined || inspectorLoading || inspectorError !== ''
+  // Every pane open path ensures a tab exists, so the open flag alone decides visibility.
+  const showInspector = inspectorOpen
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
   const conversationPlan = useMemo(() => activeDetail === null
     ? undefined
@@ -1344,6 +1412,26 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const conversationPlans = useMemo(() => activeDetail === null
     ? []
     : sessionPlans(activeDetail.interactions, activeDetail.messages), [activeDetail])
+  /**
+   * The review pane's 上一轮更改 dataset: the last run's file artifacts, merged per path the same
+   * way the transcript's changed-files card merges them. ZCode builds this client-side too.
+   */
+  const lastTurnChanges = useMemo<LastTurnChange[]>(() => {
+    const messages = activeDetail?.messages ?? []
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const artifacts = messages[index]?.artifacts
+      if (artifacts === undefined || artifacts.length === 0) continue
+      return collectChangeFiles(artifacts).map(file => ({
+        path: file.path,
+        added: file.added,
+        removed: file.deleted,
+        ...(file.before === undefined ? {} : { before: file.before }),
+        ...(file.after === undefined ? {} : { after: file.after }),
+        kind: file.before === undefined ? 'added' as const : file.after === undefined ? 'deleted' as const : 'modified' as const,
+      }))
+    }
+    return []
+  }, [activeDetail])
 
   const startRename = (item: ConversationSummary): void => {
     setEditingId(item.id)
@@ -1366,21 +1454,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewWorkspaceId(settings.defaultWorkspaceId)
     setNewPresetId(settings.defaultPresetId)
     setNewAccessMode(settings.defaultAccessMode)
-    setInspectorFile(undefined)
-    setInspectorDiff(undefined)
+    // ZCode's draft scope: conversation-owned tabs go, workspace documents stay in the bucket,
+    // and the empty draft starts with the pane collapsed.
+    const scoped = stripConversationScoped(paneRef.current)
+    commitPane(scoped)
     setInspectorPlan(undefined)
     setPluginPages([])
-    setActivePluginPageId(undefined)
     setPluginPageHosts({})
     setPluginSurfaces([])
-    setSubagentTabs([])
-    setActiveSubagentId(undefined)
+    setSideFeeds({})
+    setSideQuotes({})
     setInspectorOpen(false)
-    setBrowseWorkspaceId(null)
+    setInspectorFullView(false)
     inspectorRequestId.current += 1
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
-  }, [mobile, settings.defaultAccessMode, settings.defaultPresetId, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
+  }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultPresetId, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
   /** The plugin creator is a new task with the bundled Skill already in the draft. */
   const startPluginCreation = useCallback((): void => {
@@ -1479,32 +1568,21 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return entries
   }
 
+  /**
+   * ZCode parity: closing the pane only collapses it. The tab bucket keeps its tabs, so reopening
+   * lands where the reader left off; conversation-scoped cleanup happens on session switch instead.
+   */
   const closeInspector = (): void => {
     inspectorRequestId.current += 1
     setInspectorOpen(false)
-    setBrowseWorkspaceId(null)
-    setInspectorFile(undefined)
-    setInspectorDiff(undefined)
-    setInspectorPlan(undefined)
-    setPluginPages([])
-    setActivePluginPageId(undefined)
-    setPluginPageHosts({})
-    setSubagentTabs([])
-    setActiveSubagentId(undefined)
-    setSubagentDirectoryOpen(false)
+    setInspectorFullView(false)
     setInspectorError('')
     setInspectorLoading(false)
   }
 
-  /**
-   * Closing one plugin tab removes only that page. When the active tab closes, its neighbour takes
-   * over; when the last page goes the panel falls back to another document or closes entirely.
-   */
+  /** Close one plugin tab: drop the page and its inline-card host, then let the model pick the fallback. */
   const closePluginPage = useCallback((id: string): void => {
-    const index = pluginPages.findIndex(page => page.id === id)
-    if (index === -1) return
-    const next = pluginPages.filter(page => page.id !== id)
-    setPluginPages(next)
+    setPluginPages(current => current.filter(page => page.id !== id))
     // The tab no longer owns the host; its inline card appends it back on the next render.
     setPluginPageHosts(current => {
       if (current[id] === undefined) return current
@@ -1512,16 +1590,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       delete hosts[id]
       return hosts
     })
-    if (activePluginPageId !== id) return
-    setActivePluginPageId(next[index]?.id ?? next[index - 1]?.id)
-    if (next.length > 0) return
-    if (subagentDirectoryOpen) setInspectorView('subagents')
-    else if (inspectorPlan !== undefined || conversationPlan !== undefined) setInspectorView('plan')
-    else if (inspectorDiff !== undefined) setInspectorView('diff')
-    else if (inspectorFile !== undefined) setInspectorView('file')
-    else if (browseWorkspace !== undefined) setInspectorView('browse')
-    else closeInspector()
-  }, [activePluginPageId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentDirectoryOpen])
+    closePaneTabs([id])
+  }, [closePaneTabs])
   /**
    * Open or focus one plugin page tab; the id keeps one page per plugin call site. An inline card
    * passes its host, so the inspector moves the mounted page instead of opening a second iframe.
@@ -1536,10 +1606,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (host !== undefined) {
       setPluginPageHosts(current => current[id] === host ? current : { ...current, [id]: host })
     }
-    setActivePluginPageId(id)
-    setInspectorOpen(true)
-    setInspectorView('plugin')
-  }, [selectedId])
+    openPaneTab({ id, type: 'plugin', pageId: id, title: input.title ?? input.pluginId, openedAt: Date.now() })
+  }, [openPaneTab, selectedId])
 
   /**
    * Open or focus one child conversation as a read-only tab in the inspector. The child never
@@ -1556,62 +1624,18 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         : title !== undefined && title.trim() !== ''
           ? title.trim()
           : t('子智能体', 'Subagent')
-    setSubagentTabs(current => {
-      const index = current.findIndex(tab => tab.id === childId)
-      if (index === -1) return [...current, { id: childId, title: label }]
-      if (current[index]!.title === label) return current
-      return current.map(tab => tab.id === childId ? { ...tab, title: label } : tab)
-    })
-    setActiveSubagentId(childId)
-    setInspectorOpen(true)
-    setInspectorView('subagent')
+    openPaneTab({ id: childId, type: 'subagent', childId, title: label, openedAt: Date.now() })
     setSidebarOpen(false)
-  }, [activeDetail, t])
+  }, [activeDetail, openPaneTab, t])
 
   /**
    * The status card's 「已结束的智能体」 footer opens ZCode's directory page: every child of the
    * parent in one tab, each row opening the read-only session beside it.
    */
   const openSubagentDirectory = useCallback((): void => {
-    setSubagentDirectoryOpen(true)
-    setInspectorOpen(true)
-    setInspectorView('subagents')
+    openPaneTab({ id: 'subagents', type: 'subagents', title: t('子智能体目录', 'Subagents'), openedAt: Date.now() })
     setSidebarOpen(false)
-  }, [])
-
-  /** Close the directory tab; a neighbour tab takes over, else the panel falls back or closes. */
-  const closeSubagentDirectory = useCallback((): void => {
-    setSubagentDirectoryOpen(false)
-    if (subagentTabs.some(tab => tab.id === activeSubagentId)) { setInspectorView('subagent'); return }
-    if (pluginPages.length > 0) { setInspectorView('plugin'); return }
-    if (inspectorPlan !== undefined || conversationPlan !== undefined) { setInspectorView('plan'); return }
-    if (inspectorDiff !== undefined) { setInspectorView('diff'); return }
-    if (inspectorFile !== undefined) { setInspectorView('file'); return }
-    if (browseWorkspace !== undefined) { setInspectorView('browse'); return }
-    closeInspector()
-  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentTabs])
-
-  /**
-   * Close one child conversation tab. The tab's neighbour takes over when it was active; with no
-   * child left, the panel falls back to a document or plugin tab and only then closes entirely.
-   */
-  const closeSubagentTab = useCallback((id: string): void => {
-    const index = subagentTabs.findIndex(tab => tab.id === id)
-    if (index === -1) return
-    const next = subagentTabs.filter(tab => tab.id !== id)
-    setSubagentTabs(next)
-    if (activeSubagentId !== id) return
-    const replacement = next[index]?.id ?? next[index - 1]?.id
-    setActiveSubagentId(replacement)
-    if (replacement !== undefined) return
-    if (subagentDirectoryOpen) { setInspectorView('subagents'); return }
-    if (pluginPages.length > 0) { setInspectorView('plugin'); return }
-    if (inspectorPlan !== undefined || conversationPlan !== undefined) { setInspectorView('plan'); return }
-    if (inspectorDiff !== undefined) { setInspectorView('diff'); return }
-    if (inspectorFile !== undefined) { setInspectorView('file'); return }
-    if (browseWorkspace !== undefined) { setInspectorView('browse'); return }
-    closeInspector()
-  }, [activeSubagentId, browseWorkspace, conversationPlan, inspectorDiff, inspectorFile, inspectorPlan, pluginPages, subagentDirectoryOpen, subagentTabs])
+  }, [openPaneTab, t])
 
   /** Page ids whose host the inspector owns; an inline card shows a placeholder for those. */
   const sidePageIds = useMemo(() => new Set(Object.keys(pluginPageHosts)), [pluginPageHosts])
@@ -1646,11 +1670,108 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       closeInspector()
       return
     }
-    // The panel opens on the current workspace's directory; a file can then be
-    // opened on top of it, with the "浏览" tab returning to the same folder.
-    if (currentWorkspaceId !== undefined) openWorkspaceBrowser(currentWorkspaceId)
-    else setInspectorOpen(true)
+    setInspectorOpen(true)
+    // ZCode's collapsed expansion: a pane with no tabs lands on the launcher page.
+    if (paneRef.current.tabs.length === 0) {
+      openPaneTab({ id: 'new-tab', type: 'new-tab', title: t('新标签页', 'New tab'), openedAt: Date.now() })
+    }
   }
+
+  // —— ZCode launcher entries: review, browser, trajectory, new-tab, selection side chat. ——
+  const openReviewPane = useCallback((): void => {
+    openPaneTab({ id: 'git', type: 'git', title: t('审查', 'Review'), openedAt: Date.now() })
+  }, [openPaneTab, t])
+  const openBrowserPane = useCallback((): void => {
+    openPaneTab({ id: `browser:${crypto.randomUUID()}`, type: 'browser', title: t('浏览器', 'Browser'), openedAt: Date.now(), url: '' })
+  }, [openPaneTab, t])
+  const openTrajectoryPane = useCallback((): void => {
+    if (selectedId === null) {
+      announce(t('先打开一个会话再查看模型轨迹', 'Open a conversation to view its model trajectory'))
+      return
+    }
+    const title = selectedSummary?.title !== undefined && selectedSummary.title !== ''
+      ? selectedSummary.title
+      : t('模型调用轨迹', 'Model trajectory')
+    openPaneTab({ id: `trajectory:${selectedId}`, type: 'trajectory', conversationId: selectedId, title, openedAt: Date.now() })
+  }, [announce, openPaneTab, selectedId, selectedSummary, t])
+  const openNewTabPane = useCallback((): void => {
+    openPaneTab({ id: 'new-tab', type: 'new-tab', title: t('新标签页', 'New tab'), openedAt: Date.now() })
+  }, [openPaneTab, t])
+  const patchBrowserTab = useCallback((tabId: string, patch: { url?: string; addressDraft?: string; title?: string }): void => {
+    const current = paneRef.current
+    const tabs = current.tabs.map(tab => tab.id === tabId
+      ? { ...tab, ...(patch.url === undefined ? {} : { url: patch.url }), ...(patch.addressDraft === undefined ? {} : { addressDraft: patch.addressDraft }), ...(patch.title === undefined ? {} : { title: patch.title }) }
+      : tab)
+    commitPane(normalizePaneState({ tabs, activeTabId: current.activeTabId }) ?? { tabs, activeTabId: current.activeTabId })
+  }, [commitPane])
+  const toggleInspectorFullView = useCallback((): void => {
+    if (!showInspector) {
+      // ZCode enters the full view by expanding the pane first when it was closed.
+      toggleInspector()
+      setInspectorFullView(true)
+      return
+    }
+    setInspectorFullView(value => !value)
+  }, [showInspector, toggleInspector])
+
+  /** Create (or reuse) a side chat conversation for a transcript selection and open its tab. */
+  const sideChatOpening = useRef(false)
+  const openSelectionChat = useCallback(async (quote?: string): Promise<void> => {
+    const workspaceId = currentWorkspaceIdRef.current
+    if (workspaceId === undefined) {
+      announce(t('请先选择工作区', 'Choose a workspace first'))
+      return
+    }
+    if (sideChatOpening.current) return
+    sideChatOpening.current = true
+    try {
+      const ordinal = nextSelectionChatOrdinal(paneRef.current)
+      const title = t(`辅助对话 ${ordinal}`, `Side conversation ${ordinal}`)
+      const created = await api.createConversation({ workspaceId, title, model: selectedModel, thinkingLevel })
+      const childId = created.conversation.id
+      if (quote !== undefined && quote.trim() !== '') setSideQuotes(current => ({ ...current, [childId]: quote.trim() }))
+      openPaneTab({ id: `selection-chat:${childId}`, type: 'selection-chat', conversationId: childId, ordinal, title, openedAt: Date.now() })
+    } catch (cause) {
+      announce(errorText(cause, t('无法创建辅助对话', 'Could not create the side conversation')))
+    } finally {
+      sideChatOpening.current = false
+    }
+  }, [announce, openPaneTab, selectedModel, thinkingLevel, t])
+  /** The side chat's first send folds the pending quote into the prompt, ZCode reference semantics. */
+  const sendSideChatMessage = useCallback((conversationId: string, text: string): void => {
+    const quote = sideQuotes[conversationId]
+    const prompt = quote === undefined || text.trim() === '' ? text : buildSideChatPrompt(quote, text)
+    if (quote !== undefined) {
+      setSideQuotes(current => {
+        if (current[conversationId] === undefined) return current
+        const next = { ...current }
+        delete next[conversationId]
+        return next
+      })
+    }
+    void api.submit(conversationId, { text: prompt, requestId: crypto.randomUUID() })
+      .catch(cause => { announce(errorText(cause, t('无法发送消息', 'Could not send the message'))) })
+  }, [announce, sideQuotes, t])
+
+  // ZCode's side pane chords live with the entries they drive, which are declared above.
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      const target = event.target
+      if (target instanceof HTMLElement && (target.isContentEditable || target.matches('input, textarea, select'))) return
+      if (document.querySelector('[role="menu"], [role="dialog"]') !== null) return
+      const shortcuts = resolveShortcuts(settings.shortcuts)
+      if (matchesShortcut(event, shortcuts.toggleInspector)) {
+        event.preventDefault()
+        toggleInspector()
+      } else if (matchesShortcut(event, shortcuts.toggleInspectorFullView)) {
+        event.preventDefault()
+        toggleInspectorFullView()
+      }
+    }
+    document.addEventListener('keydown', onShortcut, true)
+    return () => { document.removeEventListener('keydown', onShortcut, true) }
+  }, [settings.shortcuts, toggleInspector, toggleInspectorFullView])
 
   const clampInspectorWidth = (value: number): number =>
     Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7))
@@ -1692,11 +1813,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
     inspectorRequestId.current += 1
     setInspectorPlan(plan)
-    setInspectorView('plan')
-    setInspectorOpen(true)
+    openPaneTab({ id: 'doc:plan', type: 'document', title: t('计划', 'Plan'), openedAt: Date.now(), doc: { kind: 'plan' } })
     setInspectorError('')
     setInspectorLoading(false)
-  }, [selectedId])
+  }, [openPaneTab, selectedId, t])
 
   // DSH opens each pending review once, automatically, and stops after the reader closes it
   // (`PlanCard.tsx:63-80` + `review-store.ts:12-22`). Pi keys the memory to the conversation,
@@ -1707,16 +1827,29 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   // Plugin pages belong to the conversation that opened them (`plugin-marketplace-design.md` §8.2),
   // so a session switch destroys both the mounted pages and the surface list for the old session.
-  // Child tabs go with them: a subagent belongs to the parent that delegated it.
+  // Child tabs, trajectory and side chats go with them: each belongs to its parent conversation.
   useEffect(() => {
     setPluginPages([])
-    setActivePluginPageId(undefined)
     setPluginPageHosts({})
     setPluginSurfaces([])
-    setSubagentTabs([])
-    setActiveSubagentId(undefined)
-    setSubagentDirectoryOpen(false)
-  }, [selectedId])
+    setSideFeeds({})
+    setSideQuotes({})
+    commitPane(stripConversationScoped(paneRef.current))
+  }, [commitPane, selectedId])
+
+  // Tabs are remembered per workspace (ZCode's taskSidePaneMemory); moving between workspaces
+  // swaps the bucket, and an unknown workspace starts empty. An empty scope collapses the pane
+  // (ZCode's resolveSidePaneScopeState), so switching to a fresh workspace never shows a bare shell.
+  useEffect(() => {
+    if (currentWorkspaceId === undefined) {
+      setPaneState({ tabs: [], activeTabId: null })
+      setInspectorOpen(false)
+      return
+    }
+    const restored = readPaneMemory(currentWorkspaceId) ?? { tabs: [], activeTabId: null }
+    setPaneState(restored)
+    if (restored.tabs.length === 0) setInspectorOpen(false)
+  }, [currentWorkspaceId])
   useEffect(() => {
     if (selectedId === null || conversationPlan === undefined || conversationPlan.pending !== true) return
     if (planAutoOpenedFor.current === selectedId) return
@@ -1995,7 +2128,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         .finally(() => { setDetailLoading(false) })
                     }}>{t('重试', 'Retry')}</Button>
                   </div>}
-                  {activeDetail !== null && <div className={`${css.chatLayout} ${statusPanelVisible ? css.withStatusPanel : ''}`}>
+                  {activeDetail !== null && <div ref={selectionHostRef} className={`${css.chatLayout} ${statusPanelVisible ? css.withStatusPanel : ''}`}>
+                    <SelectionAskPopover containerRef={selectionHostRef} onAsk={quote => { void openSelectionChat(quote) }} />
                     <div className={css.messagesPane}>
                     <div className={css.messagesViewport} ref={messagesViewport} tabIndex={-1} onScroll={event => { syncViewportScroll(event.currentTarget) }}>
                       <Transcript messages={visibleTranscriptMessages(activeDetail.messages, activeDetail.compaction?.running === true)} compactionRunning={activeDetail.compaction?.running === true} conversationId={activeDetail.conversation.id}
@@ -2004,12 +2138,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         running={activeDetail.conversation.busy === true}
                         onFork={entryId => { void forkFrom(entryId) }} onRetry={entryId => { void retryEntry(entryId) }}
                         onFeedback={(entryId, rating) => { void submitFeedback(entryId, rating) }}
-                        onOpenFile={(path, line) => { void openWorkspaceFile(path).then(() => {
-                          if (line !== undefined) setInspectorFile(current => current === undefined ? undefined : { ...current, line })
-                        }) }}
+                        onOpenFile={(path, line) => { void openWorkspaceFile(path, undefined, line) }}
                         resolveFileImage={path => currentWorkspaceId === undefined ? undefined
                           : `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/asset?${new URLSearchParams({ path }).toString()}`}
-                        onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
+                        onInspectDiff={inspectDiff}
                         onOpenSubagent={(childId, title) => { openSubagentTab(childId, title) }}
                         onOpenPlan={plan => { openPlan(plan) }}
                         onOpenPluginUi={openPluginPage}
@@ -2029,7 +2161,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       onOpenSubagentDirectory={openSubagentDirectory}
                       onOpenPlan={plan => { openPlan(plan) }}
                       onGoalAction={action => { void updateGoal(action) }}
-                      onInspectDiff={diff => { inspectorRequestId.current += 1; setInspectorOpen(true); setInspectorView('diff'); setInspectorFile(undefined); setInspectorDiff(diff); setInspectorPlan(undefined); setInspectorError(''); setInspectorLoading(false) }}
+                      onInspectDiff={inspectDiff}
                       onNotice={announce} onVisibilityChange={setStatusPanelVisible}
                       onContentChange={setStatusPanelOccupied} />
                     {catalogError !== '' && <div className={css.catalogNotice} role="status"><span>{catalogError}</span>
@@ -2074,7 +2206,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>
           {showInspector && <>
-            <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
+            {!inspectorFullView && <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
               aria-label={t('调整侧栏宽度', 'Resize inspector')}
               aria-valuenow={inspectorWidth} aria-valuemin={280} aria-valuemax={760} tabIndex={0}
               onPointerDown={beginInspectorResize} onPointerMove={moveInspectorResize}
@@ -2083,34 +2215,78 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               onKeyDown={event => {
                 if (event.key === 'ArrowLeft') { event.preventDefault(); nudgeInspector(16) }
                 else if (event.key === 'ArrowRight') { event.preventDefault(); nudgeInspector(-16) }
-              }} />
-            <aside className={css.inspectorPane} aria-label={t('文件检查器', 'File inspector')}>
-              <Inspector file={inspectorFile} diff={inspectorDiff} plan={inspectorPlan ?? conversationPlan ?? null}
-                browse={browseWorkspace === undefined ? null : {
+              }} />}
+            <aside className={`${css.inspectorPane} ${inspectorFullView && !mobile ? css.inspectorPaneFullscreen : ''}`}
+              aria-label={t('侧边面板', 'Side pane')}>
+              <Inspector
+                workspaceId={currentWorkspaceId}
+                tabs={pane.tabs} activeTabId={pane.activeTabId}
+                onSelectTab={selectPaneTab} onCloseTab={id => { closePaneTabs([id]) }}
+                onCloseOtherTabs={closeOtherPaneTabs} onCloseAllTabs={closeAllPaneTabs}
+                onOpenNewTab={openNewTabPane}
+                fullView={inspectorFullView} onToggleFullView={toggleInspectorFullView}
+                launcher={{
+                  surfaces: pluginSurfaces,
+                  surfacesLoading: false,
+                  onRefreshSurfaces: () => { void refreshPluginSurfaces() },
+                  onOpenSurface: openPluginSurface,
+                  onOpenFiles: () => { if (currentWorkspaceId !== undefined) openWorkspaceBrowser(currentWorkspaceId) },
+                  onOpenReview: openReviewPane,
+                  onOpenBrowser: openBrowserPane,
+                  onOpenTrajectory: openTrajectoryPane,
+                  onOpenSelectionChat: () => { void openSelectionChat() },
+                  canOpenReview: !pane.tabs.some(tab => tab.type === 'git'),
+                  canOpenTrajectory: selectedId !== null,
+                  canOpenSelectionChat: currentWorkspaceId !== undefined,
+                }}
+                gitPane={{
+                  activeSource: gitSource,
+                  onSelectSource: setGitSource,
+                  lastTurnChanges,
+                  onNotice: announce,
+                }}
+                browserPane={{ onNavigate: patchBrowserTab }}
+                selectionChat={{ for: conversationId => {
+                  const feed = sideFeeds[conversationId]
+                  const quote = sideQuotes[conversationId]
+                  return {
+                    messages: feed?.messages ?? [],
+                    busy: feed?.busy ?? false,
+                    onSend: text => { sendSideChatMessage(conversationId, text) },
+                    quotedText: quote,
+                    onDismissQuote: quote === undefined ? undefined : () => {
+                      setSideQuotes(current => {
+                        if (current[conversationId] === undefined) return current
+                        const next = { ...current }
+                        delete next[conversationId]
+                        return next
+                      })
+                    },
+                  }
+                } }}
+                onNotice={announce}
+                plan={inspectorPlan ?? conversationPlan ?? null}
+                browse={browseWorkspace === undefined || browseTab === undefined ? null : {
                   workspace: browseWorkspace,
-                  path: browsePath,
+                  path: browseTab.path ?? '',
                   onOpenFile: path => { void openWorkspaceFile(path, browseWorkspace.id) },
                 }}
-                view={inspectorView} onView={setInspectorView}
                 loading={inspectorLoading} error={inspectorError}
-                pluginPages={pluginPages} activePluginPageId={activePluginPageId}
+                pluginPages={pluginPages}
                 pluginPageHosts={pluginPageHosts} sidePageIds={sidePageIds}
                 onReleasePluginPageHost={holdPluginPageHost}
-                onSelectPluginPage={setActivePluginPageId} onClosePluginPage={closePluginPage}
+                onClosePluginPage={closePluginPage}
                 onPluginContext={addPluginContext} onPluginMessage={text => { void sendPluginMessage(text) }}
                 onPluginOpenLink={openPluginLink}
                 pluginSurfaces={pluginSurfaces} onOpenPluginSurface={openPluginSurface}
                 onRefreshPluginSurfaces={refreshPluginSurfaces}
-                subagentTabs={subagentTabs} activeSubagentId={activeSubagentId}
-                onSelectSubagentTab={setActiveSubagentId} onCloseSubagentTab={closeSubagentTab}
-                subagentDirectory={subagentDirectoryOpen ? {
-                  subagents: activeDetail?.subagents ?? [],
-                  onOpen: (childId, title) => { openSubagentTab(childId, title) },
-                } : null}
-                onCloseSubagentDirectory={closeSubagentDirectory}
+                subagentDirectory={{ subagents: activeDetail?.subagents ?? [], onOpen: (childId, title) => { openSubagentTab(childId, title) } }}
                 onClose={closeInspector} />
             </aside>
           </>}
+          {pane.tabs.filter(tab => tab.type === 'selection-chat').map(tab => <SideConversationPump key={tab.id}
+            conversationId={tab.conversationId!} active={showInspector && pane.activeTabId === tab.id}
+            onFeed={(messages, busyParam) => { setSideFeeds(current => ({ ...current, [tab.conversationId!]: { messages, busy: busyParam } })) }} />)}
         </div>
         </PluginPageHostContext.Provider>
       </section>
@@ -2158,6 +2334,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         onDone={() => { setToast(current => current?.id === toast.id ? null : current) }} />}
     </main>
   )
+}
+
+/**
+ * Polls one side chat's conversation and pumps its feed into the app state the inspector reads.
+ * Mounted per selection-chat tab; rendering nothing keeps the pane's DOM contract untouched.
+ */
+function SideConversationPump({ conversationId, active, onFeed }: {
+  conversationId: string
+  active: boolean
+  onFeed: (messages: SideChatMessage[], busy: boolean) => void
+}) {
+  const { messages, busy } = useSideConversation(conversationId, active)
+  useEffect(() => { onFeed(messages, busy) }, [busy, messages, onFeed])
+  return null
 }
 
 function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onSelect, onEditTitle, onSaveTitle,

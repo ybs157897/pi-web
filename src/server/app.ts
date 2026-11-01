@@ -776,7 +776,10 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.get('/api/workspaces/:id/git/diff', async c => {
     const path = c.req.query('path') ?? ''
     if (path === '') throw new RuntimeError('INVALID_INPUT', '缺少文件路径')
-    return c.json(await runtime.gitWorktreeDiff(pathId(c.req.param('id')), path))
+    // Unknown review sources fall back to the default merged diff instead of failing.
+    const rawSource = c.req.query('sourceId')
+    const sourceId = rawSource === 'staged' || rawSource === 'branch' || rawSource === 'unstaged' ? rawSource : undefined
+    return c.json(await runtime.gitWorktreeDiff(pathId(c.req.param('id')), path, sourceId))
   })
   app.post('/api/workspaces/:id/git/commit', async c => {
     const input = await readJson(c.req.raw, gitCommitSchema)

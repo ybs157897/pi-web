@@ -6,6 +6,8 @@ export const DEFAULT_SHORTCUTS = {
   newConversation: 'Alt+Mod+n', search: 'Mod+k', settings: 'Alt+Mod+,', toggleSidebar: 'Mod+b',
   rename: 'Alt+Mod+g', fork: 'Shift+Mod+f', archive: 'Alt+Mod+a',
   send: 'Enter', newline: 'Shift+Enter', alternateSend: 'Mod+Enter',
+  // ZCode's side pane chords; the full-view F chord avoids pi-web's fork (Shift+Mod+f).
+  toggleInspector: 'Alt+Mod+b', toggleInspectorFullView: 'Alt+Mod+f',
 } satisfies Record<ShortcutCommand, string>
 
 export type Shortcuts = Record<ShortcutCommand, string>

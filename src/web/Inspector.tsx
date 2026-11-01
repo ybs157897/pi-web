@@ -1,8 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, MarkdownText, ReadBlock,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { FileDiff, FolderOpen, Globe, Maximize2, MessageSquareText, Minimize2, Plus, Puzzle, Waypoints } from 'lucide-react'
 import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
+import type { InspectorTab } from './inspector-tabs.ts'
+import type { GitChangeSourceId, LastTurnChange } from './GitPane.tsx'
+import type { SideChatMessage } from './SelectionChatPane.tsx'
+import GitPane from './GitPane.tsx'
+import BrowserPane from './BrowserPane.tsx'
+import TrajectoryPane from './TrajectoryPane.tsx'
+import SelectionChatPane from './SelectionChatPane.tsx'
 import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
@@ -52,6 +62,15 @@ export interface InspectorBrowse {
   onOpenFile: (path: string) => void
 }
 
+/** Toast sink shared by the git review pane and its sources. */
+export interface InspectorGitPane {
+  activeSource: GitChangeSourceId
+  onSelectSource: (source: GitChangeSourceId) => void
+  /** Last-turn changes synthesized from the conversation's artifacts; undefined means no session context. */
+  lastTurnChanges?: readonly LastTurnChange[]
+  onNotice: (text: string) => void
+}
+
 export interface InspectorProps {
   file?: InspectorFile | null
   diff?: InspectorDiff | null
@@ -92,6 +111,52 @@ export interface InspectorProps {
   /** The subagent directory page, opened from the status card's ended-agents footer. */
   subagentDirectory?: InspectorSubagentDirectory | null
   onCloseSubagentDirectory?: () => void
+  /** Workspace owning the git review tab; git tabs render an empty state without it. */
+  workspaceId?: string
+  /** The multi-tab shell's tabs; without them (and without a launcher) the pane keeps the single-slot views. */
+  tabs?: readonly InspectorTab[]
+  activeTabId?: string | null
+  onSelectTab?: (id: string) => void
+  onCloseTab?: (id: string) => void
+  onCloseOtherTabs?: (id: string) => void
+  onCloseAllTabs?: () => void
+  onOpenNewTab?: () => void
+  /** Full-view overlay state; the pane only paints the toggle, the app owns the layout. */
+  fullView?: boolean
+  onToggleFullView?: () => void
+  /** The new-tab launcher's entries and recommended plugin surfaces. */
+  launcher?: {
+    surfaces: readonly PluginUiSurfaceView[]
+    surfacesLoading: boolean
+    onRefreshSurfaces: () => void | Promise<void>
+    onOpenSurface: (surface: PluginUiSurfaceView) => void
+    onOpenFiles: () => void
+    onOpenReview: () => void
+    onOpenBrowser: () => void
+    onOpenTrajectory: () => void
+    onOpenSelectionChat: () => void
+    /** An already-open review tab hides the launcher's review entry, like ZCode's launcher dedupe. */
+    canOpenReview: boolean
+    canOpenTrajectory: boolean
+    canOpenSelectionChat: boolean
+  }
+  /** Git review state for the `git` tab; without it the tab shows an empty state. */
+  gitPane?: InspectorGitPane
+  /** Browser tab navigation; the pane binds the tab id, the app owns the tab's mutable fields. */
+  browserPane?: { onNavigate: (tabId: string, patch: { url?: string; addressDraft?: string; title?: string }) => void }
+  /** Per-conversation side chat state; returning undefined falls back to an empty state. */
+  selectionChat?: {
+    for: (conversationId: string) => {
+      messages: readonly SideChatMessage[]
+      busy: boolean
+      onSend: (text: string) => void
+      /** A selection quote waiting to ride the next send, shown as a removable chip. */
+      quotedText?: string
+      onDismissQuote?: () => void
+    } | undefined
+  }
+  /** Toast sink for the browser and trajectory panes, whose feedback escapes their own surface. */
+  onNotice?: (text: string) => void
   onClose: () => void
 }
 
@@ -127,11 +192,19 @@ export default function Inspector({
   pluginSurfaces = [], onOpenPluginSurface, onRefreshPluginSurfaces, onClose,
   subagentTabs = [], activeSubagentId, onSelectSubagentTab, onCloseSubagentTab,
   subagentDirectory = null, onCloseSubagentDirectory,
+  workspaceId, tabs = [], activeTabId = null,
+  onSelectTab, onCloseTab, onCloseOtherTabs, onCloseAllTabs, onOpenNewTab,
+  fullView = false, onToggleFullView, launcher, gitPane, browserPane, selectionChat, onNotice,
 }: InspectorProps) {
   const { t } = useUiPreferences()
   const [surfacesOpen, setSurfacesOpen] = useState(false)
   const [surfacesLoading, setSurfacesLoading] = useState(false)
   const surfacesAnchor = useRef<HTMLSpanElement>(null)
+  // The tab context menu is app-level state here because it portals out of the pane.
+  const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const tabMenuRef = useRef<HTMLDivElement>(null)
+  // ZCode's shell: any tab, or a reachable launcher, switches the header into a tab strip.
+  const shellMode = tabs.length > 0 || onOpenNewTab !== undefined
   const planView = view === 'plan'
   const pluginView = view === 'plugin' && pluginPages.length > 0
   const subagentView = view === 'subagent' && subagentTabs.length > 0
@@ -163,6 +236,20 @@ export default function Inspector({
   }, [surfacesOpen])
   // A view switch dismisses the surface menu; it belongs to the tab it was opened from.
   useEffect(() => { setSurfacesOpen(false) }, [view])
+  useEffect(() => {
+    if (tabMenu === null) return
+    const close = (event: MouseEvent): void => {
+      if (event.target instanceof Node && tabMenuRef.current?.contains(event.target) === true) return
+      setTabMenu(null)
+    }
+    const key = (event: KeyboardEvent): void => { if (event.key === 'Escape') setTabMenu(null) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', key)
+    }
+  }, [tabMenu])
   const toggleSurfaces = (): void => {
     const next = !surfacesOpen
     setSurfacesOpen(next)
@@ -202,6 +289,76 @@ export default function Inspector({
         : browseView
           ? t('关闭文件浏览器', 'Close file browser')
           : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')
+  if (shellMode) {
+    // In the shell the header close means "close the active tab"; with no tab left it collapses the pane.
+    const activeTab = tabs.find(tab => tab.id === activeTabId)
+    const closeShellActive = (): void => {
+      if (activeTab !== undefined && onCloseTab !== undefined) onCloseTab(activeTab.id)
+      else onClose()
+    }
+    const openTabMenu = (id: string, event: { clientX: number; clientY: number }): void => {
+      if (onCloseTab === undefined) return
+      setTabMenu({
+        id,
+        x: Math.max(0, Math.min(event.clientX, window.innerWidth - 176)),
+        y: Math.max(0, Math.min(event.clientY, window.innerHeight - 116)),
+      })
+    }
+    return (
+      <aside className={`${css.root}${fullView ? ` ${css.fullscreen}` : ''}`} aria-label={t('检查器', 'Inspector')} data-inspector-shell>
+        <header className={css.tabBar}>
+          <div className={css.tabStrip} role="group" aria-label={t('检查器标签', 'Inspector tabs')}>
+            {tabs.map(tab => {
+              const active = tab.id === activeTabId
+              return (
+                <span key={tab.id} className={css.tab} data-inspector-tab-trigger={tab.id} data-active={active}
+                  onAuxClick={event => { if (event.button === 1) onCloseTab?.(tab.id) }}
+                  onContextMenu={event => { event.preventDefault(); openTabMenu(tab.id, event) }}>
+                  <button type="button" className={css.tabButton} aria-pressed={active} title={tab.title}
+                    onClick={() => onSelectTab?.(tab.id)}>{tab.title}</button>
+                  {onCloseTab !== undefined && <button type="button" className={css.tabClose}
+                    aria-label={t(`关闭标签 ${tab.title}`, `Close tab ${tab.title}`)}
+                    onClick={() => onCloseTab(tab.id)}><IconCloseOutlineRegular size={11} /></button>}
+                </span>
+              )
+            })}
+          </div>
+          {onOpenNewTab !== undefined && <button type="button" className={css.tabBarAction}
+            aria-label={t('新增标签', 'New tab')} onClick={onOpenNewTab}><Plus size={15} /></button>}
+          {onToggleFullView !== undefined && <button type="button" className={css.tabBarAction}
+            aria-label={fullView ? t('退出完整视图', 'Exit full view') : t('进入完整视图', 'Enter full view')}
+            title={fullView ? t('退出完整视图', 'Exit full view') : t('进入完整视图', 'Enter full view')}
+            aria-pressed={fullView} onClick={onToggleFullView}>
+            {fullView ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>}
+          <button type="button" className={css.close} onClick={closeShellActive} aria-label={t('关闭标签', 'Close tab')}>
+            <IconCloseOutlineRegular size={15} />
+          </button>
+        </header>
+        <div className={css.tabSurfaces}>
+          {tabs.map(tab => {
+            const active = tab.id === activeTabId
+            return <div key={tab.id} className={css.tabSurface} data-inspector-tab={tab.id} hidden={!active}>
+              {tabContent(tab, {
+                active, t, plan, loading, error, browse, pluginPages, pluginPageHosts, sidePageIds, onReleasePluginPageHost,
+                onPluginContext, onPluginMessage, onPluginOpenLink, subagentDirectory,
+                workspaceId, gitPane, browserPane, selectionChat, onNotice, launcher,
+              })}
+            </div>
+          })}
+        </div>
+        {tabMenu !== null && createPortal(
+          <div ref={tabMenuRef} className={css.tabMenu} role="menu" style={{ left: tabMenu.x, top: tabMenu.y }}>
+            <button type="button" role="menuitem" className={css.tabMenuItem}
+              onClick={() => { onCloseTab?.(tabMenu.id); setTabMenu(null) }}>{t('关闭标签', 'Close tab')}</button>
+            <button type="button" role="menuitem" className={css.tabMenuItem} disabled={tabs.length <= 1}
+              onClick={() => { onCloseOtherTabs?.(tabMenu.id); setTabMenu(null) }}>{t('关闭其他标签', 'Close other tabs')}</button>
+            <button type="button" role="menuitem" className={css.tabMenuItem}
+              onClick={() => { onCloseAllTabs?.(); setTabMenu(null) }}>{t('关闭所有标签', 'Close all tabs')}</button>
+          </div>, document.body)}
+      </aside>
+    )
+  }
   return (
     <aside className={css.root} aria-label={directoryView
       ? t('子智能体目录', 'Subagent directory')
@@ -304,6 +461,132 @@ export default function Inspector({
         </>)}
     </aside>
   )
+}
+
+/** Everything a tab's content renderer needs; gathered once so the dispatch stays a pure switch. */
+interface TabContentDeps {
+  active: boolean
+  t: (chinese: string, english: string) => string
+  plan: PlanDocument | null
+  loading: boolean
+  error: string | null
+  browse: InspectorBrowse | null
+  pluginPages: readonly PluginUiPage[]
+  pluginPageHosts: Readonly<Record<string, HTMLElement>>
+  sidePageIds: ReadonlySet<string>
+  onReleasePluginPageHost?: (host: HTMLElement) => void
+  onPluginContext?: (entry: PluginContextEntry) => void
+  onPluginMessage?: (text: string) => void
+  onPluginOpenLink?: (url: string) => void
+  subagentDirectory: InspectorSubagentDirectory | null
+  workspaceId?: string
+  gitPane?: InspectorGitPane
+  browserPane?: { onNavigate: (tabId: string, patch: { url?: string; addressDraft?: string; title?: string }) => void }
+  selectionChat?: NonNullable<InspectorProps['selectionChat']>
+  onNotice?: (text: string) => void
+  launcher?: NonNullable<InspectorProps['launcher']>
+}
+
+/** Route one shell tab to its renderer; every surface keeps its own pane mounted while hidden. */
+function tabContent(tab: InspectorTab, deps: TabContentDeps): ReactNode {
+  const { t, active } = deps
+  switch (tab.type) {
+    case 'document': {
+      const doc = tab.doc
+      if (doc === undefined) return <div className={css.empty}>{t('没有可显示的内容', 'Nothing to show')}</div>
+      if (doc.kind === 'file') return <FileContents key={doc.file.path} file={doc.file} />
+      if (doc.kind === 'diff') return <DiffContents diff={doc.diff} />
+      return <PlanPreview plan={deps.plan} loading={deps.loading} error={deps.error} />
+    }
+    case 'browse':
+      return deps.browse !== null
+        ? <WorkspaceBrowserPage workspace={deps.browse.workspace} path={deps.browse.path ?? ''} onOpenFile={deps.browse.onOpenFile} compact />
+        : <div className={css.empty}>{t('没有可浏览的工作区', 'No workspace to browse')}</div>
+    case 'git':
+      return deps.workspaceId !== undefined && deps.gitPane !== undefined
+        ? <GitPane workspaceId={deps.workspaceId} activeSource={deps.gitPane.activeSource}
+          onSelectSource={deps.gitPane.onSelectSource} lastTurnChanges={deps.gitPane.lastTurnChanges}
+          onNotice={deps.gitPane.onNotice} />
+        : <div className={css.empty}>{t('没有可审查的代码变更', 'No code changes to review')}</div>
+    case 'browser':
+      return <BrowserPane tab={tab} onNotice={deps.onNotice ?? noop}
+        onNavigate={patch => { deps.browserPane?.onNavigate(tab.id, patch) }} />
+    case 'trajectory':
+      return <TrajectoryPane conversationId={tab.conversationId!} title={tab.title} onNotice={deps.onNotice ?? noop} />
+    case 'selection-chat': {
+      const chat = deps.selectionChat?.for(tab.conversationId ?? '')
+      return chat === undefined
+        ? <div className={css.empty}>{t('没有可显示的对话', 'No conversation to show')}</div>
+        : <SelectionChatPane conversationId={tab.conversationId!} title={tab.title}
+          messages={chat.messages} busy={chat.busy} onSend={chat.onSend}
+          quotedText={chat.quotedText} onDismissQuote={chat.onDismissQuote} />
+    }
+    case 'plugin': {
+      const page = deps.pluginPages.find(candidate => candidate.id === tab.pageId)
+      if (page === undefined) return <div className={css.empty}>{t('插件页面已关闭', 'This plugin page is closed')}</div>
+      const host = deps.pluginPageHosts[page.id]
+      // An inline card already mounted this page; move its host instead of opening a second iframe.
+      return host !== undefined && deps.sidePageIds.has(page.id)
+        ? <PluginPageHostSlot pageId={page.id} host={host} hidden={!active} onRelease={deps.onReleasePluginPageHost} />
+        : <PluginUiPane page={page} hidden={!active}
+          onContext={deps.onPluginContext ?? noop} onMessage={deps.onPluginMessage ?? noop} onOpenLink={deps.onPluginOpenLink ?? noop} />
+    }
+    case 'subagent':
+      return <SubagentPane childId={tab.childId!} title={tab.title} hidden={!active} />
+    case 'subagents':
+      return deps.subagentDirectory !== null
+        ? <SubagentDirectory subagents={deps.subagentDirectory.subagents} onOpen={deps.subagentDirectory.onOpen} />
+        : <div className={css.empty}>{t('没有子智能体记录', 'No subagent records')}</div>
+    case 'new-tab':
+      return deps.launcher === undefined
+        ? <div className={css.empty}>{t('没有可打开的内容', 'Nothing to open')}</div>
+        : <NewTabLauncher launcher={deps.launcher} />
+  }
+}
+
+/** The `new-tab` page: built-in entries up top, recommended plugin apps below a short rule. */
+function NewTabLauncher({ launcher }: { launcher: NonNullable<InspectorProps['launcher']> }) {
+  const { t } = useUiPreferences()
+  const entries = [
+    { id: 'files', icon: FolderOpen, label: t('文件', 'Files'), description: t('从目录中选择一个文件', 'Choose a file from the workspace'), available: true, open: launcher.onOpenFiles },
+    { id: 'browser', icon: Globe, label: t('浏览器', 'Browser'), description: t('浏览网页和预览应用', 'Browse the web and preview apps'), available: true, open: launcher.onOpenBrowser },
+    { id: 'review', icon: FileDiff, label: t('审查', 'Review'), description: t('查看代码变更与差异', 'Review code changes and diffs'), available: launcher.canOpenReview, open: launcher.onOpenReview },
+    { id: 'trajectory', icon: Waypoints, label: t('模型调用轨迹', 'Model trajectory'), description: t('查看本次会话的模型调用记录', 'View this conversation\'s model calls'), available: launcher.canOpenTrajectory, open: launcher.onOpenTrajectory },
+    { id: 'selection-chat', icon: MessageSquareText, label: t('辅助对话', 'Side chat'), description: t('在侧边面板中继续对话', 'Continue the conversation in the side panel'), available: launcher.canOpenSelectionChat, open: launcher.onOpenSelectionChat },
+  ].filter(entry => entry.available)
+  return <div className={css.launcher}>
+    <h2 className={css.launcherTitle}>{t('新标签页', 'New tab')}</h2>
+    <div className={css.launcherGrid}>
+      {entries.map(entry => {
+        const Icon = entry.icon
+        return <button key={entry.id} type="button" className={css.launcherItem} data-launcher-entry={entry.id} onClick={entry.open}>
+          <span className={css.launcherIcon} aria-hidden="true"><Icon size={20} /></span>
+          <span className={css.launcherText}>
+            <span className={css.launcherLabel}>{entry.label}</span>
+            <span className={css.launcherDescription}>{entry.description}</span>
+          </span>
+          <span className={css.launcherPill}>{t('打开', 'Open')}</span>
+        </button>
+      })}
+    </div>
+    <div className={css.launcherDivider} aria-hidden="true" />
+    <section className={css.launcherApps}>
+      <h3 className={css.launcherSectionTitle}>{t('应用插件', 'Apps')}</h3>
+      {launcher.surfaces.length === 0
+        ? <div className={css.launcherEmpty}>{t('暂无推荐的应用插件', 'No recommended apps yet')}</div>
+        : <div className={css.launcherGrid}>
+          {launcher.surfaces.map(surface => <button key={surface.id} type="button" className={css.launcherItem}
+            data-launcher-surface={surface.id} onClick={() => launcher.onOpenSurface(surface)}>
+            <span className={css.launcherIcon} aria-hidden="true"><Puzzle size={20} /></span>
+            <span className={css.launcherText}>
+              <span className={css.launcherLabel}>{surface.title}</span>
+              <span className={css.launcherDescription}>{surface.pluginName}</span>
+            </span>
+            <span className={css.launcherPill}>{t('打开', 'Open')}</span>
+          </button>)}
+        </div>}
+    </section>
+  </div>
 }
 
 function DiffContents({ diff }: { diff: InspectorDiff }) {
@@ -469,4 +752,3 @@ function formatFileSize(size: number): string {
 function baseName(path: string): string {
   return path.split(/[\\/]/u).at(-1) || 'download'
 }
-

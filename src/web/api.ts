@@ -47,6 +47,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload as T
 }
 
+/** Text-shaped requests for non-JSON endpoints (NDJSON trajectory export). */
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(path)
+  if (!response.ok) {
+    let message = `请求失败（${response.status}）`
+    try {
+      const body = (await response.json()) as unknown
+      if (isRecord(body) && typeof body.error === 'string') message = body.error
+    } catch { /* keep the status fallback */ }
+    throw new ApiFailure(message)
+  }
+  return response.text()
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -270,8 +284,9 @@ export const api = {
   gitWorktreeStatus(id: string): Promise<GitWorktreeStatus> {
     return request(`/api/workspaces/${encodeURIComponent(id)}/git/status`)
   },
-  gitWorktreeDiff(id: string, path: string): Promise<GitWorktreeDiff> {
+  gitWorktreeDiff(id: string, path: string, sourceId?: 'unstaged' | 'staged' | 'branch'): Promise<GitWorktreeDiff> {
     const query = new URLSearchParams({ path })
+    if (sourceId !== undefined) query.set('sourceId', sourceId)
     return request(`/api/workspaces/${encodeURIComponent(id)}/git/diff?${query.toString()}`)
   },
   gitCommit(id: string, input: GitCommitInput): Promise<GitCommitResult> {
@@ -282,6 +297,10 @@ export const api = {
   },
   gitCommitMessage(id: string, input: GitCommitMessageInput): Promise<GitCommitMessageResult> {
     return request(`/api/workspaces/${encodeURIComponent(id)}/git/commit-message`, { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** Full captured trajectory of one conversation as chronological NDJSON text. */
+  trajectory(id: string): Promise<string> {
+    return requestText(`/api/conversations/${encodeURIComponent(id)}/trajectory`)
   },
   listPresets(): Promise<{ presets: AgentPreset[] }> {
     return request('/api/presets')

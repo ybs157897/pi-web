@@ -2,6 +2,7 @@ import { execFile, type ExecFileException } from 'node:child_process'
 import { lstat, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type {
+  GitChangeSourceId,
   GitCommitInput,
   GitCommitResult,
   GitHeadRefType,
@@ -53,6 +54,7 @@ function emptyStatus(isGitAvailable: boolean): GitWorktreeStatus {
     added: 0,
     removed: 0,
     files: [],
+    trackingBranchName: null,
   }
 }
 
@@ -146,6 +148,43 @@ function errorText(result: GitCommandResult): string {
   return (result.stderr.trim() || result.stdout.trim() || 'Git 命令执行失败').slice(0, 2_000)
 }
 
+/** `git diff --cached --name-only -z`: just the paths the index currently holds. */
+function parseNameOnly(stdout: string): string[] {
+  return stdout.split('\0').filter(name => name !== '')
+}
+
+/** `origin/main` when the current branch tracks an upstream; the command fails otherwise. */
+async function upstreamName(repoRoot: string): Promise<string | null> {
+  const upstream = await runGit(repoRoot, ['rev-parse', '--abbrev-ref', '@{upstream}'])
+  const name = upstream.stdout.trim()
+  return upstream.code === 0 && name !== '' ? name : null
+}
+
+/** ZCode's branch source: the lines this branch added on top of its upstream, keyed by path. */
+async function branchFileList(repoRoot: string, upstream: string): Promise<GitWorktreeFile[]> {
+  const range = await runGit(repoRoot, ['diff', '--numstat', '-z', `${upstream}...HEAD`])
+  const counts = parseNumstat(range.stdout)
+  return [...counts.entries()]
+    .map(([path, count]) => ({ path, status: 'modified' as const, added: count.added, removed: count.removed, staged: false }))
+    .sort((first, second) => first.path.localeCompare(second.path))
+}
+
+/** `git show <revision>:<path>`; undefined when that revision has no such blob. */
+async function showRevision(repoRoot: string, path: string, revision: string): Promise<string | undefined> {
+  const shown = await runGit(repoRoot, ['show', `${revision}:${path}`])
+  return shown.code === 0 ? shown.stdout : undefined
+}
+
+/** Shared patch shaping: binary markers and oversized patches become availability hints. */
+function shapePatch(path: string, patch: GitCommandResult): GitWorktreeDiff {
+  if (patch.stdout.startsWith('Binary files ')) return { path, diff: patch.stdout, availability: 'binary' }
+  if (patch.stdout !== '') {
+    const truncated = patch.stdout.length > MAX_DIFF_BYTES
+    return { path, diff: patch.stdout.slice(0, MAX_DIFF_BYTES), ...(truncated ? { availability: 'truncated' } : {}) }
+  }
+  return { path }
+}
+
 function normalizeRelativePath(root: string, rawPath: string): string {
   const target = resolve(root, rawPath)
   const rel = relative(root, target)
@@ -172,15 +211,23 @@ export class GitWorktree {
     return await this.readStatus(this.workspacePath(id))
   }
 
-  async diff(id: string, rawPath: string): Promise<GitWorktreeDiff> {
+  /**
+   * One file's diff for the review pane. ZCode sources: `staged` compares the index with HEAD
+   * (both texts included so the pane can render a side-by-side view), `branch` compares the
+   * upstream with HEAD; the default keeps the merged `diff HEAD` view with untracked full text.
+   */
+  async diff(id: string, rawPath: string, sourceId?: GitChangeSourceId): Promise<GitWorktreeDiff> {
     const status = await this.readStatus(this.workspacePath(id))
     if (!status.isRepository || status.repoRoot === null) {
       throw new RuntimeError('INVALID_INPUT', '工作区不在 Git 仓库中')
     }
     const path = normalizeRelativePath(status.repoRoot, rawPath)
+    if (sourceId === 'staged') return await this.stagedDiff(status.repoRoot, path)
+    if (sourceId === 'branch') return await this.branchDiff(status, path)
     const patch = await runGit(status.repoRoot, ['diff', 'HEAD', '--no-color', '--unified=3', '--', path])
     if (patch.unavailable) throw new RuntimeError('INVALID_INPUT', '未找到 Git')
-    if (patch.stdout !== '') return { path, diff: patch.stdout.slice(0, MAX_DIFF_BYTES) }
+    const shaped = shapePatch(path, patch)
+    if (shaped.diff !== undefined) return shaped
     // Untracked files have no HEAD entry, so the inspector gets their current text instead.
     const target = resolve(status.repoRoot, path)
     const info = await lstat(target).catch(() => undefined)
@@ -192,6 +239,33 @@ export class GitWorktree {
     if (insideRoot.startsWith('..') || isAbsolute(insideRoot)) return { path }
     const text = await readFile(real, 'utf8').catch(() => undefined)
     return text === undefined ? { path } : { path, newText: text }
+  }
+
+  /** The index versus HEAD; the texts let the pane render a full diff view instead of a patch. */
+  private async stagedDiff(root: string, path: string): Promise<GitWorktreeDiff> {
+    const patch = await runGit(root, ['diff', '--cached', '--no-color', '--unified=3', '--', path])
+    if (patch.unavailable) throw new RuntimeError('INVALID_INPUT', '未找到 Git')
+    const shaped = shapePatch(path, patch)
+    if (shaped.availability === 'binary') return shaped
+    // A newly added file has no HEAD blob and a removed one no index blob; either drops the texts.
+    const indexText = await showRevision(root, path, '')
+    const headText = await showRevision(root, path, 'HEAD')
+    if (indexText !== undefined && headText !== undefined
+      && indexText.length <= MAX_DIFF_BYTES && headText.length <= MAX_DIFF_BYTES) {
+      return { ...shaped, oldText: headText, newText: indexText }
+    }
+    return shaped.diff !== undefined ? shaped : { path, availability: 'unavailable' }
+  }
+
+  /** The local commits versus the upstream; patches only, matching ZCode's branch source. */
+  private async branchDiff(status: GitWorktreeStatus, path: string): Promise<GitWorktreeDiff> {
+    if (status.repoRoot === null) throw new RuntimeError('INVALID_INPUT', '工作区不在 Git 仓库中')
+    const upstream = status.trackingBranchName
+    if (upstream === null) throw new RuntimeError('INVALID_INPUT', '当前分支没有上游分支')
+    const patch = await runGit(status.repoRoot, ['diff', '--no-color', '--unified=3', `${upstream}...HEAD`, '--', path])
+    if (patch.unavailable) throw new RuntimeError('INVALID_INPUT', '未找到 Git')
+    const shaped = shapePatch(path, patch)
+    return shaped.diff !== undefined || shaped.availability !== undefined ? shaped : { path, availability: 'unavailable' }
   }
 
   /** The diff a commit would contain, capped for the model-based message generator. */
@@ -260,11 +334,22 @@ export class GitWorktree {
     if (porcelain.code !== 0) return { ...emptyStatus(true), isRepository: true, repoRoot }
 
     const parsed = parseStatus(porcelain.stdout)
-    const numstat = await runGit(repoRoot, ['diff', 'HEAD', '--numstat', '-z'])
+    const [numstat, stagedNames, upstream] = await Promise.all([
+      runGit(repoRoot, ['diff', 'HEAD', '--numstat', '-z']),
+      runGit(repoRoot, ['diff', '--cached', '--name-only', '-z']),
+      upstreamName(repoRoot),
+    ])
     const counts = parseNumstat(numstat.stdout)
+    const stagedPaths = new Set(parseNameOnly(stagedNames.stdout))
     const files: GitWorktreeFile[] = parsed.files.map(file => {
       const count = counts.get(file.path)
-      return { path: file.path, status: file.status, added: count?.added ?? 0, removed: count?.removed ?? 0 }
+      return {
+        path: file.path,
+        status: file.status,
+        added: count?.added ?? 0,
+        removed: count?.removed ?? 0,
+        staged: stagedPaths.has(file.path),
+      }
     })
     const added = files.reduce((sum, file) => sum + file.added, 0)
     const removed = files.reduce((sum, file) => sum + file.removed, 0)
@@ -280,6 +365,8 @@ export class GitWorktree {
       added,
       removed,
       files,
+      trackingBranchName: upstream,
+      branchFiles: upstream === null ? [] : await branchFileList(repoRoot, upstream),
     }
   }
 }

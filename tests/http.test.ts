@@ -306,7 +306,7 @@ class FakeRuntime implements Runtime {
   }
   async gitWorktreeStatus(id: string): Promise<Protocol.GitWorktreeStatus> {
     this.calls.push('git-status:' + id)
-    return { isGitAvailable: true, isRepository: true, repoRoot: '/tmp/repo', branchName: 'main', headRefType: 'branch', ahead: 0, behind: 0, dirtyFileCount: 1, added: 2, removed: 1, files: [{ path: 'a.ts', status: 'modified', added: 2, removed: 1 }] }
+    return { isGitAvailable: true, isRepository: true, repoRoot: '/tmp/repo', branchName: 'main', headRefType: 'branch', ahead: 0, behind: 0, dirtyFileCount: 1, added: 2, removed: 1, trackingBranchName: null, files: [{ path: 'a.ts', status: 'modified', added: 2, removed: 1, staged: false }] }
   }
   async gitWorktreeDiff(id: string, path: string): Promise<Protocol.GitWorktreeDiff> {
     this.calls.push(`git-diff:${id}:${path}`)
@@ -885,7 +885,7 @@ describe('management API', () => {
       const store = await AppStateStore.open({ dataDir, defaultWorkspace })
       const { app } = createTestApp(new PersistedShortcutsRuntime(store))
       const edited = resolveShortcuts({ search: 'Mod+p' })
-      expect(Object.keys(edited)).toHaveLength(10)
+      expect(Object.keys(edited)).toHaveLength(12)
       const editResponse = await app.request('/api/settings', json('PATCH', { shortcuts: edited }))
       expect(editResponse.status).toBe(200)
       expect((await editResponse.json()).shortcuts).toEqual(edited)

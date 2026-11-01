@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   AddWorkspaceInput, Automation, ConversationSummary, CreateGitBranchInput, GitBranchMutation, GitBranchSnapshot,
-  GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult,
+  GitChangeSourceId, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult,
   GitWorktreeDiff, GitWorktreeStatus, RenameWorkspaceInput, SwitchGitBranchInput, WorkspaceSummary,
 } from '../../shared/types.ts'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -104,7 +104,7 @@ export function createWorkspaces(deps: WorkspacesDeps) {
   const switchGitBranch = (id: string, input: SwitchGitBranchInput): Promise<GitBranchMutation> => gitBranches.switch(id, input)
   const createGitBranch = (id: string, input: CreateGitBranchInput): Promise<GitBranchMutation> => gitBranches.create(id, input)
   const gitWorktreeStatus = (id: string): Promise<GitWorktreeStatus> => gitWorktree.status(id)
-  const gitWorktreeDiff = (id: string, path: string): Promise<GitWorktreeDiff> => gitWorktree.diff(id, path)
+  const gitWorktreeDiff = (id: string, path: string, sourceId?: GitChangeSourceId): Promise<GitWorktreeDiff> => gitWorktree.diff(id, path, sourceId)
   const gitCommit = (id: string, input: GitCommitInput): Promise<GitCommitResult> => gitWorktree.commit(id, input)
   const gitPush = (id: string): Promise<GitPushResult> => gitWorktree.push(id)
   const gitCommitMessage = async (id: string, input: GitCommitMessageInput): Promise<GitCommitMessageResult> => {

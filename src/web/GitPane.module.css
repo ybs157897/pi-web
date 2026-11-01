@@ -1,0 +1,160 @@
+/* ZCode's review pane: source dropdown + refresh on one header row, then the scrolling file list. */
+.pane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  height: 100%;
+  color: var(--dsw-alias-label-primary);
+}
+
+.header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.sourceWrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+
+/* A native select styled as ZCode's trigger; the chevron is painted over the control. */
+.sourceSelect {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 24px 0 10px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  appearance: none;
+  cursor: pointer;
+}
+.sourceSelect:hover { background: var(--dsw-alias-bg-layer-2); }
+.sourceSelect:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+.selectChevron {
+  position: absolute;
+  right: 8px;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  pointer-events: none;
+}
+
+.refresh {
+  display: inline-flex;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.refresh:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.refresh:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+
+.list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 4px 8px;
+}
+
+/* ZCode's 32px file row: hover and the expanded row both stay highlighted. */
+.row {
+  display: flex;
+  min-width: 0;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover { background: var(--dsw-alias-bg-layer-2); }
+.row:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -1px; }
+.row[data-expanded] { background: var(--dsw-alias-bg-layer-2); }
+
+.fileIcon { flex: none; color: var(--dsw-alias-label-tertiary); }
+.directory { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-tertiary); text-overflow: ellipsis; white-space: nowrap; }
+.fileName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.counts {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  margin-left: auto;
+  font-family: var(--ds-font-family-code);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.added { color: #16a34a; }
+.removed { color: #dc2626; }
+
+.chevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+.chevronOpen { transform: rotate(180deg); }
+
+.diffBody {
+  flex: none;
+  margin: 0 4px 4px;
+  padding: 4px 0;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  overflow: hidden;
+}
+.diffContent { max-height: 320px; overflow: auto; }
+.diffPlaceholder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.noteLine { padding: 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+
+.emptyState {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px 16px;
+  text-align: center;
+}
+.emptyIcon { color: var(--dsw-alias-label-tertiary); }
+.emptyTitle { margin: 0; color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500; line-height: 20px; }
+.emptyDescription { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+
+.spin { animation: git-pane-spin 900ms linear infinite; }
+@keyframes git-pane-spin { to { transform: rotate(360deg); } }
