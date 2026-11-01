@@ -2,6 +2,7 @@ import { defineDoc, defineExtension, defineTool, section, type Extension } from 
 import { Type } from '@earendil-works/pi-ai'
 import type { AskUserQuestionAnswerItem } from '../../shared/types.ts'
 import { Interactions } from './interaction.ts'
+import { Goals } from './goal.ts'
 import { resolveToolRoute, toolRouteInstruction } from '../conversation/tool-routing.ts'
 
 /**
@@ -33,13 +34,14 @@ export type StoredPlanReview = {
   approveLabel: string
   askedAt: number
   /** `superseded` means a newer submission replaced this review before the user decided. */
-  status: 'pending' | 'answered' | 'superseded'
+  status: 'pending' | 'answered' | 'superseded' | 'cancelled'
   /** Only set once answered: true approved the plan, false asked for changes. */
   approved?: boolean
   /** What the user wants changed, echoed to the model in the reply message. */
   feedback?: string
   answers?: AskUserQuestionAnswerItem[]
   answeredAt?: number
+  cancelledAt?: number
 }
 
 const HEADING_PREFIX = '# '
@@ -72,7 +74,8 @@ export function planTitle(plan: string): string | undefined {
 /** Plan mode is off, so there is nothing to submit; the message tells the model how to recover. */
 export const PLAN_INACTIVE_ERROR = [
   'Plan mode is not active in this conversation, so there is no plan to submit.',
-  'Ask the user to turn plan mode on first (the composer plan chip or the /plan command), then write the plan and call exit_plan_mode again.',
+  'Call enter_plan_mode first to switch into plan mode yourself; do not ask the user to enable it.',
+  'Then write the plan and call exit_plan_mode again.',
   'If the request is already approved, just do the work instead of submitting a plan.',
 ].join(' ')
 
@@ -88,7 +91,7 @@ export function planReviewOf(value: unknown): StoredPlanReview | undefined {
   return record as StoredPlanReview
 }
 
-const REVIEW_STATUSES = new Set<StoredPlanReview['status']>(['pending', 'answered', 'superseded'])
+const REVIEW_STATUSES = new Set<StoredPlanReview['status']>(['pending', 'answered', 'superseded', 'cancelled'])
 
 /**
  * The interaction table is declared by the question slice as a table of question records; a plan
@@ -174,7 +177,7 @@ const exitPlanModeTool = defineTool({
     'Before calling, make sure the plan is complete and unambiguous: if questions about the requirements or the approach remain, resolve them with `ask_user_question` first, then submit.',
     'Do not use `ask_user_question` to ask "Is this plan okay?" or "Should I proceed?" — submitting the plan is itself the approval request.',
     `Make this the only and final tool call in that assistant response, and make the plan Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>") followed by the steps and the verification you will run.`,
-    'Only call this while plan mode is active: the user turns it on with the composer plan chip or the /plan command.',
+    'Only call this while plan mode is active: if plan mode is not active yet, call `enter_plan_mode` first instead of asking the user to enable it.',
     'The user reviews the plan in the transcript; approval turns plan mode off and their confirmation arrives as a follow-up message.',
     'If they ask for changes, revise the plan and call exit_plan_mode again instead of starting the work.',
     'Examples: "search for and understand how vim mode is implemented" → report the findings, do not submit a plan; "implement yank mode for vim" → submit the implementation plan; "add authentication, auth method undecided" → ask which auth method first, then submit.',
@@ -219,9 +222,54 @@ const exitPlanModeTool = defineTool({
   },
 })
 
+/**
+ * ZCode's EnterPlanMode in its free form: the model switches into plan mode itself, without a
+ * permission prompt (`plan-mode-policy` allows it unconditionally) and without asking the user.
+ * The description carries ZCode's "prefer it for implementation tasks" instruction so asking for
+ * a plan just works — the model enters plan mode instead of telling the user to flip a chip.
+ */
+const enterPlanModeTool = defineTool({
+  name: 'enter_plan_mode',
+  description: [
+    'Switch this conversation into plan mode yourself, without asking the user and without waiting for a confirmation.',
+    'Prefer entering plan mode for implementation tasks unless they are trivial: new features, work with several viable approaches, multi-file refactors, architectural decisions, or unclear acceptance criteria.',
+    'Simple lookups, one-line fixes, and direct answers do not need plan mode.',
+    'While plan mode is active, only research the repository and design the plan — make no changes — and finish by submitting the plan with exit_plan_mode for the user\'s approval.',
+    'If plan mode is already active, there is no need to call this again.',
+  ].join(' '),
+  parameters: Type.Object({}),
+  execute: async (_args, api, context) => {
+    const goal = await api.snapshot(Goals, api.conversationId, context)
+    if (goal?.goal?.phase === 'active') {
+      throw new Error('Plan and Goal cannot be active at the same time: pause or complete the goal before entering plan mode.')
+    }
+    const state = await api.snapshot(Plans, api.conversationId, context)
+    if (state?.active === true) {
+      return {
+        output: [{
+          type: 'text' as const,
+          text: 'Plan mode is already active. Research first, then submit your plan with exit_plan_mode.',
+        }],
+      }
+    }
+    await api.commit(async (tx) => {
+      const doc = await tx.doc(Plans, api.conversationId)
+      doc.active = true
+      doc.updatedAt = Date.now()
+    }, context)
+    return {
+      output: [{
+        type: 'text' as const,
+        text: 'Plan mode is now active. Research first, design the plan, and submit it with exit_plan_mode; do not implement anything until the user approves it.',
+      }],
+      details: { kind: 'plan-mode' as const, status: 'active' as const },
+    }
+  },
+})
+
 /** DSH's plan mode: the document, the policy section and `exit_plan_mode`; register it in the runtime. */
 export const PlanExtension: Extension = defineExtension({
   name: 'plan',
-  tools: [exitPlanModeTool],
+  tools: [enterPlanModeTool, exitPlanModeTool],
   sections: [planSection],
 })

@@ -9,6 +9,7 @@
  */
 export const ANSWER_REPLY_KIND = 'answer_to_pending_question'
 export const DISMISSAL_REPLY_KIND = 'dismissed_pending_question'
+export const DISMISS_PLAN_REPLY_KIND = 'dismissed_plan_review'
 
 /**
  * Whether a user message is one of those payloads. The runtime serializes them with
@@ -18,4 +19,5 @@ export function isInteractionPayloadText(text: string): boolean {
   const trimmed = text.trimStart()
   if (!trimmed.startsWith('{')) return false
   return trimmed.includes(`"kind":"${ANSWER_REPLY_KIND}"`) || trimmed.includes(`"kind":"${DISMISSAL_REPLY_KIND}"`)
+    || trimmed.includes(`"kind":"${DISMISS_PLAN_REPLY_KIND}"`)
 }

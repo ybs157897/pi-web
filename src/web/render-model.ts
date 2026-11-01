@@ -48,7 +48,7 @@ export function toolActivity(name: string): ToolActivity {
   if (id === 'web_search') return 'webSearch'
   if (id === 'web_fetch') return 'webFetch'
   if (id === 'subagent' || id.startsWith('subagent_')) return 'subagents'
-  if (['todo_write', 'create_goal', 'update_goal', 'get_goal', 'exit_plan_mode'].includes(id)) return 'plan'
+  if (['todo_write', 'create_goal', 'update_goal', 'get_goal', 'exit_plan_mode', 'enter_plan_mode'].includes(id)) return 'plan'
   if (id === 'ask_user_question' || id === 'request_user_input') return 'questions'
   return 'tools'
 }

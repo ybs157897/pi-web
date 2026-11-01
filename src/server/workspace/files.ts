@@ -21,6 +21,14 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 }
 const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'])
 const WINDOWS_DRIVE_PREFIX = /^[A-Za-z]:/
+/** Extension-less text files (`Makefile` has no `extname`, so the extension table never sees it). */
+const TEXT_FILE_NAMES = new Set([
+  'makefile', 'dockerfile', 'containerfile', 'justfile', 'procfile', 'rakefile', 'gemfile', 'brewfile', 'vagrantfile',
+  'license', 'licence', 'readme', 'notice', 'changelog', 'changes', 'contributing', 'authors', 'contributors',
+  'code_of_conduct', 'security', 'install', 'uninstall', 'todo', 'news',
+  '.gitignore', '.gitattributes', '.gitmodules', '.dockerignore', '.editorconfig', '.eslintignore', '.prettierignore',
+  '.npmignore', '.npmrc', '.nvmrc', '.prettierrc', '.eslintrc', '.babelrc', '.stylelintrc', '.browserslistrc', '.env',
+])
 
 function isWithin(root: string, target: string): boolean {
   const path = relative(root, target)
@@ -126,7 +134,40 @@ async function checkedPath(root: string, relativePath: string, allowMissingFinal
 }
 
 function mimeType(path: string): string {
+  if (TEXT_FILE_NAMES.has(basename(path).toLocaleLowerCase())) return 'text/plain'
   return MIME_BY_EXTENSION[extname(path).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/** Bytes above this many are judged by the control-character scan alone. */
+const TEXT_SNIFF_LIMIT = 8 * 1024
+
+/**
+ * Whether an unknown-type file reads as text: no control bytes outside tab/newline/carriage
+ * return in the head, and the head decodes as UTF-8. A sample that ends inside a multi-byte
+ * sequence would report a replacement character for valid text, so large files decode only
+ * up to the last sequence boundary.
+ */
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer.subarray(0, Math.min(buffer.length, TEXT_SNIFF_LIMIT))
+  for (let index = 0; index < sample.length; index += 1) {
+    const byte = sample[index]!
+    if (byte === 9 || byte === 10 || byte === 13) continue
+    if (byte < 32 || byte === 127) return false
+  }
+  const end = buffer.length <= sample.length ? sample.length : sample.length - 3
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(sample.subarray(0, Math.max(0, end)))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The extension table alone cannot name a `Makefile`; content decides the rest. */
+function effectiveMimeType(path: string, buffer: Buffer): string {
+  const type = mimeType(path)
+  if (type !== 'application/octet-stream') return type
+  return looksLikeText(buffer) ? 'text/plain' : type
 }
 
 /** Directories that never hold a file a reader would click on. */
@@ -254,8 +295,8 @@ export class WorkspaceFiles {
     }
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法在浏览器预览')
-    const type = mimeType(resolved.canonical)
     const buffer = await readFile(resolved.canonical)
+    const type = effectiveMimeType(resolved.canonical, buffer)
     const common = { path: resolved.path, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
     if (INLINE_IMAGE_TYPES.has(type)) return { ...common, kind: 'image', data: buffer.toString('base64') }
     if (isTextType(type) && info.size <= MAX_FILE_TEXT_BYTES && !buffer.includes(0)) {
@@ -296,7 +337,8 @@ export class WorkspaceFiles {
     const info = await stat(resolved.canonical)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取工作区中的普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法内联读取')
-    return { mimeType: mimeType(resolved.canonical), data: await readFile(resolved.canonical) }
+    const data = await readFile(resolved.canonical)
+    return { mimeType: effectiveMimeType(resolved.canonical, data), data }
   }
 
   async saveAttachments(id: string, conversationId: string, requestId: string, files: readonly AttachmentInput[]): Promise<AttachmentReference[]> {

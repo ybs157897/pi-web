@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  IconPlanOutlineRegular, ImageLightbox, JsonBlock, StateDot,
+  ImageLightbox, JsonBlock, StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { SquareTerminal, Search, Pencil, FilePlus2, Globe, Braces, Bot, ListTodo, CircleHelp, Sparkles, Ellipsis, WandSparkles } from 'lucide-react'
 import type { ContentBlock, InteractionRequest } from '../shared/types.ts'
@@ -14,6 +14,8 @@ import {
   type AskQuestionRecord, type CodemodeCallStatus, type CodemodeRowModel, type LateAnswer, type SkillRowModel,
 } from './tool-render-model.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
+import { PlanExcerptCard } from './PlanExcerptCard.tsx'
+import planCardCss from './QuestionComposer.module.css'
 import { PluginUiCard } from './PluginUiCard.tsx'
 import { PluginUiConversationContext, pluginUiDescriptor } from './plugin-ui-bridge.ts'
 import { ProcessRow } from './ProcessRow.tsx'
@@ -158,6 +160,14 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
     ...(planHeading(plan) === undefined ? {} : { title: planHeading(plan) }),
   }
   const planTitleText = planDocument?.title ?? t('计划', 'Plan')
+  // ZCode renders the submitted plan as the row itself (`switch-mode.tsx`), so the row opens
+  // once to show the excerpt card without hunting for the disclosure arrow.
+  const autoOpenedPlan = useRef(false)
+  useEffect(() => {
+    if (plan === undefined || autoOpenedPlan.current) return
+    autoOpenedPlan.current = true
+    setOpen(true)
+  }, [plan, setOpen])
   const hasArgs = Object.keys(model.args).length > 0
   const hasResult = item.result !== undefined
   const hasDetails = model.details !== undefined && model.details !== null
@@ -264,15 +274,8 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
       >
         <div className={css.body}>
           {planDocument !== undefined && planOpen !== undefined && (
-            <button type="button" className={css.planCard} data-plan-card={callId}
-              aria-label={t(`打开计划：${planTitleText}`, `Open plan: ${planTitleText}`)} onClick={planOpen}>
-              <span className={css.planCardIcon} aria-hidden="true"><IconPlanOutlineRegular size={18} /></span>
-              <span className={css.planCardDetails}>
-                <span className={css.planCardTitle}>{planTitleText}</span>
-                <span className={css.planCardDescription}>{t('计划 · Markdown', 'Plan · Markdown')}</span>
-              </span>
-              <span className={css.planCardOpen}>{t('打开', 'Open')}</span>
-            </button>
+            <PlanExcerptCard className={planCardCss.planOutputCard} markdown={planDocument.markdown}
+              onOpen={planOpen} t={t} ariaLabel={t(`打开计划：${planTitleText}`, `Open plan: ${planTitleText}`)} />
           )}
           {pluginUiInline && pluginPage !== undefined && (
             <PluginUiCard page={pluginPage} onOpenSidePane={onOpenPluginUi}

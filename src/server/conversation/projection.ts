@@ -677,9 +677,9 @@ function thinkingLevel(value: string | undefined): ThinkingLevel {
 }
 
 /** Reply entries that resume a turn an interaction paused: answers, dismissals, plan reviews. */
-const INTERACTION_REPLY_ENTRY_KINDS = new Set(['pi-web.user-question-reply', 'pi-web.user-question-dismissed', 'pi-web.plan-review-reply'])
+const INTERACTION_REPLY_ENTRY_KINDS = new Set(['pi-web.user-question-reply', 'pi-web.user-question-dismissed', 'pi-web.plan-review-reply', 'pi-web.plan-review-dismissed'])
 
-const INTERACTION_REPLY_PREFIXES = ['question-reply:', 'question-dismiss:', 'plan-review-reply:']
+const INTERACTION_REPLY_PREFIXES = ['question-reply:', 'question-dismiss:', 'plan-review-reply:', 'plan-review-dismiss:']
 
 /** The call id a reply request names, or undefined for any other request id. */
 function interactionReplyCallId(request: string): string | undefined {

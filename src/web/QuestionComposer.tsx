@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { PlanExcerptCard } from './PlanExcerptCard.tsx'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem, InteractionRequest, InteractionStatus } from '../shared/types.ts'
 import { ApiFailure, api } from './api.ts'
 import { planTitle as planHeadingOf } from './plan-preview.ts'
-import { markdownLabels } from './render-labels.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './QuestionComposer.module.css'
 
 /** DSH's "(Recommended)" / "（推荐）" suffix renders as a badge instead of part of the label. */
 const RECOMMENDED_SUFFIX = /\s*[（(]\s*(?:recommended|推荐)\s*[)）]\s*$/iu
-/** Answer id the plan-review card submits; the runtime reads the selected labels, not this id. */
+/** Answer id the plan-review card submits; the route only inspects the selected labels. */
 const PLAN_REVIEW_ANSWER_ID = 'plan-review'
-const DEFAULT_APPROVE_LABEL = '同意执行'
+/** The approve option the decision card shows, matching ZCode's plan-approval elicitation. */
+const PLAN_APPROVE_OPTION = '批准'
 
 type DraftAnswer = { selected: string[]; custom: string }
 type AnsweredLocally = { answers: AskUserQuestionAnswerItem[] }
@@ -42,14 +42,6 @@ function newest(interactions: readonly InteractionRequest[] | undefined): Intera
 function splitRecommended(label: string): { text: string; recommended: boolean } {
   const match = RECOMMENDED_SUFFIX.exec(label)
   return match ? { text: label.slice(0, match.index).trimEnd(), recommended: true } : { text: label, recommended: false }
-}
-
-/** The plan review's own status wording: `approved` separates an approval from a change request. */
-function planStatusText(status: InteractionStatus, approved: boolean | undefined, t: (chinese: string, english: string) => string): string {
-  if (status === 'pending') return t('待审批', 'Waiting for review')
-  if (status === 'continued') return t('已被新计划取代', 'Superseded by a newer plan')
-  if (approved === false) return t('已要求修改', 'Changes requested')
-  return t('已批准', 'Approved')
 }
 
 /**
@@ -94,7 +86,7 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
 
   if (planReview !== undefined) {
     return <PlanReviewCard key={planReview.id} conversationId={conversationId} review={planReview}
-      onAnswered={onAnswered} onDismiss={onDismiss} onOpenPlan={onOpenPlan} />
+      onAnswered={onAnswered} onOpenPlan={onOpenPlan} />
   }
   if (!interaction || questions.length === 0) return null
 
@@ -257,36 +249,53 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
 }
 
 /**
- * DSH's plan review card: the submitted plan plus the two decisions. "Request changes" only collapses
- * the card and returns focus to the composer, so the user's next message is their feedback; the
- * approve button posts the decision, and the server turns plan mode off when it lands.
+ * ZCode's plan review pair (`switch-mode.tsx` card + `ElicitationDialog`): a "计划" header with a
+ * copy action, the plan markdown clipped to a fading excerpt with a centered "查看完整计划" pill,
+ * and below it the permission card that carries the decision — "需要权限 · 实施计划" with the
+ * numbered approve option, a free-form answer line, and 忽略/提交. Both cards are clickable like
+ * ZCode's, with real child controls excluded from the activation.
  */
-function PlanReviewCard({ conversationId, review, onAnswered, onDismiss, onOpenPlan }: {
+function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
   conversationId: string
   review: InteractionRequest & { detail: string }
   onAnswered?: (detail: Awaited<ReturnType<typeof api.answerInteraction>>) => void
-  onDismiss?: () => void
   onOpenPlan?: (plan: { markdown: string; title?: string }) => void
 }) {
   const { t } = useUiPreferences()
-  const [dismissed, setDismissed] = useState(false)
-  const [expanded, setExpanded] = useState(review.status === 'pending')
   const [submitting, setSubmitting] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
   const [error, setError] = useState('')
   const [decided, setDecided] = useState<PlanDecisionLocally | null>(null)
+  const [approveSelected, setApproveSelected] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const composing = useRef(false)
   const status: InteractionStatus = decided !== null ? 'answered' : review.status
-  const approved = decided?.approved ?? review.approved
-  const approveLabel = review.approveLabel ?? DEFAULT_APPROVE_LABEL
   const readOnly = status !== 'pending'
-  if (dismissed && !readOnly) return null
+  const heading = planHeadingOf(review.detail)
+  const openPlan = (): void => {
+    onOpenPlan?.({ markdown: review.detail, ...(heading === undefined ? {} : { title: heading }) })
+  }
 
-  const approve = async (): Promise<void> => {
-    if (readOnly || submitting || dismissed) return
+  // A decided plan leaves the composer like an answered question; the transcript's
+  // plan tool row keeps the record.
+  if (readOnly) return null
+
+  /**
+   * ZCode's `continueOrSubmit`: selecting the approve option (or leaving everything empty — an
+   * empty answer on a plan approval is an explicit approval, never a skip) approves the plan;
+   * typed text alone travels back as the requested changes.
+   */
+  const submitDecision = async (): Promise<void> => {
+    if (readOnly || submitting) return
+    const feedback = feedbackText.trim()
+    const selected = approveSelected || feedback === '' ? [PLAN_APPROVE_OPTION] : []
     setSubmitting(true)
     setError('')
     try {
-      const detail = await api.answerInteraction(conversationId, review.id, [{ id: PLAN_REVIEW_ANSWER_ID, selected: [approveLabel] }])
-      setDecided({ approved: true })
+      const detail = await api.answerInteraction(conversationId, review.id, [
+        { id: PLAN_REVIEW_ANSWER_ID, selected, ...(feedback === '' ? {} : { custom: feedback }) },
+      ])
+      setDecided({ approved: selected.length > 0 })
       onAnswered?.(detail)
     } catch (cause) {
       setError(cause instanceof ApiFailure ? cause.message : t('提交计划决定失败', 'Could not submit the plan decision'))
@@ -295,42 +304,89 @@ function PlanReviewCard({ conversationId, review, onAnswered, onDismiss, onOpenP
     }
   }
 
-  // A decided plan leaves the composer like an answered question; the transcript's
-  // plan tool row keeps the record. The collapsed bar only bridges the brief
-  // decided-but-not-settled window, where hiding the card reads better than a residue.
-  if (readOnly && !expanded) return null
+  const ignore = async (): Promise<void> => {
+    if (readOnly || dismissing) return
+    setDismissing(true)
+    setError('')
+    try {
+      const detail = await api.cancelInteraction(conversationId, review.id)
+      onAnswered?.(detail)
+    } catch (cause) {
+      setError(cause instanceof ApiFailure ? cause.message : t('放弃计划审阅失败', 'Could not dismiss the plan review'))
+    } finally {
+      setDismissing(false)
+    }
+  }
 
-  return <section className={css.card} data-plan-card data-status={status} aria-label={t('计划待审', 'Plan review')}>
-    <header className={css.header}>
-      <span className={css.eyebrow}>{readOnly ? t('计划', 'Plan') : t('计划待审', 'Plan review')}</span>
-      <span className={css.status} data-plan-status={status}>{planStatusText(status, approved, t)}</span>
-      {/* DSH's plan-review actions slot: the "查看全文" link opens the same plan in the sidebar
-          (`ui-plan/src/client/PlanCard.tsx:81-83`, copy `locales.ts:10`). */}
-      {onOpenPlan !== undefined && <button type="button" className={css.reviewLink} data-plan-full
-        title={t('在侧边栏打开计划', 'Open plan in sidebar')}
-        aria-label={t('在侧边栏打开计划', 'Open plan in sidebar')}
-        onClick={() => { onOpenPlan({ markdown: review.detail, ...(planHeadingOf(review.detail) === undefined ? {} : { title: planHeadingOf(review.detail) }) }) }}>
-        {t('查看全文', 'View full plan')}
-      </button>}
-      <button type="button" className={css.collapseButton} data-plan-toggle onClick={() => setExpanded(false)}>
-        {t('收起', 'Collapse')}
-      </button>
-    </header>
+  // 上下键在批准选项与回答输入行之间移动（ZCode 的 keyboardHint 所指的行为）。
+  const moveDecisionFocus = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const rows = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-decision-row]')]
+    const index = rows.indexOf(document.activeElement as HTMLElement)
+    if (index === -1) return
+    const next = rows[event.key === 'ArrowDown' ? index + 1 : index - 1]
+    if (next !== undefined) {
+      event.preventDefault()
+      next.focus()
+    }
+  }
+
+  const planCard = <PlanExcerptCard
+    className={css.card}
+    dataStatus={status}
+    markdown={review.detail}
+    onOpen={onOpenPlan === undefined ? undefined : openPlan}
+    t={t}
+    ariaLabel={t('计划待审', 'Plan review')}
+  >
     {review.feedback !== undefined && review.feedback !== '' && <div className={css.planFeedback} data-plan-feedback>
       {t(`修改要求：${review.feedback}`, `Requested changes: ${review.feedback}`)}
     </div>}
-    <div className={css.planBody} data-plan-body>
-      <MarkdownText text={review.detail} labels={markdownLabels(t)} />
+  </PlanExcerptCard>
+
+  const decisionCard = <section className={css.decisionCard} data-plan-decision aria-label={t('审批计划', 'Approve plan')}>
+    <header className={css.decisionHeader}>
+      <span className={css.permissionChip}>{t('需要权限', 'Permission needed')}</span>
+      <h3 className={css.decisionTitle}>{t('实施计划', 'Implement the plan')}</h3>
+    </header>
+    <div className={css.decisionOptions} role="radiogroup" aria-label={t('计划决定', 'Plan decision')}
+      onKeyDown={moveDecisionFocus}>
+      <button type="button" className={css.decisionOption} role="radio" aria-checked={approveSelected}
+        data-selected={approveSelected || undefined} data-decision-row
+        onClick={() => { setApproveSelected(current => !current) }}>
+        <span className={css.decisionIndex} aria-hidden="true">1.</span>
+        <span className={css.decisionBody}>
+          <span className={css.decisionLabel}>{t('批准', 'Approve')}</span>
+          <span className={css.decisionDescription}>{t('退出计划模式并开始实施。', 'Exit plan mode and start implementation.')}</span>
+        </span>
+      </button>
+      <div className={css.decisionCustomRow}>
+        <span className={css.decisionIndex} aria-hidden="true">2.</span>
+        <textarea className={css.decisionCustom} rows={1} value={feedbackText} data-decision-row tabIndex={-1}
+          placeholder={t('输入你的回答…', 'Type your answer…')} aria-label={t('输入你的回答', 'Type your answer')}
+          onChange={event => setFeedbackText(event.target.value)}
+          onCompositionStart={() => { composing.current = true }}
+          onCompositionEnd={() => { composing.current = false }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && !event.shiftKey && !composing.current) {
+              event.preventDefault()
+              void submitDecision()
+            }
+          }} />
+      </div>
     </div>
     {error !== '' && <div className={css.error} role="alert" data-plan-error>{error}</div>}
-    {!readOnly && <footer className={css.footer}>
-      <span className={css.footerSpacer} />
-      <button type="button" className={css.secondary} data-plan-revise onClick={() => { setDismissed(true); onDismiss?.() }}>
-        {t('要求修改', 'Request changes')}
+    <footer className={css.decisionFooter}>
+      <span className={css.decisionHint}>{t('ⓘ 使用 Tab / 上下键选择，回车或空格选中', 'ⓘ Tab / arrow keys to choose, Enter or Space to select')}</span>
+      <span className={css.decisionSpacer} />
+      <button type="button" className={css.secondary} data-plan-ignore disabled={dismissing} onClick={() => { void ignore() }}>
+        {dismissing ? t('提交中…', 'Submitting…') : t('忽略', 'Ignore')}
       </button>
-      <button type="button" className={css.submit} data-plan-approve disabled={submitting} onClick={() => { void approve() }}>
-        {submitting ? t('提交中…', 'Submitting…') : approveLabel}
+      <button type="button" className={css.decisionSubmit} data-plan-submit disabled={submitting} onClick={() => { void submitDecision() }}>
+        {submitting ? t('提交中…', 'Submitting…') : t('提交', 'Submit')}
       </button>
-    </footer>}
+    </footer>
   </section>
+
+  return <>{planCard}{decisionCard}</>
 }

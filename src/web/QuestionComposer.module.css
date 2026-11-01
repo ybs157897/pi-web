@@ -27,16 +27,6 @@
   line-height: 18px;
 }
 
-.status {
-  flex: none;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: var(--dsw-alias-state-business-tertiary);
-  color: var(--dsw-alias-label-primary-bluish);
-  font-size: 11px;
-  line-height: 18px;
-}
-
 .chip {
   flex: none;
   max-width: 40%;
@@ -94,28 +84,290 @@
   cursor: default;
 }
 
-/* DSH's plan-review actions link (`ui-plan/src/client/PlanPreview.module.css:32-34`). */
-.reviewLink {
-  display: inline-flex;
-  flex: none;
+/* ZCode's plan card header (`ToolCallBlocks/renderers/switch-mode.tsx`): a subtle glyph and
+   label on the left, a ghost copy action on the right. */
+.planHeader {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.planGlyph {
+  display: flex;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.planHeading {
+  flex: none;
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.planIconAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
   border: 0;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  font: inherit;
-  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
 }
 
-.reviewLink:hover {
-  color: var(--dsw-alias-label-primary);
+.planIconAction:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
 }
 
-.reviewLink:focus-visible {
+.planClip {
+  position: relative;
+  overflow: hidden;
+  margin: 8px 0 2px;
+}
+
+/* The plan card floats above the decision card, so it keeps all four corners and its own
+   bottom border (`.card` alone is the composer-attached question card shape). */
+.card[data-plan-card] {
+  margin: 0 16px 0;
+  border-bottom: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-lg);
+}
+
+/* ZCode clips the plan to a fading excerpt: the max-height and the mask must live on the same
+   clipping node (`switch-mode.tsx`), or a long body fades over its full height instead of the
+   tail, and the visible area loses its bottom fade. The 48px padding reserves room for the pill. */
+.planExcerpt {
+  box-sizing: border-box;
+  max-height: 256px;
+  padding: 0 4px 48px 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  mask-image: linear-gradient(to bottom, #000 0%, #000 30%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 30%, transparent 100%);
+}
+
+.planExcerpt p,
+.planExcerpt li {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.planPill {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 18px 0 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  transform: translateX(-50%);
+  box-shadow: var(--dsw-elevation-soft);
+}
+
+.planPill:hover {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.planPill:focus-visible {
   outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: 3px;
+}
+
+/* The decision card under the plan: ZCode's ElicitationDialog (「需要权限 · 实施计划」 with the
+   numbered approve option, a free-form answer line, and 忽略/提交). It is the composer-attached
+   card of the pair, so it keeps the question card's top-radius-only frame. */
+.decisionCard {
+  box-sizing: border-box;
+  width: min(100%, var(--dsh-composer-card-max-width, 774px));
+  margin: 6px 16px -6px;
+  padding: 10px 12px 12px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-bottom: 0;
+  border-radius: var(--dsw-radius-lg) var(--dsw-radius-lg) 0 0;
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-2));
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.decisionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.permissionChip {
+  flex: none;
+  padding: 0 8px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.decisionTitle {
+  flex: none;
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.decisionOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.decisionOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.decisionOption:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.decisionOption[data-selected] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: var(--dsw-alias-state-business-tertiary);
+}
+
+.decisionOption:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+.decisionIndex {
+  flex: none;
+  min-width: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.decisionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.decisionLabel {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.decisionDescription {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.decisionCustomRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  outline: none;
+}
+
+.decisionCustom {
+  flex: 1;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  resize: none;
+}
+
+.decisionCustom:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.decisionFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.decisionHint {
+  display: flex;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+.decisionSpacer {
+  flex: 1;
+}
+
+.decisionSubmit {
+  height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.decisionSubmit:hover {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.decisionSubmit:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* The transcript variant: the exit_plan_mode row renders the same card standalone at full
+   width inside the process body. */
+.planOutputCard {
+  width: 100%;
+  margin: 2px 0;
+  padding: 8px 12px 10px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-base);
+  box-shadow: var(--dsw-elevation-soft);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .question {
@@ -349,20 +601,11 @@
   overflow-wrap: anywhere;
 }
 
-.planBody {
-  box-sizing: border-box;
-  max-height: 260px;
-  margin: 6px 0 2px;
-  padding-right: 4px;
-  overflow-y: auto;
-  overflow-wrap: anywhere;
-}
+.planExcerpt h1 { margin: 2px 0 6px; font-size: 15px; line-height: 22px; }
 
-.planBody h1 { margin: 2px 0 6px; font-size: 15px; line-height: 22px; }
+.planExcerpt h2 { margin: 10px 0 4px; font-size: 13px; line-height: 20px; }
 
-.planBody h2 { margin: 10px 0 4px; font-size: 13px; line-height: 20px; }
-
-.planBody p, .planBody li { font-size: 13px; line-height: 20px; }
+.planExcerpt p, .planExcerpt li { font-size: 13px; line-height: 20px; }
 
 @media (max-width: 760px) {
   .card { margin-inline: 8px; }

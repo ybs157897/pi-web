@@ -631,11 +631,14 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   if (userText.includes('[plan]') || planReply !== undefined || planAwaitingReview) {
     if (submittedThisTurn) {
       const refused = [...currentResults].reverse().find((message) => message.toolName === 'exit_plan_mode')?.isError === true
+      const entered = currentResults.some((message) => message.toolName === 'enter_plan_mode' && !message.isError)
+      if (refused && !entered) {
+        // ZCode's EnterPlanMode: the model switches into plan mode itself instead of asking
+        // the user to flip the composer chip.
+        return fauxAssistantMessage(fauxToolCall('enter_plan_mode', {}, { id: `demo-plan-enter-${runToken}` }), { stopReason: 'toolUse' })
+      }
       if (refused) {
-        return fauxAssistantMessage([
-          fauxThinking('exit_plan_mode 被拒绝：计划模式当前没有开启。'),
-          fauxText('计划模式当前没有开启，exit_plan_mode 被拒绝。请在输入区点开「计划」chip（或输入 /plan）后再提交计划。'),
-        ])
+        return fauxAssistantMessage(fauxToolCall('exit_plan_mode', { plan: DEMO_PLAN }, { id: `demo-plan-retry-${runToken}` }), { stopReason: 'toolUse' })
       }
       return fauxAssistantMessage([
         fauxThinking('计划已提交待审，等待用户在待审卡上确认。'),

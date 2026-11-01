@@ -892,3 +892,39 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 - **测试**：`tests/render-model.test.ts` 新增用例（thinking-only 活消息窗口：process=['content','reasoning']、responses=[]；正文开始后 responses 归活消息）；全量 919 过 + typecheck 干净（runtime-policy 的 rmdir ENOTEMPTY 偶发单跑通过）。
 - **实测**（4317 真实模型，text→tool→text 提示）：6100ms 帧出现「正在思考」行@628px、其下 0 个 `assistantBody`（旧正文全部在 -501 以上）；6606ms 活消息正文在 625px 接管回答区。倒置消除；工具轮窗口（活消息含 toolCall）同样正确清空回答区。
 - ZCode 参照：行按时间线排（`ConversationTurnGroup` flowItems），思考行永远在被它跟随的正文之后；结算态思考行在回答上方是两边一致的正常形态。
+
+### 计划审阅卡对齐 ZCode 计划卡（2026-11-01 晚 2，用户点名）
+
+用户对照截图：pi-web 的计划待审卡是全量 Markdown 大卡（「计划待审/待审批/查看全文/收起」头 + 可滚动正文 + 页脚要求修改/同意执行），ZCode 是紧凑摘要卡。ZCode 参照 `ToolCallBlocks/renderers/switch-mode.tsx`（exit_plan_mode 渲染器，i18n `planTool.panel.*`）。
+
+- **ZCode 结构**：`rounded-xl` 卡 → 头部（NotepadText 图标 + 「计划」subtle 字 + 右上 ghost 复制钮）→ `relative` 裁切区：摘要 `max-h-64`（256px）+ `pb-12`（48px 留白）+ `[mask-image:linear-gradient(to_bottom,black_0%,black_30%,transparent_100%)]`，正文 p/li 弱色；居中黑色胶囊「查看完整计划 →」（`absolute bottom-6 left-1/2 h-10 rounded-full`）→ 整卡 role=button 可点开详情（子控件守卫 `closest('button,a,…')`）。
+- **pi-web 落点**（`QuestionComposer.tsx` PlanReviewCard + module.css）：头部 `.planHeader/.planGlyph/.planHeading`（IconPlanOutline + 「计划」tertiary 500 字重）+ `.planIconAction` 复制（成功换 check 1.5s）；`.planClip/.planExcerpt/.planPill` 按上述常量复刻（256px/30%/48px/bottom-24px/h-40px/999px）；胶囊色 `--dsw-alias-button-primary-fill`（浅色=近黑 neutral-bluish-1000、深色自动反转）+ 文字 `--dsw-alias-label-primary-foreground`；摘要正文 `--dsw-alias-label-secondary`。整卡点击守卫照抄。**审批页脚（要求修改/同意执行）保留**——ZCode 的审批在其权限卡，pi-web 无对应面，卡即审批面。删除：待审批 chip、查看全文链接、收起钮与 expanded 态、planStatusText。
+- **ego 实测**（demo 4336 `[plan]` + 先开计划 chip）：heading「计划」、摘要恰 256px、mask 生效、胶囊 150×40 居中偏差 <4px、bg rgb(15,17,21)/白字/999px、页脚双按钮齐。截图 `artifacts`（/tmp/pi-ask-gap-shots/11-plan-card.png）。
+- **未验**：复制/要求修改/胶囊打开侧栏三项交互的浏览器点击验证被用户接管 ego 会话打断（代码路径与旧卡一致：clipboard + setDismissed + 既有 onOpenPlan）；工具行的「打开计划」窄行（ToolCard）仍是旧形态，未改。
+
+### 无扩展名文件预览修复：Makefile 被判二进制（2026-11-01 晚 3，用户报告）
+
+用户点转录里「读取 Makefile」的工具行，右侧检查器落到「无法以内嵌方式预览此文件 application/octet-stream」。**不是路径问题**：检查器能显示 1.2 KB 说明文件已找到（服务端还支持按路径后缀找同名文件，歧义时 404 要求写全路径；行上显示 basename 是 DSH 的行样式）。根因是 MIME 判定纯按扩展名查表（`workspace/files.ts` 的 `mimeType()`），`Makefile` 无 `extname` → `application/octet-stream` → `read()` 落 `kind:'binary'` 无 content → 检查器只有下载回退。
+
+- **修法**（`src/server/workspace/files.ts`）：① `TEXT_FILE_NAMES` 已知无扩展名文本文件名表（Makefile/Dockerfile/LICENSE/.gitignore/.env 等 30+，按 basename 小写匹配）直判 `text/plain`；② `effectiveMimeType()`：仍为 octet-stream 时读内容嗅探——头部 8KB 无控制字节（除 \t\n\r）+ UTF-8 严格解码（大文件截去末尾 3 字节避免多字节序列截断误判）→ `text/plain`；`read()` 与 `asset()` 都走它，元数据与 Content-Type 一致。
+- **测试**：`tests/http.test.ts` 新增用例（Makefile/.gitignore → kind text；未知名文本 `notes` 嗅探为 text/plain；带 NUL 的二进制 `output` 保持 octet-stream + attachment）；全量 920 过，typecheck 干净。
+- **运维**：4317 空闲时已重启（服务端 files.ts 改动需重启）；用户工作区 deepseek-harness 的 Makefile 实测 `kind=text mime=text/plain`，点工具行即出代码预览。
+
+### 计划审批改 ZCode「需要权限·实施计划」选项卡 + 模型自进计划模式（2026-11-01 深夜，用户点名，计划模式批次）
+
+用户两张对照截图圈出两处不同：① pi-web 的审批是计划卡页脚「要求修改/同意执行」按钮，ZCode 是单独的选项卡（`ElicitationDialog.tsx`：chip「需要权限」+ 标题「实施计划」+ 编号选项「1. 批准 退出计划模式并开始实施。」+ 编号接续的自定义输入「2. 输入你的回答…」+ 页脚键盘提示「使用 Tab / 上下键选择，回车或空格选中」+ 忽略/提交，提交为黑胶囊）；② ZCode 支持模型侧自动进入计划模式（内置 `EnterPlanMode` 免审批工具 + 描述点名实施类任务优先先进），pi-web 只有用户 chip 一条路、模型只会劝用户去点。
+
+- **服务端**（`src/server/tools/plan.ts` + `runtime/interactions.ts` + 投影）：新增 `enter_plan_mode` 免审批工具（无参数；goal 冲突拒绝镜像 ZCode "Plan and Goal cannot be active at the same time"；幂等；输出进入计划模式指引），进 `PlanExtension.tools`；`PLAN_INACTIVE_ERROR` 与 exit_plan_mode description 改口「先调 enter_plan_mode，不要让用户开」；`StoredPlanReview.status` 加 `'cancelled'`（REVIEW_STATUSES 同步，wire 联合类型本就有），`cancelInteraction` 的 plan 分支由「直接拒绝」改为 `dismissPlanReview`：submitReply 幂等注入 `dismissed_plan_review` instruction（未决定/计划模式保持/不要实施）+ commit cancelled。投影侧：`storedPlanReviews` 直通 cancelled；`INTERACTION_REPLY_ENTRY_KINDS`/`PREFIXES` 加 `pi-web.plan-review-dismissed`/`plan-review-dismiss:`（并回提问 run 的既有机制自动覆盖）。
+- **前端**（`QuestionComposer.tsx` + module.css）：PlanReviewCard 拆两卡——计划摘要卡（去页脚，`[data-plan-card]` 改全圆角独立态）+ 决策卡 `.decisionCard`（chip「需要权限」+「实施计划」+ 编号批准选项（选中态主题色）+ 序号接续的 textarea「输入你的回答…」+ 提示行 + 忽略/提交黑胶囊 `--dsw-alias-button-primary-fill`）。提交语义照 ZCode `continueOrSubmit`：选批准→approve；只有文字→custom 反馈（要求修改）；**两者皆空→视为批准**；忽略→`cancelInteraction`。键盘：↑/↓ 在选项与回答行间移动、textarea 裸 Enter 提交（composition IME 保护）。interaction-payload 加 `dismissed_plan_review` kind（转录隐藏气泡）。render-model `toolActivity` 加 `enter_plan_mode → 'plan'`。
+- **demo**：`[plan]` 场景 case 改为 exit 被拒 → faux `enter_plan_mode` → 重提 `exit_plan_mode`（不再劝用户点 chip）。
+- **测试**：runtime.test.ts 计划用例重写（拒绝指向 enter_plan_mode → 模型自进 → 重提待审；新增忽略段：cancelled + instruction + 幂等）；prompt 快照刷新（33 工具 + enter_plan_mode 描述）；新增 `tests/plan-decision-card.test.tsx` 7 项（渲染/空提交=批准/文字=反馈/选中批准/忽略调 cancel/箭头移焦/结算后消失）。全量 927 过 + typecheck 干净。
+- **ego 实测**（demo 4336，未开 chip 直接 `[plan]`）：enter 自动进入 → 摘要卡 + 决策卡（chip/标题/「1. 批准 退出计划模式并开始实施。」/提示/黑胶囊提交全就位）→ 点批准+提交 → 决策卡消失、计划 chip 熄灭、模型开始执行。截图 `/tmp/pi-ask-gap-shots/12-13`。4317 空闲时已重启。
+- **未做**：转录里 exit_plan_mode 工具行保持窄行；ZCode 的行内锚定（卡片挂在工具行下）不改——pi-web 交互卡固定在 composer 上方。
+
+### 转录内计划输出卡对齐（2026-11-01 深夜 4，用户点名）
+
+用户最新截图是 ZCode 把紧凑计划卡**内联渲染在转录里**（ExitPlanMode 工具行位置），要求 pi-web 的输出渲染一致——此前 pi-web 转录里是窄条「计划 · Markdown + 打开」按钮（前一批明确列为不做，本批补上）。
+
+- **共享组件**：新建 `src/web/PlanExcerptCard.tsx`（「计划」头部+复制态 ✓、256px 渐隐摘要、居中胶囊、整卡可点+子控件守卫；props `{markdown,onOpen,t,ariaLabel,className,dataStatus?,children?}`，children 给审阅卡反馈条）。QuestionComposer 的 PlanReviewCard 改用它（`css.card` + dataStatus），内部重复 JSX 删除；随迁清理无用的 icons/MarkdownText/ArrowRight 导入与 copied 态。
+- **ToolCard**：exit_plan_mode 行正文换 `<PlanExcerptCard className={planCardCss.planOutputCard}>`；行内有计划时自动展开一次（照插件卡的做法，effect 移到 plan 声明后避免 TDZ）；折叠态头部的「打开」accessory 保留；ToolCard.module.css 的旧 .planCard* 块删除；`.planOutputCard`（全圆角、100% 宽、bg-base）进 QuestionComposer.module.css 供两处共享。
+- **验证**：全量 927 过 + typecheck 干净；ego 实测 demo 会话两张转录卡均 848×311、摘要 256px、胶囊与 aria（「打开计划：<标题>」）就位（截图 14）。

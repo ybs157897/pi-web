@@ -319,41 +319,37 @@ describe('Pi Durable runtime', () => {
     ])).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
-  it('runs plan mode: refuses without the switch, submits for review, revises, and stops on approval', async () => {
+  it('runs plan mode: the model enters plan mode itself, submits for review, revises, and stops on approval', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
     const id = created.conversation.id
     expect((await runtime.detail(id)).plan).toEqual({ active: false })
 
-    // Without the switch the tool refuses, and both the tool error and the answer tell the model how to recover.
+    // ZCode's EnterPlanMode parity: without the switch the tool refuses and points at
+    // enter_plan_mode, which the model calls itself — no user action — and the resubmitted
+    // plan lands as a pending review with plan mode on.
     await runtime.submit(id, { text: '[plan] 计划模式未开启时提交', requestId: 'plan-off' })
-    const refused = await waitForCompletedRun(runtime, id)
-    const refusal = refused.messages.find(message => message.role === 'tool' && message.toolName === 'exit_plan_mode')
-    expect(refusal?.isError).toBe(true)
+    const recovered = await waitForDetail(runtime, id, detail =>
+      !detail.conversation.busy && detail.interactions?.some(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending') === true)
+    const refusal = recovered.messages.find(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError === true)
     expect(textOf(refusal)).toContain('Plan mode is not active')
-    expect(textOf(refused.messages.at(-1))).toContain('计划模式当前没有开启')
-    expect(refused.interactions ?? []).toEqual([])
-
-    // The switch is idempotent and bound to an existing conversation.
-    expect((await runtime.setPlan(id, true)).plan).toEqual({ active: true })
+    expect(textOf(refusal)).toContain('enter_plan_mode')
+    const entered = recovered.messages.find(message => message.role === 'tool' && message.toolName === 'enter_plan_mode')
+    expect(entered?.isError).toBeFalsy()
+    expect(textOf(entered)).toContain('Plan mode is now active')
+    expect(recovered.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)).toHaveLength(1)
+    expect(recovered.plan).toEqual({ active: true })
     expect((await runtime.setPlan(id, true)).plan).toEqual({ active: true })
     await expect(runtime.setPlan('9999', true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
-    // Submitting a plan creates the pending review, settles the tool with a notice, and keeps plan mode on.
-    await runtime.submit(id, { text: '[plan] 演示计划模式', requestId: 'plan-run-1' })
-    const submitted = await waitForDetail(runtime, id, detail =>
-      !detail.conversation.busy && detail.interactions?.some(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending') === true)
-    const first = submitted.interactions?.find(interaction => interaction.kind === 'plan-review')
+    const first = recovered.interactions?.find(interaction => interaction.kind === 'plan-review')
     expect(first?.id).toBeTruthy()
     expect(first?.approveLabel).toBe('同意执行')
     expect(first?.detail?.startsWith('# ')).toBe(true)
     expect(first?.detail).toContain('演示计划')
-    expect(submitted.plan).toEqual({ active: true })
-    const planResults = submitted.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode')
-    const firstResult = planResults.at(-1)
-    expect(firstResult?.isError).toBeFalsy()
-    expect(textOf(firstResult)).toContain('pending')
-    expect(textOf(submitted.messages.at(-1))).toContain('计划已提交待审')
+    const planResults = recovered.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)
+    expect(textOf(planResults.at(-1))).toContain('pending')
+    expect(textOf(recovered.messages.at(-1))).toContain('计划已提交待审')
 
     // A change request settles the review, keeps plan mode on, and hands the feedback to the model,
     // which answers with a revised plan submitted as a new review.
@@ -394,6 +390,26 @@ describe('Pi Durable runtime', () => {
     const stale = await runtime.answerInteraction(dismissedId, superseded!.id, [{ id: 'plan-review', selected: ['同意执行'] }])
     expect(stale.plan).toEqual({ active: true })
     expect(stale.interactions?.find(interaction => interaction.id === superseded!.id)).toMatchObject({ status: 'continued' })
+
+    // 忽略 (ZCode's decline) settles the review as cancelled without a decision: plan mode
+    // stays on, and the steered reply tells the model nothing was decided. A repeat dismissal
+    // is idempotent.
+    const ignored = await runtime.create({})
+    const ignoredId = ignored.conversation.id
+    await runtime.setPlan(ignoredId, true)
+    await runtime.submit(ignoredId, { text: '[plan] 先提交，然后忽略', requestId: 'plan-ignore-1' })
+    const ignoreDraft = await waitForDetail(runtime, ignoredId, detail =>
+      !detail.conversation.busy && detail.interactions?.some(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending') === true)
+    const ignoreReview = ignoreDraft.interactions?.find(interaction => interaction.kind === 'plan-review')
+    const cancelled = await runtime.cancelInteraction(ignoredId, ignoreReview!.id)
+    expect(cancelled.plan).toEqual({ active: true })
+    expect(cancelled.interactions?.find(interaction => interaction.id === ignoreReview!.id))
+      .toMatchObject({ status: 'cancelled' })
+    const dismissReply = cancelled.messages.find(message => message.role === 'user' && textOf(message).includes('dismissed_plan_review'))
+    expect(textOf(dismissReply)).toContain('do not implement it')
+    const againCancelled = await runtime.cancelInteraction(ignoredId, ignoreReview!.id)
+    expect(againCancelled.interactions?.find(interaction => interaction.id === ignoreReview!.id))
+      .toMatchObject({ status: 'cancelled' })
 
     // A third submission is refused by the demo model itself, which stops resubmitting after two rounds.
     await runtime.submit(id, { text: '再补充风险一节', requestId: 'plan-run-3' })

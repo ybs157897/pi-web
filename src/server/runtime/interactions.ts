@@ -119,6 +119,39 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
   /**
+   * Dismiss a plan review the way ZCode's elicitation decline does: no decision is made, the
+   * plan was not approved, and plan mode stays on. The dismissal is steered first with a
+   * call-derived request id (idempotent across restarts), then the stored review settles as
+   * `cancelled`; a review that already settled is idempotent.
+   */
+  const dismissPlanReview = async (
+    conversation: Awaited<ReturnType<typeof requireConversation>>,
+    callId: string,
+    review: StoredPlanReview,
+  ): Promise<ConversationDetail> => {
+    if (review.status !== 'pending') return currentDetail(conversation.id)
+    await assertConversationModelAllowed(conversation)
+    const requestId = `plan-review-dismiss:${callId}`
+    await submitReply(conversation, requestId, JSON.stringify({
+      kind: 'dismissed_plan_review',
+      callId,
+      approveLabel: review.approveLabel,
+      instruction: 'The user dismissed the plan review without a decision. Plan mode is still on and the plan was not approved: do not implement it. Ask the user how to proceed (revise the plan, or work without one).',
+    }), {
+      kind: 'pi-web.plan-review-dismissed',
+      data: { requestId, callId },
+    })
+    await harness().commit(async (tx) => {
+      const table = interactionTable(await tx.doc(Interactions, conversation.id))
+      const stored = planReviewOf(table[callId])
+      if (!stored || stored.status !== 'pending') return
+      stored.status = 'cancelled'
+      stored.cancelledAt = Date.now()
+    }, CTX)
+    return currentDetail(conversation.id)
+  }
+
+  /**
    * Settle one pending interaction. The reply is submitted first, so a rejected submission leaves the
    * call answerable; the document is marked answered afterwards. The reply entry carries the call id
    * and `requestId` is derived from it, so a retry after a restart never injects the message twice.
@@ -187,7 +220,8 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     const state = await harness().snapshot(Interactions, id, CTX)
     const request = state?.[callId]
     if (!request) throw new RuntimeError('NOT_FOUND', '交互请求不存在')
-    if (planReviewOf(request)) throw new RuntimeError('UNSUPPORTED', '计划待审请在卡片上批准或要求修改')
+    const review = planReviewOf(request)
+    if (review) return dismissPlanReview(conversation, callId, review)
     if (request.status === 'answered') throw new RuntimeError('CONFLICT', '该问题已回答，无法放弃整组问题')
     if (request.status === 'cancelled') return currentDetail(id)
     await assertConversationModelAllowed(conversation)

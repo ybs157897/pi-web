@@ -1180,6 +1180,50 @@ describe('management API', () => {
     }
   })
 
+  it('previews extension-less text files and keeps real binaries unrenderable', async () => {
+    // 模型点开的 Makefile/Dockerfile 没有扩展名：扩展名表查不到就被当成二进制，
+    // 预览只剩「无法内嵌」。已知文件名直判 text/plain，其余未知类型按内容嗅探。
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x01, 0x02])
+    await writeFile(join(root, 'Makefile'), 'all:\n\techo hi\n', 'utf8')
+    await writeFile(join(root, '.gitignore'), 'node_modules\n', 'utf8')
+    await writeFile(join(root, 'notes'), 'plain text with no known name\n', 'utf8')
+    await writeFile(join(root, 'output'), binary)
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const fileUrl = (path: string) => `/api/workspaces/ws-1/file?path=${encodeURIComponent(path)}`
+
+      const makefile = await app.request(fileUrl('Makefile'))
+      expect(makefile.status).toBe(200)
+      expect(await makefile.json()).toMatchObject({ kind: 'text', mimeType: 'text/plain', content: 'all:\n\techo hi\n' })
+
+      const gitignore = await app.request(fileUrl('.gitignore'))
+      expect(gitignore.status).toBe(200)
+      expect(await gitignore.json()).toMatchObject({ kind: 'text', mimeType: 'text/plain' })
+
+      const unknownTextFile = await app.request(fileUrl('notes'))
+      expect(unknownTextFile.status).toBe(200)
+      expect(await unknownTextFile.json()).toMatchObject({ kind: 'text', mimeType: 'text/plain' })
+
+      const plainAsset = await app.request('/api/workspaces/ws-1/asset?path=Makefile')
+      expect(plainAsset.status).toBe(200)
+      expect(plainAsset.headers.get('content-type')).toBe('text/plain')
+      expect(plainAsset.headers.get('content-disposition')).toBeNull()
+
+      const sniffedAsset = await app.request('/api/workspaces/ws-1/asset?path=notes')
+      expect(sniffedAsset.status).toBe(200)
+      expect(sniffedAsset.headers.get('content-type')).toBe('text/plain')
+
+      const binaryFile = await app.request(fileUrl('output'))
+      expect(await binaryFile.json()).toMatchObject({ kind: 'binary', mimeType: 'application/octet-stream' })
+      const binaryAsset = await app.request('/api/workspaces/ws-1/asset?path=output')
+      expect(binaryAsset.headers.get('content-type')).toBe('application/octet-stream')
+      expect(binaryAsset.headers.get('content-disposition')).toContain('attachment')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('answers a missing workspace file with 404 instead of a server failure', async () => {
     // 模型写的路径常常指向另一个项目，文件被删掉也是常事：这两种都不是服务器故障。
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
