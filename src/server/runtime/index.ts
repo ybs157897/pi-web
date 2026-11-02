@@ -515,22 +515,29 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   // The nightly issue analysis is provisioned once, and only once the operator has
   // bound a workspace to analyse. A deleted task stays deleted: the marker file
-  // remembers that it was already offered.
+  // remembers that it was already offered. A task that is still there gets its
+  // prompt and workspace kept in sync with the current analysis procedure.
   const provisionWetrackDaily = async (): Promise<void> => {
     const binding = await analysisRuns.workspaceBinding()
     if (binding.workspaceId === undefined) return
-    if (await wetrackDailyProvisioned(dataDir)) return
     const { model } = await analysisRuns.settings()
-    await automationsFeature().ensureBuiltin({
+    const spec = {
       key: WETRACK_DAILY_AUTOMATION_KEY,
       name: '问题清单每日分析',
       prompt: wetrackDailyCoordinatorPrompt(),
       schedule: WETRACK_DAILY_SCHEDULE,
       workspaceId: binding.workspaceId,
-      accessMode: 'readOnly',
+      accessMode: 'readOnly' as const,
       ...(model === undefined ? {} : { model }),
-    })
-    await markWetrackDailyProvisioned(dataDir)
+    }
+    const existing = automationsFeature().list().find(item => item.builtin === WETRACK_DAILY_AUTOMATION_KEY)
+    if (existing === undefined) {
+      if (await wetrackDailyProvisioned(dataDir)) return
+      await automationsFeature().ensureBuiltin(spec)
+      await markWetrackDailyProvisioned(dataDir)
+      return
+    }
+    await automationsFeature().ensureBuiltin(spec)
   }
   await provisionWetrackDaily()
 

@@ -12,6 +12,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AutomationSchedule } from '../../shared/types.ts'
+import { analysisProcedure } from './analysis-procedure.ts'
 
 /** Marks the task in the automations list. */
 export const WETRACK_DAILY_AUTOMATION_KEY = 'wetrack-analysis-daily'
@@ -34,10 +35,14 @@ export function wetrackDailyCoordinatorPrompt(): string {
     '',
     '1. 第 1 轮调用 `wetrack_analysis_list` 拿到待分析缺陷清单（编号 + 标题）。清单为空就报告「今日没有待分析的缺陷」并结束，不要再调用别的工具。',
     '2. 第 2 轮起逐批派发子 Agent。在同一轮里把互不依赖的缺陷合并成一个批次（一个缺陷一个 `subagent` 调用，`agent_type: "general-purpose"`），每批最多 6 个；一批返回后再派下一批，直到清单派完。',
-    '3. 每个子 Agent 的任务必须自包含：缺陷编号、标题、现象、只读约束（禁止修改任何文件、禁止 git 操作、禁止提交或推送）、验收标准（必须用 `wetrack_analysis_save` 写入该缺陷的分析结论，`status` 用 analyzed，确实无法定位时用 blocked），以及要返回什么（结论摘要 + 关键 `path:line` 证据 + 未证实的缺口）。',
-    '4. 子 Agent 自己完成全部工作：调用 `wetrack_analysis_detail` 读详情、在绑定工作区里检索代码和调用链、给出带证据的结论、调用 `wetrack_analysis_save` 保存。它不需要你参与，也不要把详情或代码贴进任务里。',
-    '5. 全部派发完成后汇总一份清单：每个缺陷的编号、状态（已保存 / 失败）、失败原因与子 Agent 的要点。不要在主会话里重做分析，也不要替缺陷补写结论。',
-    '6. 结论质量优先于速度：证据不足的缺陷让子 Agent 标 blocked 并说明缺什么，不要编造结论。',
+    '3. 每个子 Agent 的任务必须自包含，并且**原样带上下面这段调研规程**（不要改写、不要删减、不要替它做总结）：',
+    '',
+    analysisProcedure('own'),
+    '',
+    '4. 任务里还要写清：缺陷编号、标题、现象、只读约束（禁止修改任何文件、禁止 git 操作、禁止提交或推送）、以及要返回什么（结论摘要 + 关键 `path:line` 证据 + 未证实的缺口）。',
+    '5. 子 Agent 自己完成全部工作：它调用 `wetrack_analysis_detail` 读详情、在绑定工作区里检索代码和调用链、给出带证据的结论、调用 `wetrack_analysis_save` 保存。它不需要你参与，也不要把详情或代码贴进任务里。',
+    '6. 全部派发完成后汇总一份清单：每个缺陷的编号、状态（已保存 / 失败）、失败原因与子 Agent 的要点。不要在主会话里重做分析，也不要替缺陷补写结论。',
+    '7. 结论质量优先于速度：证据不足的缺陷让子 Agent 标 blocked 并说明缺什么，不要编造结论。',
   ].join('\n')
 }
 

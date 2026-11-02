@@ -352,11 +352,13 @@ export function createAutomations(deps: AutomationsDeps) {
   }): Promise<Automation> => {
     const existing = appState.snapshot().automations.find(item => item.builtin === spec.key)
     if (existing !== undefined) {
+      // The built-in task's prompt is server-owned: a coordinator that predates the
+      // current analysis procedure would hand its workers the old rules.
+      const patch: UpdateAutomationInput = {}
+      if (existing.prompt !== spec.prompt) patch.prompt = spec.prompt
       // A rebinding of the shared workspace must not leave the task pointing at the old one.
-      if (spec.workspaceId !== undefined && existing.workspaceId !== spec.workspaceId) {
-        return await updateAutomation(existing.id, { workspaceId: spec.workspaceId })
-      }
-      return existing
+      if (spec.workspaceId !== undefined && existing.workspaceId !== spec.workspaceId) patch.workspaceId = spec.workspaceId
+      return Object.keys(patch).length === 0 ? existing : await updateAutomation(existing.id, patch)
     }
     return await createAutomation({
       name: spec.name,
