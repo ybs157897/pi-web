@@ -28,7 +28,7 @@ function service(overrides: { submit?: () => Promise<unknown>; create?: () => Pr
     modelRuntime: { models: { getModel: () => undefined } } as never,
     isClosed: () => false,
     requireConversation: async (id: string) => ({ id: id as never, waitForIdle: async () => undefined }),
-    currentDetail: async (id: string) => detail(String(id)),
+    currentDetail: async (id) => detail(String(id)),
     selectedWorkspace: () => workspace,
     selectedPreset: () => undefined,
     assertModelAllowed: () => undefined,

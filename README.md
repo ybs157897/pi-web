@@ -100,7 +100,7 @@ Git Bash 中可直接使用上文的 POSIX 写法。生产模式同样是 `npm r
   - `week`：每周 `dayOfWeek`（0 = 周日）的 `timeOfDay`。
   - `month`：每月 `dayOfMonth`（1–31）的 `timeOfDay`；短月份会收敛到当月最后一天（31 号在 2 月落到 28/29 号），任务不会因此漏掉一个月。
 
-到期时间由 `src/server/automation/recurrence.ts` 计算，是纯函数：输入参考时间戳与调度，输出严格晚于它���下一个到期时刻，夏令时切换由本地时间构造自然处理。
+到期时间由 `src/server/automation/recurrence.ts` 计算，是纯函数：输入参考时间戳与调度，输出严格晚于它的下一个到期时刻，夏令时切换由本地时间构造自然处理。
 
 #### 执行记录
 
