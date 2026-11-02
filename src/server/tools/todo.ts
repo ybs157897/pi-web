@@ -17,7 +17,7 @@ export const Todos = defineDoc<{ items: TodoItem[] | null; updatedAt: number }>(
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ items: null, updatedAt: 0 }),
 })
 

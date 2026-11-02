@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-mcp'
 import { createInMemoryTransportPair } from '@earendil-works/pi-mcp/testing'
 import type { Context } from '@earendil-works/chord/context'
+import { NOOP_TELEMETRY_CONTEXT } from '@earendil-works/pi-telemetry'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionApi, ToolExecutionResult, ToolRegistration } from '@earendil-works/pi-durable'
 import { McpRegistry } from '../src/server/mcp/registry.ts'
@@ -21,6 +22,7 @@ const openManagers: McpRegistry[] = []
 const liveFakeServers: Array<{ close(): Promise<void> }> = []
 
 const EMPTY_CONTEXT: Context = {
+  telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
   value: () => undefined,
   toString: () => 'pi-web-mcp-test',

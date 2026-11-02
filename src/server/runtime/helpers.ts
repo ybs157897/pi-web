@@ -55,7 +55,7 @@ export const META = defineDoc<ConversationMetadata>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({
     title: 'New conversation',
     createdAt: Date.now(),
@@ -75,7 +75,7 @@ export const META = defineDoc<ConversationMetadata>({
 })
 
 export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' }>({
-  kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({}),
+  kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false, initial: () => ({}),
 })
 
 export const CTX: Context = BACKGROUND_CONTEXT

@@ -60,7 +60,7 @@ export const Goals = defineDoc<GoalDocValue>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ goal: null }),
 })
 

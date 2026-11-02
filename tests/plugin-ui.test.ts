@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context } from '@earendil-works/chord/context'
+import { NOOP_TELEMETRY_CONTEXT } from '@earendil-works/pi-telemetry'
 import type { JsonValue } from '@earendil-works/chord'
 import type { ToolExecutionApi, ToolExecutionResult } from '@earendil-works/pi-durable'
 import { createRuntime } from '../src/server/runtime/index.ts'
@@ -104,6 +105,7 @@ const UI_MANIFEST = {
 }
 
 const EMPTY_CONTEXT: Context = {
+  telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
   value: () => undefined,
   toString: () => 'pi-web-plugin-ui-test',

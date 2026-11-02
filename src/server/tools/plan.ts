@@ -17,7 +17,7 @@ export const Plans = defineDoc<PlanState>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ active: false, updatedAt: 0 }),
 })
 

@@ -51,7 +51,7 @@ export const LoadedSkills = defineDoc<LoadedSkillsState>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ references: [] }),
 })
 

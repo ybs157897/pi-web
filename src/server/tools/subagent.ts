@@ -62,7 +62,7 @@ export const Subagents = defineDoc<{ record: SubagentIdentity | null }>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ record: null }),
 })
 

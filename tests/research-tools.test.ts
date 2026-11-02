@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
+import { NOOP_TELEMETRY_CONTEXT } from '@earendil-works/pi-telemetry'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -19,6 +20,7 @@ afterEach(async () => {
 })
 
 const TEST_CONTEXT: Context = {
+  telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
   value: () => undefined,
   toString: () => 'pi-web-research-tools-test',

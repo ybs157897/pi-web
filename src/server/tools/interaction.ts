@@ -28,7 +28,7 @@ export const Interactions = defineDoc<InteractionsState>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({}),
 })
 

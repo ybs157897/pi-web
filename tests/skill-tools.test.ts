@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@earendil-works/chord/context'
+import { NOOP_TELEMETRY_CONTEXT } from '@earendil-works/pi-telemetry'
 import type { ToolExecutionApi, Tx } from '@earendil-works/pi-durable'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -16,6 +17,7 @@ afterEach(async () => {
 })
 
 const TEST_CONTEXT: Context = {
+  telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
   value: () => undefined,
   toString: () => 'pi-web-skill-tools-test',

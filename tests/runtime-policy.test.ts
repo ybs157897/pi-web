@@ -355,7 +355,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     }, BACKGROUND_CONTEXT)
     const metadata = defineDoc<ConversationMetadata>({
       kind: 'pi-durable-web.conversation', version: 1, scope: 'conversation',
-      history: 'latest', fork: 'initial',
+      history: 'latest', fork: 'initial', checkpointWhen: () => false,
       initial: () => { throw new Error('The fixture must already have conversation metadata') },
     })
     try {

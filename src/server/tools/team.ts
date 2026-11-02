@@ -94,7 +94,7 @@ export const Team = defineDoc<TeamDocValue>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ members: [], tasks: [] }),
 })
 
@@ -107,7 +107,7 @@ export const TeamLink = defineDoc<{ leadConversationId: string | null; name: str
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ leadConversationId: null, name: null }),
 })
 
@@ -123,7 +123,7 @@ export const TeamAnchors = defineDoc<{ taskId: number | null }>({
   version: 1,
   scope: 'conversation',
   history: 'latest',
-  fork: 'initial',
+  fork: 'initial', checkpointWhen: () => false,
   initial: () => ({ taskId: null }),
 })
 
