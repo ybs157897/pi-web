@@ -379,9 +379,10 @@ class FakeRuntime implements Runtime {
   async retry(id: string, entryId: string, requestId: string) { this.calls.push(`retry:${id}:${entryId}:${requestId}`); return { conversationId: 'retried-conv', submissionId: 'retried-submission' } }
   automations(): Protocol.Automation[] { return [{ id: 'auto-1', name: 'Scheduled task', prompt: 'Check', enabled: false, createdAt: NOW, updatedAt: NOW }] }
   async createAutomation(input: Protocol.CreateAutomationInput): Promise<Protocol.Automation> { return { ...input, id: 'auto-new', enabled: input.enabled ?? false, createdAt: NOW, updatedAt: NOW } }
-  async updateAutomation(id: string, input: Protocol.UpdateAutomationInput): Promise<Protocol.Automation> { return { ...this.automations()[0]!, ...input, id, intervalMs: input.intervalMs ?? undefined } }
+  async updateAutomation(id: string, input: Protocol.UpdateAutomationInput): Promise<Protocol.Automation> { return { ...this.automations()[0]!, ...input, id, intervalMs: input.intervalMs ?? undefined, schedule: input.schedule ?? undefined } }
   async deleteAutomation(id: string) { this.calls.push('delete-automation:' + id) }
   async runAutomation(id: string) { return { automation: { ...this.automations()[0]!, id }, conversationId: 'scheduled-conv' } }
+  automationRuns(id: string): Protocol.AutomationRun[] { return this.automations()[0]?.runs ?? [] }
   async wetrackDefects(): Promise<Protocol.WetrackDefectList> {
     this.calls.push('wetrack-defects')
     return {

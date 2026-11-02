@@ -316,26 +316,57 @@ export interface AutomationRun {
   finishedAt?: number
   error?: string
 }
+
+/** How often an automation repeats. */
+export type AutomationIntervalUnit = 'hour' | 'day' | 'week' | 'month'
+
+/**
+ * A calendar-aligned repeat. An automation with this repeats at a wall-clock time
+ * (local time), not every N minutes: `day` fires at `timeOfDay`, `week` on
+ * `dayOfWeek`, `month` on `dayOfMonth`, and `hour` fires at the minute part of
+ * `timeOfDay` every hour.
+ */
+export interface AutomationSchedule {
+  unit: AutomationIntervalUnit
+  /** "HH:MM" in local time. */
+  timeOfDay?: string
+  /** 0 = Sunday … 6 = Saturday; used by `week`. */
+  dayOfWeek?: number
+  /** 1–31; used by `month`, clamped to the month's length. */
+  dayOfMonth?: number
+}
+
 export interface Automation {
   id: string
   name: string
   prompt: string
   enabled: boolean
   intervalMs?: number
+  /** Calendar-aligned repeat; takes precedence over `intervalMs` when both are set. */
+  schedule?: AutomationSchedule
   nextRunAt?: number
   createdAt: number
   updatedAt: number
   lastRun?: AutomationRun
+  /** Run history, newest first. */
+  runs?: AutomationRun[]
+  /** Marks a task the server provisions; the value names the built-in kind. */
+  builtin?: string
+  /** Permission level the run's conversation gets; unset follows the app default. */
+  accessMode?: AccessMode
   model?: ModelRef
   workspaceId?: string
   presetId?: string
 }
-export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partial<Pick<Automation, 'enabled' | 'intervalMs'>> & {
+export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partial<Pick<Automation, 'enabled' | 'intervalMs' | 'schedule' | 'accessMode' | 'builtin'>> & {
   model?: ModelRef
   workspaceId?: string
   presetId?: string
 }
-export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'intervalMs'> & { intervalMs?: number | null }
+export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'intervalMs' | 'schedule'> & {
+  intervalMs?: number | null
+  schedule?: AutomationSchedule | null
+}
 
 /** One WeTrack list row. Unknown scalar fields survive, matching the plugin's list contract. */
 export interface WetrackDefectItem {

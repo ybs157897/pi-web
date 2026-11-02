@@ -1,5 +1,5 @@
 import type {
-  AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, ChildMessageInput, ConversationDetail, ConversationSummary,
+  AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
   CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
@@ -328,6 +328,9 @@ export const api = {
   },
   runAutomation(id: string): Promise<{ automation: Automation; conversationId?: string }> {
     return request(`/api/automations/${encodeURIComponent(id)}/run-now`, { method: 'POST' })
+  },
+  automationRuns(id: string): Promise<{ runs: AutomationRun[] }> {
+    return request(`/api/automations/${encodeURIComponent(id)}/runs`)
   },
   wetrackDefects(): Promise<WetrackDefectList> {
     return request('/api/wetrack/defects')

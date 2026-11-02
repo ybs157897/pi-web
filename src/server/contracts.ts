@@ -9,6 +9,7 @@ import type {
   AppSettings,
   AskUserQuestionAnswerItem,
   Automation,
+  AutomationRun,
   ChildMessageInput,
   ConversationDetail,
   ConversationSummary,
@@ -160,6 +161,8 @@ export interface Runtime {
   updateAutomation(id: string, input: UpdateAutomationInput): Promise<Automation>
   deleteAutomation(id: string): Promise<void>
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
+  /** One task's run history, newest first. */
+  automationRuns(id: string): AutomationRun[]
   /** WeTrack issues for the standalone list page; this data never enters a conversation. */
   wetrackDefects(): Promise<WetrackDefectList>
   /** One defect's full detail for the issues page modal. */

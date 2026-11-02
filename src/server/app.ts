@@ -132,12 +132,23 @@ const presetSchema = z.object({
   instructions: z.string().max(32_000), extensions: z.array(z.string().min(1).max(160)).max(100),
   tools: z.array(z.string().min(1).max(160)).max(500), model: modelRef.optional(), thinkingLevel: z.enum(thinkingLevels).optional(), accessMode: z.enum(accessModes),
 }).strict()
+const automationScheduleSchema = z.object({
+  unit: z.enum(['hour', 'day', 'week', 'month']),
+  timeOfDay: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u).optional(),
+  dayOfWeek: z.number().int().min(0).max(6).optional(),
+  dayOfMonth: z.number().int().min(1).max(31).optional(),
+}).strict()
 const automationSchema = z.object({
   name: z.string().trim().min(1).max(120), prompt: z.string().trim().min(1).max(100_000), enabled: z.boolean().optional(),
   intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).optional(),
+  schedule: automationScheduleSchema.optional(),
+  accessMode: z.enum(['readOnly', 'workspaceWrite', 'fullAccess']).optional(),
   model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
 }).strict()
-const automationPatchSchema = automationSchema.partial().extend({ intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional() }).refine(value => Object.keys(value).length > 0)
+const automationPatchSchema = automationSchema.partial().extend({
+  intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional(),
+  schedule: automationScheduleSchema.nullable().optional(),
+}).refine(value => Object.keys(value).length > 0)
 const wetrackWorkspaceSchema = z.object({ workspaceId: identifier.nullable().optional(), thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional() }).strict()
 const pluginMarketplaceSchema = z.object({ source: z.string().trim().min(1).max(4_096) }).strict()
 const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginNameSchema, requestId: z.string().min(1).max(256).optional() }).strict()
@@ -831,6 +842,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.patch('/api/automations/:id', async c => c.json({ automation: await runtime.updateAutomation(pathId(c.req.param('id')), await readJson(c.req.raw, automationPatchSchema)) }))
   app.delete('/api/automations/:id', async c => { await runtime.deleteAutomation(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.post('/api/automations/:id/run-now', async c => c.json(await runtime.runAutomation(pathId(c.req.param('id'))), 202))
+  app.get('/api/automations/:id/runs', c => c.json({ runs: runtime.automationRuns(pathId(c.req.param('id'))) }))
   app.get('/api/wetrack/defects', async c => c.json(await runtime.wetrackDefects()))
   app.get('/api/wetrack/defects/:defectNumber', async c => {
     const defectNumber = c.req.param('defectNumber')

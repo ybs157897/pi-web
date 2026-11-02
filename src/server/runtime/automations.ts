@@ -9,12 +9,14 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type {
-  AgentPreset, Automation, ConversationDetail, CreateAutomationInput, CreateConversationInput,
+  AgentPreset, Automation, AutomationRun, AutomationSchedule, ConversationDetail, CreateAutomationInput, CreateConversationInput,
   ModelRef as UiModelRef, SubmitInput, UpdateAutomationInput, WorkspaceSummary,
 } from '../../shared/types.ts'
 import type { AppStateStore } from '../state/app-state.ts'
 import type { RuntimeModels } from '../model/catalog.ts'
 import { AutomationScheduler } from '../automation/scheduler.ts'
+import { nextRunAt } from '../automation/recurrence.ts'
+import { parseTimeOfDay } from '../../shared/automation-schedule.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import { CTX, safeFailure } from './helpers.ts'
 
@@ -47,11 +49,23 @@ export function createAutomations(deps: AutomationsDeps) {
   const automationTasks = new Set<Promise<void>>()
   let runAutomation: (id: string) => Promise<{ automation: Automation; conversationId: string }>
   const automationScheduler = new AutomationScheduler()
+  /** How many finished runs the history keeps; the list is a tail, not an archive. */
+  const MAX_RUN_HISTORY = 50
+  /**
+   * When the task fires next. A calendar schedule wins over the plain interval, and
+   * a stored `nextRunAt` keeps the due time stable across restarts.
+   */
+  const dueAt = (automation: Automation, from: number): number | undefined => {
+    if (automation.schedule !== undefined) return nextRunAt(automation.schedule, from)
+    if (automation.intervalMs !== undefined) return from + automation.intervalMs
+    return undefined
+  }
   const scheduleAutomation = (automation: Automation): void => {
     automationScheduler.cancel(automation.id)
-    if (isClosed() || !automation.enabled || automation.intervalMs === undefined) return
-    const dueAt = automation.nextRunAt ?? Date.now() + automation.intervalMs
-    automationScheduler.schedule(automation.id, dueAt, () => {
+    if (isClosed() || !automation.enabled) return
+    const at = automation.nextRunAt ?? dueAt(automation, Date.now())
+    if (at === undefined) return
+    automationScheduler.schedule(automation.id, at, () => {
       void runAutomation(automation.id).catch(() => undefined)
     })
   }
@@ -62,6 +76,23 @@ export function createAutomations(deps: AutomationsDeps) {
     if (input.prompt !== undefined && (!input.prompt.trim() || input.prompt.length > 100_000)) throw new RuntimeError('INVALID_INPUT', 'Automation 提示词无效')
     if (input.intervalMs !== undefined && input.intervalMs !== null && (!Number.isSafeInteger(input.intervalMs) || input.intervalMs < 60_000 || input.intervalMs > 365 * 24 * 60 * 60 * 1000)) {
       throw new RuntimeError('INVALID_INPUT', 'Automation interval 必须在 1 分钟到 1 年之间')
+    }
+    if (input.schedule !== undefined && input.schedule !== null) {
+      const schedule = input.schedule
+      if (!['hour', 'day', 'week', 'month'].includes(schedule.unit)) throw new RuntimeError('INVALID_INPUT', 'Automation 重复单位无效')
+      if (schedule.timeOfDay !== undefined) {
+        const time = parseTimeOfDay(schedule.timeOfDay)
+        const raw = /^(\d{1,2}):(\d{2})$/u.exec(schedule.timeOfDay.trim())
+        if (raw === null || time.hour !== Number(raw[1]) || time.minute !== Number(raw[2])) {
+          throw new RuntimeError('INVALID_INPUT', 'Automation 时间格式应为 HH:MM')
+        }
+      }
+      if (schedule.unit === 'week' && schedule.dayOfWeek !== undefined && (schedule.dayOfWeek < 0 || schedule.dayOfWeek > 6)) {
+        throw new RuntimeError('INVALID_INPUT', 'Automation 星期应在 0-6 之间')
+      }
+      if (schedule.unit === 'month' && schedule.dayOfMonth !== undefined && (schedule.dayOfMonth < 1 || schedule.dayOfMonth > 31)) {
+        throw new RuntimeError('INVALID_INPUT', 'Automation 月份日期应在 1-31 之间')
+      }
     }
     if (input.model && !modelRuntime.models.getModel(input.model.provider, input.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', 'Automation 模型不在 Pi 模型目录中')
     assertModelAllowed(input.model, 'Automation 模型')
@@ -91,18 +122,26 @@ export function createAutomations(deps: AutomationsDeps) {
     validateAutomation(input)
     const now = Date.now()
     const intervalMs = input.intervalMs
+    const schedule = input.schedule
+    const enabled = input.enabled ?? (intervalMs !== undefined || schedule !== undefined)
     const candidate: Automation = {
       id: randomUUID(),
       name: input.name.trim(),
       prompt: input.prompt,
-      enabled: input.enabled ?? intervalMs !== undefined,
+      enabled,
       ...(intervalMs !== undefined ? { intervalMs } : {}),
+      ...(schedule !== undefined ? { schedule } : {}),
       ...(input.model ? { model: { ...input.model } } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.presetId ? { presetId: input.presetId } : {}),
-      ...(input.enabled !== false && intervalMs !== undefined ? { nextRunAt: now + intervalMs } : {}),
+      ...(input.accessMode ? { accessMode: input.accessMode } : {}),
+      ...(input.builtin ? { builtin: input.builtin } : {}),
       createdAt: now,
       updatedAt: now,
+    }
+    if (enabled) {
+      const at = dueAt(candidate, now)
+      if (at !== undefined) candidate.nextRunAt = at
     }
     const stored = await appState.update(state => {
       assertAutomationResourcesExist(candidate.workspaceId, candidate.presetId, state.workspaces, state.presets)
@@ -123,16 +162,29 @@ export function createAutomations(deps: AutomationsDeps) {
       if (input.model !== undefined) current.model = input.model ? { ...input.model } : undefined
       if (input.workspaceId !== undefined) current.workspaceId = input.workspaceId
       if (input.presetId !== undefined) current.presetId = input.presetId
+      if (input.accessMode !== undefined) current.accessMode = input.accessMode
+      let scheduleChanged = false
+      if (input.schedule === null) {
+        if (current.schedule !== undefined) scheduleChanged = true
+        delete current.schedule
+      } else if (input.schedule !== undefined) {
+        current.schedule = input.schedule
+        scheduleChanged = true
+      }
       if (input.intervalMs === null) {
+        if (current.intervalMs !== undefined) scheduleChanged = true
         delete current.intervalMs
-        delete current.nextRunAt
-        if (input.enabled === undefined) current.enabled = false
       } else if (input.intervalMs !== undefined) {
         current.intervalMs = input.intervalMs
-        current.nextRunAt = input.enabled === false ? undefined : Date.now() + input.intervalMs
+        scheduleChanged = true
       }
       if (input.enabled !== undefined) current.enabled = input.enabled
-      if (!current.enabled || current.intervalMs === undefined) delete current.nextRunAt
+      if (scheduleChanged) {
+        const at = current.enabled ? dueAt(current, Date.now()) : undefined
+        if (at === undefined) delete current.nextRunAt
+        else current.nextRunAt = at
+      }
+      if (!current.enabled || (current.intervalMs === undefined && current.schedule === undefined)) delete current.nextRunAt
       assertAutomationResourcesExist(current.workspaceId, current.presetId, state.workspaces, state.presets)
       current.updatedAt = Date.now()
       return structuredClone(current)
@@ -151,6 +203,14 @@ export function createAutomations(deps: AutomationsDeps) {
       if (index < 0) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
       state.automations.splice(index, 1)
     })
+  }
+
+  /** The run history is a tail: newest first, capped, and always including `lastRun`. */
+  const recordRun = (automation: Automation, run: AutomationRun): void => {
+    automation.lastRun = run
+    const runs = (automation.runs ?? []).filter(item => item.id !== run.id)
+    runs.unshift(run)
+    automation.runs = runs.slice(0, MAX_RUN_HISTORY)
   }
 
   const finishAutomation = async (automationId: string, runId: string, conversationId: string): Promise<void> => {
@@ -172,16 +232,18 @@ export function createAutomations(deps: AutomationsDeps) {
       const automation = state.automations.find(item => item.id === automationId)
       if (!automation || automation.lastRun?.id !== runId) return undefined
       const finishedAt = Date.now()
-      automation.lastRun = {
+      recordRun(automation, {
         id: runId,
         status,
         conversationId,
         startedAt: automation.lastRun.startedAt,
         finishedAt,
         ...(errorMessage ? { error: errorMessage } : {}),
-      }
+      })
       automation.updatedAt = finishedAt
-      if (automation.enabled && automation.intervalMs !== undefined) automation.nextRunAt = finishedAt + automation.intervalMs
+      const at = automation.enabled ? dueAt(automation, finishedAt) : undefined
+      if (at === undefined) delete automation.nextRunAt
+      else automation.nextRunAt = at
       return structuredClone(automation)
     })
     if (updated) scheduleAutomation(updated)
@@ -197,7 +259,7 @@ export function createAutomations(deps: AutomationsDeps) {
       const automation = state.automations.find(item => item.id === id)
       if (!automation) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
       if (automation.lastRun?.status === 'running') throw new RuntimeError('CONFLICT', 'Automation 已在运行')
-      automation.lastRun = { id: runId, status: 'running', startedAt }
+      recordRun(automation, { id: runId, status: 'running', startedAt })
       delete automation.nextRunAt
       automation.updatedAt = startedAt
       return structuredClone(automation)
@@ -209,27 +271,35 @@ export function createAutomations(deps: AutomationsDeps) {
         ...(running.model ? { model: running.model } : {}),
         ...(running.workspaceId ? { workspaceId: running.workspaceId } : {}),
         ...(running.presetId ? { presetId: running.presetId } : {}),
+        ...(running.accessMode ? { accessMode: running.accessMode } : {}),
       })
       conversationId = detail.conversation.id
       await submit(conversationId, { text: running.prompt, requestId: `automation:${runId}`, whenBusy: 'reject' })
       await appState.update(state => {
         const automation = state.automations.find(item => item.id === id)
-        if (automation?.lastRun?.id === runId) automation.lastRun.conversationId = conversationId
+        if (automation === undefined || automation.lastRun?.id !== runId) return
+        const runs = automation.runs ?? []
+        const index = runs.findIndex(item => item.id === runId)
+        if (index >= 0) runs[index] = { ...runs[index]!, conversationId }
+        automation.runs = runs
+        automation.lastRun = { ...automation.lastRun!, conversationId }
       })
     } catch (error) {
       await appState.update(state => {
         const automation = state.automations.find(item => item.id === id)
         if (automation?.lastRun?.id === runId) {
-          automation.lastRun = {
+          recordRun(automation, {
             id: runId,
             status: 'failed',
             startedAt,
             finishedAt: Date.now(),
             ...(conversationId ? { conversationId } : {}),
             error: safeFailure(error),
-          }
+          })
           automation.updatedAt = Date.now()
-          if (automation.enabled && automation.intervalMs !== undefined) automation.nextRunAt = Date.now() + automation.intervalMs
+          const at = automation.enabled ? dueAt(automation, Date.now()) : undefined
+          if (at === undefined) delete automation.nextRunAt
+          else automation.nextRunAt = at
         }
       })
       const updated = appState.snapshot().automations.find(item => item.id === id)
@@ -249,21 +319,61 @@ export function createAutomations(deps: AutomationsDeps) {
       const now = Date.now()
       for (const automation of state.automations) {
         if (automation.lastRun?.status === 'running') {
-          automation.lastRun = {
+          const interrupted: AutomationRun = {
             ...automation.lastRun,
             status: 'interrupted',
             finishedAt: now,
             error: 'Pi Durable Web 在运行期间重新启动',
           }
+          recordRun(automation, interrupted)
           automation.updatedAt = now
         }
-        if (automation.enabled && automation.intervalMs !== undefined && automation.nextRunAt === undefined) {
-          automation.nextRunAt = now + automation.intervalMs
-        }
+        const at = automation.enabled ? dueAt(automation, now) : undefined
+        if (at === undefined) delete automation.nextRunAt
+        else if (automation.nextRunAt === undefined) automation.nextRunAt = at
       }
       return structuredClone(state.automations)
     })
     for (const automation of recovered) scheduleAutomation(automation)
+  }
+
+  /**
+   * Provision a task the server owns, without ever resurrecting one the operator
+   * deleted: the caller decides whether the built-in should exist.
+   */
+  const ensureBuiltin = async (spec: {
+    key: string
+    name: string
+    prompt: string
+    schedule?: AutomationSchedule
+    workspaceId?: string
+    model?: UiModelRef
+    accessMode?: Automation['accessMode']
+  }): Promise<Automation> => {
+    const existing = appState.snapshot().automations.find(item => item.builtin === spec.key)
+    if (existing !== undefined) {
+      // A rebinding of the shared workspace must not leave the task pointing at the old one.
+      if (spec.workspaceId !== undefined && existing.workspaceId !== spec.workspaceId) {
+        return await updateAutomation(existing.id, { workspaceId: spec.workspaceId })
+      }
+      return existing
+    }
+    return await createAutomation({
+      name: spec.name,
+      prompt: spec.prompt,
+      enabled: true,
+      ...(spec.schedule ? { schedule: spec.schedule } : {}),
+      ...(spec.workspaceId ? { workspaceId: spec.workspaceId } : {}),
+      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.accessMode ? { accessMode: spec.accessMode } : {}),
+      builtin: spec.key,
+    })
+  }
+
+  const runsOf = (id: string): AutomationRun[] => {
+    const automation = appState.snapshot().automations.find(item => item.id === id)
+    if (automation === undefined) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
+    return automation.runs ?? (automation.lastRun === undefined ? [] : [automation.lastRun])
   }
 
 
@@ -273,6 +383,8 @@ export function createAutomations(deps: AutomationsDeps) {
     update: updateAutomation,
     remove: deleteAutomation,
     run: (id: string) => runAutomation(id),
+    runs: runsOf,
+    ensureBuiltin,
     recover: recoverAutomations,
     assertNoAutomationReferences,
     close: () => automationScheduler.close(),

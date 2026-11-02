@@ -71,16 +71,26 @@ const automationRunSchema = z.object({
   finishedAt: z.number().finite().optional(),
   error: z.string().max(500).optional(),
 }).strict()
+const automationScheduleSchema = z.object({
+  unit: z.enum(['hour', 'day', 'week', 'month']),
+  timeOfDay: z.string().regex(/^\d{1,2}:\d{2}$/u).optional(),
+  dayOfWeek: z.number().int().min(0).max(6).optional(),
+  dayOfMonth: z.number().int().min(1).max(31).optional(),
+}).strict()
 const automationSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().min(1).max(120),
   prompt: z.string().min(1).max(100_000),
   enabled: z.boolean(),
   intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).optional(),
+  schedule: automationScheduleSchema.optional(),
   nextRunAt: z.number().finite().optional(),
   createdAt: z.number().finite(),
   updatedAt: z.number().finite(),
   lastRun: automationRunSchema.optional(),
+  runs: z.array(automationRunSchema).optional(),
+  builtin: z.string().min(1).max(64).optional(),
+  accessMode: accessMode.optional(),
   model: modelRef.optional(),
   workspaceId: z.string().optional(),
   presetId: z.string().optional(),

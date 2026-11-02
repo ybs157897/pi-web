@@ -84,6 +84,8 @@ function cleanContext(value: unknown): unknown {
 export function createWetrackAnalysisExtension(options: {
   dataDir: string
   readDefect?: (defectNumber: string) => Promise<unknown>
+  /** Reads the pending issue list; a coordinator uses it to hand work to subagents. */
+  readDefects?: () => Promise<unknown>
 }): Extension {
   const saveTool = defineTool({
     name: 'wetrack_analysis_save',
@@ -160,9 +162,41 @@ export function createWetrackAnalysisExtension(options: {
     },
   })
 
+  const listTool = options.readDefects === undefined ? undefined : defineTool({
+    name: 'wetrack_analysis_list',
+    description: [
+      'List the WeTrack defects that are still waiting to be analysed.',
+      'A coordinator reads this list once and then delegates each defect to a subagent;',
+      'do not read the code yourself.',
+    ].join(' '),
+    parameters: Type.Object({
+      /** Cap the returned rows; the list can hold dozens of pending defects. */
+      maxResults: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+    }),
+    execute: async (args, _api, context) => {
+      context.abortSignal?.throwIfAborted()
+      const list = await options.readDefects!()
+      const rows = Array.isArray(list) ? list : []
+      const limit = args.maxResults ?? 50
+      const items = rows.slice(0, limit).map(item => {
+        const record = (item ?? {}) as Record<string, unknown>
+        return {
+          defectNumber: record.defectNumber,
+          title: record.simpleDesc ?? record.title,
+          defectStatusName: record.defectStatusName,
+          severityName: record.severityName,
+        }
+      })
+      const text = items.length === 0
+        ? '问题清单里没有待分析的缺陷。'
+        : items.map(item => `${String(item.defectNumber)} ${String(item.title ?? '')}`.trim()).join('\n')
+      return { output: output(text), details: { items } as unknown as JsonValue }
+    },
+  })
+
   return defineExtension({
     name: WETRACK_ANALYSIS_EXTENSION_NAME,
-    tools: [saveTool, getTool, ...(detailTool === undefined ? [] : [detailTool])],
+    tools: [saveTool, getTool, ...(detailTool === undefined ? [] : [detailTool]), ...(listTool === undefined ? [] : [listTool])],
     sections: [analysisSection()],
   })
 }

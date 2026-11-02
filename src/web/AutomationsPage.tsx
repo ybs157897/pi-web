@@ -4,7 +4,8 @@ import {
   Button, IconClockOutlineRegular, IconEditOutlineRegular, IconPlayOutlineRegular,
   IconPlusOutlineRegular, IconSearchOutlineRegular, IconTrashOutlineRegular, Input, Modal, Switch,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { Automation, CreateAutomationInput, UpdateAutomationInput } from '../shared/types.ts'
+import type { Automation, AutomationRun, AutomationSchedule, CreateAutomationInput, UpdateAutomationInput } from '../shared/types.ts'
+import { WEEKDAY_LABELS, describeSchedule, formatTimeOfDay, parseTimeOfDay } from '../shared/automation-schedule.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './AutomationsPage.module.css'
@@ -24,6 +25,24 @@ const STATUS_FILTERS: readonly { value: StatusFilter; zh: string; en: string }[]
   { value: 'enabled', zh: '已开启', en: 'Enabled' },
   { value: 'finished', zh: '已结束', en: 'Finished' },
 ]
+
+/** How a task repeats. `none` is a manual task; `minutes` keeps the old fixed interval. */
+type RepeatKind = 'none' | 'minutes' | 'hour' | 'day' | 'week' | 'month'
+
+const REPEAT_KINDS: readonly { value: RepeatKind; zh: string; en: string }[] = [
+  { value: 'none', zh: '手动', en: 'Manual' },
+  { value: 'minutes', zh: '按分钟', en: 'Minutes' },
+  { value: 'hour', zh: '每小时', en: 'Hourly' },
+  { value: 'day', zh: '每天', en: 'Daily' },
+  { value: 'week', zh: '每周', en: 'Weekly' },
+  { value: 'month', zh: '每月', en: 'Monthly' },
+]
+
+function repeatKindOf(automation: Automation | null): RepeatKind {
+  if (automation === null) return 'none'
+  if (automation.schedule !== undefined) return automation.schedule.unit
+  return automation.intervalMs === undefined ? 'none' : 'minutes'
+}
 
 /** Manage recurring tasks and open each run in its durable conversation. */
 export default function AutomationsPage({ workspaceId, presetId, onOpenConversation }: AutomationsPageProps) {
@@ -62,6 +81,8 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
           prompt: input.prompt,
           ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
           ...(typeof input.intervalMs === 'number' ? { intervalMs: input.intervalMs } : {}),
+          ...(input.schedule === undefined || input.schedule === null ? {} : { schedule: input.schedule }),
+          ...(input.accessMode === undefined ? {} : { accessMode: input.accessMode }),
           ...(input.model === undefined ? {} : { model: input.model }),
           ...(workspaceId === undefined ? {} : { workspaceId }),
           ...(presetId === undefined ? {} : { presetId }),
@@ -157,7 +178,11 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
     <section className={css.list} aria-label={t('自动化任务列表', 'Automation list')}>
       {visible.map(automation => <article className={css.card} key={automation.id}>
         <div className={css.cardHead}>
-          <div className={css.cardTitle}><h2>{automation.name}</h2><Schedule automation={automation} /></div>
+          <div className={css.cardTitle}>
+            <h2>{automation.name}</h2>
+            {automation.builtin !== undefined && <span className={css.builtin}>{t('内置', 'Built-in')}</span>}
+            <Schedule automation={automation} />
+          </div>
           <div className={css.actions}>
             <Button variant="ghost" size="sm" aria-label={t(`运行 ${automation.name}`, `Run ${automation.name} now`)}
               disabled={busyId === automation.id} icon={<IconPlayOutlineRegular size={15} />} onClick={() => { void runNow(automation) }} />
@@ -173,7 +198,7 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
           <Switch checked={automation.enabled} disabled={busyId === automation.id} label={t(`启用 ${automation.name}`, `Enable ${automation.name}`)}
             onChange={enabled => { void toggle(automation, enabled) }} />
         </div>
-        <RunResult automation={automation} onOpen={onOpenConversation} />
+        <RunHistory automation={automation} onOpen={onOpenConversation} />
       </article>)}
     </section>
     <AutomationDialog key={editing?.id ?? 'new'} open={dialogOpen} automation={editing} saving={busyId !== null}
@@ -189,24 +214,37 @@ export default function AutomationsPage({ workspaceId, presetId, onOpenConversat
 
 function Schedule({ automation }: { automation: Automation }) {
   const { t, settings } = useUiPreferences()
-  if (automation.intervalMs === undefined) return <span className={css.schedule}>{t('手动运行', 'Manual run')}</span>
-  const interval = t(`每 ${Math.max(1, Math.round(automation.intervalMs / 60_000))} 分钟`, `Every ${Math.max(1, Math.round(automation.intervalMs / 60_000))} minutes`)
   const next = automation.enabled && automation.nextRunAt !== undefined
     ? new Intl.DateTimeFormat(settings.locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(automation.nextRunAt)
     : undefined
-  return <span className={css.schedule}>{interval}{next === undefined ? '' : ` · ${t('下次', 'Next')} ${next}`}</span>
+  let label: string
+  if (automation.schedule !== undefined) label = describeSchedule(automation.schedule)
+  else if (automation.intervalMs !== undefined) label = t(`每 ${Math.max(1, Math.round(automation.intervalMs / 60_000))} 分钟`, `Every ${Math.max(1, Math.round(automation.intervalMs / 60_000))} minutes`)
+  else label = t('手动运行', 'Manual run')
+  return <span className={css.schedule}>{label}{next === undefined ? '' : ` · ${t('下次', 'Next')} ${next}`}</span>
 }
 
-function RunResult({ automation, onOpen }: { automation: Automation; onOpen: (id: string) => void }) {
-  const { t } = useUiPreferences()
-  const run = automation.lastRun
-  if (run === undefined) return null
-  const status = run.status === 'completed' ? t('已完成', 'Completed')
-    : run.status === 'running' ? t('运行中', 'Running')
-      : run.status === 'failed' ? t('失败', 'Failed') : t('已中断', 'Interrupted')
-  return <div className={css.lastRun} data-status={run.status}>
-    <span>{t('最近运行', 'Last run')} · {status}{run.error ? ` · ${run.error}` : ''}</span>
-    {run.conversationId && <Button variant="ghost" size="sm" onClick={() => { onOpen(run.conversationId as string) }}>{t('打开结果会话', 'Open result conversation')}</Button>}
+function RunHistory({ automation, onOpen }: { automation: Automation; onOpen: (id: string) => void }) {
+  const { t, settings } = useUiPreferences()
+  const runs: AutomationRun[] = automation.runs ?? (automation.lastRun === undefined ? [] : [automation.lastRun])
+  if (runs.length === 0) return null
+  const format = (value: number): string =>
+    new Intl.DateTimeFormat(settings.locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(value)
+  const label = (status: AutomationRun['status']): string => status === 'completed' ? t('已完成', 'Completed')
+    : status === 'running' ? t('运行中', 'Running')
+      : status === 'failed' ? t('失败', 'Failed') : t('已中断', 'Interrupted')
+  const shown = runs.slice(0, 8)
+  return <div className={css.runList}>
+    <div className={css.runHead}>{t('执行记录', 'Run history')}<span>{t(`${runs.length} 次`, `${runs.length} runs`)}</span></div>
+    {shown.map(run => <div className={css.runRow} data-status={run.status} key={run.id}>
+      <span className={css.runStatus}>{label(run.status)}</span>
+      <span className={css.runTime}>{format(run.startedAt)}</span>
+      {run.error !== undefined && <span className={css.runError}>{run.error}</span>}
+      {run.conversationId !== undefined
+        ? <Button variant="ghost" size="sm" onClick={() => { onOpen(run.conversationId as string) }}>{t('打开会话', 'Open conversation')}</Button>
+        : null}
+    </div>)}
+    {runs.length > shown.length && <span className={css.runMore}>{t(`另有 ${runs.length - shown.length} 条记录`, `${runs.length - shown.length} more runs`)}</span>}
   </div>
 }
 
@@ -220,54 +258,114 @@ function AutomationDialog({ open, automation, saving, onClose, onSave }: {
   const { t } = useUiPreferences()
   const [name, setName] = useState(automation?.name ?? '')
   const [prompt, setPrompt] = useState(automation?.prompt ?? '')
-  const [interval, setInterval] = useState(automation?.intervalMs === undefined ? '' : String(Math.round(automation.intervalMs / 60_000)))
+  const [kind, setKind] = useState<RepeatKind>(repeatKindOf(automation))
+  const [minutes, setMinutes] = useState(automation?.intervalMs === undefined ? '30' : String(Math.round(automation.intervalMs / 60_000)))
+  const [timeOfDay, setTimeOfDay] = useState(formatTimeOfDay((parseTimeOfDay(automation?.schedule?.timeOfDay).hour * 60) + parseTimeOfDay(automation?.schedule?.timeOfDay).minute))
+  const [dayOfWeek, setDayOfWeek] = useState(automation?.schedule?.dayOfWeek ?? 1)
+  const [dayOfMonth, setDayOfMonth] = useState(automation?.schedule?.dayOfMonth ?? 1)
   const [error, setError] = useState('')
 
   useEffect(() => {
     if (!open) return
     setName(automation?.name ?? '')
     setPrompt(automation?.prompt ?? '')
-    setInterval(automation?.intervalMs === undefined ? '' : String(Math.round(automation.intervalMs / 60_000)))
+    setKind(repeatKindOf(automation))
+    setMinutes(automation?.intervalMs === undefined ? '30' : String(Math.round(automation.intervalMs / 60_000)))
+    const time = parseTimeOfDay(automation?.schedule?.timeOfDay)
+    setTimeOfDay(formatTimeOfDay(time.hour * 60 + time.minute))
+    setDayOfWeek(automation?.schedule?.dayOfWeek ?? 1)
+    setDayOfMonth(automation?.schedule?.dayOfMonth ?? 1)
     setError('')
   }, [automation, open])
+
+  const buildSchedule = (): AutomationSchedule | undefined => {
+    if (kind === 'hour') return { unit: 'hour', timeOfDay }
+    if (kind === 'day') return { unit: 'day', timeOfDay }
+    if (kind === 'week') return { unit: 'week', timeOfDay, dayOfWeek }
+    if (kind === 'month') return { unit: 'month', timeOfDay, dayOfMonth }
+    return undefined
+  }
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
     const normalizedName = name.trim()
     const normalizedPrompt = prompt.trim()
-    const minutes = interval.trim() === '' ? undefined : Number(interval)
-    if (normalizedName === '' || normalizedPrompt === '' || minutes !== undefined && (!Number.isFinite(minutes) || minutes < 1)) {
-      setError(t('请填写名称和提示词，间隔至少为 1 分钟', 'Enter a name and prompt. The interval must be at least 1 minute.'))
+    if (normalizedName === '' || normalizedPrompt === '') {
+      setError(t('请填写名称和提示词', 'Enter a name and a prompt'))
       return
     }
+    const parsedMinutes = Number(minutes)
+    if (kind === 'minutes' && (!Number.isFinite(parsedMinutes) || parsedMinutes < 1)) {
+      setError(t('间隔分钟数至少为 1', 'The interval must be at least one minute'))
+      return
+    }
+    const schedule = buildSchedule()
     if (automation === null) {
       const input: CreateAutomationInput = {
         name: normalizedName,
         prompt: normalizedPrompt,
-        ...(minutes === undefined ? {} : { intervalMs: Math.floor(minutes * 60_000) }),
+        ...(kind === 'minutes' ? { intervalMs: Math.floor(parsedMinutes * 60_000) } : {}),
+        ...(schedule === undefined ? {} : { schedule }),
+        ...(kind === 'none' ? { enabled: false } : {}),
       }
       onSave(input)
-    } else {
-      const input: UpdateAutomationInput = {
-        name: normalizedName,
-        prompt: normalizedPrompt,
-        intervalMs: minutes === undefined ? null : Math.floor(minutes * 60_000),
-      }
-      onSave(input)
+      return
     }
+    const input: UpdateAutomationInput = {
+      name: normalizedName,
+      prompt: normalizedPrompt,
+      // Both mechanisms are exclusive: the minute interval and the calendar schedule
+      // each clear the other, so the task never keeps two conflicting due times.
+      intervalMs: kind === 'minutes' ? Math.floor(parsedMinutes * 60_000) : null,
+      schedule: kind === 'none' || kind === 'minutes' ? null : schedule,
+      enabled: kind === 'none' ? false : automation.enabled,
+    }
+    onSave(input)
   }
 
   return <Modal open={open} onClose={onClose} title={automation === null ? t('新建自动化任务', 'New automation') : t('编辑自动化任务', 'Edit automation')}
-    description={t('任务结果会保存为 Pi 会话，可以从运行记录重新打开', 'Each result is saved as a Pi conversation and can be reopened from the run history')}
+    description={t('任务结果会保存为 Pi 会话，可以从执行记录重新打开', 'Each result is saved as a Pi conversation and can be reopened from the run history')}
     closeLabel={t('关闭任务表单', 'Close automation form')} className={css.dialog}>
     <form className={css.form} onSubmit={submit}>
       <label htmlFor="automation-name">{t('任务名称', 'Name')}</label>
       <input id="automation-name" value={name} onChange={event => { setName(event.currentTarget.value) }} data-modal-autofocus />
       <label htmlFor="automation-prompt">{t('提示词', 'Prompt')}</label>
       <textarea id="automation-prompt" value={prompt} rows={7} onChange={event => { setPrompt(event.currentTarget.value) }} />
-      <label htmlFor="automation-interval">{t('重复间隔（分钟，可选）', 'Repeat interval (minutes, optional)')}</label>
-      <input id="automation-interval" value={interval} inputMode="numeric" placeholder={t('留空表示手动运行', 'Leave blank for manual runs')}
-        onChange={event => { setInterval(event.currentTarget.value) }} />
+      <label>{t('重复方式', 'Repeat')}</label>
+      <div className={css.unitTabs} role="group" aria-label={t('选择重复方式', 'Choose how the task repeats')}>
+        {REPEAT_KINDS.map(option => <button type="button" key={option.value} aria-pressed={kind === option.value}
+          data-selected={kind === option.value || undefined}
+          onClick={() => { setKind(option.value) }}>{t(option.zh, option.en)}</button>)}
+      </div>
+      {kind === 'minutes' && <>
+        <label htmlFor="automation-interval">{t('间隔分钟数', 'Interval in minutes')}</label>
+        <input id="automation-interval" value={minutes} inputMode="numeric"
+          onChange={event => { setMinutes(event.currentTarget.value) }} />
+      </>}
+      {kind === 'hour' && <>
+        <label htmlFor="automation-time">{t('每小时的第几分钟', 'Minute of the hour')}</label>
+        <input id="automation-time" type="time" value={timeOfDay}
+          onChange={event => { setTimeOfDay(event.currentTarget.value) }} />
+      </>}
+      {(kind === 'day' || kind === 'week' || kind === 'month') && <>
+        <label htmlFor="automation-time">{t('执行时间', 'Time of day')}</label>
+        <input id="automation-time" type="time" value={timeOfDay}
+          onChange={event => { setTimeOfDay(event.currentTarget.value) }} />
+      </>}
+      {kind === 'week' && <>
+        <label>{t('星期', 'Day of the week')}</label>
+        <div className={css.unitTabs} role="group" aria-label={t('选择星期', 'Choose a weekday')}>
+          {WEEKDAY_LABELS.map((label, index) => <button type="button" key={label} aria-pressed={dayOfWeek === index}
+            data-selected={dayOfWeek === index || undefined}
+            onClick={() => { setDayOfWeek(index) }}>{label}</button>)}
+        </div>
+      </>}
+      {kind === 'month' && <>
+        <label htmlFor="automation-day">{t('每月第几日', 'Day of the month')}</label>
+        <input id="automation-day" type="number" min={1} max={31} value={dayOfMonth} inputMode="numeric"
+          onChange={event => { setDayOfMonth(Math.min(31, Math.max(1, Number(event.currentTarget.value) || 1))) }} />
+      </>}
+      {kind === 'none' && <p className={css.formHint}>{t('手动任务不会被定时触发，只能点「立即运行」。', 'A manual task never fires on its own; run it on demand.')}</p>}
       {error !== '' && <p className={css.formError} role="alert">{error}</p>}
       <div className={css.formActions}><Button variant="ghost" type="button" disabled={saving} onClick={onClose}>{t('取消', 'Cancel')}</Button>
         <Button variant="primary" type="submit" disabled={saving}>{saving ? t('保存中…', 'Saving…') : t('保存任务', 'Save automation')}</Button></div>

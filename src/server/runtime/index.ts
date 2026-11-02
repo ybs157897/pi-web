@@ -22,6 +22,10 @@ import { RuntimeError } from '../runtime-errors.ts'
 import { builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackReport, wetrackConfigured } from '../automation/wetrack.ts'
 import { listWetrackAnalyses, readWetrackAnalysis } from '../automation/wetrack-analysis.ts'
 import { createWetrackAnalysisRuns } from '../automation/wetrack-analysis-runs.ts'
+import {
+  WETRACK_DAILY_AUTOMATION_KEY, WETRACK_DAILY_SCHEDULE, markWetrackDailyProvisioned,
+  wetrackDailyCoordinatorPrompt, wetrackDailyProvisioned,
+} from '../automation/wetrack-daily.ts'
 import { TodoTools } from '../tools/todo.ts'
 import { createWetrackAnalysisExtension } from '../tools/wetrack-analysis.ts'
 import { createGoalExtension } from '../tools/goal.ts'
@@ -191,6 +195,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(createWetrackAnalysisExtension({
     dataDir,
     readDefect: async defectNumber => (await wetrackDefect(defectNumber)).defect,
+    readDefects: async () => (await wetrackDefects()).items,
   }))
   registry.install(createGoalExtension({
     canCreate: async (id, context) => {
@@ -508,6 +513,27 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }, CTX)
   }
 
+  // The nightly issue analysis is provisioned once, and only once the operator has
+  // bound a workspace to analyse. A deleted task stays deleted: the marker file
+  // remembers that it was already offered.
+  const provisionWetrackDaily = async (): Promise<void> => {
+    const binding = await analysisRuns.workspaceBinding()
+    if (binding.workspaceId === undefined) return
+    if (await wetrackDailyProvisioned(dataDir)) return
+    const { model } = await analysisRuns.settings()
+    await automationsFeature().ensureBuiltin({
+      key: WETRACK_DAILY_AUTOMATION_KEY,
+      name: '问题清单每日分析',
+      prompt: wetrackDailyCoordinatorPrompt(),
+      schedule: WETRACK_DAILY_SCHEDULE,
+      workspaceId: binding.workspaceId,
+      accessMode: 'readOnly',
+      ...(model === undefined ? {} : { model }),
+    })
+    await markWetrackDailyProvisioned(dataDir)
+  }
+  await provisionWetrackDaily()
+
   // Submission recovery can start the scheduler itself. Install guards on every stored
   // conversation before any recovery path is allowed to submit or resume work.
   let policyCursor: Cursor | undefined
@@ -632,6 +658,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     updateAutomation: (id, input) => automationsFeature().update(id, input),
     deleteAutomation: (id) => automationsFeature().remove(id),
     runAutomation: (id) => automationsFeature().run(id),
+    automationRuns: (id) => automationsFeature().runs(id),
     wetrackDefects,
     wetrackDefect,
     wetrackReport,
