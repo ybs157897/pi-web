@@ -134,7 +134,9 @@ interface LooseSystemRow {
 }
 
 /** Group durable messages into user runs while preserving their recorded order. */
-export function buildRenderModel(messages: readonly ChatMessage[]): RenderModel {
+export function buildRenderModel(messages: readonly ChatMessage[], interactions?: readonly InteractionRequest[]): RenderModel {
+  const pendingInteractionCalls = new Set((interactions ?? [])
+    .filter(interaction => interaction.status === 'pending').map(interaction => interaction.id))
   const mutableRuns: MutableRun[] = []
   const byRunId = new Map<string, MutableRun>()
   const systemEntries: SystemEntry[] = []
@@ -222,7 +224,7 @@ export function buildRenderModel(messages: readonly ChatMessage[]): RenderModel 
     rowsByRun.set(position, rows)
   }
 
-  const runs = orderedRuns.map((run, position) => createRenderRun(run, rowsByRun.get(position) ?? []))
+  const runs = orderedRuns.map((run, position) => createRenderRun(run, rowsByRun.get(position) ?? [], pendingInteractionCalls))
   return { runs, timeline: buildTimeline(runs, looseRows) }
 }
 
@@ -250,7 +252,7 @@ function stableRunKey(message: ChatMessage): string {
   return `run:${message.requestId ?? message.id}`
 }
 
-function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRow[]): RenderRun {
+function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRow[], pendingInteractionCalls: ReadonlySet<string>): RenderRun {
   const callItems = new Map<string, MutableToolItem>()
   const toolResults = new Map<string, ChatMessage>()
 
@@ -331,12 +333,23 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
 
   const process: ProcessPart[] = []
   const responses: ResponsePart[] = []
-  const finalResponse = finalResponseOf(run.messages)
+  // An interaction that still waits for the user pauses the run mid-turn, so the prose the
+  // model wrote around the pending call is intermediate work, never the answer: promoting it
+  // would let the reader settle on a paragraph that then has to jump into the work group the
+  // moment the reply resumes the run. The durable tool result freezes `details.status` at
+  // write time, so "pending" is read from the interaction records instead.
+  const interactionPending = hasPendingInteractionCall(run.messages, pendingInteractionCalls)
+  // After the interaction resolves, the reply payload is the in-log boundary: content written
+  // behind it belongs to the paused turn and stays in the work group, so the gap frames
+  // between "answered" and the continuation's first token cannot resurrect the old prose.
+  const answerBarrier = interactionPending ? run.messages.length : lastInteractionReplyIndex(run.messages) + 1
+  const candidates = run.messages.slice(answerBarrier)
+  const finalResponse = interactionPending ? undefined : finalResponseOf(candidates)
   // A generation that is still streaming displaces the settled answer: until it writes its own
   // text, the previous answer demotes to process content so the timeline stays chronological —
   // the live reasoning row must read after the body it was written after (ZCode's strict
   // order), not float above a finished paragraph.
-  const liveAnswer = run.messages.findLast(message => isLiveAnswer(message))
+  const liveAnswer = candidates.findLast(message => isLiveAnswer(message))
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role === 'user' && message.id !== run.users[0]?.id && !isInteractionPayloadText(messageText(message))) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
@@ -409,6 +422,27 @@ function finalResponseOf(messages: readonly ChatMessage[]): ChatMessage | undefi
     && message.parentToolCallId === undefined
     && !message.blocks.some(block => block.type === 'toolCall')
     && message.blocks.some(block => block.type === 'text' && block.text !== '' || block.type === 'image' || block.type === 'file'))
+}
+
+/**
+ * Whether the run still waits on an interaction call (a question or a plan review the user
+ * has not answered). The projected interaction records are the only live source: a durable
+ * tool result keeps the `pending` status it was written with forever, because the answer
+ * lands as a separate reply entry instead of rewriting it.
+ */
+function hasPendingInteractionCall(messages: readonly ChatMessage[], pendingInteractionCalls: ReadonlySet<string>): boolean {
+  if (pendingInteractionCalls.size === 0) return false
+  return messages.some(message => message.role === 'assistant'
+    && message.blocks.some(block => block.type === 'toolCall' && pendingInteractionCalls.has(block.id)))
+}
+
+/** The newest interaction reply payload in the run; content before it belongs to the paused turn. */
+function lastInteractionReplyIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role === 'user' && isInteractionPayloadText(messageText(message))) return index
+  }
+  return -1
 }
 
 /**

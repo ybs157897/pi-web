@@ -89,7 +89,7 @@ export default function Transcript({
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
   const presentation = policy ?? presentationPolicyFor(settings.transcriptView, settings.collapseTiming)
-  const model = useMemo(() => buildRenderModel(messages), [messages])
+  const model = useMemo(() => buildRenderModel(messages, interactions), [messages, interactions])
   // Late answers keyed by their question call: the reply bubble reads them from
   // its own message, and the tool row uses its call's answer to settle.
   const replies = useMemo(() => {

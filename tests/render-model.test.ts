@@ -91,6 +91,70 @@ describe('transcript render model', () => {
     expect(result.runs[1]?.responses.map(response => response.key)).toEqual(['assistant-2:response'])
   })
 
+  const questionTurn = (): ChatMessage[] => [
+    user('user-1', 'request-1'),
+    assistant('assistant-ask', [
+      { type: 'thinking', text: 'Asking what to write about.' },
+      { type: 'toolCall', id: 'call-1', name: 'ask_user_question', arguments: { questions: [] } },
+    ], { runId: 'run-1', status: 'completed' }),
+    { id: 'tool-1', role: 'tool', blocks: [{ type: 'text', text: 'The questions are now pending.' }], timestamp: 250,
+      runId: 'run-1', toolCallId: 'call-1', toolName: 'ask_user_question', details: { status: 'pending' } },
+    assistant('assistant-interim', [{ type: 'text', text: '我问了三个问题，回答后我就写正文。' }], { runId: 'run-1', status: 'completed', timestamp: 300 }),
+  ]
+  const pendingQuestion: InteractionRequest[] = [
+    { id: 'call-1', kind: 'question', status: 'pending', createdAt: 240 },
+  ]
+
+  it('keeps the post-question prose in the work group while the question waits', () => {
+    const run = buildRenderModel(questionTurn(), pendingQuestion).runs[0]!
+    // The turn is paused, not over: promoting the interim prose would make it jump into the
+    // work group the moment the reply resumes the run.
+    expect(run.responses).toEqual([])
+    expect(run.process.filter(part => part.kind === 'content').map(part => part.kind === 'content' ? part.message.id : '')).toEqual(['assistant-interim'])
+    // The streaming interim prose stays process content too — it never enters the answer slot.
+    const streaming = buildRenderModel([
+      ...questionTurn(),
+      assistant('assistant-interim-live', [{ type: 'text', text: '还在补充说明' }], { runId: 'run-1', streaming: true, status: 'running', timestamp: 310 }),
+    ], pendingQuestion).runs[0]!
+    expect(streaming.responses).toEqual([])
+    expect(streaming.process.filter(part => part.kind === 'content')).toHaveLength(2)
+  })
+
+  it('promotes only post-reply content once the interaction resolves, with no gap resurrection', () => {
+    const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', answers: [] })
+    const reply = { id: 'reply-1', role: 'user' as const, blocks: [{ type: 'text' as const, text: replyText }], timestamp: 350, runId: 'run-1' }
+    const answered: InteractionRequest[] = [{ id: 'call-1', kind: 'question', status: 'answered', createdAt: 240, answeredAt: 350 }]
+    // The gap between "answered" and the continuation's first token: the interim prose must
+    // not reappear in the answer area for those frames.
+    const gap = buildRenderModel([...questionTurn(), reply], answered).runs[0]!
+    expect(gap.responses).toEqual([])
+    expect(gap.process.filter(part => part.kind === 'content').map(part => part.kind === 'content' ? part.message.id : '')).toEqual(['assistant-interim'])
+    // The continuation owns the answer; the interim prose stays in the work group.
+    const continued = buildRenderModel([
+      ...questionTurn(), reply,
+      assistant('assistant-final', [{ type: 'text', text: '好，那就随便聊聊。' }], { runId: 'run-1', status: 'completed', timestamp: 400 }),
+    ], answered).runs[0]!
+    expect(continued.responses.map(response => response.message.id)).toEqual(['assistant-final'])
+    expect(continued.process.filter(part => part.kind === 'content').map(part => part.kind === 'content' ? part.message.id : '')).toEqual(['assistant-interim'])
+  })
+
+  it('keeps a pending plan review from promoting the post-plan prose', () => {
+    const messages: ChatMessage[] = [
+      user('user-1', 'request-1'),
+      assistant('assistant-plan', [
+        { type: 'text', text: '先说结论。' },
+        { type: 'toolCall', id: 'call-plan', name: 'exit_plan_mode', arguments: { plan: '# Plan' } },
+      ], { runId: 'run-1', status: 'completed' }),
+      { id: 'tool-plan', role: 'tool', blocks: [{ type: 'text', text: 'The plan is now pending review.' }], timestamp: 250,
+        runId: 'run-1', toolCallId: 'call-plan', toolName: 'exit_plan_mode', details: { status: 'pending' } },
+      assistant('assistant-plan-note', [{ type: 'text', text: '计划已提交，正在等你审阅。' }], { runId: 'run-1', status: 'completed', timestamp: 300 }),
+    ]
+    const pendingReview: InteractionRequest[] = [{ id: 'call-plan', kind: 'plan-review', status: 'pending', createdAt: 240 }]
+    expect(buildRenderModel(messages, pendingReview).runs[0]!.responses).toEqual([])
+    // Without interaction records the promotion rule is unchanged (pure-message callers).
+    expect(buildRenderModel(messages).runs[0]!.responses.map(response => response.message.id)).toEqual(['assistant-plan-note'])
+  })
+
   it('keeps the streaming process and settled answer on stable render keys without duplicating tool results', () => {
     const pending = user('user-live', 'request-live')
     const assistantLive = assistant('assistant-live', [

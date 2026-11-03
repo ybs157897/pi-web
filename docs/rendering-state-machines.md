@@ -150,6 +150,58 @@ useState，run 子树重挂载（run key 迁移）时静默丢失。
 
 ---
 
+## S5 答案区归属（answer area ownership）
+
+答案区（transcript 尾部的 `responses`）同一时刻只归一条 assistant 消息所有。归属由
+`createRenderRun`（`src/web/render-model.ts`）裁定：live partial 优先，settled 时归
+`finalResponseOf`——但两条交互边界先于两者裁决：
+
+```
+候选 = run.messages 切去 reply 屏障（barrier = 最后一条交互回复 payload 之后）
+pending 交互存在 → barrier = 末尾（无候选，答案区恒空）
+```
+
+**为什么**：`ask_user_question` 工具契约要求模型"别等回答、继续干活"，于是问题 pending
+期间模型会写一段过渡文。若把它提为答案区正文，作答恢复 generation 的那一刻（partial
+首帧带 `streaming:true`），liveAnswer 逐出规则会把这段正文降级进工作区，而 partial 只有
+thinking 时 `responses=[]`（thinking 非 content block），答案区空白整个 thinking 阶段
+（max 档可达十几秒）——用户视角即「正文消失又出现」。durable 工具结果的
+`details.status` 冻结在写入时（作答后仍是 `pending`，答案以独立 reply entry 落库），
+所以 pending 判定必须读 projected `interactions` 记录；reply payload
+（`answer_to_pending_question` 三种 kind）是日志里唯一可靠的解除边界。
+
+### 转移矩阵（修复后）
+
+| 帧 \ 答案区所有者 | 无 | 过渡文（settled） | 过渡文（streaming） | 续写（streaming） | 续写（settled） |
+|---|---|---|---|---|---|
+| 问题 pending | **恒定**（过渡文在过程区） | — | — | — | — |
+| 已答复、续写未出首 token | **恒定**（gap 帧不得复活过渡文） | — | — | — | — |
+| 续写首 text token | — | — | **→ 续写** | — | — |
+| 续写 settle | — | — | — | **→ 续写** | 终态（与 settled 全程一致） |
+
+### 非法转移（缺陷，已修复）
+
+- **V5.1** 问题 pending 时把过渡文提为答案区正文，作答瞬间降级 + thinking 阶段答案区
+  空白（2026-11-03 真实模型复现：会话 4059，`w+7651` 过渡文在答案区、`w+9465` 同帧降级
+  进 `processOutput`；多轮会话 4081 每轮重复一次）。修复：pending 交互存在时不产生候选。
+- **V5.2** 已答复与续写首 token 之间的 gap 帧把过渡文重新提为答案区（`finalResponseOf`
+  扫全量消息）。修复：reply payload 屏障之后的消息才可参与归属。
+
+### 不变量
+
+- I5.1 一条消息若曾在答案区出现，则其后每一帧都必须留在答案区（位移 = 缺陷）。
+- I5.2 pending 交互所在 run 的答案区恒空；过渡文从首帧起就渲染在过程区。
+- I5.3 run 结算后的最终归属与修复前一致：屏障后最后一条有内容的 assistant 消息。
+
+### ego 验收（修复后，2026-11-03）
+
+真实模型 `opencode-go/deepseek-v4.1-flash`，提问→作答→续写全流程 50ms 逐帧采样
+（会话 4111 / 4141）：过渡文全程只出现在 `[class*="processOutput"]`（过程区），
+答案区 `[data-role="assistant"]` 在 pending 期与 gap 期恒空；作答后最终正文直接在
+答案区流式（1→186 字，settled 一次），**答案区→过程区位移事件 = 0**。
+
+---
+
 ## ego 验收判据（真实模型）
 
 复测时间 2026-10-28 23:07，`opencode-go/deepseek-v4.1-flash`，与修复前同一 ego 任务空间、同一脚本骨架。
