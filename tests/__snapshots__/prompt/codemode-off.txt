@@ -1,7 +1,7 @@
 # codemode-off
 
 sections (10019 chars): runtime-core 3272, project-instructions 302, work-policy 932, wetrack-analysis 617, goal-policy 491, skills-policy 3784, delegation-policy 621
-tools (32; descriptions 14684 chars; parameters 7629 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
+tools (33; descriptions 14859 chars; parameters 7718 chars): read, write, edit, bash, list_files, search_files, glob, grep, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
 
 ## section runtime-core
 

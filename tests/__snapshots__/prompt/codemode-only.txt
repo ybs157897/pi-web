@@ -1,6 +1,6 @@
 # codemode-only
 
-sections (15855 chars): runtime-core 3272, project-instructions 302, work-policy 1251, wetrack-analysis 617, goal-policy 591, skills-policy 3852, delegation-policy 662, codemode 5308
+sections (15699 chars): runtime-core 3272, project-instructions 302, work-policy 1251, wetrack-analysis 617, goal-policy 591, skills-policy 3852, delegation-policy 662, codemode 5152
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -199,20 +199,6 @@ declare const tools: { write(args: {
 }): Promise<string>; };
 ```
 
-### `list_files`
-List relative file and directory paths from the current workspace. path defaults to "."; recursive defaults to false; maxEntries is an integer from 1 to 100 (default 100). Hidden paths, node_modules, common secret files, and symlinks are excluded. Read-only; does not invoke a shell.
-
-codemode tool declaration:
-```ts
-declare const tools: { list_files(args: {
-  // @integer @minimum 1 @maximum 100
-  maxEntries?: number;
-  // @maxLength 1024
-  path?: string;
-  recursive?: boolean;
-}): Promise<string>; };
-```
-
 ### `wetrack_analysis_get`
 Read the stored analysis of one WeTrack defect. Use it before re-analyzing so you can tell whether the conclusion changed.
 
@@ -232,6 +218,17 @@ codemode tool declaration:
 declare const tools: { wetrack_analysis_detail(args: {
   // @minLength 4 @maxLength 32
   defectNumber: string;
+}): Promise<string>; };
+```
+
+### `wetrack_analysis_list`
+List the WeTrack defects that are still waiting to be analysed. A coordinator reads this list once and then delegates each defect to a subagent; do not read the code yourself.
+
+codemode tool declaration:
+```ts
+declare const tools: { wetrack_analysis_list(args: {
+  // @minimum 1 @maximum 200
+  maxResults?: number;
 }): Promise<string>; };
 ```
 
