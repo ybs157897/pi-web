@@ -38,6 +38,8 @@
   cursor: help;
   white-space: nowrap;
 }
+/* 失败要比普通次要文案醒目一级；停止是中性态，维持 muted。 */
+.statusFailed { color: var(--message-danger); }
 .statusStopped { cursor: default; text-decoration: none; }
 .subagentStatus { flex: none; color: var(--message-muted); font-size: calc(var(--message-font) - 1px); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); white-space: nowrap; }
 

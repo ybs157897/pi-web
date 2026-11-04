@@ -723,3 +723,14 @@
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
 }
+
+/* 窄屏下右区全屏接管会话，关闭钮是唯一返回路径：给可见的命中面。 */
+@media (max-width: 760px) {
+  .close {
+    width: 34px;
+    height: 34px;
+    border: 0.5px solid var(--dsw-alias-border-l3);
+    background: var(--dsw-alias-bg-module-platform);
+    color: var(--dsw-alias-label-secondary);
+  }
+}

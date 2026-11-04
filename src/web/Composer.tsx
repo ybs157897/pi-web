@@ -422,7 +422,7 @@ export default function Composer(props: ComposerProps) {
           </span>
         })}
       </div>}
-      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容, / 调用指令, @ 文件, $ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('发消息或创建任务, / 调用指令, @ 文件, $ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
+      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('发消息或创建任务，/ 调用指令、@ 文件、$ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
         value={value} disabled={disabled || sending} rows={hero ? 2 : 1} onChange={event => updateValue(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={onKeyDown}
         onPaste={event => { const files = event.clipboardData.files; if (files.length) { event.preventDefault(); onAddImages(files) } }} />
       {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : trigger.type === 'skill' ? t('技能', 'Skills') : t('文件与文件夹', 'Files and folders')}>

@@ -1,4 +1,4 @@
-.markdown { min-width: 0; width: 100%; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; letter-spacing: .025em; overflow-wrap: anywhere; }
+.markdown { min-width: 0; width: 100%; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; letter-spacing: .025em; overflow-wrap: anywhere; line-break: strict; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .paragraph { margin: 16px 0; }
@@ -36,4 +36,4 @@
 .gallery .image { width: 100%; height: 100%; max-height: none; }
 @media(min-width:640px) { .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media(min-width:768px) { .gallery { display: flex; flex-wrap: wrap; } .gallery > .imageButton { width: auto; height: 176px; flex: none; } .gallery .image { width: auto; height: 176px; max-width: none; } }
-.fallback { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; }
+.fallback { white-space: pre-wrap; overflow-wrap: anywhere; line-break: strict; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; }
