@@ -1,6 +1,6 @@
 # Pi Durable Web
 
-一个独立的 Pi Durable Web 入口。AI 回答与工作过程按 ZCode 的展示和交互实现：正文使用 Streamdown，代码使用 @pierre/diffs，表格、图表、思考和终端拥有独立展示组件；应用外壳继续使用固定版本的 DSH 设计变量。执行、消息、工具和恢复由 Pi Durable 1.3.0 与 SQLite 承担。
+一个独立的 Pi Durable Web 入口。AI 回答与工作过程按 ZCode 的展示和交互实现：正文使用 Streamdown，代码使用 @pierre/diffs，表格、图表、思考和终端拥有独立展示组件；应用外壳继续使用固定版本的 DSH 设计变量。执行、消息、工具和恢复由 Pi Durable 1.4.0 与 SQLite 承担。
 
 ## 启动
 
@@ -184,7 +184,7 @@ Plan 模式只做只读研究和计划审阅。命令式语言要求实施时，
 
 ## 代码模式与 MCP
 
-Pi Durable 1.3.0 的 code mode 与 MCP 客户端已在本项目中开启：
+Pi Durable 1.4.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 - **代码模式**：设置 → 通用 → 代码模式，三态可选，默认「开启」。
   - 开启：模型多一个 `codemode` 工具，用 QuickJS 沙箱执行它写的 JavaScript；脚本里的工具调用是 Pi 的嵌套工具调用，运行中显示为子行，结束后从结果的 `details.calls` 展示。

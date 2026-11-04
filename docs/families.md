@@ -1,6 +1,6 @@
 # 整族功能：DSH 机制 → Pi Durable 落点
 
-基准：DSH `687f282e86`（0.2.1-rc.2）对照 Pi Durable 1.3.0 与本仓库 `src/server/runtime/` / `conversation/projection.ts` / `shared/types.ts`。
+基准：DSH `687f282e86`（0.2.1-rc.2）对照 Pi Durable ^1.4.0（`package.json:31-34`，已由 1.3.0 升级；§8 假设表仍是 1.3.0 上的验证结论，升级 1.4.0 后未重验）与本仓库 `src/server/runtime/` / `conversation/projection.ts` / `shared/types.ts`。
 本文件是实施蓝图：每族写清「DSH 机制 → Pi 等价物 → pi-web 最小切片」，与 `docs/parity.md` 的状态表配套。
 
 ## 贯穿全局的三条事实
@@ -56,14 +56,18 @@
 - **pi-web 切片**：`SubagentTools`（先做前台一次性）；`children(id)` runtime 方法 + `GET /api/conversations/:id/children`、`POST .../children/:childId/messages|stop`；projection `subagents`；子会话不进侧栏（`list()` 已过滤 `owner === undefined`），由会话头触发器/卡片进入。
 - **2026-10-31 增补（ZCode/DSH 参照）**：`subagent` 支持 `agent_type`（默认 `general-purpose` 继承父工具；`Explore` 只读白名单 `read/glob/grep/list_files/search_files` 与父工具取交集、缺 `read` 报错、不注入 AGENTS.md——`record.profile` 门控 project-instructions）与 per-call `model {provider, modelId}`（`spawn_teammate` 同参数，`fork` 上下文拒绝以保 KV cache，DSH 同款理由）。覆盖经 pi-durable `configure(tx, childId, AgentChange)` 在创建 commit 内写入——**`Tx.createConversation` 只收 `{ownership}`，agent 覆盖是 Harness 层 `createConversation` 的参数**（实测踩坑：spread 传入会被静默忽略）。内置 profile 在 `src/server/agents/builtins.ts`；模型校验 `createChildModelResolver`（目录 `getModel` + 白名单 `modelWithinAllowlist` + `clampThinkingLevel`，越界 `MODEL_UNAVAILABLE`）；委派引导走新 section `delegation-policy`。批次细节见 `docs/parity.md`「内置双 agent、委派策略与调用时模型选择」。
 - **2026-10-31 晚增补（后台 activation）**：`subagent` 加 `run_in_background`（启动即返回 activation，结算由 runtime 的 `subagent-settle.ts` 以 requestReceipt 通道回注父会话，`[subagent-settlement]` 标记 + 系统行渲染 + 队列隐藏 + 启动 reconcile 幂等重注入）。**机制坑：工具 api 派生的一切 handle（含 child.submit 返回的 submission）都绑定工具 invocation，invocation 结束后连 `wait(CTX)` 都抛 "invocation has ended"——detached 链必须全部经 `harness()` 重解析 + `conversation.watch(CTX)` 观察子会话**。
+- **委派路由定稿（2026-11-01，f46451c）**：一次性子任务——哪怕大量并行、哪怕互相交叉校验——一律路由到 `subagent`，队友的结论文本不会自动回流：`spawn_teammate` description 明确该取舍（`src/server/tools/team.ts:1060`），`delegation-policy` 同步改口（`src/server/tools/subagent.ts:212`）。
 
 ## 6. 团队（agent team）
 
 - **DSH**：`team/member` + `team/task` 全量快照（revision CAS、依赖 ready、写范围 advisory、环校验）；工具 `spawn_teammate / send_message / list_agents / wait_agent / interrupt_agent / team_task_*`；面板显示成员与共享看板。
 - **Pi**：Team = 顶层会话 + 其 task-owned 子会话树；共享看板放 Lead 会话的 conversation doc（照抄 `TeamTaskSnapshot`）；`wait_agent` 用 `watchDoc` + 有界等待实现（无活跃成员立即返回 noProgress）；成员即子会话（复用第 5 节）。
+- **Pi（2026-11-01，f46451c 增补）**：`wait_agent` 的结果携带每个队友的最新状态，已结束队友附带其最终回答文本（截 2000 字）——`teamRosterWithAnswers`（`src/server/tools/team.ts:800-843`），execute 两个分支都返回 roster（`:1295-1301`），`team-policy` 注入文案同步（`:1020`）；无活跃成员立即 `noActivePeer` 的机制不变（`:777-778`）。
 - **pi-web 切片**：最后做。先落「共享任务看板 + send_message + wait_agent」，成员管理复用第 5 节；看板纯函数（CAS/依赖/环/授权）先单测再接线。
 
 ## 7. 实现顺序
+
+> 注：以下为 2026-10-19/20 的验收快照，行号与结论以正文为准。
 
 1. ~~**todo**~~ —— **已实现并验证**：`src/server/tools/todo.ts`（工具 + doc）、`projection` 的 `todos` 字段、`src/web/TodoPanel.tsx`；runtime 已注册并支持新用户输入清空、readOnly 白名单放行；测试覆盖投影与端到端（demo `[todo]` 脚本），ego 复核收起/展开/清空。
 2. ~~**交互协议 + ask_user_question**~~ —— **已实现并验证**（`interaction-tools.ts` + doc + `POST .../interactions/:callId/answer` + 三源配对投影 + `QuestionComposer`；78 用例与 ego 端到端含跳过/400/404）
@@ -73,6 +77,8 @@
 6. ~~**team**~~ —— **已实现并验证**（`team-tools.ts`：9 工具 + 看板 CAS/依赖/环/写范围 + `wait_agent` 有界等待；`TeamPanel`；demo 与 4317/3080 两侧 DeepSeek 同题复跑结果一致）
 
 ## 8. Pi 侧假设与验证状态
+
+> 注：下表为 Pi Durable 1.3.0 上的验证快照（2026-10-19/20），升级 1.4.0 后未重验；行号与结论以正文为准。
 
 | # | 假设 | 结论（脚本验证于 `/tmp/pi-assumptions`，SQLite 后端复核 A3/A6） |
 |---|---|---|
@@ -129,6 +135,8 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 
 ### pi-web 现状（Pi Durable 1.3.0）
 
+> 注：本节与下节「并排差异」为 2026-10-20 前后的验收快照，行号与结论以正文为准。
+
 - 旧状态（本次改动前）：策略固定、不可配，`enabled=true / reserveTokens=16384 / keepRecentTokens=20000 / backgroundTokens=32768`（`node_modules/@earendil-works/pi-durable/dist/harness/agent.js:12-17`）；`Harness.open` 没有传 `settings.compaction`。
 - 触发在 generation 准备阶段：`> window - 16384` 阻塞、`> window - 49152` 后台；provider 溢出压缩后重试一次（`dist/harness/generation.js:219-233,371-395`）。
 - 摘要用独立 summarizer system prompt + 把旧消息序列化成纯文本（工具结果截 2000 字符），`cacheRetention: "none"`，`maxTokens≈13107`，模板 6 节（Goal/Constraints/Progress/Key Decisions/Next Steps/Critical Context）（`dist/harness/compaction.js:12-47,103-160,294-337`）。
@@ -158,6 +166,8 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 4. **前置缩减**：在压缩前对超长 tool result 做确定性裁剪（对应 DSH pruner），必要时再做图片 offload；这层能显著推迟摘要。
 
 ### 可行性结论（2026-10-20，只核 seam，未实现）
+
+> 注：本节与下节「生态实现核对」为 2026-10-20 的验收快照，行号与结论以正文为准。
 
 结论：**行为上可对齐约 80–90%**；完全逐项一致需要改 Pi Durable 上游。
 
@@ -208,6 +218,8 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 
 ### 真实模型与 UI 验收（2026-10-20）
 
+> 注：本节为 2026-10-20 的验收快照，行号与结论以正文为准。
+
 - **1M 窗口不再被 200k 硬压**：`compactionBudget()` 默认返回模型真实窗口（1M 就是 1M）；只有模型未声明窗口时回退 200k。`PI_WEB_CONTEXT_BUDGET` 可显式设置成本上限；`PI_WEB_COMPACTION_{RESERVE,KEEP_RECENT,BACKGROUND}_TOKENS` 可覆盖策略。
 - **真实 provider**：opencode-go（`https://opencode.ai/zen/go/v1`，`anthropic-messages`），模型 `opencode-go/deepseek-v4.1-flash`（1M window）。`POST /api/providers/opencode-go/test` 返回 `connected`；真实对话完成 3 轮后手动压缩成功，`pi.compaction` entry 24 / head 19，摘要 980 字符，包含完整 6 节标题与 `<read-files>/private/tmp/pi-real-compaction-workspace/seed.txt</read-files>`，证明自定义摘要、文件跟踪和落盘路径在真实模型上生效。测试用 `PI_WEB_CONTEXT_BUDGET=60000`、`keepRecent=2000` 降低触发成本，生产默认按模型窗口。
 - **UI 运行态**：`LiveDoc.compactions` 投影为 `ConversationDetail.compaction`；转录末尾显示与完成标记同级的系统行（12px、tertiary、居中，带小 spinner）；运行期间旧的「已完成上下文压缩」标记被隐藏，且不再弹 toast。完成后系统行变为「已完成上下文压缩」；失败显示「上下文压缩失败」+ 原因。压缩运行中再次 `/compact` 直接忽略，不重复提交。ego + 真实 `opencode-go/deepseek-v4.1-flash` 验收：`artifacts/ego-compaction/07-level-running.png`（只有运行系统行，无 toast/胶囊/完成标记）、`08-level-completed.png`（只有完成标记）。
@@ -215,7 +227,7 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 
 ## 11. 轨迹采集与导出（trajectory，RSI 用途）
 
-这一族不是 DSH 复刻：DSH 的轨迹视图是会话事件流的只读 UI 投影（`ui-trajectory`），数据本就全部持久化；pi-web 的目标是超哥说的那条路——**把完整 agent 轨迹数据采集完整，让 AI 能据此离线分析调优**（human-in-the-loop RSI）。2026-10-28 的 a812bfc 已把 DSH 式轨迹 tab 整体移除（对齐 ZCode 批次的有意取舍），本族只做数据层，不做视图。
+这一族不是 DSH 复刻：DSH 的轨迹视图是会话事件流的只读 UI 投影（`ui-trajectory`），数据本就全部持久化；pi-web 的目标是超哥说的那条路——**把完整 agent 轨迹数据采集完整，让 AI 能据此离线分析调优**（human-in-the-loop RSI）。2026-10-28 的 a812bfc 已把 DSH 式轨迹 tab 整体移除（对齐 ZCode 批次的有意取舍）；**2026-11-01 的 176e3f2 反转了「只做数据层，不做视图」**——落地 ZCode 式 TrajectoryPane：按模型调用逐 call 展开的时间线（`src/web/TrajectoryPane.tsx:16-20`），入口在 Inspector 新标签页（`src/web/Inspector.tsx:554`）与 `App.tsx:1687-1696` 的 `openTrajectoryPane`。
 
 ### 数据盘点（2026-10-31 核对）
 
@@ -231,3 +243,4 @@ DSH 把压缩做成 capability seam（`ctx.compaction`）：Service Definition `
 - **第二批补全（2026-10-31 晚，用户要求「全部都要」）**：① **TTFT**——`wrapModelsWithTrajectory()` 用 Proxy 包住传给 `Harness.open` 的 models 目录，只拦 `streamSimple`：透传事件流，从流开始到首个可见 content 计时，把 `ttftMs` 戳在最终消息上（经 `result()` 回到 pi-durable 的 classify，进 assistant entry 与 response 行；无内容则缺省）。pi-ai 的 `AssistantMessage` 接口经模块增强认识该字段。② **旁路调用**——`captureSideCall(purpose, ...)` 记 `sidecall` 行（input/answer/options/耗时，错误也记录后原样重抛），四个调用点接线：会话标题 `session-title`（conversations.ts）、压缩摘要 `compaction-summary`（compaction.ts）、AI commit message `commit-message`（workspaces.ts，无会话时跳过）、记忆提取每轮 `memory-extraction`（extraction.ts 的 `complete` 回调）。provider 连通性测试（catalog.ts:730）无所属会话，不采集。③ **工具目录行 `catalog`**——beforeRequest 读 `conversation.agent()`，对 model+thinkingLevel+tools 取 sha1 前 12 位做变更门控，只在变化时落一行（含全部工具的 name/description/parameters JSON schema）；request 行也补上了 model 与 thinkingLevel。
 - **剩余边界**：provider 测试调用不采集；`streamOptions`（maxTokens 等）不经 beforeRequest 暴露，目录行只有 model/thinkingLevel/tools；catalog 的 tools 取自 `agent.tools`（模型实际被提供的口径），deferred 未加载工具在 `agent.deferred`，tool_search 加载后会体现在下一次目录变更里。
 - **判据**：`tests/trajectory-capture.test.ts`——脚本 provider 跑「工具调用 → 最终回答」一轮，断言导出首行是 conversation、行类型齐全（entry/task/request/response/tools/catalog/sidecall）、请求行 messages 与 messageCount 一致且含用户原文并带 model、两次请求只落一行 catalog 且 tools 含 read、每条 response 带 `ttftMs` 数值、轮询等到 `sidecall`（purpose=session-title，answer.role=assistant）、时间戳非降序、采集文件逐行落盘；`PI_WEB_TRAJECTORY=0` 时无 request/response 行且无采集文件；`tests/http.test.ts` 路由 200 + `application/x-ndjson`。真实库冒烟：会话 535 导出 84 行（46 entries + 37 tasks + meta），时间有序、六种 entry 全识别。
+- **委派消费方（2026-11-02，dfaea84 / fdb303f）**：automations 批次新增内置「问题清单每日分析」协调会话，把缺陷派给独立 general-purpose 子 agent（每批最多 6 个，`src/server/automation/wetrack-daily.ts:31-46`）；调研规程由单缺陷分析与夜间 worker 两角色共用（`src/server/automation/analysis-procedure.ts`）。该批未改动机制层断言（delegation-policy、work-policy、subagent/team 工具），本节路由结论不受影响。

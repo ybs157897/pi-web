@@ -5,12 +5,14 @@
 
 状态：`待修` / `进行中` / `已修` / `不做`（附原因）。
 
+> 注：「输入区 / 聊天与侧栏 / 设置与页面 / 文案与语义 / 已对齐」各表为带日期的验收快照（2026-10-19/20 基线），其中行号与部分结论已被后续批次更新，以文末最新章节为准。
+
 ## 有意差异（用户要求）
 
 | ID | 差异 | 说明 | 状态 |
 |---|---|---|---|
 | DF-1 | 插件市场按 ZCode 数据模型原生实现（2026-10-27 起取代原「不展示插件管理界面」决策） | 设置 → 扩展 → 插件市场：本地目录 / HTTPS / GitHub / git 来源、安装 / 更新 / 卸载 / 启停、安装确认（展示 MCP 命令与能力）、插件技能接入技能目录、插件 MCP 工具热重载；P2 补齐 `@` 引用 reminder、`_meta.ui` 内联卡、右侧插件 tab 与 JSON-RPC bridge。原「所有内置扩展工具恒开启」仍成立，不做逐插件工具开关。 | 已实现（P0+P1+P2） |
-| DF-2 | 代码模式与 MCP 按 Pi Durable 1.3.0 语义开启 | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 由用户级 `mcp.json` 与已启用插件的 `mcpServers` 合并而成（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`），插件能力变化时热重载。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
+| DF-2 | 代码模式与 MCP 按 Pi Durable ^1.4.0 语义开启（2026-11 由 1.3.0 升级，`package.json:31-34`） | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 由用户级 `mcp.json` 与已启用插件的 `mcpServers` 合并而成（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`），插件能力变化时热重载。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
 | DF-3 | ~~回答的最终结论按「设计文档」版式渲染~~（差异已随功能移除，2026-10-26） | 「结论文档排版」整体下线：前端渲染层（`DocText` / `DocBlock` / `DocInline` / `doc-split` / `doc-inline`、`DocBody.module.css` / `DocBlock.module.css`）、设置项 `docStyle`、模型契约 `doc-style-instruction.ts`，以及为 doc 块 JSON 载荷引入的「结构化输出」模型能力开关（b3093f6）一并删除；移除时结论与过程回答统一走库的 `MarkdownText`；2026-10-27 的 ZCode 输出迁移见 DF-4。历史会话里已有的 ```` ```doc ```` 围栏按普通代码块显示。详见 `docs/spec.md` 2026-10-26。 | 已移除（用户要求） |
 
 | DF-4 | AI 输出改按 ZCode（2026-10-27） | 回答、代码、表格/图表/图片、思考、常见工具过程与已更改文件摘要以 ZCode 3.16.2 源码和 3.16.3 实机为参考；宿主执行、权限、问答、计划和子会话语义保留。新正文不再使用 DSH Markdown/CodeBlock，终端不再依赖 DSH 内部 DOM。详见 `docs/zcode-markdown-rendering-plan.md`。 | 有意差异（用户要求，已实施） |
@@ -27,8 +29,8 @@
 | IN-5 | 「繁忙时的发送行为」设置不生效（硬编码 `followUp`） | 设置项决定 Enter/发送按钮行为，备用手势取反 | 代码 `App.tsx:151` | 已修（sendMode 初值取 settings.busySendMode） |
 | IN-6 | 附件并发添加可绕过上限；超限后收到英文 `Request body is invalid` | 客户端预检整批拒绝并给出本地化文案 | 代码 `App.tsx:490-521` | 已修（reading 预留计数；纯函数门控 16/16 用例） |
 | IN-7 | 附件无读取中/失败/重试态；发送失败无幂等重试 | 上传中 spinner/进度、失败点击重试、未完成阻止发送 | 代码 `App.tsx:528-539` | 已修（reading/ready/error 三态 + 失败点击重试 + 未就绪阻止发送；发送失败复用同一 requestId 幂等重试；ego 复核） |
-| IN-8 | AVIF 与 `File.type` 为空的图片被降级为普通文件 | 图片按 MIME 白名单识别并渲染缩略 | 代码 `App.tsx:47` / `server/workspace-files.ts:20` | 部分修复（前端识别 avif + 空 MIME 按扩展名推断；服务端 `IMAGE_TYPES` 仍不含 avif，发送会 400） |
-| IN-9 | `/compact` 不可达；`/plan` 不存在 | `/` 面板包含压缩/计划/权限/目标/反馈 | 代码 `Composer.tsx:100-106` | 部分修复（`/compact` 已接通 runtime/HTTP/api 并接入 App；`/plan`、目标、反馈仍未实现） |
+| IN-8 | AVIF 与 `File.type` 为空的图片被降级为普通文件 | 图片按 MIME 白名单识别并渲染缩略 | 代码 `App.tsx:47` / `server/workspace-files.ts:20` | 已修（前端识别 avif + 空 MIME 按扩展名推断；服务端 `'.avif': 'image/avif'` 与 `INLINE_IMAGE_TYPES` 已含 avif——`src/server/workspace/files.ts:20-21`） |
+| IN-9 | `/compact` 不可达；`/plan` 不存在 | `/` 面板包含压缩/计划/权限/目标/反馈 | 代码 `Composer.tsx:100-106` | 部分修复（`/compact` 已接通 runtime/HTTP/api 并接入 App；`/plan` 命令已实现——`Composer.tsx:230`；目标、反馈命令仍缺） |
 | IN-10 | 队列项附件只显示「附件消息」；无重排（DSH 也无重排，此项两边一致） | 队列行显示图片 24×24 / 文件 chip | 代码 `Composer.tsx:196` | 已修（队列行 24×24 图片缩略 + 文件 chip（图标+名+大小）；两边都无重排） |
 | IN-11 | 切换/新建会话静默清空已添加附件 | 草稿与附件按会话保留 | 代码 `App.tsx:286-291` | 已修（附件按 scope 保存，切回恢复） |
 
@@ -37,12 +39,12 @@
 | ID | 问题 | DSH 对照 | 证据 | 状态 |
 |---|---|---|---|---|
 | CH-1 | 会话行 hover 直接露 3 个图标，标题被挤压省略 | 行内只露「…」菜单 + 置顶；hover 弹深色信息卡 | `dsh-18-row-hover.png` / `pi-11-session-top.png` | 已修（hover 仅「…」菜单 + 常显置顶图标，菜单含全部动作；DSH 的深色 hover 信息卡未做） |
-| CH-2 | 轨迹视图只有搜索 + 简单列表 | 「时长/轮次/调用」开关 + 彩色时序图 + 密集行 | `dsh-15-trajectory.png` / `pi-15-trajectory.png` | 已修（时长/轮次/调用三开关 + 时序图 + 类型 chip；ego 复核，统计口径与列表一致） |
+| CH-2 | 轨迹视图只有搜索 + 简单列表 | 「时长/轮次/调用」开关 + 彩色时序图 + 密集行 | `dsh-15-trajectory.png` / `pi-15-trajectory.png` | 已修（2026-10-19：时长/轮次/调用三开关 + 时序图 + 类型 chip）；**已随 a812bfc（2026-10-28）移除**，DSH 式时序图轨迹视图由 ZCode 式 TrajectoryPane 取代（176e3f2，2026-11-01） |
 | CH-3 | 用户气泡 radius 17 / padding 9×15 | radius 20 / padding 10×16；底色两边一致 `rgb(237,243,254)` | 实测 | 已修（padding 10×16、radius 20，与 DSH 实测一致） |
 | CH-4 | 用户消息图片最大 300px 宽 | 单图长边 240、宽高比 clamp、多图 64 tile | 实测 + `dsh` `MessageImage` | 已修（消息图片上限改为 240×240、radius 16） |
-| CH-5 | 子智能体触发器/层级目录/只读转录缺失 | 会话头计数触发器 + 目录 + 子会话转录 | `dsh-16-team.png` 等 | 不做（待后端工具） |
+| CH-5 | 子智能体触发器/层级目录/只读转录缺失 | 会话头计数触发器 + 目录 + 子会话转录 | `dsh-16-team.png` 等 | 已实现（触发器 `SubagentPanel` 与只读转录 pane 2026-10-19 起；目录页 `SubagentDirectory`/`SubagentPane` 已齐备——状态卡「已结束的智能体」页脚入口 `StatusPanel.tsx:532-535`，`App.tsx:1635` `openSubagentDirectory`、`:2161` 接线） |
 | CH-6 | 智能体团队面板缺失 | 成员 + 共享任务 + 打开成员会话 | `dsh-16-team.png` / `pi-97-team-01-trigger.png` … `pi-97-team-05-back-to-lead.png`、`pi-97-team-06-real-panel.png` / `dsh-97-team-01-panel.png` | 已修（2026-10-19：`TeamPanel` 会话头触发器 + 成员区/共享任务区；空态与 DSH 同文案，见「团队对比」） |
-| CH-7 | 计划/目标/待办/问答交互缺失 | 计划 chip、待审卡、todo 清单、目标栏、问答卡 | 代码核对 | 不做（待后端工具） |
+| CH-7 | 计划/目标/待办/问答交互缺失 | 计划 chip、待审卡、todo 清单、目标栏、问答卡 | 代码核对 | 已实现（2026-10-19 起分批落地：`GoalBar` / `TodoPanel` / `QuestionComposer` 接线 `App.tsx:2169-2171`；`/plan` 命令 `Composer.tsx:230`） |
 | CH-8 | 偶发「连接已恢复」Toast | 无 | `pi-17-queue.png` | 已修（根因：任何 SSE `open` 都被当成 recovered；改为仅在曾断开后提示，生产构建双向实测通过） |
 | CH-9 | 改动文件默认逐文件展开成卡片，整块很长 | 回合末尾一张卡：填充卡头（文件磁贴 + 已编辑 N 个文件 + 总增删）、每行一个路径 + 增删数、超过 4 行折叠、点行在右侧看 diff、悬停 500ms 出预览（`ui-deliverables/ChangedFiles.tsx`，折叠常量 `COLLAPSED_ROWS = 4`，行按 display 路径排序） | 本机 DSH 源码 `687f282e86` + `artifacts/doc-layout-check/50-53-*.png` | 已修（按 DSH 结构移植：单卡、默认折叠、折叠开关、悬停预览、点行开 Inspector；行数据由本轮产物推导，排序对齐 `compareDisplay`）。另：pi-web 多一个卡头折叠控件（DSH 无整卡折叠），卡片位置/行分隔线/折叠键边线已按 DSH 源码对齐 |
 
@@ -108,6 +110,8 @@
 
 ## 子智能体对比（2026-10-19，前台一次性 + children API）
 
+> 注：本节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
+
 同一会话头位置、同一演示流程（1440×900 / 浅色 / 中文，demo 模型 `pi-web-demo`：`[subagent]` → 触发器 → 展开 → 打开子会话 → 返回父会话 → 跟进/停止）；pi 侧证据 `pi-90-subagent-01…07`。
 
 ### 机制对照
@@ -125,7 +129,7 @@
 | 崩溃重放 | activation 由 subagent runtime 托管 | 工具 `replay:'safe'`：先 `scanConversations({ownerTaskId:api.taskId},1)` 复用已有子会话，再以稳定 `requestId=subagent:<taskId>` 提交（`subagent-tools.ts:98-113`） | 有意差异（pi 特有）：一次委派＝一次工具调用，做成幂等 |
 | 面板触发器 | 会话头 `{n} 个子智能体`；运行中 aria-label 用「正在运行」变体、可见文本始终是总数；空 catalog 不渲染；hover 即开 150ms、hover 即关 120ms、点击 pin（`packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx:496-500,536-552,667-716`；文案 `locales.ts:36-42`） | 同文案同位置（标题右侧、header actions 之前）：`SubagentPanel.tsx:193-201`，`aria-haspopup="tree"`，空列表返回 null（`:188`）；hover/pin/外点/Escape 与 DSH 同构（`SubagentPanel.tsx:108-149,173-180`） | 已对齐（触发器 28px 高 / 12px 字 / `--dsw-alias-label-tertiary`，`SubagentPanel.module.css:12-40`；hover 于 2026-10-19 修，`pi-98-subagent-03-hover-open` 对 `dsh-98-hover-03-subagent-open`） |
 | 面板卡 | 336px、`--dsw-specific-menu` 材质 + `--dsw-elevation-prominent`、行 44px、状态点 + label + 10px 副标题（`SubagentHeaderLineage.module.css:100-200,215-235`） | 同几何同材质（`SubagentPanel.module.css:42-63,65-96,98-115`）；行＝label + `正在运行/当前未运行` + 回答摘要 + `停止/跟进/打开` | 已对齐（材质与尺寸）；按钮是 pi 的显式控件 |
-| 打开子会话 | 点整行 → `openChild`；子会话头另有面包屑 switcher 在同级间切换（`SubagentHeaderLineage.tsx:279-286,785-822`） | 「打开」→ 复用现有选会话路径（`App.tsx:1443-1447`），详情走 `GET /api/conversations/:id` | 已实现：子会话头面包屑「父标题 ← 当前标题」+ 同级计数切换（`App.tsx:1478-1495,1763-1790`）；截图 `pi-99-subagent-03..06` |
+| 打开子会话 | 点整行 → `openChild`；子会话头另有面包屑 switcher 在同级间切换（`SubagentHeaderLineage.tsx:279-286,785-822`） | 「打开」→ 复用现有选会话路径（原 `App.tsx:1443-1447`，行号已失效——176e3f2 后 App.tsx 增长约 500 行），详情走 `GET /api/conversations/:id` | 已实现：子会话头面包屑「父标题 ← 当前标题」+ 同级计数切换（`App.tsx:1478-1495,1763-1790`，行号同为当时快照）；截图 `pi-99-subagent-03..06` |
 | 转录内呈现 | 同一回合的多次 `subagent` 调用各自启动、转录里只有工具回执；回合过程行用 `{n} subagent` 汇总（`packages/client/ui-chat/src/client/locale.ts:153-154`、`conversation-nodes/turn-process.ts:180-184`） | 连续调用合并为一行彩色胶囊（`SubagentRunStrip`）：每个子会话固定配色、运行中转圈 + `{已结束}/{总数}`、完成显示 tokens、失败标红；点胶囊复用既有选会话路径打开子会话 | 有意差异（pi 侧呈现增强）：DSH 的汇总停留在过程标题，pi 把「哪些子智能体、各自什么状态」放进正文一行；会话头 `SubagentPanel` 目录保持不变 |
 | 子会话不进侧栏 | 子会话不进侧栏；`origin==='subagent'` 的会话在该位置不渲染触发器（`SubagentHeaderLineage.tsx:760-777`） | `list()` 只取 `owner===undefined`（`runtime.ts:610-613`）；投影给子会话标 `origin:'subagent'`+`parentId`（`projection.ts:757`），前端据此不插入侧栏（`App.tsx:262-271`） | 已对齐（ego `pi-90-subagent-03`：打开子会话后侧栏仍只有父会话） |
 | 只读转录文案 | 一次性子会话的输入区换为只读说明「一次性子智能体记录 / 一次性任务不支持后续消息…」（`ui-subagent/src/client/SubagentReadOnlyComposer.tsx:19-31`） | 未做：一期子会话可继续（`childMessage` 已实现），输入区保持可用 | 不适用：只读文案属于「一次性且不可继续」，与当前实现形态不符 |
@@ -149,13 +153,15 @@
 
 ### 待跟进的小项（本轮记录，未做）
 
-- ~~迟到回答在转录里目前是原始 JSON 用户气泡~~ —— **已修（2026-10-19）**：`transcript.tsx` 按 payload 识别并渲染 DSH 式折叠气泡，见下表「迟到回答 + 问答工具行的代码级并排」。
+- ~~迟到回答在转录里目前是原始 JSON 用户气泡~~ —— **已修（2026-10-19）**：`transcript.tsx` 按 payload 识别并渲染 DSH 式折叠气泡，见下表「迟到回答 + 问答工具行的代码级并排」。（**2026-10-31，841860e：该折叠气泡已删除**——answer/dismiss/plan-dismiss payload 全部隐藏并入 ask 行，`src/web/interaction-payload.ts:18-23`、`render-model.ts:155`；下表同此状态。）
 - 问答卡暂不显示倒计时/「慢慢回答」（DSH 的 timed 通道），因为一期采用「立即 pending」模式。
-- 计划待审（plan-review）与审批（approval）复用同一协议但尚未实现，见 families.md 第 2 节。
+- ~~计划待审（plan-review）与审批（approval）复用同一协议但尚未实现~~ —— **plan-review 已实现**（`src/server/runtime/interactions.ts:84` `interactionKind: 'plan-review'`）；approval 的 wire 类型仍在（`src/shared/types.ts:738`）但至今无生产方。见 families.md 第 2 节。
 
 - 2026-10-19：整族进展——待办、问答、目标三族实现并验证（79 测试通过 + ego 复核截图 pi-40/41/42、pi-50、pi-52/53）；计划模式（复用问答协议）、子智能体（Pi child conversation）、团队（后台子智能体 + 看板）待实现。
 
 ## 交互收尾对比（2026-10-19，问答细分 / 放弃整组 / 子智能体行 / hover 面板）
+
+> 注：本节为带日期的验收快照，其中的行号已在后续重构中漂移；问答行的文案与气泡已于 2026-10-31 被 ZCode 式渲染取代，以文末最新章节为准。
 
 两条侧同一条流程（1440×900 / 浅色 / 中文）：pi demo 实例（端口 4418，`/tmp` 数据目录，脚本化演示模型）跑 `[ask]`、`[subagent]`、`[team]`；DSH 3080 实例（会话上显式使用 DeepSeek-V4.1-Flash）跑同一组问句（「请调用 ask_user_question …」「请调用 subagent …」）。
 
@@ -163,6 +169,8 @@
 - DSH 证据：`dsh-98-ask-01-waiting` / `dsh-98-ask-02-cancelled` / `dsh-98-ask-04-cancelled-toolrow` / `dsh-98-ask-05-cancelled-detail` / `dsh-98-ask-06-answered` / `dsh-98-hover-01-team-open` / `dsh-98-hover-03-subagent-open` / `dsh-98-subagent-00-state`（含 `-01-row` / `-02-receipt` 的 DOM 断言）。
 
 ### 1) 问答工具行的状态细分
+
+> 注：2026-10-31（841860e）起，本表的五行状态文案已被 ZCode 式「正在询问 / 已询问」行取代（`src/web/tool-render-model.ts:687-696`）；下表为当时快照。
 
 | 语义 | DSH | pi-web | 定性 |
 |---|---|---|---|
@@ -180,9 +188,9 @@
 |---|---|---|---|
 | 文案与图标 | `nav.cancel` = 「放弃整组问题」/「Dismiss all questions」（`ui-user-questions/src/client/locales.ts:26`；按钮 `QuestionComposer.tsx:477-479`） | 卡片头部「放弃整组问题」按钮（`QuestionComposer.tsx:244-249`；样式 `QuestionComposer.module.css:74-96`） | 已对齐（文案逐字一致；pi 放在「收起」之后，DSH 的 nav 行同序） |
 | 按钮出现条件 | `dismissal === 'cancel'` 才用 nav.cancel：只有 **Host 从未命名 callId** 的卡片（`contract/slots.ts:283-287`）＝ 无 `wait` 的阻塞提问；带 callId 的 timed 卡显示「收起问题面板，可从工具调用重新打开」（`nav.close`） | 仅 `status==='pending'` 时显示（`QuestionComposer.tsx:244`）；「收起」保留为独立的折叠动作（`:236-238`） | **有意差异**：pi 的提问一律带 callId（`interaction-tools.ts:126` 写交互表），没有「未命名卡片」形态；本轮按任务口径把「放弃整组」做成 pending 卡上的显式动作，语义与 DSH 的 `ASK_CANCELLED` 一致（结束整组请求、不留回答通道）。实测 DSH 的阻塞提问卡同样显示该按钮（`dsh-98-ask-01-waiting`），故功能可对照 |
-| 结束语义 | 客户端以 `ASK_CANCELLED` 拒绝 waterfall（`contract/slots.ts:548-562` 的 `dismiss()`；错误码 `:110-120`），工具调用以「已取消」收场；**不发任何用户消息** | 服务端 `POST /api/conversations/:id/interactions/:callId/cancel`（`app.ts:440-444`）→ `runtime.cancelInteraction`（`runtime.ts:1112-1149`）：文档置 `cancelled` + 幂等 steer 一条 `{"kind":"dismissed_pending_question",…}` JSON | 有意差异（底座不同）：pi 的工具调用已经返回（无阻塞），所以「取消」必须自己通知模型；steer 的 `requestId=question-dismiss:<callId>` 保证重启/重试不重复注入；steer 前与回答路由同款做模型白名单校验（`runtime.ts:1124`，拒绝时卡保持可操作） |
+| 结束语义 | 客户端以 `ASK_CANCELLED` 拒绝 waterfall（`contract/slots.ts:548-562` 的 `dismiss()`；错误码 `:110-120`），工具调用以「已取消」收场；**不发任何用户消息** | 服务端 `POST /api/conversations/:id/interactions/:callId/cancel`（`app.ts:440-444`）→ `runtime.cancelInteraction`（`runtime.ts:1112-1149`）：文档置 `cancelled` + 幂等 steer 一条 `{"kind":"dismissed_pending_question",…}` JSON | 有意差异（底座不同）：pi 的工具调用已经返回（无阻塞），所以「取消」必须自己通知模型；steer 的 `requestId=question-dismiss:<callId>` 保证重启/重试不重复注入；steer 前与回答路由同款做模型白名单校验（`runtime.ts:1124`，拒绝时卡保持可操作）。渲染层：2026-10-31（841860e）起该 payload 不再显示为气泡，见「卡片与转录的收尾」行 |
 | 幂等与冲突 | 卡片关闭后无法再次取消（没有对应接口） | 已 `cancelled` → 幂等返回当前详情、不再 steer（`runtime.ts:1123`）；已 `answered` → 409 `CONFLICT`「该问题已回答，无法放弃整组问题」（`runtime.ts:1122`）；回答路由对已取消的调用同样返回 409（`runtime.ts:1067`），文档提交只认 `pending`（`runtime.ts:1094-1099`）；计划待审记录走该路由返回 422 `UNSUPPORTED`（`runtime.ts:1121`） | 有意差异（更严）：pi 的两条路径都不会让「放弃」和「回答」互相覆盖 |
-| 卡片与转录的收尾 | 卡片消失；工具行「提问 · 已取消」+ 展开显示「本轮已取消，未提交回答」+ 题面 | 卡片消失（`QuestionComposer.tsx:31-36` 把 `cancelled` 移出可渲染集）；工具行同款只读记录（`ToolCard.tsx:178-196`）；steer 的用户消息渲染为紧凑气泡「放弃整组问题 / 未提交回答」而不是原始 JSON（`transcript.tsx:206-223,225-262`、`tool-render-model.ts:765-779`） | 已对齐；**有意差异（表现）**：DSH 没有这条用户消息（其取消不走 steer），pi 用气泡如实呈现 |
+| 卡片与转录的收尾 | 卡片消失；工具行「提问 · 已取消」+ 展开显示「本轮已取消，未提交回答」+ 题面 | 卡片消失（`QuestionComposer.tsx:31-36` 把 `cancelled` 移出可渲染集）；工具行同款只读记录（`ToolCard.tsx:178-196`）；steer 的用户消息渲染为紧凑气泡「放弃整组问题 / 未提交回答」而不是原始 JSON（`transcript.tsx:206-223,225-262`、`tool-render-model.ts:765-779`）——**2026-10-31（841860e）起该紧凑气泡已删除**，payload 只作为 run 边界隐藏；「放弃整组问题」按钮仍在（`QuestionComposer.tsx:202`） | 已对齐；**有意差异（表现）**：DSH 没有这条用户消息（其取消不走 steer），pi 曾用气泡如实呈现（已删） |
 | 演示与测试 | —— | demo `[ask]` 后点「放弃整组问题」→ 模型收到 `dismissed_pending_question` 并收尾（`demo-model.ts:121-133,239-244`）；`tests/interactions.test.ts` 折叠用例、`tests/runtime.test.ts` 端到端（cancelled 状态 + 只 steer 一次 + 幂等 + 回答 409）、`tests/http.test.ts` 路由（200 / 幂等 / 409 / 404）、`tests/projection.test.ts` 存储态解析 | 证据：`pi-98-ask-02-cancelled`（行 + 记录 + 气泡）与 `dsh-98-ask-04-cancelled-toolrow` / `dsh-98-ask-05-cancelled-detail` 并排 |
 
 ### 3) `subagent` 工具行
@@ -218,6 +226,8 @@
 - ~~子会话耗时 / token 列~~ —— **已实现（2026-10-19）**，口径见上。
 
 ## 团队对比（2026-10-19，共享看板 + send/wait + 面板）
+
+> 注：本节为带日期的验收快照，其中的行号已在后续重构中漂移（wait_agent 结果已带队友状态与回答，见 families.md §6），以文末最新章节为准。
 
 两侧跑同一条流程（1440×900 / 浅色 / 中文）：`spawn_teammate`（wp-checker）→ `team_task_create` → `send_message` → `list_agents` → `wait_agent` → 原样汇报。pi demo 证据 `pi-97-team-01…05`；真实模型证据 pi `pi-97-team-06-real-panel.png`（会话 361）、DSH `dsh-97-team-01-panel.png`（DSH 实例 3080，显式选 DeepSeek-V4.1-Flash）。
 
@@ -265,6 +275,8 @@
 - `interrupt_agent` 等 abort join 完成（见机制对照），长 turn 的成员会让工具行停留较久；DSH 是立即返回 + 事后状态。
 
 ## 真实模型验证（2026-10-19，opencode-go/deepseek-v4.1-flash）
+
+> 注：本节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
 
 在真实实例（4317，真实数据目录）新建会话并选择该模型，逐族验证：
 
@@ -318,10 +330,10 @@
 | 观察点 | DSH（真实实例 3080） | pi-web（真实实例 4317） | 差异 / 处理 |
 |---|---|---|---|
 | 回答时机与消息路径 | 窗口内回答走**工具结果**：转录不出现额外用户气泡，只有助手文本「已按你的要求询问，你的选择是：继续。」（截图 `dsh-74-ask-late-answered.png`） | pi 一期采用「立即 pending」模式，回答一律走**迟到路径**：向会话 steer 一条 `pi-web.user-question-reply` 用户消息 | 机制差异（有意）。DSH 的迟到路径同样是「一条用户消息」，故渲染应对齐 DSH 的迟到呈现，而不是原样显示 JSON |
-| 转录里的回答呈现 | 迟到回答渲染为折叠气泡「回答先前等待的问题」+ 摘要行 + 逐题「问题 / 回答：」定义列表 + 复制（`ui-user-questions/src/client/QuestionReplyView.tsx:30-105`，解析/取值/复制文本 `.../question-reply.ts:58-132`） | **已修**：同一呈现 —— 识别 + 折叠气泡在 `src/web/transcript.tsx:60-72`（回答表）、`:199-209`（`UserEntryRow` 分派）、`:217-284`（气泡）；纯函数在 `src/web/tool-render-model.ts:506-616`。截图 `pi-80-ask-reply-02-bubble-collapsed.png`、`pi-80-ask-reply-03-bubble-expanded.png`、`pi-80-ask-reply-06-copied.png` | **已修**（2026-10-19，demo `[ask]` 实测；对照 `dsh-74-ask-late-answered.png`） |
+| 转录里的回答呈现 | 迟到回答渲染为折叠气泡「回答先前等待的问题」+ 摘要行 + 逐题「问题 / 回答：」定义列表 + 复制（`ui-user-questions/src/client/QuestionReplyView.tsx:30-105`，解析/取值/复制文本 `.../question-reply.ts:58-132`） | **已修**（2026-10-19）：同一呈现 —— 识别 + 折叠气泡在 `src/web/transcript.tsx:60-72`（回答表）、`:199-209`（`UserEntryRow` 分派）、`:217-284`（气泡）；纯函数在 `src/web/tool-render-model.ts:506-616`。**2026-10-31（841860e）起折叠气泡已删除**：answer payload 隐藏并入 ask 行（`interaction-payload.ts:18-23`、`render-model.ts:155`），行号为当时快照。截图 `pi-80-ask-reply-02-bubble-collapsed.png`、`pi-80-ask-reply-03-bubble-expanded.png`、`pi-80-ask-reply-06-copied.png` | **已修**（2026-10-19，demo `[ask]` 实测；对照 `dsh-74-ask-late-answered.png`） |
 | 工具行呈现 | 「提问」+ `N / M` + 状态（等待回答 / `{answered}/{total} 已回答`），展开为只读问答记录（`ui-tool/src/client/tool/toolviews/ask-question-row.tsx:214-368`；解析/配对 `:47-148`；文案 `ui-conversation/src/client/locales.ts:290-303`） | **已修**：`提问 · 1 / 2 · 已回答`（等待态 `0 / 2 · 等待回答`、失败 `提问失败`）；展开为只读记录 + 保留「调用参数」「工具详情」折叠项 —— `src/web/ToolCard.tsx:45-68`（行模型接线）、`:156-172`（记录卡）；纯函数 `src/web/tool-render-model.ts:648-735`。截图 `pi-80-ask-reply-01-tool-pending.png`、`pi-80-ask-reply-04-tool-collapsed.png`、`pi-80-ask-reply-05-tool-expanded.png` | **已修**（2026-10-19，demo `[ask]` 实测；对照 `dsh-73-ask-after-timeout.png`） |
 | 问答卡 | 回答提交后离开输入区（窗口内）或转「已继续工作，仍可回答」再被替换 | 回答后卡片转只读「已回答」并显示逐题摘要（截图 `pi-62-ask-real-answered.png`） | 已对齐（pi 的只读态即 DSH 的 review 态） |
-| 卡内元素 | 题号 `1 / 1`、`跳过`、`提交`、收起/放弃整组按钮、自定义输入框 | 题号 `1 / 1`、`跳过`、`提交`、收起、自定义输入框 | 已对齐（DSH 另有「放弃整组问题」按钮，pi 暂缺，记为小项） |
+| 卡内元素 | 题号 `1 / 1`、`跳过`、`提交`、收起/放弃整组按钮、自定义输入框 | 题号 `1 / 1`、`跳过`、`提交`、收起、自定义输入框 | 已对齐（「放弃整组问题」按钮 2026-10-19 已补齐且仍在——`QuestionComposer.tsx:202`） |
 
 #### 迟到回答 + 问答工具行的代码级并排（2026-10-19，DSH `687f282e86`）
 
@@ -342,7 +354,7 @@
 
 残留差异定性（2026-10-19）：
 
-- **已修（2026-10-19，本轮）**：pending 工具行已按 `interactions` 的投影状态细分。接线：`App.tsx:1527`（`interactions={activeDetail.interactions}`）→ `transcript.tsx:39-48,95-100,325-330`（`Transcript` → `ProcessGroup` → `ProcessPartView`）→ `ToolCard.tsx:43-58`（按 callId 查状态并传给行模型）→ `tool-render-model.ts:648-720`（映射：`pending`→`0 / M · 等待回答`、`continued`→`已继续工作，仍可回答`、`expired`→`已结束`、`cancelled`→`已取消`、`answered`→`N / M · 已回答`；DSH 对照 `ask-question-row.tsx:272-273,297-334`、文案 `ui-conversation/src/client/locales.ts:290-303`）。截图 `pi-98-ask-01-waiting.png`（等待回答）、`pi-98-ask-03-answered.png`（`0 / 2 · 已回答`）与 `dsh-98-ask-01-waiting.png`、`dsh-98-ask-06-answered.png` 并排一致；单测 `tests/render-model.test.ts`「reads the projected interaction state: waiting, continued, closed, cancelled」。
+- **已修（2026-10-19，本轮）**：pending 工具行已按 `interactions` 的投影状态细分。接线：`App.tsx:1527`（`interactions={activeDetail.interactions}`）→ `transcript.tsx:39-48,95-100,325-330`（`Transcript` → `ProcessGroup` → `ProcessPartView`）→ `ToolCard.tsx:43-58`（按 callId 查状态并传给行模型）→ `tool-render-model.ts:648-720`（映射：`pending`→`0 / M · 等待回答`、`continued`→`已继续工作，仍可回答`、`expired`→`已结束`、`cancelled`→`已取消`、`answered`→`N / M · 已回答`；DSH 对照 `ask-question-row.tsx:272-273,297-334`、文案 `ui-conversation/src/client/locales.ts:290-303`）。截图 `pi-98-ask-01-waiting.png`（等待回答）、`pi-98-ask-03-answered.png`（`0 / 2 · 已回答`）与 `dsh-98-ask-01-waiting.png`、`dsh-98-ask-06-answered.png` 并排一致；单测 `tests/render-model.test.ts`「reads the projected interaction state: waiting, continued, closed, cancelled」。（**2026-10-31 起（841860e）已被 ZCode 式「正在询问 / 已询问」行取代**——`src/web/tool-render-model.ts:687-696`，上述五行文案不再使用。）
 - **有意（残留，低优先级）**：pi 的 `pending` 在语义上更接近 DSH 的「已继续工作，仍可回答」（pi 的模型提问后立即继续，`interaction-tools.ts:128-134`），但 DSH 的两个细分文案由 `userQuestions` 投影的 answerable/settled 决定（`ask-question-row.tsx:224-241`），pi 一期没有 timed/answerable 通道，故按本轮口径把 `pending` 映射为「等待回答」；`continued` 分支已实现，等（若）引入超时/继续通道后自然生效。
 - **有意**：等待态记录卡只列题面、不渲染 DSH 的 verdict 文案（`ask.pendingDetail` 一类）——可操作状态由输入区问答卡承担，记录卡为只读（`continued`/`expired`/`cancelled` 三个终态已带 verdict，见 `ToolCard.tsx:178-196`）。
 - **有意**：保留「调用参数」「工具详情」折叠项（本轮任务要求；问实行仍保留，DSH 在记录卡出现时以 `bodyRaw/output` 置空替换 ioCard，`ask-question-row.tsx:346-351`）。
@@ -401,6 +413,8 @@
 
 ## 默认执行策略与任务进度
 
+> 注：本节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
+
 基准仍为 DSH `687f282e8625c6b8d11ff58211a90524be2e4317`。本次增强普通执行会话的任务管理指导，并把核心提示词接入 Pi 默认运行时；没有新增界面模式。
 
 | 项目 | DSH 源码 | pi-web 落点 | 结论 |
@@ -448,6 +462,8 @@
 验证：`npm run typecheck`、`npx vitest run`（32 个文件，371 项通过、1 项仅在 Windows 执行）、`npx vite build`。新增 `tests/shell-tools.test.ts` 与 `tests/research-tools.test.ts` 的 glob/grep 用例、用户话语解读断言，以及 ask-user pending / shell 删除移动目标核对断言；Windows 的 `pwsh` 执行用例按平台门控。
 
 ## 模型目录与推理等级（2026-10-20）
+
+> 注：本节到「侧栏浏览、拖拽与文件预览（2026-10-20）」各节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
 
 用户报告两件事：配置推理等级不生效；配置模型后输入框的模型列表不自动刷新。对照 DSH `687f282e86` 后确认是两条独立链路。
 
@@ -646,6 +662,8 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 
 ## 工作步骤组体不压缩行（2026-10-21）
 
+> 注：本节到「末尾运行指示器与块级流式状态（2026-10-21）」各节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
+
 - 现象：标准模式下展开工作步骤组，行数多到超过组体高度上限时，「思考」行与相邻行内容互相重叠错乱；工具行不受影响。
 - 根因：DSH 组体（`ChatGroupSeat.module.css` 的 `.content`）在 `max-height: min(400px, 50vh)` + `overflow-y: auto` 的 flex 列上显式设置 `.content > * { flex-shrink: 0 }`，pi-web 的 `.processBody`（`src/web/Transcript.module.css`）漏抄了这条。思考行沿用 DSH ReasoningRow 的 `contain: size layout`，最小内容高度为 0；行总高超过上限时 flex 压缩全部落在思考行上（实测可压到 0px），24px 行头按 `overflow: visible` 照常绘制，盖住下一行。
 - 修复：`.processBody > * { flex-shrink: 0 }`，行保持自然高度、组体滚动，与 DSH 一致。
@@ -747,6 +765,8 @@ DSH 的右侧栏由 `ui-sidebar-documentpreview` 按扩展名注册渲染器（M
 - 这是 pi-web 相对 DSH 的**有意增强**：DSH 的行为在 DSH 里没有对应实现，pi-web 记为 DF-3 同类的有意差异。
 
 ## 右侧状态卡：Git / 进程 / 智能体（2026-10-28）
+
+> 注：本节到「折叠工作分组头的正文预览（2026-10-31，DF-5）」各节为带日期的验收快照，其中的行号已在后续重构中漂移，以文末最新章节为准。
 
 按 ZCode `ConversationStatusPanel` 的结构补齐右侧浮动状态卡：
 
@@ -957,3 +977,46 @@ Pi 的一条 run 在两次工具轮之间会把消息状态落成 `completed`，
 - **ZCode 会话取证**（session_a0859875…，db.sqlite part 表）：8 个 `Agent` 调用参数 `{subagent_type:'general-purpose', description:'Math 1: Euler phi inverse', prompt:…}`，description 即行标题。
 - **ego 对比验证**（4317 真实模型，同款提示词「给我开8个agent，做几道数学题」，会话 3824）：模型改用 `subagent`×8（labels math-1…math-8，全部 general-purpose）→ 8 条彩色子智能体条带「✓ 8 个子智能体已完成」+ 每条 ✓/label/17.6K tok → 8 份完整解答随工具结果回传 → Lead 汇总答案表。全程 46 秒/42K tok（3431 同任务 27 分钟/50 万+ tok），模型结尾还主动说明 subagent 与 spawn_teammate 的取舍。截图 `/tmp/pi-ask-gap-shots/15-17`。
 - **运维**：4317 重启两次（一次在 3792 运行中——pi-durable 会续跑任务，3792 重启后仍在运行，无实际损害）；一次瞬时 500 为启动时序误报（与改动无关，二分复测确认）。
+
+## pending 交互不再产生回答候选（2026-11-03，e376a75）
+
+`ask_user_question`/`exit_plan_mode` 的契约让模型在提问后继续干活，pending 期间写下的是过渡文。e376a75 之前，这段过渡文在回合暂停时被提升进答案区；回答恢复 generation 的第一帧（partial 只有 thinking）又把它挤回工作过程区，答案区整个思考阶段空白——正文「消失又出现」。修复后 `buildRenderModel` 接收投影的 `interactions`，在 `createRenderRun` 内对答案区施加两条边界：
+
+- **pending 交互不产生回答候选**：pending 期间模型写的正文只留在工作过程区，不提升为答案区（`src/web/render-model.ts:137-139` 构建 pending 集合、`:227`/`:255` 传入 `createRenderRun`、`:341` 的 `interactionPending`、`:433-436` 的 `hasPendingInteractionCall`）。
+- **reply payload 是屏障**：交互回复 payload（`answer_to_pending_question` 三种 kind，判定在 `src/web/interaction-payload.ts:18-23`）是日志里唯一的解除边界；屏障之前的内容属于被暂停的回合，回答续写时不得回灌答案区（payload 作为 run 边界隐藏在 `render-model.ts:155`）。
+
+权威记录（动机与转移矩阵）在 `docs/rendering-state-machines.md` 的 S5「答案区归属」，此处只作交叉引用。
+
+## 自动化调度、运行历史与内置夜间分析（2026-11-02，dfaea84 / fdb303f）
+
+- **墙钟调度**：`AutomationScheduler` 按绝对到期时间（`dueAt`）调度自动化任务，封装 Node 定时器上限（约 24.8 天）与可替换的 timer driver（`src/server/automation/scheduler.ts:26-27` 起）。
+- **运行历史**：`GET /api/automations/:id/runs` 返回某次自动化任务的历史运行（`src/server/app.ts:845`）。
+- **内置「问题清单每日分析」**：夜间协调会话把缺陷派给独立 general-purpose 子 agent（每批最多 6 个，`src/server/automation/wetrack-daily.ts:31-46`）；调研规程由单缺陷分析与夜间 worker 两角色共用（`src/server/automation/analysis-procedure.ts`，fdb303f）。与上文委派路由（delegation-policy / work-policy / subagent·team 工具）无冲突：该批未改动这些机制文件。
+- **与状态表的关系**：ST-4 的「已启用/已结束映射 enabled 布尔」仍准确（`src/web/AutomationsPage.tsx:19-25`），本批未引入新的终态语义，无冲突。
+
+## RSI 一轮真实任务驱动的 pi-web 优化（2026-11-03，未提交）
+
+**方法**：以 pi-web agent（4317，`opencode-go/deepseek-v4.1-flash` Max，会话 4349，RSI 工作区）执行一轮真实修复任务（RSI 四项 bug/UI），全程 ego 界面操作与监控；回合结束后做轨迹取证，按证据落地 pi-web 优化。RSI 侧四项全部修复（+751/−184，23 改 4 增），门禁复核 983/0，ego 走查四项全过（`artifacts/rsi-round-4349/`）。
+
+**轨迹取证结论（会话 4349）**：1 轮 277 次模型往返 / 56.3 分钟 / 309 次工具调用 / 上游零错误 / 5/5 todo。耗时结构：模型侧 48.6 分钟，其中 **TTFT 合计 28.5 分钟（59%）**（p50 5.8s、max 67.5s 为上游停顿）；token 56.0M cacheRead vs 0.4M 未命中输入（99.3% 缓存命中）、输出 155K、成本 $0.32——**瓶颈是墙钟不是钱**。工具分布：bash 174（441s）、edit 54、read 47、grep 21、write 10、todo_write 3；**glob 0 次但 bash 里有 11 次 ls/find**（guidance 已有、属低频合理）；模型为验证 RSI UI **徒手搭了 CDP 浏览器 harness**（起 headless Chrome、写 /tmp/cdp-*.mjs、`URL=$(grep -o '…#token=…')` 重复 12 次）。
+
+**优化① 轨迹采集瘦身**（`src/server/conversation/trajectory.ts`）：实测一次长会话的采集文件 **614MB，全部是 request 行**（277 行 × p50 1.8MB/max 5.7MB；response 仅 0.7MB）——旧实现把每轮完整出站载荷（含全部历史）原样落盘。改为默认记录**每消息轮廓**（同序同数的 role + 系统 section 键 + 块级类型/字符数/toolCall 名，尾部 3 条消息带 1500 字符预览、toolCall 参数 300 字符预览），`PI_WEB_TRAJECTORY_FULL_REQUEST=1` 保留全量旧行为。`runtime.close()` 增加 `drainTrajectoryCapture()`，顺带修掉记录在案的 runtime-policy「rmdir ENOTEMPTY」偶发（采集写入与测试删目录竞态）。实机复测（会话 5533）：请求行 0.6/1.9/1.3 KB。测试 `tests/trajectory-capture.test.ts` 改断言 + 新增全量模式用例。
+
+**优化② 内置 `browser` 工具**（新 `src/server/tools/browser.ts`）：headless Chromium over CDP（Node 22 原生 WebSocket，零新依赖），动作 `open/evaluate/click/fill/screenshot/close`，单浏览器实例按进程复用（隔离 profile 于 `tmpdir/pi-web-browser-profile`，`freshProfile` 可清；`PI_WEB_BROWSER_PATH` 指定可执行文件），截图回 image block（`Page.captureScreenshot`，`captureBeyondViewport` 支持整页）。证据即动机：RSI 一轮里模型徒手搭了整套 harness 且重复 grep token 12 次。计划模式自动排除（不在 PLAN_TOOLS）；行标题「浏览器」（`tool-render-model.ts`）；纯函数（chrome 候选/DevToolsActivePort 解析/click/fill 脚本）单测于 `tests/browser-tool.test.ts`。prompt 快照按惯例 `-u` 更新（工具面 34→35、计划模式快照不动=正确排除）。**实机 ego 验证**（4317，会话 5533，14 秒 1 轮 6 步 45.7K tok）：open→screenshot→evaluate 三行「浏览器」友好标题，模型准确描述截图内容（书本图标/多语言/Learn more），图片块行内展开渲染 1440×813（截图 `browser-tool-live.png`、`browser-tool-image-expanded.png`）。
+
+**不单独改（证据不支持）**：glob/grep 提示词强化——bash 描述已写「Do not use grep -r/rg/find/recursive ls」，本轮 11 次 ls 属低频合理使用，再加文案收益递减。
+
+**遗留建议（未落地，待用户决策）**：① **TTFT 是墙钟大头**（28.5/56.3 分钟）：cache 已 99.3%，TTFT 随上下文体涨——可考虑「TTFT 感知压缩」选项（1M 窗口模型在 ~200K 就压，用窗口换延迟）；② wetrack_analysis_* 等 33 个工具在无关工作区（RSI 会话）也全量加载，插件工具按工作区过滤可省 token/噪音；③ 会话底栏可加 TTFT p50 指标（数据已在轨迹）。
+
+**门禁**：`npm run check` exit 0（92 文件 957 过/4 跳过 + build；含此前偶发的两个 ENOTEMPTY 用例，drain 修复后全绿）。
+
+### 委派时机引导（2026-11-04，会话 4349 轨迹的后续批次）
+
+4349 取证发现：四项独立任务全程 0 次 `subagent`，277 往返严格串行——delegation-policy 当时的「互不依赖的工作值得并行委派」是弱倾向、无具体触发器，「按顺序完成」也无语义澄清（任务简报本身的「按顺序完成」加剧串行）。修复（提示词层两处）：
+
+- **delegation-policy**（`tools/subagent.ts`）：新增「多项目任务是默认的并行委派场景」触发器——用户消息含编号/分项清单（bug/功能/多改动）时，列完计划就把独立项**同一条回复并行派给 general-purpose**（每项一个、任务自包含），主会话只做规划/集成/整体验证；并澄清「按顺序完成/逐项做」指交付顺序，不改变独立项可并行。原弱倾向句移除。
+- **work-policy TODO_STEPS**：列步骤时顺手判断各项可否委派；独立项优先并行委派给子智能体。
+- 测试：`agent-builtins.test.ts` 新增两条文案断言；prompt 快照 `-u`；门禁 `npm run check` exit 0（957/0）。
+- **真实模型对照验证（4317，会话 5556，DeepSeek V4.1 Flash Max）**：同会话两连发两组三项任务。轻任务组（三条单命令统计）模型直接串行自查（~1 分钟）——符合「单点事实直接查」，不视为失败；重任务组（两项大文件职责切分 + 一项模块契约分析，各需精读千行级文件）**一条回复并行派出 3 个 subagent**（labels：app-server-application / web-main-console / supervisor-worker-sdk，轨迹确认三调用同帧），模型自述「三项互不依赖，我并行派出三个只读分析子任务……最后我来交叉核对并汇总」，收尾给出 path:line 级证据与跨模块单向依赖结论；子会话各消化 673K/819K/1.7M tok。全程 7.3 分钟 21 往返（旧形态逐项精读串行估计 20 分钟+）。截图 `delegation-parallel-strips.png`。
+- 判读：触发器按「每项工作量」分层生效——轻清单直接查是对的，重清单才并行委派；引导意图达成且未过度委派。
+- **续（同日，ZCode/DSH 提示词对照后）**：子代理侧提示词（builtins.ts）已覆盖 ZCode 全部要素（只读红线/并行搜索/不写报告 md/绝对路径/load-bearing 引码/结论式汇报）；调度侧唯一的差距是两家都写了的动机句——ZCode「delegate it and you keep the conclusion, not the file dumps」、DSH「so it does not consume this conversation's context」。已融合补进 delegation-policy 的「何时委派」行（「委派的收益是你只保留结论：文件倾倒和大段阅读都留在子会话里，不消耗主会话上下文」），新增断言 + 快照更新，check exit 0。有意不搬：DSH fork 变体（pi-web 无 fork）、DSH CONCURRENCY 位置的 listing-reminder 形态（policy section 等价）、ZCode emoji/冒号两条化妆级 Note。

@@ -1,11 +1,11 @@
 # Windows 兼容性审计与逐项支持说明
 
-- 审计时间：2026-10-19；2026-10-20 复核门禁并补入 Git 分支、Skills 与默认任务规划。
-- 代码快照：基线 `8e73f16` + 本次未提交改动。审计期间曾有并发合入，最终门禁已按 2026-10-20 的稳定工作树复核。
+- 审计时间：2026-10-19；2026-10-20 复核门禁并补入 Git 分支、Skills 与默认任务规划；2026-11-03 按当前工作树复核 pwsh/shell 工具机制、补入原生搜索与共享 runner 行为，并更新已搬家的代码引用。
+- 代码快照：基线 `8e73f16` + 本次未提交改动。审计期间曾有并发合入，最终门禁已按 2026-10-20 的稳定工作树复核。pi-durable 1.4.0 新增的 `checkpointWhen`/telemetry 属新增 API 面，本文的旧断言不覆盖它们。
 - 审计范围：全部产品功能、服务端 OS 集成、浏览器前端、持久化、依赖/构建/脚本/测试与 CI。
 - 审计方法：macOS + Node v24.15.0 静态代码与依赖审计；`path.win32` 路径语义与 Node 行为实验；macOS 基线测试；未使用 Windows 实机。
 - **边界：本文不是 Windows 实机验收证明。** 标为「待实机」的项目必须在 Windows 10/11 + Edge/Chrome 上复测后，才能视为已验证。
-- 文档关系：本文是 Windows 能力的完整清单；README 的 Windows 章节是操作入口；architecture 的 Platforms 小节是架构摘要。三处结论应保持一致。
+- 文档关系：本文是 Windows 能力的完整清单；README 的 Windows 章节是操作入口；architecture 的 Platforms 小节是架构摘要；`docs/native-search-and-shell.md`（a8b1c78 新增）覆盖原生 grep/glob 与共享 shell runner。各处结论应保持一致。
 
 ## 审计快照门禁
 
@@ -25,7 +25,7 @@
 **当前项目不是所有功能都原生支持 Windows，整体属于「有条件支持」。**
 
 - Web 界面、会话/SSE/队列/停止/分叉/恢复、`node:sqlite` 持久化、模型与 Provider、Code mode/QuickJS、MCP、Skills、子代理/团队/目标/计划/待办/问答，主体是 Node + 浏览器标准能力，静态判断可跨平台使用；但仍受下方路径、IME、ACL 和测试缺口影响。
-- 命令执行工具：Windows 只注册 `pwsh`（Pi 的 `createPowerShellTool()`，依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell），与 DSH 一致；`bash` 只在 macOS/Linux 注册。`pwsh` 支持 `workdir`/`description`。
+- 命令执行工具：Windows 只注册本地自定义 `createWindowsPowerShellTool` 的 `pwsh`（探测顺序 `PI_WEB_PWSH_PATH` → `where.exe pwsh.exe` → 硬编码 System32 `powershell.exe`），其他平台只注册 `bash`，与 DSH 的平台分组一致。两个工具都支持 `workdir`/`description`/`timeout`（默认 300 秒）；工作区内容搜索改用原生 ripgrep 的 `grep` 工具与 `glob` 工具（见 `docs/native-search-and-shell.md`）。
 - `workspaceWrite` 访问模式仅 macOS `sandbox-exec` 可用；Windows 只提供 `readOnly` / `fullAccess`，这是设计限制。
 - Windows 原生目录选择器（koffi + COM `IFileOpenDialog`）代码已接入，但从未在 Windows 实机验证；失败时没有可用回退，当前属于高风险路径。
 - Git 分支能力要求服务进程 PATH 中有 `git.exe`；它与 shell 工具相互独立。
@@ -60,15 +60,15 @@
 | 工作区文件浏览、@ 引用、搜索、Inspector | 有条件 | 工作区相对路径统一用 `/`，正常浏览可用；工具产生的 `C:\...`、`src\foo` 或临时绝对路径点击打开会被服务端拒绝；路径行会显示 `C:\root/sub` 混合分隔符。 |
 | 附件、拖拽、粘贴、缩略图 | 有条件 | File API 跨平台；AVIF 前端可添加但服务端拒绝；拖放可能双触发；Windows 非法文件名/ADS/保留设备名未完整过滤；附件非原子落盘。 |
 | `read`/`write`/`edit` 工具 | 支持（静态） | Pi `NodeExecutionEnv` 使用 Node fs；edit 处理 CRLF/BOM；Windows ACL/只读属性错误待实机。 |
-| `pwsh` 工具 | 支持（静态，待实机） | Windows 只注册 `pwsh`，Pi 依次尝试 PowerShell 7 `pwsh` 与 Windows PowerShell；支持 `workdir`/`description`，`workdir` 通过 `Set-Location -LiteralPath` 应用并限制在工作区内。 |
-| `bash` 工具 | 不支持（Windows 不注册） | `bash` 只在 macOS/Linux 注册；Windows 使用 `pwsh`，与 DSH 的平台组合一致。 |
+| `pwsh` 工具 | 支持（静态，待实机） | 项目自定义 `createWindowsPowerShellTool`（`src/server/tools/shell/windows.ts:143-197`）：探测 `PI_WEB_PWSH_PATH` → `where.exe pwsh.exe` → System32 `powershell.exe`（`windows.ts:60-80`）；本地执行把 `workdir`（`resolveWorkdir` 限制在工作区内，`common.ts:23-43`）直接作为 spawn cwd 走共享 runner，`Set-Location -LiteralPath` 只剩非本地 env 的 pi-durable 兜底；支持 `workdir`/`description`/`timeout`（默认 300 秒）；脚本强制 UTF-8 输出并以 `-ExecutionPolicy Bypass` 运行；递归 `Get-ChildItem …` 管道进 `Select-String` 在 spawn 前被拒绝并指向 `grep` 工具。 |
+| `bash` 工具 | 不支持（Windows 不注册） | `bash` 只在 macOS/Linux 注册；Windows 使用 `pwsh`，与 DSH 的平台组合一致。非 Windows 的本地 bash 同样支持 `workdir`/`description`/`timeout`，递归 `grep`/`rg` 在 spawn 前被拦截。 |
 | `workspaceWrite` 访问模式 | 不支持（设计限制） | 仅 macOS `sandbox-exec`；Windows capabilities 正确降级为 readOnly/fullAccess。旧数据中的 default/session/preset 值需迁移。 |
 | Code mode/QuickJS | 支持（静态） | QuickJS-WASI + worker_threads，无 Windows 原生扩展；Windows 脚本里的 `tools.pwsh` 走原生 PowerShell，`tools.bash` 不可用。 |
 | MCP（stdio / Streamable HTTP） | 有条件 | pi-mcp 的 stdio 使用 cross-spawn（支持 `.cmd`/PATHEXT），关闭时用 `taskkill /T /F`；HTTP 使用全局 fetch。代理/TLS、`npx` shim、强杀残留待实机。 |
 | 待办（todo） | 支持 | 纯进程内 doc/工具/面板，无 OS 依赖。 |
 | 计划模式（plan） | 支持 | 纯进程内 doc/section/交互卡；无 OS 依赖。 |
 | 目标（goal） | 支持 | 纯进程内 doc + onYield；无 OS 依赖。 |
-| 默认任务规划/进度 | 支持（静态） | `runtime-policy` 启动时读取 `src/server/prompts/runtime-core.md`，并按真实 todo/codemode 路由生成 section；无 OS API。Windows 需验证发布包内提示词文件存在。 |
+| 默认任务规划/进度 | 支持（静态） | `runtime-policy` 启动时读取 `src/server/conversation/prompts/runtime-core.md`，并按真实 todo/codemode 路由生成 section；无 OS API。Windows 需验证发布包内提示词文件存在。 |
 | 问答（ask_user_question） | 有条件 | 主流程无 OS 依赖；Enter/Escape 的 IME 组合态保护不完整，微软拼音可能误提交/误关闭。 |
 | 子代理（subagent） | 有条件 | 会话/投影/轮询无 OS 依赖；跟进输入和面板 Escape 的 IME 保护不完整。 |
 | 智能体团队（team） | 支持（静态） | 共享任务板、成员、wait_agent 均为进程内实现；无 OS API。 |
@@ -95,7 +95,7 @@
 
 ### Skills（技能目录、加载、保存、校验）
 
-- 服务端 `src/server/skills.ts` 从仓库内置 `skills/`、当前工作区 `.agents/skills/` 和 `.pi-web/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
+- 服务端 `src/server/skills/store.ts` 从仓库内置 `skills/`、当前工作区 `.agents/skills/` 和 `.pi-web/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
 - Windows 相关静态结论：
   - 所有路径用 `node:path` 与 `realpath`/`lstat` 处理，不硬编码 `/` 作为文件系统分隔符；HTTP 协议里的资源路径则明确要求 `/`，并拒绝 `\`、盘符、UNC、`..`。
   - 技能名按小写 kebab-case 校验，同时显式拒绝 `con/prn/aux/nul/com1..9/lpt1..9` 等 Windows 保留设备名。
@@ -103,14 +103,14 @@
   - 拒绝符号链接；junction/reparse point 的识别和越界保护需 Windows 实机确认。
   - `chmod 0600` 不提供 Windows ACL 隔离，技能文件与工作区其它文件一样依赖用户目录/工作区 ACL。
 - 测试与验收：
-  - `tests/skills.test.ts:69` 断言诊断路径包含 `/broken-skill/SKILL.md`，Windows 的 `path.join` 会生成 `\`，该断言预计失败。
-  - `tests/skills.test.ts:130,132` 主动创建 symlink；普通 Windows 用户未开启 Developer Mode 或无 SeCreateSymbolicLinkPrivilege 时会 EPERM，不能把整套测试当成无条件通过。
+  - `tests/skills.test.ts:71-73` 断言诊断路径包含 `/no-name/SKILL.md` 这类 `/` 分隔路径，Windows 的 `path.join` 会生成 `\`，该断言预计失败。
+  - `tests/skills.test.ts:228,230` 主动创建 symlink；普通 Windows 用户未开启 Developer Mode 或无 SeCreateSymbolicLinkPrivilege 时会 EPERM，不能把整套测试当成无条件通过。
   - `test:live:skills` 未写死 `workspaceWrite`，但使用真实模型和 fullAccess；当前只能标「待 Windows 实机」。
 - 结论：服务端代码已考虑 Windows 路径安全，但**Windows 可交付状态 = 有条件/待实机**。
 
 ### Git 分支（本地分支列表、切换、新建并切换）
 
-- 服务端 `src/server/git-branches.ts` 通过 `execFile('git', ...)` 调用系统 Git，提供快照、`git switch --no-guess`、`git switch --no-guess -c`，并将阻塞原因归一为结构化 issue。
+- 服务端 `src/server/workspace/git/branches.ts` 通过 `execFile('git', ...)` 调用系统 Git，提供快照、`git switch --no-guess`、`git switch --no-guess -c`，并将阻塞原因归一为结构化 issue。
 - Windows 要求：
   - PATH 上必须有 `git.exe`；这与 shell 工具无关，只影响分支功能。
   - `git switch` 需要 Git ≥ 2.23；测试里的 `git init -b` 需要 Git ≥ 2.28。建议使用当前 Git for Windows。
@@ -124,9 +124,16 @@
 
 ### 默认任务规划与运行时核心提示词
 
-- `src/server/work-policy.ts` 在服务模块加载时用 `readFileSync(new URL('./prompts/runtime-core.md', import.meta.url))` 读取核心提示词；`node:fs` 的 file URL 读取在 Windows 上可用，无 shell 依赖。
+- `src/server/conversation/work-policy.ts:13` 在服务模块加载时用 `readFileSync(new URL('./prompts/runtime-core.md', import.meta.url))` 读取核心提示词（文件现为 `src/server/conversation/prompts/runtime-core.md`）；`node:fs` 的 file URL 读取在 Windows 上可用，无 shell 依赖。
 - `runtime-policy` 扩展本身不贡献工具；它按实际 `todo_write`/`codemode` 路由生成待办指导，并按 Plan/Goal 状态生成限制。属于进程内 section，不依赖 OS。
 - `test:live:workflow` 使用真实 DeepSeek 执行多步开发样例，并用宿主侧 Node `--test` 独立核验产物；Windows 上使用 `pwsh`。
+
+### Shell 工具与原生搜索（共享 runner）
+
+- 两个 shell 工具共用一个 runner（`src/server/tools/shell/runner.ts`）：15 秒自动转后台、全量输出落 `tmpdir()/pi-web-shell/*.log`、截断时保留尾部 50 KiB / 2000 行（`runner.ts:13-15,48-52`）。完整契约见 `docs/native-search-and-shell.md`。
+- `grep`/`egrep`/`fgrep`/`rg`/`findstr`/`git grep` 的退出码 1 判为成功「无匹配」，其余非零退出仍是错误（`src/server/tools/shell/common.ts:46,98-113`）。
+- `grep` 工具优先用原生 ripgrep：解析顺序 `PI_WEB_RG_PATH` → `@vscode/ripgrep` → `PATH`，失败回退 JavaScript walker（`src/server/tools/search/native.ts:32-60`、`src/server/tools/research.ts:537-596`）；另有 `glob` 工具（`research.ts:507`）。
+- POSIX bash 侧继承 `C`/`POSIX` locale 时改设 `en_US.UTF-8`（macOS）或 `C.UTF-8`（Linux），非 UTF-8 codeset 保留为解码回退（`src/server/tools/shell/posix.ts:87-103`）。
 
 ### Code mode 与 MCP
 
@@ -158,7 +165,7 @@
 
 ### W1（高）原生目录选择器失败后没有兜底，也没有前端取消
 
-- Windows driver 在 worker 失败时抛普通 `Error`（`src/server/win32-dialog.ts:139,154`），服务端统一映射为 500 `Internal server error`（`src/server/app.ts:191`）。
+- Windows driver 在 worker 失败时抛普通 `Error`（`src/server/platform/win32-dialog.ts:139,154`），服务端统一映射为 500 `Internal server error`（`src/server/app.ts:191`）。
 - 前端只有在错误文案包含中文「原生目录选择器」时才打开内置浏览器（`src/web/App.tsx:1077`）；Windows 错误除非巧合，否则永远不会触发。
 - `WorkspaceDialog` 手动输入路径的入口实际不可达：`workspaceDialogOpen` 只有 setter 调用成 false 的地方，全仓库没有 `setWorkspaceDialogOpen(true)`。
 - Win32 选择器没有总超时，前端 picker 请求也没有 AbortController；koffi 缺失、COM 初始化失败、worker 启动失败、非交互桌面或对话框卡住时，用户可能只看到 500/toast，无法添加工作区。
@@ -168,54 +175,58 @@
 
 - `src/web/App.tsx:1069,1621` 使用 `path.replace(/\/+$/u, '').split('/').pop()`。
 - `path.win32` 实验：`C:\Users\alice\project` 得到整条 `C:\Users\alice\project`，而不是 `project`。
-- 短路径会显示成重复的整条路径；名称超过 120 字符时服务端以「工作区名称长度」拒绝（`src/server/app.ts:120`、`src/server/workspace-files.ts:105`），直接导致添加失败。
+- 短路径会显示成重复的整条路径；名称超过 120 字符时服务端以「工作区名称长度」拒绝（添加时 `src/server/runtime/workspaces.ts:56`、改名时 `src/server/workspace/files.ts:243`），直接导致添加失败。
 - 修复方向：用服务端 `basename` 或 `path.win32.basename` 统一取名，并校验尾部斜杠、UNC 和长路径。
 
 ### W3（已修复，待实机）Windows 使用原生 pwsh，不再注册 bash
 
-- `src/server/shell-tools.ts` 的 `CodingTools` 在 win32 只注册 `pwsh`（`createPowerShellTool()`，依次尝试 `pwsh`/`powershell`），其他平台只注册 `bash`；两者都支持 `workdir`/`description`，越界 workdir 拒绝。
-- 提示词在工作区事实里声明平台与 shell；Windows 不再出现 bash 指引，也不会再因缺少 Git Bash 导致命令工具不可用。
-- demo 模型按平台切换 shell：Windows 用 `pwsh` 与 PowerShell 命令（`Get-Content`、`Write-Output`、`Start-Sleep`、`[Convert]::FromBase64String`），非 Windows 保持 bash。
-- 仍需实机验证：只有 `powershell` 没有 `pwsh`、路径含空格/中文/单引号、UNC/长路径、`Set-Location` 行为、PowerShell 执行策略与 UTF-8 输出。
+- 平台分组在 `src/server/tools/shell/tools.ts:40-44`：win32 只注册 `pwsh`，其他平台只注册 `bash`；两者都支持 `workdir`/`description`/`timeout`（默认 300 秒，`src/server/tools/shell/common.ts:6`），越界 workdir 由 `resolveWorkdir` 拒绝（`common.ts:23-43`）。
+- 本地 `pwsh` 是项目自定义 `createWindowsPowerShellTool`（`src/server/tools/shell/windows.ts:143-197`），不是 Pi 的 `createPowerShellTool()`（原文指向的 `src/server/shell-tools.ts` 已不存在）。探测顺序（`windows.ts:60-80`）：`PI_WEB_PWSH_PATH` → `where.exe pwsh.exe` → 硬编码 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`。
+- 本地执行走共享 runner：`workdir` 直接作为 spawn cwd（`windows.ts:183-187` → `runner.ts:177-183`），不再用 `Set-Location` 切目录。pi-durable 的 `createPowerShellTool`（`windows.ts:26`）只在非本地 env 兜底，那时才用 `Set-Location -LiteralPath`（`windows.ts:176-181`）。
+- 递归 `Get-ChildItem -Recurse … | Select-String` 在 spawn 前抛 FORBIDDEN 并指向 `grep` 工具（`windows.ts:40-46,156-161`，工具描述见 `windows.ts:146`）；POSIX bash 侧同样拦截 `grep -r`/`rg`/`find -exec grep`/`xargs grep`，引号内的提及不拦（`src/server/tools/shell/posix.ts:40-72,129-134`）。
+- 执行策略由 `-ExecutionPolicy Bypass` 固定传入（`windows.ts:186`）；脚本强制 UTF-8 输出（`[Console]::OutputEncoding` + `chcp 65001`，`windows.ts:48-58`），解码回退探测旧代码页，可被 `PI_WEB_WINDOWS_OUTPUT_ENCODING` 覆盖（`windows.ts:82-122`）——这两项不再是待验项。
+- 仍需实机验证：路径含空格/中文/单引号、UNC/长路径 cwd、System32 回退在只装 Windows PowerShell 的机器上的表现。
 
 ### W4（中）内置目录浏览器拒绝 UNC/`\\?\`，且没有盘符入口
 
-- `src/server/directory-picker.ts:121-129` 在 win32 上把 `\\server\share`、`\\?\C:\...` 也当成「无盘符根路径」拒绝。
+- `src/server/workspace/directory-picker.ts:119-128` 在 win32 上把 `\\server\share`、`\\?\C:\...` 也当成「无盘符根路径」拒绝。
 - 起始位置只有 `homedir()`；UI 没有「此电脑」、盘符列表或 UNC 输入。
 - 内置浏览器目前又因 W1 不可达；即使修通回退，这些限制仍会阻止网络共享、长路径工作区。
 
 ### W5（中）新建文件夹可用反斜杠越出所选父目录
 
-- `src/server/directory-picker.ts:177-190` 只拒绝 `/`，没有拒绝 `\`、`..\`、盘符或 UNC。
+- `src/server/workspace/directory-picker.ts:177-191` 只拒绝 `/`，没有拒绝 `\`、`..\`、盘符或 UNC。
 - `path.win32.join('C:\\ws', '..\\evil')` 实测为 **`C:\evil`**，不是 `C:\ws\evil`。因此在 Windows 上可直接在父目录/更上层创建目录。
 - 当前受 W1 影响 UI 不可达，但直接 API 或未来修通回退后会暴露。本地单用户、非远程提权，但仍应修复名称校验。
 
 ### W6（中）SIGTERM/关控制台不走优雅关闭
 
-- `src/server/index.ts:157-158` 只监听 SIGINT/SIGTERM。Windows 不投递 SIGTERM；关闭控制台、任务管理器结束或 `taskkill` 不会运行 `app.shutdown()`/`runtime.close()`。
+- `src/server/index.ts:171-172` 只监听 SIGINT/SIGTERM。Windows 不投递 SIGTERM；关闭控制台、任务管理器结束或 `taskkill` 不会运行 `app.shutdown()`/`runtime.close()`。
 - 后果：SQLite WAL 下次启动可恢复，但 MCP/shell 子进程可能残留；automation 的 running 记录要等下次启动修复。
+- 部分缓解：runtime 关闭时调用 `disposeBackgroundShells()`（`src/server/runtime/index.ts:686`、`src/server/tools/shell/runner.ts:27-31`）终止已转后台的 shell 命令；但 Windows 不投递 SIGTERM 的根本问题未变，MCP 等其他子进程仍可能残留。
 - `scripts/smoke-check.ts` 用 SIGTERM 验证优雅关闭；在 Windows 上该断言会假绿。Ctrl+C 是当前唯一可靠的手动优雅关闭方式。
 
 ### W7（低）Windows 隐藏属性不被识别
 
-- `src/server/directory-picker.ts:169` 仅用 `startsWith('.')` 判断隐藏；`DirectoryBrowser.tsx` 默认隐藏这些项。
+- `src/server/workspace/directory-picker.ts:169` 仅用 `startsWith('.')` 判断隐藏；`DirectoryBrowser.tsx` 默认隐藏这些项。
 - Windows 的隐藏属性目录（AppData、`$Recycle.Bin` 等）不会隐藏；点号目录反而被隐藏。这是语义差异，不阻断核心功能。
 
 ### W8（中低）附件名与 Windows 文件系统语义不一致
 
-- API `src/server/app.ts:55` 允许名称最长 255，但 `src/server/workspace-files.ts:33-39` 的 `safeFileName` 超过 200 直接拒绝；201–255 大小的合法文件名会到发送后才 400。
+- API `src/server/app.ts:61` 允许名称最长 255，但 `src/server/workspace/files.ts:57-63` 的 `safeFileName` 超过 200 直接拒绝；201–255 大小的合法文件名会到发送后才 400。
 - `safeFileName` 只过滤控制字符；没有拒绝 `<>:"|?*`、尾部点、尾随空格或 Windows 保留设备名。`:stream` 可能被 NTFS 解释为备用数据流，尾部点/空格可能被系统改写，导致记录路径与实际文件不一致。
 - 附件直接写最终路径（`workspace-files.ts:202-213`），不是临时文件 + rename；崩溃留下半文件后，同 requestId 重试可能返回 CONFLICT。
 - 注意：`trim()` 会去掉两端空格；存储名前缀（`<hash>-<index>-...`）也让独立 `CON` 文件名不再直接命中保留设备名。仍需处理真正影响路径一致性的字符和长度上限。
 
 ### W9（低，待实机）打开配置文件存在 cmd 元字符风险
 
-- `src/server/runtime.ts:244-249` 使用 `execFile('cmd', ['/c', 'start', '', path])`。路径含 `%` 时 cmd 可能展开环境变量；无空格且含 `&` 时可能被当作命令分隔符；`^`、`"` 也需实测。
+- `src/server/runtime/helpers.ts:224-227` 使用 `execFile('cmd', ['/c', 'start', '', path])`。路径含 `%` 时 cmd 可能展开环境变量；无空格且含 `&` 时可能被当作命令分隔符；`^`、`"` 也需实测。
 - 仅影响「打开配置文件」按钮；错误会以 toast 显示。
 
 ### W10（中低）工具产生的绝对/临时/反斜杠路径无法在 Inspector 打开
 
 - Code mode 的 `details.fullOutputPath` 来自 OS 临时目录；Windows 下通常是 `C:\Users\...\AppData\Local\Temp\...`。
+- shell 工具现在同样产生这类路径：命令转后台或输出被截断时给出 `tmpdir()/pi-web-shell/*.log` 的临时绝对路径（`fullOutputPath` 或 full_output 诊断，`src/server/tools/shell/runner.ts:13-15,48-52`），Inspector 打不开的问题与 Code mode 相同。
 - 工具卡把它直接交给工作区文件 API，而服务端 `safeRelativePath` 明确拒绝 `\`、盘符、UNC 和绝对路径，必然 400。
 - 模型自然输出的 `src\foo`、`C:/foo` 也有同类问题；本地绝对图片、UNC Markdown 链接不能渲染/打开。
 
@@ -233,13 +244,13 @@
 
 ### W13（中低）chmod 不是 Windows ACL
 
-- `src/server/app-state.ts:183-192`、`src/server/models.ts:300-309,368,379` 使用 `0600/0700`。Windows 下 chmod 只切换只读位，不会建立用户/组 ACL。
+- `src/server/state/app-state.ts:201-208`、`src/server/model/catalog.ts:392-399` 使用 `0600/0700`。Windows 下 chmod 只切换只读位，不会建立用户/组 ACL。
 - API key、Provider 凭据、app-state、feedback、SQLite 会话内容和附件都依赖用户目录默认继承 ACL。若用户把数据目录放在共享盘/OneDrive/权限宽松目录，敏感内容可能被同机其他用户读取。
 - 文档不能把「0600」写成 Windows 的安全保证；建议用 `icacls` 在 Windows 实机验证预期 ACL。
 
 ### W14（低）JSON 配置文件带 UTF-8 BOM 会启动失败
 
-- `src/server/app-state.ts:218`、`src/server/models.ts:63`、`src/server/mcp-config.ts:99` 直接 `JSON.parse`；Node 不接受 BOM。Windows 编辑器可能默认写 BOM。
+- `src/server/state/app-state.ts:235`、`src/server/model/catalog.ts:123`、`src/server/mcp/config.ts:99` 直接 `JSON.parse`；Node 不接受 BOM。Windows 编辑器可能默认写 BOM。
 - 失败会表现为「无法读取有效的应用配置/模型配置」或 MCP 配置错误。CRLF 本身可正常解析。
 - 首次迁移或手工编辑配置时请保存为无 BOM UTF-8。
 
@@ -286,13 +297,13 @@
 ### X7（中）旧 workspaceWrite preset 迁移会报错
 
 - 旧 preset 的 accessMode 可能仍是 `workspaceWrite`；Presets 面板下拉只有 readOnly/fullAccess（`src/web/PresetsPanel.tsx:156-157`）。
-- runtime 保存 preset 时在非 macOS 返回 UNSUPPORTED（`src/server/runtime.ts:1722` 附近）。迁移文档必须明确逐个修正 preset，而不能只提默认/会话。
+- runtime 保存 preset 时在非 macOS 返回 UNSUPPORTED（`src/server/runtime/presets.ts:49`；`workspaceWriteAvailable` 即 `platform !== 'darwin'`，见 `src/server/runtime/index.ts:133`）。迁移文档必须明确逐个修正 preset，而不能只提默认/会话。
 
 ### X8（中低）测试按 POSIX 语义写死
 
-- `tests/runtime.test.ts:451-452` 断言 `0o600/0o700`；Windows 文件/目录 mode 与 POSIX 不同，必失败。
-- `tests/skills.test.ts:69` 断言路径含 `/broken-skill/SKILL.md`；Windows `join` 产生 `\`，必失败。
-- `tests/skills.test.ts:130,132` 的 symlink 在普通 Windows 用户下可能 EPERM。
+- `tests/runtime.test.ts:495-497` 断言 `0o600/0o700`；Windows 文件/目录 mode 与 POSIX 不同，必失败。
+- `tests/skills.test.ts:71-73` 断言路径含 `/no-name/SKILL.md` 这类 `/` 分隔路径；Windows `join` 产生 `\`，必失败。
+- `tests/skills.test.ts:228,230` 的 symlink 在普通 Windows 用户下可能 EPERM。
 - `tests/git-branches.test.ts` 依赖系统 `git`；macOS 基线已通过，但没有 `git` 的 Windows 机器会整组失败。
 - 因此 README 中「装 Git Bash 后仅 1 项失败」必须删除或改写。
 
@@ -392,7 +403,7 @@
 
 1. koffi/COM `IFileOpenDialog` 全链路：vtable 偏移、`GetDisplayName`、`CoTaskMemFree`、跨进程 `EnumThreadWindows`、Alt 前台合成、DPI。
 2. Win32 picker worker 的 `node --import tsx/esm` 启动、`abort`/kill 和 UI 请求取消。
-3. `pwsh` 探测：PowerShell 7 与 Windows PowerShell 的 PATH 优先级、执行策略、UTF-8 输出、空格/中文用户名、UNC/长路径 cwd。
+3. `pwsh` 探测：`PI_WEB_PWSH_PATH`/`where.exe`/System32 回退的实际表现、空格/中文用户名、UNC/长路径 cwd。执行策略与 UTF-8 输出已在代码中强制（`windows.ts:186,48-58`），不再是待验项。
 4. `git.exe` PATH、Git for Windows 版本（`git switch`、`init -b`）、中文分支名和仅大小写不同的 branch ref。
 5. `node:sqlite` WAL 在 NTFS/Defender/OneDrive/强杀后的恢复；SQLite 文件锁与 MCP/shell 残留进程。
 6. chmod 后的实际 ACL、用户目录继承、`providers.json`/app-state/SQLite/附件敏感数据隔离。

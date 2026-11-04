@@ -21,7 +21,8 @@ The native search uses `--json --stats` and a bounded stdout buffer. It keeps hi
 of results, respects `.gitignore`, and explicitly excludes VCS metadata, `node_modules`, and
 `.data`. Credential names and key extensions are excluded both with `--glob` rules and a
 post-filter. The per-file ceiling remains 512 KiB; the total-read cap of the old walker is gone.
-A search stops after `maxResults` matches and is marked truncated.
+Once `maxResults` matches have been recorded, the search stops recording further matches and is
+marked truncated, but keeps reading so the stats still report how many files were searched.
 
 Patterns are passed to ripgrep directly. If ripgrep rejects a pattern (for example a JavaScript
 lookahead), the tool compiles it for the JavaScript fallback; a ripgrep-only pattern such as
