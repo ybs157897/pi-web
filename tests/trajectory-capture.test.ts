@@ -11,6 +11,7 @@ const cleanups: Array<() => Promise<void>> = []
 
 afterEach(async () => {
   delete process.env.PI_WEB_TRAJECTORY
+  delete process.env.PI_WEB_TRAJECTORY_FULL_REQUEST
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
@@ -135,16 +136,31 @@ describe('trajectory capture and export', () => {
     expect(lines.some(line => line.type === 'entry' && (line.record as { kind?: string })?.kind === 'pi.assistant')).toBe(true)
     expect(lines.some(line => line.type === 'task' && line.kind === 'pi.generation' && typeof line.startedAt === 'number')).toBe(true)
 
-    // The captured request is the exact outbound payload: user text reaches the model.
+    // The captured request line is a per-message outline (default mode): same message count,
+    // with the newest user text in the trailing preview and the system sections named.
     const requests = lines.filter(line => line.type === 'request')
     expect(requests.length).toBeGreaterThanOrEqual(2)
     expect(requests.every(line => Array.isArray(line.messages) && line.messages.length === line.messageCount)).toBe(true)
-    const firstRequest = requests[0] as unknown as { messages: Array<{ role: string; content: unknown }>; model?: unknown }
+    const firstRequest = requests[0] as unknown as {
+      messages: Array<{ role: string; sections?: string[]; content: { kind: string; preview?: string } }>
+      model?: unknown
+    }
     expect(JSON.stringify(firstRequest.messages)).toContain(submitted)
     expect(firstRequest.model).toEqual({ provider: 'repro', modelId: 'repro-model' })
-    // The tool round's request carries the real tool result.
-    const toolRound = requests[1] as unknown as { messages: Array<{ role: string }> }
+    expect(firstRequest.messages[0]).toMatchObject({ role: 'system' })
+    expect(Array.isArray(firstRequest.messages[0]?.sections)).toBe(true)
+    // Older messages outline shape only: no preview key outside the trailing window.
+    const headPreviews = firstRequest.messages.slice(0, -3).filter(message => 'preview' in message.content)
+    expect(headPreviews).toHaveLength(0)
+    // The tool round's request carries the tool result role in the outline.
+    const toolRound = requests[1] as unknown as { messages: Array<{ role: string; content: { kind: string; blocks?: Array<{ type: string }> } }> }
     expect(toolRound.messages.some(message => message.role === 'toolResult')).toBe(true)
+    // The outline must stay small even when the payload is not: assert the capture keeps
+    // request lines well under the verbatim provider body for this fixture.
+    const captureText = await readFile(join(dataDir, TRAJECTORY_CAPTURE_DIR, `${conversationId}.jsonl`), 'utf8')
+    const outlineLine = parseTrajectory(captureText).filter(line => line.type === 'request').length
+    expect(outlineLine).toBeGreaterThanOrEqual(2)
+    expect(captureText.length).toBeLessThan(provider.requests().join('').length * 4)
 
     // The catalog changes rarely: exactly one line despite two requests, naming the offered tools.
     const catalogs = lines.filter(line => line.type === 'catalog') as unknown as Array<{
@@ -210,5 +226,28 @@ describe('trajectory capture and export', () => {
     expect(types.has('task')).toBe(true)
     // No capture file was created.
     await expect(readFile(join(dataDir, TRAJECTORY_CAPTURE_DIR, `${created.conversation.id}.jsonl`), 'utf8')).rejects.toThrow()
+  })
+
+  it('records verbatim payloads when PI_WEB_TRAJECTORY_FULL_REQUEST=1', async () => {
+    process.env.PI_WEB_TRAJECTORY_FULL_REQUEST = '1'
+    const provider = await scriptedProvider()
+    cleanups.push(() => provider.close())
+    const { runtime, dataDir } = await fixture(provider)
+    const created = await runtime.create({ title: 'Traj full', model: { provider: 'repro', modelId: 'repro-model' } })
+    const submitted = '请读取 notes.md 并给出要点。'
+    await runtime.submit(created.conversation.id, { text: submitted, requestId: 'traj-3' })
+    await waitForMessage(runtime, created.conversation.id, value => value.messages
+      .some(message => message.role === 'assistant'
+        && message.blocks.some(block => block.type === 'text' && block.text.includes('DONE'))))
+
+    const lines = parseTrajectory(await runtime.trajectory(created.conversation.id))
+    const firstRequest = lines.find(line => line.type === 'request') as unknown as {
+      messages: Array<{ role: string; content: unknown }>
+    }
+    // Full mode keeps the verbatim payload: plain string content, no outline wrapper.
+    expect(JSON.stringify(firstRequest.messages)).toContain(submitted)
+    expect(firstRequest.messages.some(message => typeof message.content === 'string' || Array.isArray(message.content))).toBe(true)
+    const captureText = await readFile(join(dataDir, TRAJECTORY_CAPTURE_DIR, `${created.conversation.id}.jsonl`), 'utf8')
+    expect(captureText).not.toContain('"kind":"blocks"')
   })
 })

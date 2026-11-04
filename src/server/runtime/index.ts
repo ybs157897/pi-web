@@ -40,10 +40,11 @@ import { createSkillTools } from '../tools/skill.ts'
 import { createWorkPolicyExtension } from '../conversation/work-policy.ts'
 import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
 import { createRuntimeCodemodeExtension } from '../codemode-policy.ts'
+import { BrowserTools } from '../tools/browser.ts'
 import { ResearchTools } from '../tools/research.ts'
 import { COMPACTION_POLICY, createCompactionExtension } from '../conversation/compaction.ts'
 import {
-  TRAJECTORY_CAPTURE_DIR, TRAJECTORY_EXTENSION_NAME, assembleTrajectory, createTrajectoryExtension,
+  TRAJECTORY_CAPTURE_DIR, TRAJECTORY_EXTENSION_NAME, assembleTrajectory, createTrajectoryExtension, drainTrajectoryCapture,
   wrapModelsWithTrajectory,
 } from '../conversation/trajectory.ts'
 import { MEMORY_EXTRACTION_DRAIN_MS, createMemoryExtraction } from '../memory/extraction.ts'
@@ -175,10 +176,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const registry = createRegistry()
   registry.install(createWorkPolicyExtension())
   registry.install(createCompactionExtension({ harness: () => harness }))
-  // After the compaction extension, so a captured request is the exact post-prune payload.
+  // After the compaction extension, so a captured request reflects the exact post-prune shape.
   registry.install(createTrajectoryExtension({
     dir: join(dataDir, TRAJECTORY_CAPTURE_DIR),
     enabled: process.env.PI_WEB_TRAJECTORY !== '0',
+    fullRequest: process.env.PI_WEB_TRAJECTORY_FULL_REQUEST === '1',
     harness: () => harness,
   }))
   // Installed before the execution policy so its sections are covered by the plan-mode filter and
@@ -189,6 +191,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }))
   registry.install(CodingTools)
   registry.install(ResearchTools)
+  registry.install(BrowserTools)
   registry.install(TodoTools)
   // Analysis records outlive the conversation that wrote them: the issues page reads them back
   // with no conversation of its own, so the store lives on the app data directory.
@@ -694,6 +697,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
             try {
               await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
               await subagentSettlement.drain()
+              // Capture writes are fire-and-forget appends; drain them before close so a
+              // test's temp-dir removal cannot race a still-queued trajectory line.
+              await drainTrajectoryCapture()
               await harness.close(CTX)
               await automationsService?.drain()
               await analysisRuns.drain()

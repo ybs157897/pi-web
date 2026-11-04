@@ -42,6 +42,13 @@ export interface TrajectoryExtensionOptions {
   dir: string
   /** Read per runtime creation so tests can flip it without re-importing the module. */
   enabled: boolean
+  /**
+   * Capture the verbatim outbound payload instead of the per-message outline
+   * (`PI_WEB_TRAJECTORY_FULL_REQUEST=1`). Full payloads re-record the entire
+   * history every round — a long agentic session measured 614MB of request
+   * lines against 0.7MB of responses — so the default records the outline.
+   */
+  fullRequest: boolean
   /** Resolved lazily: the extension is installed before `Harness.open` returns. */
   harness: () => Harness | undefined
 }
@@ -73,6 +80,76 @@ function enqueueCaptureLine(file: string, payload: unknown): void {
 /** Resolve once pending capture writes have hit disk, before an export reads them. */
 export function drainTrajectoryCapture(): Promise<void> {
   return captureTail
+}
+
+/* ------------------------------------------------------------------ */
+/* Request outlining                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Preview length for trailing-message outlines; the newest turn lives here. */
+const OUTLINE_PREVIEW_CHARS = 1_500
+/** How many trailing messages keep content previews (older ones outline only). */
+const OUTLINE_TAIL_MESSAGES = 3
+/** Preview length for toolCall arguments inside trailing messages. */
+const OUTLINE_ARGS_CHARS = 300
+
+function blockChars(block: unknown): number {
+  try {
+    return JSON.stringify(block).length
+  } catch {
+    return 0
+  }
+}
+
+function clip(text: string): string {
+  return text.length <= OUTLINE_PREVIEW_CHARS ? text : `${text.slice(0, OUTLINE_PREVIEW_CHARS)}…[TRUNCATED ${text.length} chars]`
+}
+
+function previewOf(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
+  return typeof text === 'string' ? clip(text) : undefined
+}
+
+/** Outline one message's content: shape and sizes, previews only when `preview` is set. */
+function outlineContent(content: unknown, preview: boolean): Record<string, unknown> {
+  if (typeof content === 'string') {
+    return { kind: 'text', chars: content.length, ...(preview ? { preview: clip(content) } : {}) }
+  }
+  if (Array.isArray(content)) {
+    return {
+      kind: 'blocks',
+      blocks: content.map(block => {
+        const record = block as { type?: string; name?: string; text?: unknown; arguments?: unknown }
+        const outline: Record<string, unknown> = { type: record.type ?? 'unknown', chars: blockChars(block) }
+        if (typeof record.name === 'string') outline.name = record.name
+        if (preview && record.type === 'toolCall' && record.arguments !== undefined) outline.argsPreview = previewOf(record.arguments)
+        if (preview && record.type === 'text') outline.preview = previewOf(record.text)
+        return outline
+      }),
+    }
+  }
+  return { kind: 'other', chars: blockChars(content), ...(preview ? { preview: previewOf(content) } : {}) }
+}
+
+/**
+ * Per-message outline of one outbound request: one entry per message (same
+ * order and count as the payload) carrying role, system section keys, and a
+ * content outline. The trailing messages keep truncated previews because the
+ * newest user text and tool results live there; earlier history is already
+ * durable in the entries, so recording it verbatim only bloats the capture.
+ */
+export function outlineRequestMessages(messages: readonly Message[]): Array<Record<string, unknown>> {
+  return messages.map((message, index) => {
+    const preview = index >= messages.length - OUTLINE_TAIL_MESSAGES
+    const record = message as { role?: string; content?: unknown; sections?: unknown }
+    return {
+      role: record.role ?? 'unknown',
+      ...(record.sections !== null && typeof record.sections === 'object'
+        ? { sections: Object.keys(record.sections as Record<string, unknown>) }
+        : {}),
+      content: outlineContent(record.content, preview),
+    }
+  })
 }
 
 /** One outbound provider request: numbered within its generation task. */
@@ -136,7 +213,9 @@ export function createTrajectoryExtension(options: TrajectoryExtensionOptions): 
       ...(facts.model === undefined ? {} : { model: facts.model }),
       ...(facts.thinkingLevel === undefined ? {} : { thinkingLevel: facts.thinkingLevel }),
       messageCount: request.messages.length,
-      messages: request.messages,
+      ...(options.fullRequest
+        ? { messages: request.messages }
+        : { messages: outlineRequestMessages(request.messages) }),
     })
     // The tool catalog changes rarely; hash-gate it so only real changes become lines.
     if (facts.tools !== undefined) {

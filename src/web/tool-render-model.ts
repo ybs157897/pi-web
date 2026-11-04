@@ -126,6 +126,8 @@ export function toolRowTitle(name: string, t: Translate): string {
   if (id === 'skill_save') return t('保存技能', 'Save skill')
   if (id === 'skill_validate') return t('校验技能', 'Validate skill')
   if (id === 'task_stop') return t('停止任务', 'Stop task')
+  // The headless-Chrome tool: name the operation so the row never falls back to raw JSON.
+  if (id === 'browser') return t('浏览器', 'Browser')
   // The team family: ZCode has no counterpart, but the rows must not fall back to raw JSON titles.
   if (id === 'spawn_teammate') return t('组建队友', 'Spawn teammate')
   if (id === 'wait_agent') return t('等待队友', 'Wait for teammate')
