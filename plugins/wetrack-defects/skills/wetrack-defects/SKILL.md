@@ -7,6 +7,8 @@ description: Use when the user asks about WeTrack pending defects, a DTS defect 
 
 Use the plugin's MCP tools to read WeTrack data, then inspect the actual workspace code before drawing conclusions.
 
+When the host provides a defect-analysis procedure and `wetrack_analysis_detail`, `wetrack_analysis_get`, and `wetrack_analysis_save`, follow that procedure and use those host tools for its analysis record. The host procedure owns the investigation budget, evidence format, and save behavior; the plugin report workflow below applies when that host procedure is absent.
+
 ## Read the data first
 
 1. Call `wetrack_pending` for the current user's pending list. Use its optional `project`, `owner` and `status` filters only when the user provides them.

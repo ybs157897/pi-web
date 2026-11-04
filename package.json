@@ -18,6 +18,7 @@
     "test:live:tools": "tsx scripts/live-tools-check.ts",
     "test:live:codemode": "tsx scripts/live-codemode-check.ts",
     "test:live:skills": "tsx scripts/live-skills-check.ts",
+    "test:live:policy": "tsx scripts/live-prompt-policy-check.ts",
     "test:live:workflow": "tsx scripts/live-workflow-check.ts",
     "test:live:prompt": "tsx scripts/live-prompt-check.ts"
   },

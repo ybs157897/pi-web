@@ -40,12 +40,16 @@ const READ_ONLY_TOOL_NAMES = ['read', 'glob', 'grep', 'list_files', 'search_file
  */
 function stubRun(options: {
   parentTools?: string[]
+  parentCallable?: string[]
+  parentDeferred?: string[]
   thinkingLevel?: string
   existing?: boolean
   resolveChildModel?: SubagentToolOptions['resolveChildModel']
 } = {}) {
   const parentAgent = {
     tools: (options.parentTools ?? [...READ_ONLY_TOOL_NAMES, 'bash', 'write']).map(name => ({ name })),
+    callable: (options.parentCallable ?? options.parentTools ?? [...READ_ONLY_TOOL_NAMES, 'bash', 'write']).map(name => ({ name })),
+    deferred: (options.parentDeferred ?? []).map(name => ({ name })),
     thinkingLevel: options.thinkingLevel ?? 'medium',
   }
   const creations: unknown[] = []
@@ -131,6 +135,14 @@ describe('built-in delegation profiles', () => {
     )).rejects.toThrow(/Explore subagent needs the read tool/)
     expect(run.creations).toEqual([])
     expect(run.identities).toEqual([])
+  })
+
+  it('preserves codemode and nested read-only tools when Explore is delegated from codemode-only', async () => {
+    const run = stubRun({ parentTools: ['codemode'], parentCallable: ['read', 'grep', 'write', 'subagent'] })
+    await registeredTool({ prepareChild: async () => undefined }).execute(
+      { task: 'research', agent_type: 'Explore' }, run.api, {} as Context,
+    )
+    expect(run.agentStates[0]?.tools).toEqual(['codemode', 'read', 'grep'])
   })
 
   it('keeps the parent tool set for general-purpose while replacing its instructions', async () => {
@@ -319,6 +331,14 @@ describe('delegation policy section', () => {
     expect(await renderDelegation()).toBeUndefined()
   })
 
+  it('mentions only the available delegation route', async () => {
+    const teammate = await renderDelegation({ offered: ['spawn_teammate'] })
+    expect(teammate).toContain('直接调用 `spawn_teammate(')
+    expect(teammate).not.toContain('subagent')
+    const child = await renderDelegation({ offered: ['subagent'] })
+    expect(child).not.toContain('spawn_teammate')
+  })
+
   it('lists both built-in types, the delegation rules, and the direct call', async () => {
     const prompt = await renderDelegation({ offered: [SUBAGENT_TOOL] })
     expect(prompt).toContain('- general-purpose：')
@@ -328,11 +348,11 @@ describe('delegation policy section', () => {
     expect(prompt).toContain('先派 Explore 再综合它的结论')
     expect(prompt).toContain('只有已知路径/符号的单点事实才直接查')
     expect(prompt).toContain('你只保留结论')
-    expect(prompt).toContain('多项目任务是默认的并行委派场景')
-    expect(prompt).toContain('「按顺序完成」「逐项做」指交付顺序')
+    expect(prompt).toContain('多项目任务可并行委派互相独立的项')
+    expect(prompt).toContain('写入范围重叠或共用构建、测试、锁文件、快照等产物时协调并串行处理')
     expect(prompt).toContain('委派了检索就不要自己再跑同一搜索')
     expect(prompt).toContain('计划模式开启期间只委派只读调研')
-    expect(prompt).toContain('Call `subagent({ task: "...", agent_type: "Explore", label: "..." })` directly.')
+    expect(prompt).toContain('委派示例：直接调用 `subagent({ task: "...", agent_type: "Explore", label: "..." })`。')
     // One selectable model is no choice, so the model line waits for a second one.
     expect(prompt).not.toContain('可选模型')
   })
@@ -356,6 +376,6 @@ describe('delegation policy section', () => {
 
   it('routes the example through code mode when only codemode offers the tool', async () => {
     const prompt = await renderDelegation({ offered: ['codemode'], callable: [SUBAGENT_TOOL] })
-    expect(prompt).toContain('Through `codemode`, call `await tools.subagent({ task: "...", agent_type: "Explore", label: "..." })` inside the script.')
+    expect(prompt).toContain('委派示例：在 `codemode` 脚本里调用 `await tools.subagent({ task: "...", agent_type: "Explore", label: "..." })`。')
   })
 })

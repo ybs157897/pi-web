@@ -9,6 +9,7 @@ import {
   type FauxResponseFactory,
 } from '@earendil-works/pi-ai'
 import type { ModelRef } from '@earendil-works/pi-durable'
+import { getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult, ThinkingLevel } from '../../shared/types.ts'
 import type { RuntimeModels } from './catalog.ts'
 import { RuntimeError } from '../runtime-errors.ts'
@@ -150,16 +151,16 @@ function parseDismissedReply(text: string): { callId: string } | undefined {
   '# 演示计划：分三步落地计划模式',
   '',
   '## 目标',
-  '在演示会话里跑通「进入计划模式 → 提交计划 → 待审 → 批准执行」。',
+  '在演示会话里跑通「进入计划模式 → 提交计划 → 待审 → 批准方案」。',
   '',
   '## 步骤',
   '1. 只读调研现有问答交互协议与投影字段，不改动任何文件',
   '2. 用 exit_plan_mode 提交计划，等待用户在待审卡上确认',
-  '3. 批准后执行计划并汇报结果',
+  '3. 批准后关闭计划模式，按当前访问权限处理后续工作',
   '',
   '## 验证',
   '- 提交后待审卡出现，标题与正文完整',
-  '- 批准后计划模式关闭，模型输出执行结果',
+  '- 批准后计划模式关闭；只读会话确认方案且不改文件，可写会话按获批方案实施',
 ].join('\n')
 
 const DEMO_PLAN_REVISED = [
@@ -352,6 +353,11 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   }
   const currentResults = context.messages.slice(lastUserIndex + 1).filter((message) => message.role === 'toolResult')
   const userText = latestUserText(context).trim()
+  const toolNames = new Set(getCurrentTools(normalizeContext(context).messages).map(tool => tool.name))
+  const routedCall = (name: string, args: NonNullable<Parameters<typeof fauxToolCall>[1]>, id: string) =>
+    !toolNames.has(name) && toolNames.has('codemode')
+      ? fauxToolCall('codemode', { code: `return await tools.${name}(${JSON.stringify(args)})` }, { id })
+      : fauxToolCall(name, args, { id })
   if (userText.includes('[prompt-probe]')) return fauxAssistantMessage(fauxText('PROMPT_PROBE_OK'))
   if (userText.includes('[memory-write]')) {
     const root = currentResults.length === 0 ? demoMemoryRoot(context) : undefined
@@ -381,6 +387,9 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   const planReply = parsePlanReviewReply(userText)
   const answerReply = planReply === undefined ? parseAnswerReply(userText) : undefined
   if (planReply?.approved) {
+    if (userText.includes('This conversation remains read-only')) {
+      return fauxAssistantMessage(fauxText('计划已获批准，计划模式已关闭；当前会话仍为只读，未实施任何修改。实施需要具备写入权限的会话。'))
+    }
     return fauxAssistantMessage([
       fauxThinking('用户已批准计划，计划模式已关闭，现在执行计划。'),
       fauxText([
@@ -688,11 +697,16 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
     const defectNumber = /\[wetrack-analysis:(DTS\d+)\]/u.exec(userText)?.[1] ?? 'DTS000000001'
     const saved = currentResults.some(message => message.toolName === 'wetrack_analysis_save' && !message.isError)
     if (!saved) {
+      const previous = currentResults.findLast(message => message.toolName === 'wetrack_analysis_get' && !message.isError)
+      if (!previous) {
+        return fauxAssistantMessage(fauxToolCall('wetrack_analysis_get', { defectNumber }, { id: `demo-wetrack-get-${context.messages.length}` }), { stopReason: 'toolUse' })
+      }
       const evidence = currentResults.some(message => message.toolName === 'read' && !message.isError)
       if (evidence) {
         return fauxAssistantMessage(fauxToolCall('wetrack_analysis_save', {
           defectNumber, status: 'analyzed', title: `${defectNumber} 代码分析`, summary: '已核对代码证据',
-          markdown: `## 根因\n\n已结合代码定位 ${defectNumber}。\n\n## 证据\n\n\`demo.ts:1\``,
+          expectedRevision: Number(/revision:\s*(\d+)/u.exec(toolResultText(previous))?.[1] ?? 0),
+          markdown: `## 根因\n\n已结合代码定位 ${defectNumber}。\n\n## 证据\n\n[demo.ts:1](demo.ts#L1)`,
         }, { id: `demo-wetrack-save-${context.messages.length}` }), { stopReason: 'toolUse' })
       }
       return fauxAssistantMessage(fauxToolCall('read', { path: 'demo.ts' }, { id: `demo-wetrack-read-${context.messages.length}` }), { stopReason: 'toolUse' })
@@ -722,14 +736,14 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       return fauxAssistantMessage([
         fauxThinking('计划已提交待审，等待用户在待审卡上确认。'),
         fauxText(planSubmissions >= 2
-          ? '已按你的反馈把修订后的计划再次提交（第 2 轮）。请在待审卡上选择「要求修改」或「同意执行」。'
-          : '计划已提交待审。请在待审卡上选择「要求修改」或「同意执行」；同意后我会开始执行。'),
+          ? '已按你的反馈把修订后的计划再次提交（第 2 轮）。请在待审卡上选择是否批准，或提供修改意见。'
+          : '计划已提交待审。请在待审卡上选择是否批准，或提供修改意见；批准不改变当前访问权限。'),
       ])
     }
     if (planSubmissions >= 2) {
       return fauxAssistantMessage([
         fauxThinking('两轮计划都已提交待审，不再自动提交。'),
-        fauxText('两轮计划都已提交待审，我不会再自动提交。请在待审卡上「同意执行」，或直接告诉我具体要调整哪一部分。'),
+        fauxText('两轮计划都已提交待审，我不会再自动提交。请在待审卡上选择是否批准，或直接告诉我具体要调整哪一部分。'),
       ])
     }
     const revised = planSubmissions >= 1
@@ -1013,6 +1027,13 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   }
   // The child's own marker, so a delegated task answers with text instead of delegating again.
   if (userText.includes(DEMO_SUBAGENT_CHILD_MARKER)) {
+    if (userText.includes('[child-read]')) {
+      if (currentResults.length === 0) {
+        return fauxAssistantMessage(routedCall('read', { path: 'probe.txt' }, `demo-child-read-${runToken}`), { stopReason: 'toolUse' })
+      }
+      const result = currentResults.at(-1)!
+      return fauxAssistantMessage(fauxText(result.isError ? 'CHILD_READ_FAILED' : `CHILD_READ_OK: ${toolResultText(result)}`))
+    }
     return fauxAssistantMessage([
       fauxThinking('子会话收到委派任务，先给出结论。'),
       fauxText(DEMO_SUBAGENT_ANSWER),
@@ -1041,15 +1062,15 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   }
   if (userText.includes('[subagent]') || userText.includes('[subagent-explore]') || userText.includes('[subagent-model]') || userText.includes('[subagent-bad-model]')) {
     if (currentResults.length === 0) {
-      return fauxAssistantMessage(fauxToolCall(SUBAGENT_TOOL, {
-        task: DEMO_SUBAGENT_TASK,
+      return fauxAssistantMessage(routedCall(SUBAGENT_TOOL, {
+        task: `${DEMO_SUBAGENT_TASK}${userText.includes('[child-read]') ? ' [child-read]' : ''}`,
         label: '机制归纳',
         ...(userText.includes('[subagent-explore]') ? { agent_type: 'Explore' as const } : {}),
         ...(userText.includes('[subagent-model]') ? { model: DEMO_MODEL } : {}),
         ...(userText.includes('[subagent-bad-model]') ? { model: { provider: 'missing-provider', modelId: 'missing-model' } } : {}),
-      }, { id: `demo-subagent-${runToken}` }), { stopReason: 'toolUse' })
+      }, `demo-subagent-${runToken}`), { stopReason: 'toolUse' })
     }
-    const failed = [...currentResults].reverse().find((message) => message.toolName === SUBAGENT_TOOL)?.isError === true
+    const failed = [...currentResults].reverse().find((message) => message.toolName === SUBAGENT_TOOL || message.toolName === 'codemode')?.isError === true
     return fauxAssistantMessage([
       fauxThinking(failed ? '子智能体调用被拒绝，本轮收尾。' : '子智能体已返回结论，据此收尾。'),
       fauxText(failed

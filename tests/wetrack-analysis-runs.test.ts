@@ -96,6 +96,33 @@ describe('WeTrack background analysis', () => {
     await runs.drain()
   })
 
+  it('stays queued during submission and deduplicates another start', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id }))
+    let submitStarted!: () => void
+    let accept!: () => void
+    const started = new Promise<void>(resolve => { submitStarted = resolve })
+    const accepted = new Promise<void>(resolve => { accept = resolve })
+    let creates = 0
+    const runs = createWetrackAnalysisRuns({
+      dataDir, selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      activateSkills: async () => ({ skillIds: [] }), create: async () => { creates += 1; return detail() },
+      submit: async () => { submitStarted(); await accepted; return { submissionId: '1' } },
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => undefined }),
+      currentDetail: async () => detail(),
+    })
+    const first = runs.start({ defectNumber: 'DTS006680988' })
+    await started
+    const second = runs.start({ defectNumber: 'DTS006680988' })
+    expect((await runs.list())[0]).toMatchObject({ status: 'queued', conversationId: '42' })
+    accept()
+    const [a, b] = await Promise.all([first, second])
+    expect(a.conversationId).toBe(b.conversationId)
+    expect(creates).toBe(1)
+    await runs.drain()
+  })
+
   it('keeps the pinned thinking level when the workspace is rebound', async () => {
     await mkdir(join(dataDir, 'wetrack'), { recursive: true })
     await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id, thinkingLevel: 'off' }))
@@ -144,6 +171,109 @@ describe('WeTrack background analysis', () => {
     await runs.drain()
   })
 
+  it('settles a blocked attempt without replacing the earlier conclusion', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id }))
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: '原结论', status: 'analyzed' }, { conversationId: 'older', expectedRevision: 0 })
+    let finish!: () => void
+    const idle = new Promise<void>(resolve => { finish = resolve })
+    const runs = createWetrackAnalysisRuns({
+      dataDir, selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      activateSkills: async () => ({ skillIds: [] }), create: async () => detail(),
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => idle }),
+      currentDetail: async () => detail(),
+    })
+    await runs.start({ defectNumber: 'DTS006680988' })
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: '已核对入口，预算耗尽', status: 'blocked', blockedReason: 'budget-exhausted' }, { conversationId: '42', expectedRevision: 1 })
+    finish()
+    await runs.drain()
+    expect((await runs.list())[0]).toMatchObject({ status: 'completed', outcome: 'blocked', blockedReason: 'budget-exhausted' })
+    const stored = await readFile(join(dataDir, 'wetrack', 'analyses', 'DTS006680988.json'), 'utf8')
+    expect(JSON.parse(stored)).toMatchObject({ markdown: '原结论', status: 'analyzed', latestAttempt: { markdown: '已核对入口，预算耗尽' } })
+  })
+
+  it('finds its own saved attempt when another conversation saves before refresh', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id }))
+    let finish!: () => void
+    const idle = new Promise<void>(resolve => { finish = resolve })
+    const runs = createWetrackAnalysisRuns({
+      dataDir, selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      activateSkills: async () => ({ skillIds: [] }), create: async () => detail(),
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => idle }),
+      currentDetail: async () => detail(),
+    })
+    await runs.start({ defectNumber: 'DTS006680988' })
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: 'A 预算耗尽', status: 'blocked', blockedReason: 'budget-exhausted' }, { conversationId: '42', expectedRevision: 0 })
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: 'B 权限不足', status: 'blocked', blockedReason: 'access' }, { conversationId: '43', expectedRevision: 1 })
+    finish()
+    await runs.drain()
+    expect((await runs.list())[0]).toMatchObject({ status: 'completed', outcome: 'blocked', blockedReason: 'budget-exhausted' })
+  })
+
+  it('does not let a slow stale refresh revert a completed run to running', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id }))
+    let finish!: () => void
+    const idle = new Promise<void>(resolve => { finish = resolve })
+    let releaseSlow!: () => void
+    let slowStarted!: () => void
+    const slowGate = new Promise<void>(resolve => { releaseSlow = resolve })
+    const started = new Promise<void>(resolve => { slowStarted = resolve })
+    let checks = 0
+    const runs = createWetrackAnalysisRuns({
+      dataDir, selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      activateSkills: async () => ({ skillIds: [] }), create: async () => detail(),
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => idle }),
+      currentDetail: async () => {
+        checks += 1
+        if (checks === 1) {
+          slowStarted()
+          await slowGate
+          return { ...detail(), conversation: { ...detail().conversation, busy: true } }
+        }
+        return detail()
+      },
+    })
+    await runs.start({ defectNumber: 'DTS006680988' })
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: '已分析', status: 'analyzed' }, { conversationId: '42', expectedRevision: 0 })
+    const slow = runs.list()
+    await started
+    expect((await runs.list())[0]?.status).toBe('completed')
+    releaseSlow()
+    expect((await slow)[0]?.status).toBe('completed')
+    finish()
+    await runs.drain()
+  })
+
+  it('does not turn a provider error into success when a late result arrives', async () => {
+    await mkdir(join(dataDir, 'wetrack'), { recursive: true })
+    await writeFile(join(dataDir, 'wetrack', 'workspace.json'), JSON.stringify({ workspaceId: workspace.id }))
+    let providerError = false
+    const runs = createWetrackAnalysisRuns({
+      dataDir, selectedWorkspace: () => workspace,
+      analysisModel: () => ({ provider: 'codebuddy', modelId: 'deepseek-v4.1-flash' }),
+      activateSkills: async () => ({ skillIds: [] }), create: async () => detail(),
+      submit: async () => ({ submissionId: '1' }),
+      requireConversation: async () => ({ id: '42' as never, waitForIdle: async () => undefined }),
+      currentDetail: async () => ({ ...detail(), ...(providerError ? { error: 'provider failure' } : {}) }),
+    })
+    await runs.start({ defectNumber: 'DTS006680988' })
+    await runs.drain()
+    expect((await runs.list())[0]).toMatchObject({ status: 'failed', error: expect.stringContaining('没有保存') })
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006680988', markdown: '已保存', status: 'analyzed' }, { conversationId: '42', expectedRevision: 0 })
+    providerError = true
+    const result = (await runs.list())[0]
+    expect(result).toMatchObject({ status: 'failed', outcome: 'analyzed', error: expect.any(String) })
+    expect(result?.error).not.toContain('没有保存')
+  })
+
   it('runs a real background conversation, saves its result and exposes the session over HTTP', async () => {
     await mkdir(join(workspace.path, '.agents', 'skills', 'rd-cli-ops'), { recursive: true })
     await writeFile(join(workspace.path, '.agents', 'skills', 'rd-cli-ops', 'SKILL.md'), '---\nname: rd-cli-ops\ndescription: WeTrack 缺陷代码分析规范\n---\n遵循此工作区的本地分析规范。\n')
@@ -164,7 +294,7 @@ describe('WeTrack background analysis', () => {
       },
       fauxAssistantMessage(fauxToolCall('read', { path: 'demo.ts' }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxToolCall('wetrack_analysis_save', {
-        defectNumber: 'DTS006744740', status: 'analyzed', title: '代码分析', markdown: '## 根因\n\n`demo.ts:1`',
+        defectNumber: 'DTS006744740', expectedRevision: 0, status: 'analyzed', title: '代码分析', markdown: '## 根因\n\n`demo.ts:1`',
       }), { stopReason: 'toolUse' }),
       fauxAssistantMessage(fauxText('分析已保存')),
     ])

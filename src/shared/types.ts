@@ -466,6 +466,21 @@ export interface WetrackAnalysisInput {
   status?: WetrackAnalysisStatus
   title?: string
   summary?: string
+  /** Why this attempt could not establish a conclusion. */
+  blockedReason?: 'budget-exhausted' | 'access' | 'missing-code' | 'contract' | 'other'
+}
+
+/** The latest saved attempt, distinct from any earlier reliable conclusion. */
+export interface WetrackAnalysisAttempt {
+  status: WetrackAnalysisStatus
+  title: string
+  summary: string
+  markdown: string
+  updatedAt: string
+  conversationId?: string
+  blockedReason?: WetrackAnalysisInput['blockedReason']
+  /** Revision read before this attempt; used to detect exact retries. */
+  baseRevision?: number
 }
 
 /** One stored analysis, as the reading page receives it. */
@@ -478,10 +493,15 @@ export interface WetrackAnalysisRecord {
   /** Local time the record was written, `YYYY-MM-DD HH:mm:ss`. */
   updatedAt: string
   conversationId?: string
+  /** Monotonic per-defect version, zero for records written before versioning. */
+  revision?: number
+  latestAttempt?: WetrackAnalysisAttempt
+  /** Saved attempt history in submission order. */
+  attempts?: WetrackAnalysisAttempt[]
 }
 
 /** List-row projection: everything but the body, so badges cost no large payload. */
-export type WetrackAnalysisSummary = Omit<WetrackAnalysisRecord, 'markdown' | 'conversationId'>
+export type WetrackAnalysisSummary = Omit<WetrackAnalysisRecord, 'markdown' | 'conversationId' | 'latestAttempt' | 'attempts'>
 
 export type WetrackAnalysisRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
 
@@ -492,6 +512,9 @@ export interface WetrackAnalysisRun {
   workspaceName: string
   conversationId?: string
   status: WetrackAnalysisRunStatus
+  /** Business result of a finished run, distinct from execution completion. */
+  outcome?: WetrackAnalysisStatus
+  blockedReason?: WetrackAnalysisInput['blockedReason']
   createdAt: number
   updatedAt: number
   error?: string

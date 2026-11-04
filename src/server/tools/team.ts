@@ -774,39 +774,30 @@ function jsonText(value: unknown): { type: 'text'; text: string }[] {
   return [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 }
 
-/** `wait_agent` without an active peer says exactly what DSH says (`tool-agent-team/src/index.ts:45`). */
-const NO_ACTIVE_PEER_MESSAGE = 'No other Team member is running or provisioning. wait_agent cannot make progress or wake inactive teammates. Re-list with list_agents and team_task_list, then use send_message to wake each required inactive teammate before waiting again.'
+/** Do not infer task completion or wake an already completed teammate from inactivity. */
+const NO_ACTIVE_PEER_MESSAGE = 'No other Team member is running or provisioning. Read the returned results and shared tasks first; use send_message only if a required inactive member still has work to do.'
 
 function isActiveStatus(status: TeamMemberView['status']): boolean {
   return status === 'running' || status === 'provisioning'
 }
 
-/**
- * Member-status digest for the post-registration recheck. Pi's reads are asynchronous where DSH
- * registers its waiter in one synchronous span, so a transition that lands while the watchers are
- * acquired is recovered here instead of being lost.
- */
-async function statusDigest(info: TeamToolOptions['conversationInfo'], ids: readonly string[]): Promise<string> {
-  const rows = await Promise.all(ids.map(async id => {
-    try {
-      return `${id}:${(await info(id)).status}`
-    } catch {
-      return `${id}:unknown`
-    }
-  }))
-  return rows.join('|')
-}
-
 /** One teammate's collected state for the `wait_agent` result: status plus the last answer text. */
-type WaitAgentMember = { name: string; status: string; answer?: string }
+type WaitAgentMember = {
+  name: string
+  status: string
+  conversationId?: string
+  answer?: string
+  answerStatus?: 'available' | 'truncated' | 'not_found_in_recent_entries' | 'read_failed'
+  answerEntryId?: string
+  conversationPath?: string
+}
 type WaitAgentResult = { timedOut: boolean; noProgress?: { reason: 'no-active-peer'; message: string }; members?: WaitAgentMember[] }
 
 const MAX_MEMBER_ANSWER_CHARS = 2_000
 
 /**
  * Collect the roster the Lead sees after a wait: each teammate's live status and, once it has
- * finished, its last assistant answer. Without this the tool result carried only a timedOut
- * flag, so the Lead could never see a teammate's conclusions and had to relay through files.
+ * inactive, a bounded recent assistant-text preview and its source for follow-up inspection.
  */
 async function teamRosterWithAnswers(
   api: ToolExecutionApi,
@@ -823,21 +814,40 @@ async function teamRosterWithAnswers(
         ? 'provisioning'
         : member.conversationId === undefined ? 'inactive' : (await info(member.conversationId)).status
     let answer: string | undefined
+    let answerStatus: WaitAgentMember['answerStatus']
+    let answerEntryId: string | undefined
     if (status !== 'running' && member.conversationId !== undefined) {
       try {
-        answer = await api.commit(async (tx) => {
+        const result = await api.commit(async (tx) => {
           const page = await tx.scanEntries({ conversationId: toConversationId(member.conversationId!), order: 'descending' }, 8)
           for (const entry of page.items) {
             const text = answerText(entry.model)
-            if (text !== '') return text.slice(0, MAX_MEMBER_ANSWER_CHARS)
+            if (text !== '') return { text, entryId: String(entry.id) }
           }
           return undefined
         }, context)
+        if (result === undefined) answerStatus = 'not_found_in_recent_entries'
+        else {
+          answer = result.text.slice(0, MAX_MEMBER_ANSWER_CHARS)
+          answerEntryId = result.entryId
+          answerStatus = result.text.length > MAX_MEMBER_ANSWER_CHARS ? 'truncated' : 'available'
+        }
       } catch {
-        answer = undefined
+        context.abortSignal?.throwIfAborted()
+        answerStatus = 'read_failed'
       }
     }
-    members.push({ name: member.name, status, ...(answer === undefined ? {} : { answer }) })
+    members.push({
+      name: member.name,
+      status,
+      ...(member.conversationId === undefined ? {} : {
+        conversationId: member.conversationId,
+        conversationPath: `/api/conversations/${encodeURIComponent(member.conversationId)}`,
+      }),
+      ...(answer === undefined ? {} : { answer }),
+      ...(answerStatus === undefined ? {} : { answerStatus }),
+      ...(answerEntryId === undefined ? {} : { answerEntryId }),
+    })
   }
   return { members }
 }
@@ -849,13 +859,10 @@ export async function waitForTeamChange(
   leadId: ConversationId,
   timeoutMs: number,
   context: Context,
+  observed: { doc: TeamDocValue; members: TeamMemberView[] },
 ): Promise<boolean> {
   const signal = context.abortSignal
   signal?.throwIfAborted()
-  const baselineDoc = await readDoc(api, leadId, context)
-  const ids = baselineDoc.members
-    .flatMap(member => member.role === 'teammate' && member.conversationId !== undefined ? [member.conversationId] : [])
-  const baseline = await statusDigest(options.conversationInfo, ids)
   let settled = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
@@ -888,8 +895,12 @@ export async function waitForTeamChange(
     stopMembers = await options.watchMembers(String(leadId), notify)
     // Recover a transition that landed while the asynchronous watchers were being acquired.
     if (!settled) {
-      const after = await statusDigest(options.conversationInfo, ids)
-      if (after !== baseline) notify()
+      const afterDoc = await readDoc(api, leadId, context)
+      const afterMembers = await memberViews(afterDoc, String(leadId), options.conversationInfo)
+      const states = (members: TeamMemberView[]) => members.filter(member => member.role === 'teammate')
+        .map(({ name, phase, status, conversationId }) => ({ name, phase, status, conversationId }))
+      if (JSON.stringify(afterDoc) !== JSON.stringify(observed.doc)
+        || JSON.stringify(states(afterMembers)) !== JSON.stringify(states(observed.members))) notify()
     }
     if (!settled) {
       if (signal !== undefined) {
@@ -950,8 +961,7 @@ const teamSection = section('team-policy', async (input, context) => {
     ]
     const message = teamCall('send_message', routes, '{ target: "lead", message: "..." }')
     if (message) {
-      lines.push(`To contact the Lead, ${message}`)
-      lines.push('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+      lines.push(`To contact the Lead, ${message} A successful send means the inbox accepted it, not that the recipient processed it. Messages from other members start with the sender's name.`)
     }
     const list = teamCall('list_agents', routes)
     if (list) lines.push(`To inspect teammate names and availability, ${list}`)
@@ -963,7 +973,7 @@ const teamSection = section('team-policy', async (input, context) => {
       lines.push('Use only task identifiers and revisions supplied in the assignment; do not guess either value.')
     }
     if (routes.team_task_list !== 'unavailable' && routes.team_task_update !== 'unavailable') {
-      lines.push('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上；必须有序的工作用任务依赖（blocked_by）表达。写域重叠只是警示不是锁。')
+      lines.push('Record expected write scopes as workspace-relative path prefixes on shared tasks and express required ordering with task dependencies (blocked_by). Overlapping write scopes are a warning, not a lock.')
     }
     const taskCalls = (['team_task_list', 'team_task_get', 'team_task_update'] as const)
       .map(name => teamCall(name, routes)).filter((line): line is string => line !== undefined)
@@ -988,16 +998,14 @@ const teamSection = section('team-policy', async (input, context) => {
   if (list) lines.push(`Use the roster to check each member’s availability; inactive means no turn is running, not task completion. ${list}`)
   const message = teamCall('send_message', routes)
   if (message) {
-    lines.push(`Use a message to steer a running member or start/resume an inactive one; a successful send does not mean it was processed. ${message}`)
-    lines.push('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
+    lines.push(`Use a message to steer a running member or start/resume an inactive one. A successful send means the inbox accepted it, not that the member processed it; messages from other members start with the sender's name. ${message}`)
   }
   const interrupt = teamCall('interrupt_agent', routes)
   if (interrupt) lines.push(`Interrupt only a member whose current turn should stop. ${interrupt}`)
 
   const createTask = teamCall('team_task_create', routes)
   if (createTask) {
-    lines.push(`Use shared tasks for work that needs ownership or dependencies; record write scopes and blockers when relevant. ${createTask}`)
-    lines.push('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上；必须有序的工作用任务依赖（blocked_by）表达。写域重叠只是警示不是锁。')
+    lines.push(`Use shared tasks for work that needs ownership or dependencies. Record expected write scopes as workspace-relative path prefixes and express required ordering with task dependencies (blocked_by); overlapping write scopes are a warning, not a lock. ${createTask}`)
   }
   const taskList = teamCall('team_task_list', routes)
   const taskGet = teamCall('team_task_get', routes)
@@ -1013,12 +1021,7 @@ const teamSection = section('team-policy', async (input, context) => {
   }
   const wait = teamCall('wait_agent', routes)
   if (wait && list) {
-    lines.push(`Wait only after the roster shows another required member running or provisioning; this observes later changes and never wakes a member. Re-list after wakeup or timeout. Wait for required teammates before the final answer. ${wait}`)
-  }
-  if (wait && list && message) {
-    lines.push('wait_agent 只观测调用之后的变化、不会唤醒任何人；调用前先 list_agents 确认相关成员在运行或 provisioning，不在就用 send_message 唤醒，等待结束或超时后重新 list。')
-    lines.push('wait_agent 的结果带每个队友的最新状态；已结束的队友附带其最终回答文本——先读它，再决定是否需要向队友要更多证据。')
-    lines.push('Lead 在给出最终答案前必须等齐所有必需的队友。')
+    lines.push(`The roster shows availability, not task completion. wait_agent observes later changes and never wakes a member; after a wakeup or timeout re-list. If nobody is active, call it once to collect available answers without waiting. Check answerStatus; the conversation path is a locator for the host or user, not a callable tool.${message ? ' Request missing details from a member when needed; do not wake an inactive member whose work is already complete.' : ' Report missing evidence when no retrieval route is available.'} Collect the results of required teammates before the final answer. ${wait}`)
   }
   return lines.join('\n')
 })
@@ -1275,7 +1278,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     name: 'wait_agent',
     description: [
       'Wait for the next teammate status, message, or shared-task change after this call starts.',
-      'The result names every teammate with its latest status, and a teammate that has finished carries its last answer text, so the Lead can collect work without file relays.',
+      'The result includes teammate status and a recent assistant-text preview when available, with answerStatus and its source conversation and entry. A preview can be truncated or belong to an earlier turn. The conversation path locates the source for the host or user; it is not itself a callable tool.',
       'This never wakes inactive members and returns noProgress immediately when no other member is running or provisioning. Re-list after wakeup or timeout instead of polling.',
       `timeout_ms is an integer from ${MIN_WAIT_MS} through ${MAX_WAIT_MS}; it defaults to ${DEFAULT_WAIT_MS}.`,
     ].join(' '),
@@ -1295,7 +1298,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         const roster = await teamRosterWithAnswers(api, doc, options.conversationInfo, context)
         return { output: jsonText({ timedOut: false, noProgress, ...roster }), details: { timedOut: false, noProgress, ...roster } }
       }
-      const timedOut = await waitForTeamChange(api, options, scope.leadId, timeoutMs, context)
+      const timedOut = await waitForTeamChange(api, options, scope.leadId, timeoutMs, context, { doc, members })
       const roster = await teamRosterWithAnswers(api, await readDoc(api, scope.leadId, context), options.conversationInfo, context)
       return { output: jsonText({ timedOut, ...roster }), details: { timedOut, ...roster } }
     },

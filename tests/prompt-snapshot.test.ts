@@ -98,7 +98,7 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
       const messages = normalizeContext(request).messages
       const user = [...messages].reverse().find(message => message.role === 'user')
       const text = user?.role === 'user' ? textOfUser(user.content) : ''
-      if (!text.includes(PROBE)) return
+      if (!text.includes(PROBE) && !text.includes('[subagent-child]')) return
       const system = getCurrentSystemMessage(messages)
       captured.push({
         user: text,
@@ -128,7 +128,6 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     const prompt = Object.values(request.sections).join('\n')
 
     for (const marker of [
-      '调研→形成计划→等待确认',
       '不要泛泛地“请确认”',
       'agent 状态目录',
       '只读调研后给出计划',
@@ -137,9 +136,13 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     ]) {
       expect(prompt.split(marker).length - 1, marker).toBe(1)
     }
-    // The routing rules live once in the core; the skill catalog also names the skills.
+    // Plugin creation keeps its stable route; statechart is routed only by its narrow catalog metadata.
     expect(prompt).toContain('builtin:plugin-creator')
     expect(prompt).toContain('builtin:statechart')
+    expect(request.sections['runtime-core']).not.toContain('builtin:statechart')
+    expect(request.sections['work-policy']).not.toContain('/plan')
+    expect(request.sections['skills-policy']).toContain('Skip ordinary business-flow lookup')
+    expect(prompt).not.toMatch(/调用 Call|directly\.，|委达/u)
 
     // Scenario details live in the owning skills, not the global prompt.
     for (const marker of ['设置 → 插件市场', '不得声称已安装', '只会被标为不支持', '工具调用过程复盘']) {
@@ -184,5 +187,61 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     const planRequest = await probe(planned, 'memory-plan')
     await runtime!.updateSettings({ memoryEnabled: false })
     await expect(render('memory-plan', planRequest, false)).toMatchFileSnapshot('./__snapshots__/prompt/memory-plan.txt')
+  })
+
+  it.each([
+    { profile: 'general', mode: 'on', plan: false },
+    { profile: 'explore', mode: 'on', plan: false },
+    { profile: 'general', mode: 'only', plan: false },
+    { profile: 'explore', mode: 'only', plan: false },
+    { profile: 'general', mode: 'on', plan: true },
+  ] as const)('delegated $profile child: code mode $mode, plan $plan', async ({ profile, mode, plan }) => {
+    await runtime!.updateSettings({ codemodeMode: mode })
+    await writeFile(join(workspace, 'probe.txt'), 'READABLE_CHILD_EVIDENCE\n')
+    const name = `subagent-${profile}${mode === 'only' ? '-codemode' : ''}${plan ? '-plan' : ''}`
+    const id = await create(`Snapshot ${name}`)
+    if (plan) await runtime!.setPlan(id, true)
+    const first = captured.length
+    await runtime!.submit(id, {
+      text: `${profile === 'explore' ? '[subagent-explore]' : '[subagent]'} [child-read]`,
+      requestId: randomUUID(),
+    })
+    try {
+      const deadline = Date.now() + 15_000
+      let completed = false
+      while (Date.now() < deadline) {
+        const detail = await runtime!.detail(id)
+        if (detail.error) throw new Error(detail.error)
+        if (!detail.conversation.busy && detail.messages.some(message => message.role === 'assistant' && !message.streaming)) {
+          completed = true
+          break
+        }
+        await delay(20)
+      }
+      expect(completed, 'parent completes with its child result').toBe(true)
+      const children = await runtime!.children(id)
+      expect(children).toHaveLength(1)
+      const child = await runtime!.detail(children[0]!.id)
+      const answer = child.messages.filter(message => message.role === 'assistant').at(-1)
+      const text = answer?.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n') ?? ''
+      expect(text).toContain('CHILD_READ_OK')
+      expect(text).toContain('READABLE_CHILD_EVIDENCE')
+      expect(child.interactions?.some(item => item.status === 'pending')).not.toBe(true)
+      expect(await runtime!.children(children[0]!.id)).toEqual([])
+      const request = captured.slice(first).find(item => item.user.includes('[subagent-child]'))
+      expect(request, 'provider receives a real child request').toBeDefined()
+      const forbidden = /^(?:enter_plan_mode|exit_plan_mode|ask_user_question|(?:get|create|update)_goal|subagent|spawn_teammate|send_message|list_agents|wait_agent|interrupt_agent|team_task_.*)$/u
+      expect(request!.tools.filter(tool => forbidden.test(tool.name))).toEqual([])
+      expect(request!.sections['delegation-policy']).toBeUndefined()
+      expect(request!.sections['work-policy']).not.toContain('/plan')
+      if (plan) {
+        expect(request!.sections['plan-policy']).toContain('委派方')
+        expect(request!.sections['plan-policy']).not.toContain('等待用户明确决定')
+      }
+      if (mode === 'only') expect(request!.tools.map(tool => tool.name)).toEqual(['codemode'])
+      await expect(render(name, request!, false)).toMatchFileSnapshot(`./__snapshots__/prompt/${name}.txt`)
+    } finally {
+      await runtime!.updateSettings({ codemodeMode: 'on' })
+    }
   })
 })

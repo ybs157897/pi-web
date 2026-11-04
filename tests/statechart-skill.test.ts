@@ -34,6 +34,9 @@ describe('builtin statechart skill', () => {
       writable: false,
     })
     expect(statechart?.description).toContain('state × event')
+    // Both sides of the trigger must survive the model catalog's 250-character cap.
+    expect(statechart!.description.length).toBeLessThanOrEqual(250)
+    expect(statechart?.description).toContain('Skip ordinary business-flow lookup')
     expect(await store.validate(workspace, 'statechart')).toEqual({ valid: true, errors: [], warnings: [] })
   })
 
@@ -46,6 +49,9 @@ describe('builtin statechart skill', () => {
     expect(loaded.content).toContain('Enumerate exhaustively')
     expect(loaded.content).toContain('ask_user_question')
     expect(loaded.content).toContain('references/method.md')
+    expect(loaded.content).toContain('proceed directly to implementation')
+    expect(loaded.content).toContain('Pause only the work that depends')
+    expect(loaded.content).not.toContain('End the turn while the questions are pending')
 
     const method = await store.load(workspace, 'builtin:statechart', 'references/method.md')
     expect(method.resource).toBe('references/method.md')

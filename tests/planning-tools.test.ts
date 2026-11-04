@@ -4,6 +4,7 @@ import type { Extension } from '@earendil-works/pi-durable'
 import { Goals, createGoalExtension } from '../src/server/tools/goal.ts'
 import { InteractionTools } from '../src/server/tools/interaction.ts'
 import { PlanExtension, Plans } from '../src/server/tools/plan.ts'
+import { Subagents } from '../src/server/conversation/subagent-policy.ts'
 import { TodoTools, Todos } from '../src/server/tools/todo.ts'
 
 type PromptInput = {
@@ -18,6 +19,7 @@ type MockApi = {
   conversationId: string
   snapshot: ReturnType<typeof vi.fn>
   commit: ReturnType<typeof vi.fn>
+  agent: ReturnType<typeof vi.fn>
 }
 
 const context = {} as Context
@@ -36,6 +38,8 @@ function mockApi(options: {
   planActive?: boolean
   goal?: unknown
   transactionPlanActive?: boolean
+  offered?: string[]
+  callable?: string[]
 } = {}): MockApi {
   const snapshot = vi.fn(async (document: unknown) => {
     if (document === Plans) return { active: options.planActive === true, updatedAt: 1 }
@@ -54,7 +58,8 @@ function mockApi(options: {
     }
     return change(tx)
   })
-  return { conversationId: 'conversation-1', snapshot, commit }
+  const agent = vi.fn(async () => ({ tools: (options.offered ?? []).map(name => ({ name })), callable: (options.callable ?? []).map(name => ({ name })) }))
+  return { conversationId: 'conversation-1', snapshot, commit, agent }
 }
 
 async function renderGoalPolicy(options: {
@@ -91,7 +96,7 @@ async function renderGoalPolicy(options: {
   return (await render(input, context)) ?? ''
 }
 
-async function renderPlanPolicy(options: { offered?: string[]; callable?: string[] } = {}): Promise<string> {
+async function renderPlanPolicy(options: { offered?: string[]; callable?: string[]; child?: boolean } = {}): Promise<string> {
   const policy = PlanExtension.sections?.find(candidate => candidate.key === 'plan-policy')
   if (!policy) throw new Error('Missing plan policy section')
   const input: PromptInput = {
@@ -102,7 +107,7 @@ async function renderPlanPolicy(options: { offered?: string[]; callable?: string
     },
     env: undefined,
     shown: {},
-    read: { snapshot: async document => document === Plans ? { active: true, updatedAt: 1 } : undefined },
+    read: { snapshot: async document => document === Plans ? { active: true, updatedAt: 1 } : document === Subagents && options.child ? { record: { profile: 'general-purpose' } } : undefined },
   }
   const render = policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>
   return (await render(input, context)) ?? ''
@@ -118,16 +123,46 @@ function onYield(extension: Extension) {
 describe('planning tool prompt policy', () => {
   it('routes plan submission only through tools available in the current request', async () => {
     const direct = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
-    expect(direct).toContain('Call `exit_plan_mode({ plan: "<plan markdown>" })` directly.')
+    expect(direct).toContain('直接调用 `exit_plan_mode({ plan: "<plan markdown>" })`')
     expect(direct).not.toContain('codemode')
 
     const codemode = await renderPlanPolicy({ offered: ['codemode'], callable: ['exit_plan_mode'] })
-    expect(codemode).toContain('Through `codemode`, call `await tools.exit_plan_mode({ plan: "<plan markdown>" })` inside the script.')
+    expect(codemode).toContain('在 `codemode` 脚本里调用 `await tools.exit_plan_mode({ plan: "<plan markdown>" })`')
 
     const unavailable = await renderPlanPolicy()
     expect(unavailable).toContain('把计划放在最终回复里')
     expect(unavailable).not.toContain('exit_plan_mode')
     expect(unavailable).not.toContain('pending')
+  })
+
+  it('does not ask the user or submit a plan from a delegated session', async () => {
+    const prompt = await renderPlanPolicy({ offered: ['exit_plan_mode'], child: true })
+    expect(prompt).toContain('将结论、证据和未决事项交给委派方')
+    expect(prompt).not.toContain('exit_plan_mode')
+    expect(prompt).not.toContain('ask_user_question')
+  })
+
+  it('does not name unavailable question tools in plan guidance', async () => {
+    const noQuestions = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
+    expect(noQuestions).not.toContain('ask_user_question')
+    const nested = await renderPlanPolicy({ offered: ['codemode'], callable: ['exit_plan_mode', 'ask_user_question'] })
+    expect(nested).toContain('await tools.ask_user_question(')
+  })
+
+  it('refuses plan entry when the plan cannot be submitted', async () => {
+    const api = mockApi({ offered: ['enter_plan_mode'] })
+    await expect(tool(PlanExtension, 'enter_plan_mode').execute({} as never, api as never, context as never))
+      .rejects.toThrow('no callable plan submission tool')
+    expect(api.commit).not.toHaveBeenCalled()
+    const nested = mockApi({ offered: ['codemode'], callable: ['exit_plan_mode'] })
+    await expect(tool(PlanExtension, 'enter_plan_mode').execute({} as never, nested as never, context as never)).resolves.toBeDefined()
+  })
+
+  it('reports inactive plan mode without inventing an entry route at either check', async () => {
+    for (const api of [mockApi(), mockApi({ planActive: true })]) {
+      await expect(tool(PlanExtension, 'exit_plan_mode').execute({ plan: '# Plan' } as never, api as never, context as never))
+        .rejects.toThrow('Use only the planning tools available')
+    }
   })
 
   it('states the host-enforced read-only Plan boundary and plan format', async () => {
@@ -138,7 +173,7 @@ describe('planning tool prompt policy', () => {
     expect(prompt).toContain('不结束计划模式')
     expect(prompt).toContain('不要把计划当普通回复粘贴')
     expect(prompt).toContain('工作顺序：先探索仓库')
-    expect(prompt).toContain('定稿前如仍有未决')
+    expect(prompt).toContain('定稿前如仍有重大未决')
     expect(prompt).toContain('不要用提问征求"计划可以吗"')
   })
 
@@ -147,7 +182,7 @@ describe('planning tool prompt policy', () => {
 
     expect(description).toContain('research tasks')
     expect(description).toContain('do not submit a plan')
-    expect(description).toContain('ask_user_question')
+    expect(description).toContain('user-owned questions')
     expect(description).toContain('approval request')
     expect(description).toContain('implement yank mode for vim')
   })

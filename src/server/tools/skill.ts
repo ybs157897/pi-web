@@ -307,25 +307,14 @@ function renderSkillSection(store: SkillStore) {
     const skillInstructions = [
       // Identity anchor: without it, a workspace that is itself another agent's source tree
       // (with its own AGENTS.md and skills memories) pulls "integrate into this agent" to that host.
-      'You are pi-web. Installing a Skill means writing files under pi-web\'s own discovery roots — the current workspace `.agents/skills/<name>/`, or the global `~/.pi-web/skills` when it should apply to every workspace — never by modifying the workspace project\'s source or configuration. When the user says "integrate into this agent" / "our agent" without naming another host, the target is pi-web itself; another host (for example the `pi` CLI, whose user-level root is `~/.pi/agent/skills`) is targeted only when the user names it. If the intended host or destination is genuinely ambiguous, ask the user with `ask_user_question` before writing anything.',
-      // pi-web's SKILL.md schema; copying a Skill while "fixing" it to another host's fields
-      // silently loses capability the catalog and tools already support.
-      'pi-web Skill frontmatter supports `name`, `description`, and an optional `when_to_use`. Keep these fields when copying or rewriting a Skill — never drop `when_to_use` or reshape a Skill to another host\'s schema.',
+      'You are pi-web. "Install into this agent" targets pi-web unless the user names another host; do not change the workspace project\'s source or configuration to install a Skill. Default to the current workspace `.agents/skills/<name>/`. A global installation requires an explicit user request and a tool permitted to write that destination; skill_save only writes workspace Skills. Resolve a genuinely ambiguous host or destination before writing.',
       ...(available.has('skill_list') ? ['Call skill_list when you need to refresh or search the workspace Skill catalog.'] : []),
       ...(available.has('skill_load') ? ['When the user names a Skill (by name, id or `$name`) or the task clearly matches a Skill description, load it with skill_load before acting and follow it. Do not load Skills on loose keyword overlap.'] : ['Skill bodies cannot be loaded in this request; do not claim to have read one.']),
-      ...(available.has('skill_load') && available.has('skill_save')
-        ? ['For creation or updates, first load `builtin:skill-creator` when that id is in the catalog, then follow its project-specific steps. skill_save may still reject if workspace writing is disabled or plan mode is active.']
+      ...(available.has('skill_load')
+        ? ['For creating, updating, installing, or copying a Skill, first load `builtin:skill-creator` when that id is in the catalog, then follow its discovery, destination, and validation rules. Loading it does not grant write permission.']
         : available.has('skill_save')
           ? ['skill_save may write only if its runtime permission check passes; the bundled creator cannot be loaded with the tools available in this request.']
           : []),
-      // Where Skills come from (the catalog above is the authoritative what), and how to bring
-      // external ones in — none of this is discoverable by the model otherwise.
-      ...(available.has('skill_list')
-        ? [
-          'Skills are discovered in this order: the built-in bundle; the user-level roots `~/.pi-web/skills` then `~/.agents/skills` (read-only, shared across every workspace); then workspace levels from the current workspace up to its repository root — deeper levels first, and every `.pi-web/skills` level before every `.agents/skills` level; and finally enabled plugin packages. When several Skills share a name, only the first in this order is loadable and the rest are shadowed; a source-qualified id still reaches a shadowed copy.',
-          'To integrate a Skill that lives elsewhere, copy its whole directory (SKILL.md plus any resource files) into `.agents/skills/<skill-name>/` of the current workspace with workspace file tools — global and built-in Skills are read-only, so customizing one means copying it into the workspace — or recreate a single-file Skill through skill_save, which writes only SKILL.md. Afterwards call skill_list to confirm it is discovered and skill_validate to check it.',
-        ]
-        : []),
       ...(available.has('skill_validate') ? ['Call skill_validate after a Skill is saved or updated.'] : []),
     ]
     return [

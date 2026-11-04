@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import { Plans } from '../tools/plan.ts'
+import { Subagents, subagentToolAllowed, type SubagentIdentity } from './subagent-policy.ts'
 
 export const EXECUTION_POLICY_EXTENSION_NAME = 'execution-policy'
 
@@ -30,8 +31,8 @@ export async function inheritPlanConstraint(tx: Tx, childId: ConversationId, par
   child.updatedAt = Date.now()
 }
 
-function planAgent(agent: Agent): Agent {
-  const allowed = (tool: { name: string }) => PLAN_TOOLS.has(tool.name)
+function constrainedAgent(agent: Agent, planActive: boolean, identity: SubagentIdentity | null | undefined): Agent {
+  const allowed = (tool: { name: string }) => (!planActive || PLAN_TOOLS.has(tool.name)) && subagentToolAllowed(identity, tool.name)
   return {
     ...agent,
     tools: agent.tools.filter(allowed),
@@ -56,15 +57,22 @@ export function createExecutionPolicyExtension(installed: readonly Extension[]):
           ...tool,
           execute: async (...invocation: Parameters<typeof tool.execute>) => {
             const [args, api, context] = invocation
-            const plan = await api.snapshot(Plans, api.conversationId, context)
-            if (plan?.active !== true) return tool.execute(args, api, context)
-            if (!PLAN_TOOLS.has(tool.name)) {
+            const [plan, child] = await Promise.all([
+              api.snapshot(Plans, api.conversationId, context),
+              api.snapshot(Subagents, api.conversationId, context),
+            ])
+            const identity = child?.record
+            if (!subagentToolAllowed(identity, tool.name)) {
+              throw new Error(`Delegated subagent cannot call ${tool.name}; report decisions and blockers to the delegating agent.`)
+            }
+            if (plan?.active === true && !PLAN_TOOLS.has(tool.name)) {
               throw new Error(`Plan mode blocks ${tool.name}. Finish planning and wait for the user to leave Plan mode before implementation.`)
             }
+            if (plan?.active !== true && !identity) return tool.execute(args, api, context)
             // Code mode discovers its nested tools through api.agent(), not the provider tool list.
             return tool.execute(args, {
               ...api,
-              agent: async childContext => planAgent(await api.agent(childContext)),
+              agent: async childContext => constrainedAgent(await api.agent(childContext), plan?.active === true, identity),
             }, context)
           },
         }),
@@ -74,8 +82,13 @@ export function createExecutionPolicyExtension(installed: readonly Extension[]):
         wrap: (item: NonNullable<Extension['sections']>[number]) => ({
           ...item,
           render: async (input: PromptInput, context: Parameters<typeof item.render>[1]) => {
-            const plan = await input.read.snapshot(Plans, input.conversationId, context)
-            return item.render(plan?.active === true ? { ...input, agent: planAgent(input.agent) } : input, context)
+            const [plan, child] = await Promise.all([
+              input.read.snapshot(Plans, input.conversationId, context),
+              input.read.snapshot(Subagents, input.conversationId, context),
+            ])
+            return item.render(plan?.active === true || child?.record
+              ? { ...input, agent: constrainedAgent(input.agent, plan?.active === true, child?.record) }
+              : input, context)
           },
         }),
       })),
@@ -83,9 +96,13 @@ export function createExecutionPolicyExtension(installed: readonly Extension[]):
     hooks: [
       hook(GenerationTask, {
         beforeRequest: async (request, api, context) => {
-          const plan = await api.snapshot(Plans, api.conversationId, context)
-          if (plan?.active !== true) return undefined
-          const removed = getCurrentTools(request.messages).filter(tool => !PLAN_TOOLS.has(tool.name))
+          const [plan, child] = await Promise.all([
+            api.snapshot(Plans, api.conversationId, context),
+            api.snapshot(Subagents, api.conversationId, context),
+          ])
+          if (plan?.active !== true && !child?.record) return undefined
+          const removed = getCurrentTools(request.messages).filter(tool =>
+            (plan?.active === true && !PLAN_TOOLS.has(tool.name)) || !subagentToolAllowed(child?.record, tool.name))
           if (removed.length === 0) return undefined
           return {
             messages: [

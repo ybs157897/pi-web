@@ -127,21 +127,31 @@ describe('default runtime work policy', () => {
     expect(prompt).not.toContain('搜内容用 `grep`')
   })
 
-  it('keeps plan requests read-only and points at plan mode for review', async () => {
+  it('answers plan-only requests without claiming an unavailable entry tool', async () => {
     const prompt = await renderPolicy({ tools: ['todo_write'] })
 
     expect(prompt).toContain('只读调研后给出计划，不实施')
-    expect(prompt).toContain('提示其打开计划模式')
-    expect(prompt).toContain('调研→形成计划→等待确认')
+    expect(prompt).toContain('本请求不能自行进入计划模式')
+    expect(prompt).toContain('完成只读调研后直接给出方案')
   })
 
-  it('suggests turning plan mode on before non-trivial implementation work', async () => {
-    const prompt = await renderPolicy({ tools: ['todo_write'] })
+  it('routes plan entry only when both entry and submission are callable', async () => {
+    const direct = await renderSection('work-policy', { tools: ['enter_plan_mode', 'exit_plan_mode'] })
+    expect(direct).not.toContain('/plan')
+    const nested = await renderSection('work-policy', { tools: ['codemode'], callable: ['enter_plan_mode', 'exit_plan_mode'] })
+    expect(nested).toContain('await tools.enter_plan_mode({})')
+    expect(nested).toContain('明确详细指令时不需要计划模式')
+    const noExit = await renderSection('work-policy', { tools: ['enter_plan_mode'] })
+    expect(noExit).toContain('没有可调用的计划提交工具')
+    expect(noExit).toContain('不要自行进入计划模式')
+  })
 
-    expect(prompt).toContain('建议用户先开计划模式')
-    expect(prompt).toContain('命中任一条即建议')
-    expect(prompt).toContain('需求不明需要先探索')
-    expect(prompt).toContain('直接做，不建议计划')
+  it('returns inherited planning work to the delegator instead of asking the user', async () => {
+    const prompt = await renderSection('work-policy', { planActive: true, subagentProfile: 'general-purpose' })
+    expect(prompt).toContain('将结论交给委派方')
+    expect(prompt).not.toContain('提交计划')
+    const inactive = await renderSection('work-policy', { subagentProfile: 'Explore' })
+    expect(inactive).not.toContain('/plan')
   })
 
   it('keeps proactive-asking rules in the stable core', async () => {
@@ -201,7 +211,7 @@ describe('default runtime work policy', () => {
   it('uses short textual progress when no todo tool is available', async () => {
     const prompt = await renderPolicy()
 
-    expect(prompt).toContain('Pi agent 内置的编程助手')
+    expect(prompt).toContain('pi-web 内置的编程助手')
     expect(prompt).toContain('已完成、当前和下一步')
     expect(prompt).not.toContain('todo_write')
   })

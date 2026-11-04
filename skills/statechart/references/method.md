@@ -79,7 +79,7 @@ defensible behaviors and the user owns the choice. Pick rows for the questions b
   discard the draft?".
 - **Forbidden-vs-legal disputes** — a cell you marked `✕` that the product may
   actually want (`✕` → legal with a guard).
-- **Missing scenarios** — offer one free-form line: "还有哪些场景要补进矩阵？".
+- **Missing scenarios** — ask only when a missing scenario changes a user-owned decision and cannot be resolved from the task or code.
 
 Boundaries that keep the gate useful:
 
@@ -87,8 +87,11 @@ Boundaries that keep the gate useful:
   several rows can change together.
 - Present the full table in the same reply — the questions reference rows of the
   table, so the user decides against the whole standard, not a fragment.
-- End the turn after `ask_user_question`; a pending question is not permission to
-  start coding.
+- Ask only about unresolved decisions, preserving existing authorization. Pause
+  dependent work while an answer is required; continue independent authorized work.
+  If every relevant decision is already settled, implement without another review.
+  When the question tool is unavailable, report the missing decision; delegated
+  children return it with a recommendation to their delegator.
 - Mechanical consequences of an agreed row (guard placement, test scaffolding)
   are not questions; asking them wastes the gate.
 

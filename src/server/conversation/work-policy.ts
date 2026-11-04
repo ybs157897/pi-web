@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { defineExtension, section, type Extension } from '@earendil-works/pi-durable'
 import { Plans } from '../tools/plan.ts'
-import { Subagents } from '../tools/subagent.ts'
+import { Subagents } from './subagent-policy.ts'
 import { loadProjectInstructions, renderProjectInstructions } from '../workspace/instructions.ts'
 import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
 
@@ -29,8 +29,8 @@ function todoRoute(input: { agent: PromptAgent }): TodoRoute | undefined {
 }
 
 const TODO_STEPS = [
-  '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。列步骤时顺手判断各项可否委派：互相独立的项派给子智能体并行做，自己只做规划、集成与验收。用户只要计划/方案时，把“调研→形成计划→等待确认”列为步骤，不要开始实施。简单问题或单步改动跳过待办。',
-  '只有彼此独立且确有并行价值的步骤才并行处理（独立项优先并行委派给子智能体）；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
+  '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。简单问题或单步改动跳过待办。',
+  '只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
 ]
 
 function todoPolicy(route: TodoRoute | undefined): string {
@@ -125,18 +125,36 @@ const projectInstructionsSection = section('project-instructions', async (input,
 })
 
 const workPolicySection = section('work-policy', async (input, context) => {
-  const plan = await input.read.snapshot(Plans, input.conversationId, context)
+  const [plan, identity] = await Promise.all([
+    input.read.snapshot(Plans, input.conversationId, context),
+    input.read.snapshot(Subagents, input.conversationId, context),
+  ])
+  const child = identity?.record != null
   if (plan?.active === true) {
     return [
       sessionFacts(input),
-      '计划模式已开启：按 `plan-policy` 只读研究并提交计划，不实施、不维护执行待办，也不启动自动续跑工作目标。',
+      child
+        ? '计划模式已开启：只读研究，将结论交给委派方，不实施、不等待用户，也不维护执行待办。'
+        : '计划模式已开启：按 `plan-policy` 只读研究并提交计划，不实施、不维护执行待办，也不启动自动续跑工作目标。',
     ].join('\n\n')
+  }
+
+  const enter = resolveToolRoute(input.agent, 'enter_plan_mode')
+  const exit = resolveToolRoute(input.agent, 'exit_plan_mode')
+  let planning: string | undefined
+  if (!child) {
+    if (enter === 'unavailable') {
+      planning = '本请求不能自行进入计划模式。用户只要计划或方案时，完成只读调研后直接给出方案，不实施；用户明确要求计划审阅流程时，可提示其使用计划按钮或 /plan。'
+    } else if (exit === 'unavailable') {
+      planning = '本请求没有可调用的计划提交工具，不要自行进入计划模式；需要计划时先只读调研并直接给出方案。'
+    } else if (enter === 'codemode') {
+      planning = '非平凡实现任务可先进入计划模式：在 `codemode` 脚本里调用 `await tools.enter_plan_mode({})`，调用前用 `describeTool` 查看完整说明。简单查询、单点小改、明显 bug 修复和用户已给出明确详细指令时不需要计划模式。'
+    }
   }
 
   return [
     sessionFacts(input),
-    '用户想走计划审阅流程时，提示其打开计划模式（输入框计划按钮或 /plan）。',
-    '非平凡实现任务建议用户先开计划模式（输入框计划按钮或 /plan）再动手：新增功能、存在多种合理方案、涉及架构或选型决策、预计改动超过两三个文件、需求不明需要先探索，命中任一条即建议；用户指令已明确详细、或只是单点小改和明显 bug 修复时直接做，不建议计划。',
+    planning,
     toolGuidance(input),
     todoPolicy(todoRoute(input)),
   ].filter(Boolean).join('\n\n')

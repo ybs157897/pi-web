@@ -8,6 +8,7 @@ import type { ThinkingLevel } from '../../shared/types.ts'
 import { clampThinkingLevel } from '../model/catalog.ts'
 import { modelWithinAllowlist } from '../model/allowlist.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { EXPLORE_TOOLS } from '../conversation/subagent-policy.ts'
 import type { SubagentProfile } from '../tools/subagent.ts'
 
 /** One built-in profile as the delegation tools and the delegation section read it. */
@@ -26,8 +27,8 @@ export type BuiltinProfile = {
 export const BUILTIN_PROFILES: BuiltinProfile[] = [
   {
     name: 'general-purpose',
-    description: '通用子智能体，用于调研复杂问题、检索代码和执行多步任务。当你要找一个关键词或文件且不确定几次内能命中时，把搜索交给它。',
-    summary: '调研复杂问题、检索代码、执行多步任务；不确定几次搜索能否命中时，把搜索交给它。',
+    description: '通用子智能体，用于实现、修复和复杂多步调研；只读代码检索优先交给 Explore。',
+    summary: '执行实现、修复和复杂多步调研；只读代码检索优先交给 Explore。',
     systemPrompt: [
       '你是 pi-web 的子智能体，用可用工具完成被委派的任务。',
       '',
@@ -40,6 +41,8 @@ export const BUILTIN_PROFILES: BuiltinProfile[] = [
       '- 分析从宽到窄，第一个策略不中就换下一个',
       '- 彻底：检查多个位置、多种命名习惯和关联文件，不要第一处命中就停',
       '- 除非任务必要不创建新文件，优先修改现有文件，绝不主动创建 md/README 类文档文件',
+      '',
+      '你在被委派的子会话中工作，结果交给委派方。需要用户决定或超出当前权限时，说明阻塞与建议，交由委派方处理；遵守适用的权限和模式约束。',
     ].join('\n'),
   },
   {
@@ -61,10 +64,12 @@ export const BUILTIN_PROFILES: BuiltinProfile[] = [
       '效率要求：',
       '- 用聪明的搜索方式，尽量在同一条回复里并行发起多个搜索调用',
       '- 结论直接写在最终回复里，不要写报告/总结类 md 文件',
-      '- 引用绝对路径',
+      '- 引用相关文件和具体位置，便于委派方核对',
       '- 只在确凿处贴代码（bug 原文、被问到的函数签名），不要重述你读过的代码',
+      '',
+      '你在被委派的子会话中工作，结果交给委派方。需要用户决定或超出当前权限时，说明阻塞与建议，交由委派方处理；遵守适用的权限和模式约束。',
     ].join('\n'),
-    readonlyTools: ['read', 'glob', 'grep', 'list_files', 'search_files'],
+    readonlyTools: [...EXPLORE_TOOLS],
   },
 ]
 

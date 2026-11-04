@@ -73,6 +73,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     if (review.status !== 'pending') return currentDetail(id)
     await assertConversationModelAllowed(conversation)
     const decision = decidePlanReview(review, answers)
+    const metadata = await harness().snapshot(META, id, CTX)
     const settledAnswers = answers.map(answer => ({
       id: answer.id,
       selected: [...answer.selected],
@@ -87,7 +88,9 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       ...(decision.feedback === undefined ? {} : { feedback: decision.feedback }),
       answers: settledAnswers,
       instruction: decision.approved
-        ? 'The user approved the plan and plan mode is now off: execute the approved plan in this turn, starting with todo_write if the work is multi-step.'
+        ? metadata?.accessMode === 'readOnly'
+          ? 'The user approved the plan and plan mode is now off. This conversation remains read-only: do not implement changes; explain that execution requires write access.'
+          : 'The user approved the plan and plan mode is now off: execute the approved plan in this turn, starting with todo_write if the work is multi-step, within the current access permissions.'
         : 'The user asked for changes and plan mode is still on: revise the plan and submit it again with exit_plan_mode.',
     }
     const requestId = `plan-review-reply:${callId}`

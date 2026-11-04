@@ -287,6 +287,7 @@ function createGoalSection(options: Required<GoalToolOptions>) {
       && routes.update_goal !== 'unavailable'
       && await allowed(options.canContinue, input.conversationId, context)
     const goal = doc?.goal
+    if (!goal && Object.values(routes).every(route => route === 'unavailable')) return undefined
     const lines = [
       'Use a persistent goal only for a direct human request that needs work across multiple turns. Infer that intent without requiring the word "goal"; do not create one for trivial, single-turn, or unrelated work.',
       ...(planMode ? ['Plan mode is active: do planning work only. Do not create a goal, make implementation progress, or start automatic continuation rounds.'] : []),

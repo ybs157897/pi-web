@@ -1,9 +1,10 @@
-import { defineDoc, defineExtension, defineTool, section, type Extension } from '@earendil-works/pi-durable'
+import { defineDoc, defineExtension, defineTool, section, type ConversationId, type Extension, type Tx } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
-import type { AskUserQuestionAnswerItem } from '../../shared/types.ts'
+import type { AccessMode, AskUserQuestionAnswerItem } from '../../shared/types.ts'
 import { Interactions } from './interaction.ts'
 import { Goals } from './goal.ts'
 import { resolveToolRoute, toolRouteInstruction } from '../conversation/tool-routing.ts'
+import { Subagents } from '../conversation/subagent-policy.ts'
 
 /**
  * Plan mode as the conversation document stores it. Pi re-renders every section before each request,
@@ -23,6 +24,7 @@ export const Plans = defineDoc<PlanState>({
 
 /** The button that approves a plan; the review card renders it as its primary action. */
 export const PLAN_APPROVE_LABEL = '同意执行'
+export const READ_ONLY_PLAN_APPROVE_LABEL = '确认方案'
 /** Answer id the plan-review card submits; the route only inspects the selected labels. */
 export const PLAN_REVIEW_ANSWER_ID = 'plan-review'
 
@@ -74,9 +76,8 @@ export function planTitle(plan: string): string | undefined {
 /** Plan mode is off, so there is nothing to submit; the message tells the model how to recover. */
 export const PLAN_INACTIVE_ERROR = [
   'Plan mode is not active in this conversation, so there is no plan to submit.',
-  'Call enter_plan_mode first to switch into plan mode yourself; do not ask the user to enable it.',
-  'Then write the plan and call exit_plan_mode again.',
-  'If the request is already approved, just do the work instead of submitting a plan.',
+  'Use only the planning tools available in the current request; otherwise give the plan in your reply.',
+  'If the request is already approved, continue only within the current access permissions.',
 ].join(' ')
 
 /**
@@ -131,10 +132,18 @@ export function decidePlanReview(review: StoredPlanReview, answers: readonly Ask
 
 /** The policy section: how the model must work while plan mode is on. Nothing is injected when it is off. */
 const planSection = section('plan-policy', async (input, context) => {
-  const doc = await input.read.snapshot(Plans, input.conversationId, context)
+  const [doc, identity] = await Promise.all([
+    input.read.snapshot(Plans, input.conversationId, context),
+    input.read.snapshot(Subagents, input.conversationId, context),
+  ])
   if (doc?.active !== true) return undefined
+  if (identity?.record != null) return [
+    '计划模式已开启：本子会话只读调研，不实施改动。',
+    '完成委派范围内的研究后，将结论、证据和未决事项交给委派方；不要向用户提问、提交计划或等待用户确认。',
+  ].join('\n')
   const route = resolveToolRoute(input.agent, 'exit_plan_mode')
-  const submission = toolRouteInstruction('exit_plan_mode', route, '{ plan: "<plan markdown>" }')
+  const submission = toolRouteInstruction('exit_plan_mode', route, '{ plan: "<plan markdown>" }', 'zh')
+  const questions = toolRouteInstruction('ask_user_question', resolveToolRoute(input.agent, 'ask_user_question'), undefined, 'zh')
   const readTools = ['read', 'glob', 'grep', 'list_files', 'search_files']
     .filter(name => resolveToolRoute(input.agent, name) !== 'unavailable')
     .map(name => `\`${name}\``)
@@ -150,16 +159,18 @@ const planSection = section('plan-policy', async (input, context) => {
     submission === undefined
       ? '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施；计划直接在最终回复里给出。'
       : '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施，计划本身属于 `exit_plan_mode`。',
-    '能通过检查确定的事实自己去查。只有用户拥有的选择或检查无法回答的重大歧义才用 `ask_user_question`；不要问代码在哪、当前行为是什么。',
-    '计划定稿前如仍有未决的需求或方案分歧，先用 `ask_user_question` 问清再成稿；提交计划本身就是请求批准，不要用提问征求"计划可以吗"。',
+    questions === undefined
+      ? '能通过检查确定的事实自己去查。用户才有权决定的重大分歧无法自行解决时，在回复中说明并询问，不要编造决定或提交未决计划。'
+      : `能通过检查确定的事实自己去查。只有用户拥有的选择或检查无法回答的重大歧义才${questions}；不要问代码在哪、当前行为是什么。`,
+    '计划定稿前如仍有重大未决的需求或方案分歧，先问清再成稿；提交计划本身就是请求批准，不要用提问征求"计划可以吗"。',
     '计划要决策完整：写明目标与验收标准；按子系统分组改动；列出公共 API、schema 和数据流变化；覆盖边界情况、失败模式、测试、验收标准和显式假设。简洁到可审阅，详细到另一位工程师不用再做设计决策。',
     `把计划写成 Markdown，第一行是一级标题（"${HEADING_PREFIX}<标题>"），后面是步骤和要执行的验证。`,
     ...(submission === undefined
       ? ['本请求没有可调用的计划提交工具。把计划放在最终回复里并结束本轮；不要声称已提交，也不要等待工具结果。']
       : [
-          `准备好后调用 ${submission}，并让该调用成为这次回复唯一且最后一个工具调用；不要把计划当普通回复粘贴，也不要用提问代替提交。`,
+          `准备好后${submission}，并让该调用成为这次回复唯一且最后一个工具调用；不要把计划当普通回复粘贴，也不要用提问代替提交。`,
           '计划待审期间不要执行；结束本轮。',
-          '用户要求修改时，吸收反馈并重新提交；用户批准后计划模式关闭，按后续消息执行已批准的方案。',
+          '用户要求修改时，吸收反馈并重新提交；用户批准后计划模式关闭，在当前权限内按后续消息处理已批准的方案。',
         ]),
   ].join('\n')
 })
@@ -169,15 +180,19 @@ const planSection = section('plan-policy', async (input, context) => {
  * in `pi-web.interactions`, and report the plan as pending. The user's decision arrives later through
  * `POST /api/conversations/:id/interactions/:callId/answer` and turns plan mode off when approved.
  */
-const exitPlanModeTool = defineTool({
+export type PlanExtensionOptions = {
+  readAccessMode?: (tx: Tx, conversationId: ConversationId) => Promise<AccessMode | undefined>
+}
+
+const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
   name: 'exit_plan_mode',
   description: [
     'Submit the plan you wrote in plan mode for the user\'s approval, ending this turn without waiting for the review.',
     'Use it only when the task is code-writing work whose implementation steps need planning; for research tasks — gathering information, searching or reading files, understanding the codebase — answer directly instead and do not submit a plan.',
-    'Before calling, make sure the plan is complete and unambiguous: if questions about the requirements or the approach remain, resolve them with `ask_user_question` first, then submit.',
-    'Do not use `ask_user_question` to ask "Is this plan okay?" or "Should I proceed?" — submitting the plan is itself the approval request.',
+    'Before calling, make sure the plan is complete and unambiguous: resolve any material user-owned questions about requirements or approach first, then submit.',
+    'Do not separately ask "Is this plan okay?" or "Should I proceed?" — submitting the plan is itself the approval request.',
     `Make this the only and final tool call in that assistant response, and make the plan Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>") followed by the steps and the verification you will run.`,
-    'Only call this while plan mode is active: if plan mode is not active yet, call `enter_plan_mode` first instead of asking the user to enable it.',
+    'Only call this while plan mode is active.',
     'The user reviews the plan in the transcript; approval turns plan mode off and their confirmation arrives as a follow-up message.',
     'If they ask for changes, revise the plan and call exit_plan_mode again instead of starting the work.',
     'Examples: "search for and understand how vim mode is implemented" → report the findings, do not submit a plan; "implement yank mode for vim" → submit the implementation plan; "add authentication, auth method undecided" → ask which auth method first, then submit.',
@@ -185,9 +200,18 @@ const exitPlanModeTool = defineTool({
   parameters: Type.Object({ plan: Type.String() }),
   execute: async (args, api, context) => {
     const state = await api.snapshot(Plans, api.conversationId, context)
-    if (state?.active !== true) throw new Error(PLAN_INACTIVE_ERROR)
+    if (state?.active !== true) {
+      const route = resolveToolRoute(await api.agent(context), 'enter_plan_mode')
+      const entry = toolRouteInstruction('enter_plan_mode', route, '{}')
+      throw new Error(entry === undefined ? PLAN_INACTIVE_ERROR : `${PLAN_INACTIVE_ERROR} To enter plan mode for review: ${entry}`)
+    }
     const plan = cleanPlan(args.plan)
+    let approveLabel = PLAN_APPROVE_LABEL
     await api.commit(async (tx) => {
+      if (options.readAccessMode !== undefined) {
+        const accessMode = await options.readAccessMode(tx, api.conversationId)
+        if (accessMode === 'readOnly' || accessMode === undefined) approveLabel = READ_ONLY_PLAN_APPROVE_LABEL
+      }
       const doc = await tx.doc(Plans, api.conversationId)
       // Re-checked against the committed document: a switch that landed since the snapshot wins.
       if (!doc.active) throw new Error(PLAN_INACTIVE_ERROR)
@@ -201,7 +225,7 @@ const exitPlanModeTool = defineTool({
       table[api.callId] = {
         kind: 'plan-review',
         detail: plan,
-        approveLabel: PLAN_APPROVE_LABEL,
+        approveLabel,
         askedAt: Date.now(),
         status: 'pending',
       } satisfies StoredPlanReview
@@ -215,7 +239,7 @@ const exitPlanModeTool = defineTool({
         requestKey: api.callId,
         kind: 'plan-review',
         status: 'pending' as const,
-        approveLabel: PLAN_APPROVE_LABEL,
+        approveLabel,
         title: planTitle(plan) ?? null,
       },
     }
@@ -233,7 +257,7 @@ const enterPlanModeTool = defineTool({
   description: [
     'Switch this conversation into plan mode yourself, without asking the user and without waiting for a confirmation.',
     'Prefer entering plan mode for implementation tasks unless they are trivial: new features, work with several viable approaches, multi-file refactors, architectural decisions, or unclear acceptance criteria.',
-    'Simple lookups, one-line fixes, and direct answers do not need plan mode.',
+    'Simple lookups, one-line fixes, obvious bug fixes, direct answers, and tasks with explicit and detailed user instructions do not need plan mode.',
     'While plan mode is active, only research the repository and design the plan — make no changes — and finish by submitting the plan with exit_plan_mode for the user\'s approval.',
     'If plan mode is already active, there is no need to call this again.',
   ].join(' '),
@@ -252,6 +276,9 @@ const enterPlanModeTool = defineTool({
         }],
       }
     }
+    if (resolveToolRoute(await api.agent(context), 'exit_plan_mode') === 'unavailable') {
+      throw new Error('Cannot enter plan mode because this request has no callable plan submission tool. Research and give the plan in your reply instead.')
+    }
     await api.commit(async (tx) => {
       const doc = await tx.doc(Plans, api.conversationId)
       doc.active = true
@@ -268,8 +295,12 @@ const enterPlanModeTool = defineTool({
 })
 
 /** DSH's plan mode: the document, the policy section and `exit_plan_mode`; register it in the runtime. */
-export const PlanExtension: Extension = defineExtension({
-  name: 'plan',
-  tools: [enterPlanModeTool, exitPlanModeTool],
-  sections: [planSection],
-})
+export function createPlanExtension(options: PlanExtensionOptions = {}): Extension {
+  return defineExtension({
+    name: 'plan',
+    tools: [enterPlanModeTool, exitPlanModeTool(options)],
+    sections: [planSection],
+  })
+}
+
+export const PlanExtension: Extension = createPlanExtension()

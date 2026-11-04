@@ -16,9 +16,12 @@ export function resolveToolRoute(agent: ToolCatalog, name: string): ToolRoute {
 }
 
 /** Describe only a route that the current request can actually invoke. */
-export function toolRouteInstruction(name: string, route: ToolRoute, args?: string): string | undefined {
-  if (route === 'direct') return `Call \`${name}${args === undefined ? '' : `(${args})`}\` directly.`
+export function toolRouteInstruction(name: string, route: ToolRoute, args?: string, lang: 'en' | 'zh' = 'en'): string | undefined {
+  if (route === 'direct') return lang === 'zh'
+    ? `直接调用 \`${name}${args === undefined ? '' : `(${args})`}\``
+    : `Call \`${name}${args === undefined ? '' : `(${args})`}\` directly.`
   if (route === 'codemode') {
+    if (lang === 'zh') return `在 \`${CODEMODE_TOOL_NAME}\` 脚本里调用 \`await tools.${name}(${args ?? '{ ... }'})\``
     return `Through \`${CODEMODE_TOOL_NAME}\`, call \`await tools.${name}(${args ?? '{ ... }'})\` inside the script.`
   }
   return undefined

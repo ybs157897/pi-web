@@ -45,6 +45,68 @@ describe('wetrack analysis store', () => {
     expect(record?.title).toBe('DTS006761203 分析')
   })
 
+  it('preserves a reliable conclusion when a later attempt is blocked, including across restart reads', async () => {
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '有证据的结论', status: 'fixed' }, { conversationId: 'old', expectedRevision: 0 })
+    const saved = await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '权限不足，无法核对', status: 'blocked', blockedReason: 'access' }, { conversationId: 'new', expectedRevision: 1 })
+    expect(saved).toMatchObject({ status: 'fixed', markdown: '有证据的结论', revision: 2, latestAttempt: { status: 'blocked', blockedReason: 'access', conversationId: 'new' } })
+    expect(await readWetrackAnalysis(dataDir, 'DTS006761203')).toEqual(saved)
+  })
+
+  it('does not replace a verified conclusion with an unverified attempt', async () => {
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '已核实', status: 'analyzed' }, { expectedRevision: 0 })
+    const saved = await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '有待核实', status: 'analyzing' }, { expectedRevision: 1 })
+    expect(saved).toMatchObject({ status: 'analyzed', markdown: '已核实', latestAttempt: { status: 'analyzing', markdown: '有待核实' } })
+  })
+
+  it('refuses to overwrite a corrupt existing record even when the expected version is zero', async () => {
+    const path = analysisPath(dataDir, 'DTS006761203')
+    await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '原文' })
+    await writeFile(path, '{ corrupt', 'utf8')
+    await expect(writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '新文' }, { expectedRevision: 0 })).rejects.toThrow('损坏')
+    const tool = createWetrackAnalysisExtension({ dataDir }).tools?.find(item => item.name === 'wetrack_analysis_get')!
+    await expect(tool.execute({ defectNumber: 'DTS006761203' }, {} as never, {} as never)).rejects.toThrow('损坏')
+    expect(await readFile(path, 'utf8')).toBe('{ corrupt')
+  })
+
+  it('serializes concurrent saves, rejects stale versions, and accepts an exact retry', async () => {
+    const input = { defectNumber: 'DTS006761203', markdown: '首次结论', status: 'analyzed' as const }
+    const [first, second] = await Promise.allSettled([
+      writeWetrackAnalysis(dataDir, input, { conversationId: 'first', expectedRevision: 0 }),
+      writeWetrackAnalysis(dataDir, { ...input, markdown: '旧任务的结论' }, { conversationId: 'stale', expectedRevision: 0 }),
+    ])
+    expect(first.status).toBe('fulfilled')
+    expect(second.status).toBe('rejected')
+    const retry = await writeWetrackAnalysis(dataDir, input, { conversationId: 'first', expectedRevision: 0 })
+    expect(retry).toMatchObject({ markdown: '首次结论', revision: 1 })
+    expect(retry.attempts).toHaveLength(1)
+    await writeWetrackAnalysis(dataDir, { ...input, markdown: '第二次结论' }, { conversationId: 'second', expectedRevision: 1 })
+    const delayedRetry = await writeWetrackAnalysis(dataDir, input, { conversationId: 'first', expectedRevision: 0 })
+    expect(delayedRetry).toMatchObject({ markdown: '第二次结论', revision: 2 })
+    expect(delayedRetry.attempts).toHaveLength(2)
+  })
+
+  it('caps the retained saved attempts while preserving the latest one', async () => {
+    for (let i = 0; i < 8; i += 1) {
+      await writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: `尝试 ${i}`, status: 'blocked', blockedReason: 'budget-exhausted' }, { conversationId: `run-${i}`, expectedRevision: i })
+    }
+    const saved = await readWetrackAnalysis(dataDir, 'DTS006761203')
+    expect(saved?.attempts).toHaveLength(5)
+    expect(saved?.latestAttempt).toMatchObject({ markdown: '尝试 7', blockedReason: 'budget-exhausted' })
+  })
+
+  it('reports an unconfigured integration and pages the complete pending list', async () => {
+    const unconfigured = createWetrackAnalysisExtension({ dataDir, readDefects: async () => ({ configured: false, source: 'pending', generatedAt: '', count: 0, items: [], notice: '未配置' }) })
+    const tool = unconfigured.tools?.find(item => item.name === 'wetrack_analysis_list')!
+    await expect(tool.execute({}, {} as never, {} as never)).rejects.toThrow('未配置')
+    const items = Array.from({ length: 51 }, (_, i) => ({ defectNumber: `DTS${String(i).padStart(9, '0')}`, simpleDesc: `item ${i}` }))
+    const configured = createWetrackAnalysisExtension({ dataDir, readDefects: async () => ({ configured: true, source: 'pending', generatedAt: '', count: items.length, items }) })
+    const list = configured.tools?.find(item => item.name === 'wetrack_analysis_list')!
+    const first = await list.execute({}, {} as never, {} as never)
+    const last = await list.execute({ offset: 50 }, {} as never, {} as never)
+    expect(first.details).toMatchObject({ total: 51, nextOffset: 50 })
+    expect(last.details).toMatchObject({ total: 51, nextOffset: null, items: [{ defectNumber: 'DTS000000050' }] })
+  })
+
   it('rejects a bad defect number and an empty body', async () => {
     await expect(writeWetrackAnalysis(dataDir, { defectNumber: '../escape', markdown: 'x' })).rejects.toThrow(/DTS/u)
     await expect(writeWetrackAnalysis(dataDir, { defectNumber: 'DTS006761203', markdown: '   ' })).rejects.toThrow(/markdown/u)

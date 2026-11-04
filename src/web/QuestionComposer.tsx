@@ -271,6 +271,7 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
   const composing = useRef(false)
   const status: InteractionStatus = decided !== null ? 'answered' : review.status
   const readOnly = status !== 'pending'
+  const planOnlyApproval = review.approveLabel === '确认方案'
   const heading = planHeadingOf(review.detail)
   const openPlan = (): void => {
     onOpenPlan?.({ markdown: review.detail, ...(heading === undefined ? {} : { title: heading }) })
@@ -346,8 +347,8 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
 
   const decisionCard = <section className={css.decisionCard} data-plan-decision aria-label={t('审批计划', 'Approve plan')}>
     <header className={css.decisionHeader}>
-      <span className={css.permissionChip}>{t('需要权限', 'Permission needed')}</span>
-      <h3 className={css.decisionTitle}>{t('实施计划', 'Implement the plan')}</h3>
+      <span className={css.permissionChip}>{planOnlyApproval ? t('只读审阅', 'Read-only review') : t('需要权限', 'Permission needed')}</span>
+      <h3 className={css.decisionTitle}>{planOnlyApproval ? t('确认方案', 'Confirm the plan') : t('实施计划', 'Implement the plan')}</h3>
     </header>
     <div className={css.decisionOptions} role="radiogroup" aria-label={t('计划决定', 'Plan decision')}
       onKeyDown={moveDecisionFocus}>
@@ -357,7 +358,9 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
         <span className={css.decisionIndex} aria-hidden="true">1.</span>
         <span className={css.decisionBody}>
           <span className={css.decisionLabel}>{t('批准', 'Approve')}</span>
-          <span className={css.decisionDescription}>{t('退出计划模式并开始实施。', 'Exit plan mode and start implementation.')}</span>
+          <span className={css.decisionDescription}>{planOnlyApproval
+            ? t('退出计划模式，保留只读权限；不会实施修改。', 'Exit plan mode and keep read-only access; no changes will be implemented.')
+            : t('退出计划模式并开始实施。', 'Exit plan mode and start implementation.')}</span>
         </span>
       </button>
       <div className={css.decisionCustomRow}>

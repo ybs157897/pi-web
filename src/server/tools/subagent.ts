@@ -1,4 +1,4 @@
-import { configure, defineDoc, defineExtension, defineTool, section, type AgentChange, type Extension } from '@earendil-works/pi-durable'
+import { configure, defineExtension, defineTool, section, type AgentChange, type Extension } from '@earendil-works/pi-durable'
 import type {
   ConversationId,
   SettledSubmissionRecord,
@@ -9,6 +9,7 @@ import type {
 import type { Context } from '@earendil-works/chord/context'
 import { Type, type Message } from '@earendil-works/pi-ai'
 import { inheritPlanConstraint } from '../conversation/execution-policy.ts'
+import { Subagents } from '../conversation/subagent-policy.ts'
 import { resolveToolRoute, toolRouteInstruction } from '../conversation/tool-routing.ts'
 import {
   profileByName,
@@ -21,50 +22,16 @@ export const SUBAGENT_TOOL = 'subagent'
 
 /**
  * Built-in delegation profiles (ZCode parity: `general-purpose` and `Explore`). `general-purpose`
- * keeps the parent's tool set; `Explore` narrows it to read-only search. Defined in agents/builtins.ts.
+ * inherits the parent's working tools under the child policy; `Explore` narrows them to read-only search.
  */
-export type SubagentProfile = 'general-purpose' | 'Explore'
+export { Subagents } from '../conversation/subagent-policy.ts'
+export type { SubagentProfile, SubagentIdentity, SubagentDelegation } from '../conversation/subagent-policy.ts'
 
 export const MAX_SUBAGENT_TASK_CHARS = 20_000
 export const MAX_SUBAGENT_LABEL_CHARS = 60
 
 /** How many model picks the delegation section lists before it truncates to 「等 N 个」. */
 export const SUBAGENT_MODEL_LIST_LIMIT = 12
-
-/**
- * How a background delegation reports back to its parent: the runtime's settlement channel injects
- * the child's result as a follow-up message under `requestId`, and `deliveredAt` marks that
- * injection so a restart's reconciliation does not resend it. Optional on the record, so children
- * written before background delegation existed read unchanged and the document version stays put.
- */
-export type SubagentDelegation = {
-  background: true
-  parent: ConversationId
-  requestId: string
-  deliveredAt?: number
-}
-
-/** One delegation as the parent recorded on the child conversation. */
-export type SubagentIdentity = {
-  label: string
-  createdAt: number
-  profile?: SubagentProfile
-  delegation?: SubagentDelegation
-}
-
-/**
- * DSH stamps every child session with a `subagent/descriptor` event carrying the delegation label.
- * Pi's equivalent is a conversation document on the child: it survives compaction, and it stays
- * readable after the parent's tool call leaves the active view.
- */
-export const Subagents = defineDoc<{ record: SubagentIdentity | null }>({
-  kind: 'pi-web.subagent',
-  version: 1,
-  scope: 'conversation',
-  history: 'latest',
-  fork: 'initial', checkpointWhen: () => false,
-  initial: () => ({ record: null }),
-})
 
 /**
  * Details the UI reads off the tool call, so a subagent row can attach to its child conversation
@@ -176,10 +143,14 @@ async function childAgentChange(
   const readonlyTools = profile.readonlyTools
   const resolve = model !== undefined && options.resolveChildModel !== undefined ? options.resolveChildModel : undefined
   const parent = readonlyTools !== undefined || resolve !== undefined ? await api.agent(context) : undefined
+  const readRoute = parent === undefined ? 'unavailable' : resolveToolRoute(parent, 'read')
+  // In codemode-only the directly offered tools do not include the enabled nested tools.
   const tools = readonlyTools !== undefined && parent !== undefined
-    ? parent.tools.filter(tool => readonlyTools.includes(tool.name))
+    ? [...new Map([...parent.tools, ...parent.callable, ...parent.deferred]
+      .filter(tool => readonlyTools.includes(tool.name) || (readRoute === 'codemode' && tool.name === 'codemode'))
+      .map(tool => [tool.name, tool])).values()]
     : undefined
-  if (readonlyTools !== undefined && !(tools ?? []).some(tool => tool.name === 'read')) {
+  if (readonlyTools !== undefined && readRoute === 'unavailable') {
     throw new Error('The Explore subagent needs the read tool; this conversation cannot delegate read-only research.')
   }
   const resolved = model !== undefined && resolve !== undefined && parent !== undefined
@@ -203,14 +174,22 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
       teammate: resolveToolRoute(input.agent, 'spawn_teammate'),
     }
     if (routes.subagent === 'unavailable' && routes.teammate === 'unavailable') return undefined
+    if (routes.subagent === 'unavailable') {
+      const teammate = toolRouteInstruction('spawn_teammate', routes.teammate, '{ name: "worker", prompt: "..." }', 'zh')
+      return [
+        '需要共享任务板或成员间持续通信时，可委派队友。为任务写清目标、授权、范围、验收和证据；写入范围重叠或共用产物的工作应协调并串行处理。',
+        '计划模式开启期间只委派只读调研。队友结果需通过任务板或消息收集。',
+        teammate ? `委派示例：${teammate}。` : '',
+      ].filter(Boolean).join('\n')
+    }
     const lines = [
       '内置子智能体类型（subagent 的 agent_type）：',
       `- general-purpose：${profileByName('general-purpose').summary}`,
       `- Explore：${profileByName('Explore').summary}`,
       '何时委派：调研、检索、盘点类子任务默认委派——预计要读超过三个文件、或范围不确定时，先派 Explore 再综合它的结论，不要自己逐个翻文件。委派的收益是你只保留结论：文件倾倒和大段阅读都留在子会话里，不消耗主会话上下文。只有已知路径/符号的单点事实才直接查。',
-      '多项目任务是默认的并行委派场景：用户消息含编号/分项的清单（bug 清单、功能清单、多个独立改动）时，列完计划就把互相独立的项在同一条回复里并行派给 general-purpose（每项一个，任务写全目标/范围/验收与要返回的证据），自己只保留规划、集成与整体验证；各项强依赖时才逐项串行。「按顺序完成」「逐项做」指交付顺序，不改变独立项可并行的事实。',
+      '多项目任务可并行委派互相独立的项给 general-purpose：为每项写全目标、授权、范围、验收和证据，并指定不重叠的写入范围；存在强依赖、写入范围重叠或共用构建、测试、锁文件、快照等产物时协调并串行处理。',
       '委派了检索就不要自己再跑同一搜索，等结果；子智能体只回结论，需要你转述给用户。',
-      '独立并行的子任务（无论几个、是否要互相交叉校验）一律用 `subagent` 在同一条回复里并行发起：每个子智能体在独立会话里求解，结论直接随工具结果回传。`spawn_teammate` 只用于真正需要共享任务板与成员消息往来的长时协作（仅 Lead），注意队友的结论文本不会自动回流，需要靠任务板、消息或文件自行收集。',
+      `独立并行的子任务可用 \`subagent\` 在同一条回复里并行发起：每个子智能体在独立会话里求解，结论直接随工具结果回传。${routes.teammate === 'unavailable' ? '' : '\`spawn_teammate\` 只用于真正需要共享任务板与成员消息往来的长时协作（仅 Lead），队友结论需通过任务板或消息收集。'}`,
       '计划模式开启期间只委派只读调研，并在任务里明确只读约束。',
     ]
     const catalog = options.availableChildModels === undefined ? undefined : await options.availableChildModels()
@@ -219,10 +198,10 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
       const summary = catalog.total > catalog.models.length
         ? `${listed.join('、')} 等 ${catalog.total} 个`
         : listed.join('、')
-      lines.push(`可选模型：${summary}。轻量任务（检索、清单、简单分析）可给 subagent/spawn_teammate 指定更快的模型，provider 与 modelId 必须成对；缺省继承当前会话模型。`)
+      lines.push(`可选模型：${summary}。轻量任务（检索、清单、简单分析）可给 ${routes.teammate === 'unavailable' ? 'subagent' : 'subagent/spawn_teammate'} 指定更快的模型，provider 与 modelId 必须成对；缺省继承当前会话模型。`)
     }
-    const call = toolRouteInstruction(SUBAGENT_TOOL, routes.subagent, '{ task: "...", agent_type: "Explore", label: "..." }')
-    if (call) lines.push(`委达示例：${call}`)
+    const call = toolRouteInstruction(SUBAGENT_TOOL, routes.subagent, '{ task: "...", agent_type: "Explore", label: "..." }', 'zh')
+    if (call) lines.push(`委派示例：${call}。`)
     return lines.join('\n')
   })
 
@@ -238,7 +217,8 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           'messages, so make the task self-contained: state the task, scope, applicable constraints and authorization,',
           'acceptance criteria, and the result evidence to return. The child shares the working directory; assign',
           'disjoint write paths and require it to preserve changes outside its assigned scope.',
-          'agent_type picks a built-in profile — general-purpose (default, inherits this conversation\'s tools) or',
+          'agent_type picks a built-in profile — general-purpose (default, inherits this conversation\'s working tools,',
+          'without planning, user questions, goal or delegation tools) or',
           'Explore (read-only search: broad codebase sweeps where you only need the conclusion; state the search',
           'breadth "medium" or "very thorough" in the task).',
           'model optionally selects the child\'s model as {provider, modelId}, validated against the catalog and',

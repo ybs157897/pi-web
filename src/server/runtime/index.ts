@@ -31,7 +31,7 @@ import { TodoTools } from '../tools/todo.ts'
 import { createWetrackAnalysisExtension } from '../tools/wetrack-analysis.ts'
 import { createGoalExtension } from '../tools/goal.ts'
 import { InteractionTools } from '../tools/interaction.ts'
-import { PlanExtension, Plans } from '../tools/plan.ts'
+import { createPlanExtension, Plans } from '../tools/plan.ts'
 import { createSubagentTools, type ChildModelList, SUBAGENT_MODEL_LIST_LIMIT } from '../tools/subagent.ts'
 import { createTeamTools } from '../tools/team.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
@@ -202,7 +202,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(createWetrackAnalysisExtension({
     dataDir,
     readDefect: async defectNumber => (await wetrackDefect(defectNumber)).defect,
-    readDefects: async () => (await wetrackDefects()).items,
+    readDefects: async () => wetrackDefects(),
   }))
   registry.install(createGoalExtension({
     canCreate: async (id, context) => {
@@ -219,7 +219,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
   }))
   registry.install(InteractionTools)
-  registry.install(PlanExtension)
+  registry.install(createPlanExtension({ readAccessMode: async (tx, conversationId) => (await tx.doc(META, conversationId)).accessMode }))
   registry.install(createSkillTools({
     store: skillStore,
     canWrite: async (conversationId, context) => {

@@ -25,6 +25,7 @@ import {
   taskReady,
   taskView,
   createTeamTools,
+  waitForTeamChange,
   type TeamToolOptions,
   type TeamActor,
   type TeamDocAccess,
@@ -302,27 +303,73 @@ describe('team tool prompt policy', () => {
         'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update',
       ],
     })
-    expect(lead).toContain('把每个任务预期要改的写域（工作区相对路径前缀）记录在共享任务上')
-    expect(lead).toContain('写域重叠只是警示不是锁')
-    expect(lead).toContain('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
-    expect(lead).toContain('wait_agent 只观测调用之后的变化、不会唤醒任何人')
-    expect(lead).toContain('Lead 在给出最终答案前必须等齐所有必需的队友。')
+    expect(lead).toContain('workspace-relative path prefixes')
+    expect(lead).toContain('warning, not a lock')
+    expect(lead).toContain('inbox accepted it')
+    expect(lead).toContain('never wakes a member')
+    expect(lead).toContain('before the final answer')
+    expect(lead).toContain('call it once to collect available answers')
 
     const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
-    expect(teammate).toContain('send_message 成功送达不等于对方已经处理；同伴消息以发送者名字开头。')
-    expect(teammate).not.toContain('写域重叠')
+    expect(teammate).toContain('inbox accepted it')
+    expect(teammate).not.toContain('warning, not a lock')
   })
 
   it('keeps the coordination additions off when their tools are not routable', async () => {
     const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
     expect(prompt).not.toContain('send_message')
     expect(prompt).not.toContain('wait_agent')
-    expect(prompt).not.toContain('写域重叠')
+    expect(prompt).not.toContain('warning, not a lock')
     // The wait guidance names send_message, so a Lead without messaging must not see it either.
     const noMessaging = await renderTeamPolicy({ offered: ['spawn_teammate', 'list_agents', 'wait_agent'] })
     expect(noMessaging).toContain('Call `wait_agent({ timeout_ms: 30000 })` directly.')
     expect(noMessaging).not.toContain('send_message')
-    expect(noMessaging).not.toContain('Lead 在给出最终答案前必须等齐所有必需的队友。')
+    expect(noMessaging).toContain('before the final answer')
+  })
+
+  it('snapshots actual team roles and the plan-limited tool set', async () => {
+    const offered = ['spawn_teammate', 'send_message', 'list_agents', 'wait_agent', 'interrupt_agent', 'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update']
+    const lead = await renderTeamPolicy({ offered })
+    const teammate = await renderTeamPolicy({ role: 'teammate', offered })
+    const planLead = await renderTeamPolicy({ planActive: true, offered: ['spawn_teammate', 'list_agents', 'wait_agent', 'interrupt_agent', 'team_task_list', 'team_task_get'] })
+    expect(lead).not.toMatch(/[\u4e00-\u9fff]/u)
+    expect(teammate).not.toMatch(/[\u4e00-\u9fff]/u)
+    expect(planLead).not.toMatch(/[\u4e00-\u9fff]/u)
+    await expect(lead).toMatchFileSnapshot('./__snapshots__/prompt/team-lead.txt')
+    await expect(teammate).toMatchFileSnapshot('./__snapshots__/prompt/team-teammate.txt')
+    await expect(planLead).toMatchFileSnapshot('./__snapshots__/prompt/team-plan-lead.txt')
+  })
+
+  it('recovers a member completion between the active check and watcher setup', async () => {
+    const base = doc([], [{ name: 'worker', role: 'teammate', phase: 'active', conversationId: '2' }])
+    const api = { snapshot: async () => base, watchDoc: async () => undefined }
+    const options = { ...teamOptions, conversationInfo: async () => ({ status: 'inactive' as const }) }
+    const observed = { doc: base, members: [
+      { name: 'worker', role: 'teammate' as const, phase: 'active' as const, status: 'running' as const, conversationId: '2' },
+    ] }
+    await expect(waitForTeamChange(api as never, options, 1 as ConversationId, 10_000, {} as Context, observed)).resolves.toBe(false)
+  })
+
+  it('reports truncated and unreadable teammate previews with their source', async () => {
+    const base = doc([], [
+      { name: 'long', role: 'teammate', phase: 'active', conversationId: '2' },
+      { name: 'unreadable', role: 'teammate', phase: 'active', conversationId: '3' },
+    ])
+    const api = {
+      conversationId: 1 as ConversationId,
+      snapshot: async (document: unknown) => document === Team ? base : undefined,
+      commit: async (change: (tx: unknown) => Promise<unknown>) => change({
+        scanEntries: async (query: { conversationId: number }) => {
+          if (Number(query.conversationId) === 3) throw new Error('read failed')
+          return { items: [{ id: 42, model: [{ role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(2001) }] }] }] }
+        },
+      }),
+    }
+    const result = await registeredTool(createTeamTools(teamOptions), 'wait_agent').execute({}, api, {}) as { details: { members: Array<Record<string, unknown>> } }
+    expect(result.details.members).toEqual([
+      expect.objectContaining({ name: 'long', answerStatus: 'truncated', answerEntryId: '42', conversationPath: '/api/conversations/2', answer: 'x'.repeat(2000) }),
+      expect.objectContaining({ name: 'unreadable', answerStatus: 'read_failed', conversationPath: '/api/conversations/3' }),
+    ])
   })
 
   it('refuses a fork teammate with an explicit model', async () => {

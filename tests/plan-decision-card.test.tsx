@@ -38,6 +38,19 @@ function renderCard(review: InteractionRequest = pendingReview(), onAnswered = v
 }
 
 describe('plan review decision card (ZCode elicitation)', () => {
+  it('confirms a read-only plan without promising implementation or elevated access', async () => {
+    renderCard({ ...pendingReview(), approveLabel: '确认方案' })
+    expect(screen.getByText('只读审阅')).toBeTruthy()
+    expect(screen.getByText('确认方案')).toBeTruthy()
+    expect(screen.queryByText('实施计划')).toBeNull()
+    const approve = screen.getByRole('radio', { name: '批准 退出计划模式，保留只读权限；不会实施修改。' })
+    fireEvent.click(approve)
+    fireEvent.click(screen.getByRole('button', { name: '提交' }))
+    await vi.waitFor(() => expect(apiMock.answerInteraction).toHaveBeenCalledWith('c1', 'call-1', [
+      { id: 'plan-review', selected: ['批准'] },
+    ]))
+  })
+
   it('renders the plan excerpt card and the permission decision card', () => {
     renderCard()
     expect(screen.getByText('计划')).toBeTruthy()

@@ -298,7 +298,7 @@ function PageHeader({ title, subtitle, onBack, actions }: { title: string; subti
   </header>
 }
 
-function AnalysisPanel({ state, run, workspace, model, error, onOpenConversation }: {
+export function AnalysisPanel({ state, run, workspace, model, error, onOpenConversation }: {
   state: AnalysisState
   run?: WetrackAnalysisRun
   workspace?: WorkspaceSummary
@@ -317,7 +317,7 @@ function AnalysisPanel({ state, run, workspace, model, error, onOpenConversation
     {active && <Alert type="info" showIcon message={t('后台分析进行中', 'Analysis is running in the background')} description={t('可返回列表处理其他缺陷，完成后这里会自动更新。', 'Return to the list while it runs; this page updates when the result is saved.')} />}
     {(run?.status === 'failed' || run?.status === 'interrupted') && <Alert type="error" showIcon message={run.status === 'failed' ? t('分析失败', 'Analysis failed') : t('分析已中断', 'Analysis interrupted')} description={run.error} />}
     {error !== '' && <Alert type="error" showIcon message={error} />}
-    {!active && <AnalysisBody state={state} t={t} />}
+    {(!active || state.value !== undefined && state.value !== null) && <AnalysisBody state={state} t={t} />}
   </div>
 }
 
@@ -327,7 +327,21 @@ function AnalysisBody({ state, t }: { state: AnalysisState; t: Translate }) {
   const record = state.value
   if (record === undefined || record === null) return <Empty className={css.empty} description={t('尚未分析。点击顶部「开始 AI 分析」，在共享工作区中后台执行。', 'Not analyzed yet. Start AI analysis above to run in the shared workspace.')} />
   const label = ANALYSIS_STATUS_LABELS[record.status]
+  const blockedAttempt = record.latestAttempt?.status === 'blocked' ? record.latestAttempt : undefined
+  const pendingAttempt = record.status !== 'analyzing' && record.latestAttempt?.status === 'analyzing' ? record.latestAttempt : undefined
+  const reason = blockedAttempt?.blockedReason === 'budget-exhausted' ? t('检索预算已用尽', 'Search budget exhausted')
+    : blockedAttempt?.blockedReason === 'access' ? t('缺少访问权限', 'Access unavailable')
+      : blockedAttempt?.blockedReason === 'missing-code' ? t('缺少代码', 'Code unavailable')
+        : blockedAttempt?.blockedReason === 'contract' ? t('需要处理接口契约', 'Contract needs attention')
+          : t('证据不足或其他原因', 'Insufficient evidence or another reason')
   return <>
+    {blockedAttempt !== undefined && <Alert type="warning" showIcon
+      message={record.status === 'blocked' ? t('本次分析受阻', 'Analysis blocked') : t('最近一次分析受阻，已保留此前结论', 'Latest analysis was blocked; the previous conclusion is preserved')}
+      description={<><p>{reason}{blockedAttempt.summary === '' ? '' : `：${blockedAttempt.summary}`}</p>
+        {record.status !== 'blocked' && <AnswerMarkdown text={blockedAttempt.markdown} labels={markdownLabels(t)} t={t} />}</>} />}
+    {pendingAttempt !== undefined && <Alert type="info" showIcon
+      message={t('最新分析仍待验证，已保留此前结论', 'Latest analysis needs verification; the previous conclusion is preserved')}
+      description={<AnswerMarkdown text={pendingAttempt.markdown} labels={markdownLabels(t)} t={t} />} />}
     <div className={css.readingMeta}><Tag color={label.color}>{t(label.zh, label.en)}</Tag>{record.title !== '' && <span className={css.readingDocTitle}>{record.title}</span>}<span className={css.spacer} />{record.updatedAt !== '' && <span className={css.time}>{t('更新于', 'Updated')} {record.updatedAt}</span>}</div>
     {record.summary !== '' && <p className={css.readingSummary}>{record.summary}</p>}
     <div className={css.answer}><AnswerMarkdown text={record.markdown} labels={markdownLabels(t)} t={t} /></div>
