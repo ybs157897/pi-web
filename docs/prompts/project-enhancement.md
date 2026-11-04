@@ -26,7 +26,7 @@
 
 ## 二 提示词工程与能力注册
 
-已有可维护的默认提示词组合入口：`src/server/work-policy.ts` 与 `src/server/prompts/runtime-core.md`，通过 Pi Extension/section 注入并保留 Agent instructions。后续增强先核对这条链路，不重复建立另一套执行内核或只编辑未被读取的文档副本。
+已有可维护的默认提示词组合入口：`src/server/work-policy.ts` 与 `src/server/conversation/prompts/runtime-core.md`，通过 Pi Extension/section 注入并保留 Agent instructions。后续增强先核对这条链路，不重复建立另一套执行内核或只编辑未被读取的文档副本。
 
 将内容分成以下层次：
 

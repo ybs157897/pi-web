@@ -1,5 +1,18 @@
 # DSH Web 一致性清单（实时）
 
+## 2026-11-04 提示词与运行时修订
+
+本节修订下文旧批次中的子会话工具继承、计划入口、团队等待和 WeTrack 覆盖规则。完整决定与证据见 [评审实施记录](prompts/review-2026-11-04.md)。
+
+- **一次性子会话**：借鉴 ZCode 子会话禁止独立计划审批及 DSH 默认一层的执行层约束；Pi 用持久 Subagents 身份统一收窄 direct/callable/deferred 并在工具执行处拒绝，旧子会话/重放同样生效。Explore 保留 Pi 严格只读工具集，不照搬 ZCode shell 白名单；general-purpose 专注实现与多步操作，只读检索路由到 Explore。没有移植交互转接系统，需要用户决定时回报委派方。
+- **计划权限**：批准只关闭 Plan，不提升访问权限。只读卡片显示确认方案，答复不要求实施；入口/提交/提问分别按实际路由生成，子会话计划交回父级。
+- **团队结果**：DSH 实验性 wait 不带答案，Pi 保留带来源的回答预览，允许无 active 时读取一次；首次观察状态与订阅后重查消除漏等窗口，结果明确截断及读取失败。
+- **WeTrack**：没有直接上游业务对应；借鉴执行状态与业务结论分离、版本检查。blocked/analyzing 不覆盖可靠结论；保留最近尝试与原因、拒绝过期写入，运行状态不因迟到刷新回退。
+- **Skill / goal**：statechart 由完整短目录描述路由，仅未决业务决定需要提问；全局 Skill 安装须明确请求与实际工具许可，skill_save 仍只写工作区。无工具也保留已有 goal 状态。
+- **验证**：Pi 95 文件 / 1013 通过 / 4 跳过，typecheck/build；12 份请求快照和 3 份 team 快照；DeepSeek v4.1 Flash 的 6 项策略场景、Skill 重启加载及 workflow 真测试通过。DSH pinned 两项相关逻辑测试通过；ZCode 测试缺本机 contracts 构建入口，完整双侧 UI/真实模型 parity 未执行。
+
+## 历史对照基准
+
 基准：`deepseek-ai/deepseek-harness` HEAD `687f282e86`（dsh 0.2.1-rc.2），本地 `dsh web` 与 pi-web demo 同 1440×900 / 浅色 / 中文逐屏截图对照。
 证据目录：`artifacts/ego-compare/shots`（gitignored，仅本机）。
 
@@ -422,7 +435,7 @@
 | 多步任务主动建清单、及时更新、简单任务跳过 | `packages/todo/tool-todo/src/index.ts:45`；`packages/bundle/base/cordis.patch.yml:437` | `src/server/todo-tools.ts:35`；`src/server/work-policy.ts:27` | 已接入描述与动态路由；真实模型行为待认证恢复后验证 |
 | 从用户长期请求识别 Goal，无需出现 goal 一词 | `packages/goal/tool-goal/src/index.ts:51`、`:115` | `src/server/goal-tools.ts:275`、`:401` | 目标不存在时也注入指导；按真实可调用工具生成，顶层会话可创建 |
 | 有待答问题时不续跑目标 | `packages/goal/goal-round-driver/src/index.ts:111`（只在 agent idle 且无排队输入时续跑）；`packages/interaction/tool-ask-user` 默认阻塞等待回答 | `src/server/goal-tools.ts` 的 `createGoalHook` 与 `awaitingUser` | pi-web 专属守卫（2026-10-28）：pi-web 的 `ask_user_question` 不阻塞、立即结束本轮，续跑前显式检查待答的提问与计划审阅；续跑提示参照 `goal-round-driver/src/prompt.ts`，并要求等待用户时直接结束本轮 |
-| 阶段文字进度汇报 | 默认 persona 未发现统一汇报节奏，Todo 工具负责状态回执 | `src/server/prompts/runtime-core.md` | 有意增强：简短汇报阶段成果、阻塞和下一步，不承诺固定计时播报 |
+| 阶段文字进度汇报 | 默认 persona 未发现统一汇报节奏，Todo 工具负责状态回执 | `src/server/conversation/prompts/runtime-core.md` | 有意增强：简短汇报阶段成果、阻塞和下一步，不承诺固定计时播报 |
 | Plan 只研究、提交方案后等待 | `packages/bundle/web-app/presets/standard.patch.yml:54` | `src/server/work-policy.ts:57`；Todo/Goal 执行与续跑 guard | 已保留；不把自主执行策略当作默认开启 Plan 模式 |
 | 默认加载及历史会话 | DSH profile 组合 persona/tool sections | `src/server/runtime.ts` 的 `ensureRuntimePolicy`、`conversationCreated`、启动迁移 | 工具为空的核心扩展覆盖 Preset、分叉、子会话和历史选择；工具范围与自定义 instructions 保留 |
 
@@ -444,7 +457,7 @@
 | Plan 提示词 | `standard.patch.yml` 的 Explore first / decision-complete / `exit_plan_mode` 唯一最后调用 | `src/server/plan-tools.ts` 的 `plan-policy` 与工具描述 | 计划阶段禁止实施与 todo 跟踪；能查的不问，只问用户选择/重大歧义；计划待审即结束本轮 |
 | 计划请求未开 Plan | 默认 persona 不把“停在计划”当成错误 | `runtime-core.md`；`work-policy` 的 plan-off 规则 | 用户要计划时先只读研究并给出计划，不擅自实施；提示可打开 Plan 审阅 |
 | Todo 节奏 | `tool-todo` 的 “plan multi-step work / add one per concrete step before you start” | `src/server/todo-tools.ts`；`work-policy` 的 todo 策略 | 去掉 “implementation work in progress” 的限定；计划请求把“调研→计划→等待确认”列为步骤 |
-| 主动询问 | `ask_user_question` 的 apply 边界 | `runtime-core.md` 的“澄清与提问”；`src/server/interaction-tools.ts` 描述 | 明确列出必须提问的场景；用户提“之前聊过”但本会话无历史时先问会话/文档，不扫描 `.lith`/`.kimi-code` 等 agent 状态目录 |
+| 主动询问 | `ask_user_question` 的 apply 边界 | `runtime-core.md` 的“澄清与提问”；`src/server/tools/interaction.ts` 描述 | 明确列出必须提问的场景；用户提“之前聊过”但本会话无历史时先问会话/文档，不扫描 `.lith`/`.kimi-code` 等 agent 状态目录 |
 | 用户话语解读 | plan-mode 的 imperative/agreement（`standard.patch.yml:55`）；time-context（`request-zone.ts:73`）；ask-user pending（`timed.ts:39`）；bash 删除/移动核对（`tool-bash/index.ts:96`） | `runtime-core.md` 新增“用户话语解读”；`plan-tools.ts`；`interaction-tools.ts`；`shell-tools.ts` | 请求类型（问句/诊断/实施/计划/确认）、指代、相对时间、多意图、粘贴内容、授权范围；Plan 命令式=计划、同意≠批准；pending≠permission；删除/移动先核对绝对目标 |
 | shell 调用方式 | bash/pwsh 的 `workdir` 与 “pass workdir instead of using cd” | `src/server/shell-tools.ts` | 保留 Pi `coding-tools` 名称与 read/write/edit；Windows 只注册 `pwsh`，其他平台只注册 `bash`；两者都增加 `workdir`、`description`，越界 workdir 拒绝 |
 
