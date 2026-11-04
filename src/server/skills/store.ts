@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, existsSync } from 'node:fs'
-import { lstat, mkdir, open, opendir, realpath, rename, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, opendir, realpath, rename, stat, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseDocument } from 'yaml'
@@ -49,6 +49,12 @@ export interface SkillStoreOptions {
   builtinRoot?: string
   /** User-level (global) skills, read-only; defaults to none. Anchored at `~/.pi-web/skills` in production. */
   globalRoot?: string
+  /**
+   * Shared user-level skills, read-only; defaults to none. Anchored at `~/.agents/skills`, the
+   * cross-agent convention ZCode, pi and opencode also read. Kept as its own source so a user
+   * copy and a workspace `.agents/skills` copy stay distinguishable in the catalog.
+   */
+  userAgentsRoot?: string
   /** Enabled plugin skill roots, read on every catalog/list operation. */
   pluginRoots?: () => readonly SkillRoot[]
 }
@@ -223,27 +229,15 @@ function normalizeMarkdownReference(reference: string): string | undefined {
   return safeRelativePath(path)
 }
 
+/**
+ * Read one bounded regular file. Symlinks are followed (ZCode/pi/opencode parity); the inode
+ * checks still catch a file swapped between the size probe and the read.
+ */
 async function readBoundedBuffer(path: string, maxBytes: number): Promise<Buffer> {
-  const before = await lstat(path)
-  if (before.isSymbolicLink()) throw new RuntimeError('FORBIDDEN', 'Skill files cannot be symbolic links')
+  const before = await stat(path)
   if (!before.isFile()) throw new RuntimeError('INVALID_INPUT', 'Skill resource must be a regular file')
   if (before.size > maxBytes) throw new RuntimeError('INVALID_INPUT', `Skill file exceeds ${maxBytes} bytes`)
-  let handle
-  try {
-    const noFollow = constants.O_NOFOLLOW ?? 0
-    try {
-      handle = await open(path, constants.O_RDONLY | noFollow)
-    } catch (error) {
-      if (noFollow === 0 || !(typeof error === 'object' && error !== null && 'code' in error && (error.code === 'EINVAL' || error.code === 'ENOTSUP' || error.code === 'ENOSYS'))) throw error
-      // On platforms without O_NOFOLLOW, the inode checks below provide the fallback guard.
-      handle = await open(path, constants.O_RDONLY)
-    }
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && (error.code === 'ELOOP' || error.code === 'EMLINK')) {
-      throw new RuntimeError('FORBIDDEN', 'Skill files cannot be symbolic links')
-    }
-    throw error
-  }
+  const handle = await open(path, constants.O_RDONLY)
   try {
     const opened = await handle.stat()
     if (!opened.isFile()) throw new RuntimeError('INVALID_INPUT', 'Skill resource must be a regular file')
@@ -259,8 +253,7 @@ async function readBoundedBuffer(path: string, maxBytes: number): Promise<Buffer
     if (bytesRead > maxBytes || (await handle.stat()).size > maxBytes) {
       throw new RuntimeError('INVALID_INPUT', `Skill file exceeds ${maxBytes} bytes`)
     }
-    const after = await lstat(path)
-    if (after.isSymbolicLink()) throw new RuntimeError('FORBIDDEN', 'Skill files cannot be symbolic links')
+    const after = await stat(path)
     if (after.dev !== opened.dev || after.ino !== opened.ino) throw new RuntimeError('CONFLICT', 'Skill file changed while it was being read')
     const content = buffer.subarray(0, bytesRead)
     try { new TextDecoder('utf-8', { fatal: true }).decode(content) } catch {
@@ -275,6 +268,24 @@ async function readBoundedBuffer(path: string, maxBytes: number): Promise<Buffer
 async function readBoundedFile(path: string, maxBytes: number): Promise<string> {
   const content = await readBoundedBuffer(path, maxBytes)
   return content.toString('utf8')
+}
+
+/**
+ * Resolve a directory for read-only discovery. ZCode, pi and opencode all follow symlinked
+ * skill roots and skill directories, so a dotfiles repo linked into `~/.agents/skills` (or a
+ * workspace `.agents/skills`) behaves like a real directory. Writes stay strict: `save()` uses
+ * `checkedDirectory()` and still refuses to write through a symlink.
+ */
+async function readDirectory(path: string): Promise<string | undefined> {
+  try {
+    const info = await stat(path)
+    if (!info.isDirectory()) throw new RuntimeError('INVALID_INPUT', 'Skill path contains a non-directory')
+    // Return the canonical path so resource containment compares real paths, not link paths.
+    return await realpath(path)
+  } catch (error) {
+    if (isMissing(error)) return undefined
+    throw error
+  }
 }
 
 async function checkedDirectory(root: string, segments: string[], create: boolean): Promise<string | undefined> {
@@ -335,12 +346,14 @@ async function* boundedNames(directory: string, limit: number): AsyncGenerator<s
 export class SkillStore {
   private readonly builtinRoot: string
   private readonly globalRoot: string | undefined
+  private readonly userAgentsRoot: string | undefined
   private readonly pluginRoots: () => readonly SkillRoot[]
   private readonly writeTails = new Map<string, Promise<void>>()
 
   constructor(options: SkillStoreOptions = {}) {
     this.builtinRoot = resolve(options.builtinRoot ?? join(dirname(fileURLToPath(import.meta.url)), '../../../skills'))
     this.globalRoot = options.globalRoot === undefined ? undefined : resolve(options.globalRoot)
+    this.userAgentsRoot = options.userAgentsRoot === undefined ? undefined : resolve(options.userAgentsRoot)
     this.pluginRoots = options.pluginRoots ?? (() => [])
   }
 
@@ -363,20 +376,25 @@ export class SkillStore {
         const directoryPath = join(rootPath, name)
         let info
         try {
-          info = await lstat(directoryPath)
+          // Follow symlinks here, matching ZCode/pi/opencode discovery; a dangling link is ENOENT.
+          info = await stat(directoryPath)
         } catch (error) {
           if (isMissing(error)) continue
           diagnostics.push({ path: directoryPath, message: errorMessage(error) })
           continue
         }
-        if (info.isSymbolicLink()) {
-          diagnostics.push({ path: directoryPath, message: 'skill directory is a symbolic link' })
-          continue
-        }
         if (!info.isDirectory()) continue
         // Directory names are not format-checked (ZCode loads skills by file path);
         // `save` still enforces kebab-case for anything this app creates.
-        const skillDirectory: SkillDirectory = { ...root, name, directory: directoryPath, skillPath: join(directoryPath, 'SKILL.md') }
+        let canonicalDirectory: string
+        try {
+          canonicalDirectory = await realpath(directoryPath)
+        } catch (error) {
+          if (isMissing(error)) continue
+          diagnostics.push({ path: directoryPath, message: errorMessage(error) })
+          continue
+        }
+        const skillDirectory: SkillDirectory = { ...root, name, directory: canonicalDirectory, skillPath: join(canonicalDirectory, 'SKILL.md') }
         try {
           const bytes = await readBoundedBuffer(skillDirectory.skillPath, MAX_SKILL_BYTES)
           const raw = bytes.toString('utf8')
@@ -387,6 +405,9 @@ export class SkillStore {
           }
           skills.push(summary(skillDirectory, document.name!, document.description!, hash(bytes), document.whenToUse))
         } catch (error) {
+          // A directory without SKILL.md is not a skill (ZCode/opencode behavior); only a
+          // genuinely broken document deserves a diagnostic.
+          if (isMissing(error)) continue
           diagnostics.push({ path: join(directoryPath, 'SKILL.md'), message: errorMessage(error) })
         }
       }
@@ -530,6 +551,7 @@ export class SkillStore {
     return [
       { source: 'builtin', path: this.builtinRoot },
       ...(this.globalRoot === undefined ? [] : [{ source: 'global' as const, path: this.globalRoot }]),
+      ...(this.userAgentsRoot === undefined ? [] : [{ source: 'user-agents' as const, path: this.userAgentsRoot }]),
       ...this.workspaceRoots(workspaceRoot),
       ...this.pluginRoots(),
     ]
@@ -580,12 +602,12 @@ export class SkillStore {
   private async rootPath(root: SkillRoot, workspaceRoot: string, diagnostics: SkillCatalog['diagnostics']): Promise<string | undefined> {
     try {
       if (root.source === 'agents' || root.source === 'pi') {
-        const segments = root.source === 'agents' ? ['.agents', 'skills'] : ['.pi-web', 'skills']
-        return await checkedDirectory(root.base ?? workspaceRoot, segments, false)
+        // Read-side discovery follows a symlinked `.agents`/`.pi-web` chain (ZCode/pi/opencode parity).
+        return await readDirectory(root.path)
       }
-      if (root.source === 'global') {
-        // The global root is user-configured and may legitimately sit under a
-        // symlinked prefix (macOS /var, network homes): resolve it, then require
+      if (root.source === 'global' || root.source === 'user-agents') {
+        // User-level roots may legitimately sit under a symlinked prefix (a dotfiles
+        // repo linked from home, macOS /var, network homes): resolve them, then require
         // a real directory. A missing root is the normal fresh-install state.
         return await realpath(root.path)
       }
@@ -618,7 +640,7 @@ export class SkillStore {
       }
       const rootPath = await this.rootPath(root, workspaceRoot, [])
       if (!rootPath) continue
-      const directory = await checkedDirectory(rootPath, [name], false)
+      const directory = await readDirectory(join(rootPath, name))
       if (!directory) continue
       directories.push({ ...root, path: rootPath, directory, name, skillPath: join(directory, 'SKILL.md') })
     }
@@ -644,25 +666,22 @@ export class SkillStore {
     }
   }
 
+  /**
+   * Resolve a requested resource path. The request itself must stay relative and traversal-free
+   * (`..` is rejected), but symlinks along the way are followed like ZCode/pi/opencode do, so a
+   * resource may legitimately live in a linked dotfiles tree or an app bundle.
+   */
   private async checkedSkillTarget(directory: SkillDirectory, resource: string): Promise<string> {
     const safePath = safeRelativePath(resource)
     const target = resolve(directory.directory, safePath)
-    if (!isWithin(directory.directory, target)) throw new RuntimeError('FORBIDDEN', 'Skill resource path escaped its directory')
-    let cursor = directory.directory
-    for (const segment of safePath.split('/').filter(Boolean)) {
-      cursor = join(cursor, segment)
-      const info = await lstat(cursor)
-      if (info.isSymbolicLink()) throw new RuntimeError('FORBIDDEN', 'Skill resources cannot be symbolic links')
-      if (cursor !== target && !info.isDirectory()) throw new RuntimeError('INVALID_INPUT', 'Skill resource path contains a non-directory')
-    }
-    const canonical = await realpath(target)
-    if (!isWithin(directory.directory, canonical)) throw new RuntimeError('FORBIDDEN', 'Skill resource path escaped its directory')
-    return canonical
+    // Existence still matters for validation; the target may be a symlink (followed).
+    await stat(target)
+    return target
   }
 
   private async checkedSkillFile(directory: SkillDirectory, resource: string, maxBytes: number): Promise<string> {
     const target = await this.checkedSkillTarget(directory, resource)
-    const info = await lstat(target)
+    const info = await stat(target)
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', 'Skill resource must be a regular file')
     if (info.size > maxBytes) throw new RuntimeError('INVALID_INPUT', `Skill resource exceeds ${maxBytes} bytes`)
     return target
@@ -678,8 +697,8 @@ export class SkillStore {
         count += 1
         if (count > MAX_RESOURCE_FILES) throw new RuntimeError('INVALID_INPUT', `Skill contains more than ${MAX_RESOURCE_FILES} resources`)
         const path = join(current, name)
-        const info = await lstat(path)
-        if (info.isSymbolicLink()) throw new RuntimeError('FORBIDDEN', 'Skill resources cannot be symbolic links')
+        // Follow symlinks (parity with ZCode/pi/opencode); the depth and count caps keep a loop bounded.
+        const info = await stat(path)
         const relativePath = prefix === '' ? name : `${prefix}/${name}`
         if (info.isDirectory()) await visit(path, relativePath, depth + 1)
         else if (info.isFile()) files.push(relativePath)

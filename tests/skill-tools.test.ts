@@ -68,7 +68,13 @@ async function callTool(
   return registered(extension, name).execute(args as never, api, context)
 }
 
-function promptInput(path: string, tools: string[], callable: string[], references?: unknown) {
+function promptInput(
+  path: string,
+  tools: string[],
+  callable: string[],
+  references?: unknown,
+  shown: Record<string, string> = {},
+) {
   const state = references === undefined ? undefined : { references }
   return {
     conversationId: 41 as ConversationId,
@@ -77,6 +83,7 @@ function promptInput(path: string, tools: string[], callable: string[], referenc
       tools: tools.map(name => ({ name })),
       callable: callable.map(name => ({ name })),
     },
+    shown,
     read: { snapshot: async () => state },
   }
 }
@@ -239,5 +246,60 @@ describe('Skills prompt routing', () => {
     const path = await workspace()
     const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
     expect(await renderSection(extension, promptInput(path, [], []))).toBeUndefined()
+  })
+
+  it('renders a compact ZCode-shaped catalog with callable ids and file paths', async () => {
+    const path = await workspace()
+    const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
+    const prompt = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
+
+    expect(prompt).toMatch(/- builtin:skill-creator: Create, adapt.* \(file: .*skills\/skill-creator\/SKILL\.md\)/u)
+    expect(prompt).not.toContain('{"id":')
+  })
+
+  it('drops catalog descriptions once the character budget is exhausted', async () => {
+    const path = await workspace()
+    // 120 workspace Skills whose description and when_to_use both sit at the 250-character
+    // display cap: the full pass blows the 20 000-character budget, and even the degraded
+    // id-plus-path pass is long enough that the tail has to be cut with an omitted count.
+    const description = 'd'.repeat(1_000)
+    const whenToUse = 'w'.repeat(1_000)
+    for (let index = 0; index < 120; index += 1) {
+      const name = `bulk-${String(index).padStart(3, '0')}-${'a'.repeat(40)}`
+      const directory = join(path, '.agents', 'skills', name)
+      await mkdir(directory, { recursive: true })
+      await writeFile(
+        join(directory, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${description}\nwhen_to_use: ${whenToUse}\n---\n\nFollow the task.\n`,
+      )
+    }
+    const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
+    const prompt = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
+
+    // Over budget, every line degrades to id plus path and the cap is reported explicitly.
+    expect(prompt).not.toContain('d'.repeat(200))
+    expect(prompt).not.toContain('w'.repeat(200))
+    expect(prompt).toMatch(/- agents:bulk-000-a+ \(file: .*bulk-000-a+\/SKILL\.md\)/u)
+    expect(prompt).toContain('additional Skills are omitted from this bounded catalog')
+    expect(prompt?.length ?? 0).toBeLessThan(25_000)
+  })
+
+  it('announces Skills added after the section the model already received', async () => {
+    const path = await workspace()
+    const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
+    const first = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
+    expect(first).not.toContain('New Skills became available')
+
+    const directory = join(path, '.agents', 'skills', 'fresh-drop')
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, 'SKILL.md'), '---\nname: fresh-drop\ndescription: Dropped in mid-session.\n---\n\nFollow it.\n')
+
+    const second = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list'], undefined, { 'skills-policy': first! }))
+    expect(second).toContain('New Skills became available')
+    expect(second).toContain('agents:fresh-drop')
+
+    // Once that text is the shown section, the notice is gone again.
+    const third = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list'], undefined, { 'skills-policy': second! }))
+    expect(third).not.toContain('New Skills became available')
   })
 })

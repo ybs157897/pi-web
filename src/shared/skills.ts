@@ -6,7 +6,8 @@ export interface SkillSummary {
   description: string
   /** Optional "when to use this" guidance from frontmatter, surfaced for skill routing. */
   whenToUse?: string
-  source: 'builtin' | 'global' | 'agents' | 'pi' | 'plugin'
+  /** `user-agents` is the shared user-level `~/.agents/skills` root; workspace `.agents` stays `agents`. */
+  source: 'builtin' | 'global' | 'user-agents' | 'agents' | 'pi' | 'plugin'
   /** Marketplace-qualified plugin id for `source: 'plugin'`. */
   pluginId?: string
   pluginName?: string

@@ -179,6 +179,36 @@ describe('SkillStore', () => {
     expect(withWorkspace.skills.find(item => item.id === 'agents:plain-skill')?.whenToUse).toBeUndefined()
   })
 
+  it('discovers the shared user-level ~/.agents/skills root as read-only, ahead of workspace levels', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-skills-')))
+    temporaryRoots.push(root)
+    const workspace = join(root, 'workspace')
+    const userAgents = join(root, 'agents-skills')
+    await mkdir(workspace)
+    await putSkill(userAgents, 'user-helper', skill('user-helper', 'User version.'))
+    await putSkill(userAgents, 'layered', skill('layered', 'User layered version.'))
+    // A dot-directory or plain folder without SKILL.md is not a skill and stays out of diagnostics.
+    await mkdir(join(userAgents, '.beam'), { recursive: true })
+    await putSkill(join(workspace, '.agents', 'skills'), 'layered', skill('layered', 'Workspace layered version.'))
+    const store = new SkillStore({ builtinRoot: join(root, 'builtin'), userAgentsRoot: userAgents })
+
+    // Both copies stay in the catalog under their own source, so the workspace one is not hidden.
+    const catalog = await store.list(workspace)
+    expect(catalog.diagnostics).toEqual([])
+    expect(catalog.skills.map(item => item.id)).toEqual(['agents:layered', 'user-agents:layered', 'user-agents:user-helper'])
+    expect(catalog.skills.find(item => item.id === 'user-agents:user-helper')).toMatchObject({ source: 'user-agents', writable: false })
+
+    // User roots are scanned before workspace levels, matching ZCode/opencode: the bare name is the user copy...
+    await expect(store.load(workspace, 'layered')).resolves.toMatchObject({ skill: { source: 'user-agents', description: 'User layered version. with a second line' } })
+    // ...while the shadowed workspace copy stays reachable through its source-qualified id.
+    await expect(store.load(workspace, 'agents:layered')).resolves.toMatchObject({ skill: { description: 'Workspace layered version. with a second line' } })
+    await expect(store.load(workspace, 'user-helper')).resolves.toMatchObject({ skill: { source: 'user-agents' } })
+
+    // A missing user root is the normal fresh-install state: no diagnostics, no failure.
+    const bare = new SkillStore({ builtinRoot: join(root, 'builtin'), userAgentsRoot: join(root, 'missing') })
+    await expect(bare.list(workspace)).resolves.toMatchObject({ diagnostics: [] })
+  })
+
   it('saves idempotently, requires the current hash for updates, serializes writers, and reloads in a new store', async () => {
     const { workspace, builtin } = await fixture()
     const store = new SkillStore({ builtinRoot: builtin })
@@ -219,21 +249,39 @@ describe('SkillStore', () => {
     await expect(store.load(workspace, 'agents:same-name')).resolves.toMatchObject({ skill: { writable: true } })
   })
 
-  it('rejects symbolic links in skill roots, directories, and resources', async () => {
+  it('follows symlinks in skill directories, SKILL.md files, and resources; writes stay strict', async () => {
     const { root, workspace, store } = await fixture()
     const outside = join(root, 'outside')
     await mkdir(outside)
     await writeFile(join(outside, 'SKILL.md'), skill('escaped-skill'))
     await mkdir(join(workspace, '.agents', 'skills'), { recursive: true })
     await symlink(outside, join(workspace, '.agents', 'skills', 'escaped-skill'))
+    const fileDirectory = join(workspace, '.pi-web', 'skills', 'linked-file')
+    await mkdir(fileDirectory, { recursive: true })
+    await symlink(join(outside, 'SKILL.md'), join(fileDirectory, 'SKILL.md'))
     const resourceDirectory = await putSkill(join(workspace, '.pi-web', 'skills'), 'linked-resource', skill('linked-resource'))
     await symlink(join(outside, 'SKILL.md'), join(resourceDirectory, 'external.md'))
 
+    // Directory and file symlinks are followed, matching ZCode/pi/opencode discovery and reads
+    // (a dotfiles repo linked into a skills root behaves like a real directory).
     const catalog = await store.list(workspace)
-    expect(catalog.skills.map(item => item.id)).toEqual(['pi:linked-resource'])
-    expect(catalog.diagnostics).toHaveLength(1)
-    await expect(store.load(workspace, 'agents:escaped-skill')).rejects.toMatchObject({ code: 'FORBIDDEN' })
-    await expect(store.load(workspace, 'pi:linked-resource')).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(catalog.skills.map(item => item.id)).toEqual(['agents:escaped-skill', 'pi:linked-file', 'pi:linked-resource'])
+    expect(catalog.diagnostics).toEqual([])
+    await expect(store.load(workspace, 'agents:escaped-skill')).resolves.toMatchObject({
+      skill: { description: 'A useful skill. with a second line' },
+      content: expect.stringContaining('escaped-skill'),
+    })
+    await expect(store.load(workspace, 'pi:linked-file')).resolves.toMatchObject({
+      skill: { description: 'A useful skill. with a second line' },
+    })
+    // A symlinked resource is listed and readable through the same path.
+    const resource = await store.load(workspace, 'pi:linked-resource')
+    expect(resource.files).toEqual(['SKILL.md', 'external.md'])
+    await expect(store.load(workspace, 'pi:linked-resource', 'external.md')).resolves.toMatchObject({
+      resource: 'external.md',
+      content: expect.stringContaining('escaped-skill'),
+    })
+    // Writes never follow a link: skill_save refuses an existing symlinked target.
     await expect(store.save(workspace, { name: 'escaped-skill', content: skill('escaped-skill') })).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 

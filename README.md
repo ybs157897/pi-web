@@ -202,10 +202,10 @@ Pi Durable 1.4.0 的 code mode 与 MCP 客户端已在本项目中开启：
 
 在普通会话中输入“帮我创建一个用于……的技能”，Agent 可通过 `skill_list`、`skill_load`、`skill_save`、`skill_validate` 完成创建与检查。创建器正文按需加载，不常驻整段系统提示词。
 
-- 新技能保存到当前工作区 `.agents/skills/<name>/SKILL.md`；也发现 `.pi-web/skills/` 中的已有技能。首版不扫描或改写用户全局技能目录。
-- 来源 ID 为 `builtin:<name>`、`agents:<name>`、`pi:<name>`；同名项保留独立来源，裸名称歧义时要求使用完整 ID。
+- 新技能保存到当前工作区 `.agents/skills/<name>/SKILL.md`；同时只读发现用户级 `~/.pi-web/skills/`、`~/.agents/skills/`（与 ZCode/pi/opencode 共用的约定）以及工作区的 `.pi-web/skills/`、`.agents/skills/`。用户级目录不会被写入。
+- 来源 ID 为 `builtin:<name>`、`global:<name>`、`user-agents:<name>`、`pi:<name>`、`agents:<name>`；同名项保留独立来源，裸名称按发现顺序取第一个，完整 ID 可直取被遮蔽副本。
 - `skill_save` 只原子保存 `SKILL.md`；更新需要加载时的 `version` 作为 `expectedVersion`。相同内容重试视为已保存，不重复覆盖；版本冲突不覆盖。可选 scripts/references/assets 使用已有文件工具管理；校验不会执行脚本。
-- 每次模型请求重新读取精简目录，新保存的技能在下一次请求可见；重启从文件恢复。`SKILL.md` 单次读取上限 512 KiB、普通技能资源上限 2 MiB；拒绝路径越界与符号链接。
+- 每次模型请求重新读取精简目录，新保存的技能在下一次请求可见；重启从文件恢复。`SKILL.md` 与单个资源文件读取上限均为 64 KiB；拒绝路径越界。技能根、技能目录、`SKILL.md` 与资源文件全部跟随符号链接（与 ZCode/pi/opencode 一致，接受「链可指向技能目录之外」的权衡）；`skill_save` 仍不穿链写入。
 - 无 Preset 的会话默认包含 `skills` 扩展；自定义 Preset 需显式加入扩展 `skills` 和需要的上述工具。只读会话保留列举、读取和校验，禁止保存；计划模式也禁止 `skill_save`。Code mode 嵌套调用遵守相同检查。
 
 可在演示模式发送 `[skills-create]` 验证实际文件/工具链，再用 `[skills-use]` 读取产物；它们是脚本化验收，不是真实模型证明。`npm run test:live:skills` 使用当前配置的 DeepSeek 模型，在临时工作区验证内置创建器加载、保存/校验、重启后新只读会话发现并使用技能，结果保存在 `artifacts/live-skills-check.json`。
@@ -302,7 +302,7 @@ antd 只在这个页面使用，经 `lazy()` 单独打成 chunk（约 420 kB / 1
 
 列表默认展示「待开发解决」问题，「待自验」单独分组，均按提单时间倒序。点击条目进入全页的「问题分析 / 缺陷详情 / 本地结论」，顶部提供「返回列表」。列表「设置」统一绑定一个已添加的代码工作区，供本列表的所有分析共享，持久化在 `<数据目录>/wetrack/workspace.json`，不再逐单绑定。
 
-分析默认使用当前模型目录中的 `deepseek-v4.1-flash`，找不到时明确提示先在模型设置中添加，不会静默改用其他模型。设置页同时展示实际激活的 Skills：启动时读取所选工作区的 `.agents/skills`、`.pi-web/skills` 等本地目录，匹配并加载 `rd-cli-ops` 等 WeTrack 相关 Skill 后注入会话，而不是只使用应用内置目录。
+分析默认使用当前模型目录中的 `deepseek-v4.1-flash`，找不到时明确提示先在模型设置中添加，不会静默改用其他模型。设置页同时展示实际激活的 Skills：启动时读取用户级 `~/.pi-web/skills`、`~/.agents/skills` 与所选工作区的 `.agents/skills`、`.pi-web/skills` 等本地目录，匹配并加载 `rd-cli-ops` 等 WeTrack 相关 Skill 后注入会话，而不是只使用应用内置目录。
 
 点击「开始 AI 分析」后，宿主先通过当前 WeTrack CLI 读取真实详情、剔除下载凭证和 base64 图片，再把详情、列表上下文和本地 Skill 规则注入一个只读代码会话，避免模型因无 shell 权限而向用户索要详情。
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, realpath } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { Harness, UsageDoc } from '@earendil-works/pi-durable'
 import type { Cursor } from '@earendil-works/pi-durable'
@@ -125,6 +126,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // ZCode-style user-level root: read-only skills shared across every workspace.
     // Demo runs stay isolated from the real global home.
     globalRoot: options.demo ? join(dataDir, 'skills') : join(piWebHome(), 'skills'),
+    // Shared user-level root: the `.agents/skills` convention every comparable agent reads.
+    // Demo runs stay isolated from the real home, exactly like the global root above.
+    userAgentsRoot: options.demo ? join(dataDir, 'agents-skills') : join(homedir(), '.agents', 'skills'),
     builtinRoot: resolve('skills'),
     pluginRoots: () => pluginStore.skillRoots(),
   })
@@ -498,7 +502,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
     activateSkills: async workspace => {
       const catalog = await skillStore.list(workspace.path)
-      const priority = { agents: 0, pi: 1, plugin: 2, global: 3, builtin: 4 }
+      const priority = { agents: 0, pi: 1, plugin: 2, 'user-agents': 3, global: 4, builtin: 5 }
       const selected = catalog.skills.filter(skill => skill.name === 'rd-cli-ops')
         .toSorted((left, right) => priority[left.source] - priority[right.source])[0]
       if (selected === undefined) return { skillIds: [] }

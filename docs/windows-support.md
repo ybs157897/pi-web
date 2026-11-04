@@ -95,7 +95,7 @@
 
 ### Skills（技能目录、加载、保存、校验）
 
-- 服务端 `src/server/skills/store.ts` 从仓库内置 `skills/`、当前工作区 `.agents/skills/` 和 `.pi-web/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
+- 服务端 `src/server/skills/store.ts` 从仓库内置 `skills/`、用户级 `~/.pi-web/skills/` 与 `~/.agents/skills/`、当前工作区 `.agents/skills/` 和 `.pi-web/skills/` 读取技能；`skill_list`、`skill_load`、`skill_save`、`skill_validate` 构成生命周期。设置页只读展示目录、正文、资源与校验结果。
 - Windows 相关静态结论：
   - 所有路径用 `node:path` 与 `realpath`/`lstat` 处理，不硬编码 `/` 作为文件系统分隔符；HTTP 协议里的资源路径则明确要求 `/`，并拒绝 `\`、盘符、UNC、`..`。
   - 技能名按小写 kebab-case 校验，同时显式拒绝 `con/prn/aux/nul/com1..9/lpt1..9` 等 Windows 保留设备名。

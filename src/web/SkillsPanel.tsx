@@ -328,6 +328,7 @@ function sourceName(source: SkillSummary['source'], t: (chinese: string, english
   switch (source) {
     case 'builtin': return t('内置', 'Built in')
     case 'global': return t('全局 ~/.pi-web/skills', 'Global ~/.pi-web/skills')
+    case 'user-agents': return '~/.agents/skills'
     case 'agents': return '.agents/skills'
     case 'pi': return '.pi-web/skills'
     case 'plugin': return t('插件', 'Plugin')
