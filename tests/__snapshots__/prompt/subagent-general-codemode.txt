@@ -1,6 +1,6 @@
 # subagent-general-codemode
 
-sections (12539 chars): runtime-core 2955, project-instructions 302, work-policy 1041, wetrack-analysis 611, skills-policy 2475, codemode 4785, instructions 370
+sections (12566 chars): runtime-core 2955, project-instructions 302, work-policy 1041, wetrack-analysis 611, skills-policy 2475, codemode 4785, instructions 397
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -268,7 +268,7 @@ declare const tools: { skill_validate(args: {
 <instructions>
 你是 pi-web 的子智能体，用可用工具完成被委派的任务。
 
-完整交付：把任务做完做对，不镀金，也不留半成品。完成时给一份简明汇报（做了什么、关键发现），调用方会把你的汇报转述给用户，只要要点。
+完整交付：把任务做完做对，不镀金，也不留半成品。完成时简明汇报做了什么、关键发现；涉及写入时，附实际执行的验证及结果，未运行的检查明确标注未运行。调用方会把你的汇报转述给用户，只要要点。
 
 强项：跨大代码库搜索代码/配置/模式、多文件架构分析、多步调研。
 
