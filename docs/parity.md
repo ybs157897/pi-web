@@ -1,5 +1,16 @@
 # DSH Web 一致性清单（实时）
 
+## Windows 字体观感：system-ui 与用户字体设置（2026-11-05）
+
+**动机**：同一套 UI 在 macOS 上观感良好、Windows 上偏细偏硬。三家实现均为纯系统字体栈（无 UI webfont）：ZCode 主 UI 用 `-apple-system, system-ui, "Segoe UI", sans-serif`；DSH 用 `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', … 'Microsoft YaHei', …`，pi-web 的 `vendor/dsh-theme/base.css` 与 DSH 逐字节一致。Windows 上差异来自：Segoe UI 静态字重没有 500（`font-synthesis: none` 下落到 400）、ClearType 子像素渲染、96 DPI/非整数缩放，以及雅黑与苹方的宽度/基线差。
+
+**落地两件**：
+
+- **`system-ui` 进正文栈**（`vendor/dsh-theme/base.css:7`）：`-apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', …`。macOS 行为不变；Win11 上 Chromium 的 `system-ui` 可解析到 Segoe UI Variable（静态 `'Segoe UI'` 不会）。
+- **DSH 同款字体设置**：`AppSettings` 新增 `textFontFamily` / `codeFontFamily` / `terminalFontFamily`（默认 `''` = 内置栈）。共享归一化 `src/shared/fonts.ts`（逗号分隔、去引号/反斜杠/尖括号/控制字符、非通用族双引号、幂等）；服务端 `runtime/settings.ts` 持久化前归一化，`app-state.ts` 的 zod 旧文件默认补 `''`。客户端 `ui-preferences.tsx` 把三条列表写到 **documentElement**（`:root` 上声明的 mono 栈才能解析到；空值 `removeProperty`，避免 fallback 栈出现悬空逗号），设置页在「更多字体设置」里提供三行输入（失焦/Enter 提交，清空恢复内置）。代码与终端栈改为 DSH 的「用户列表 + 重复内置栈」写法（`message-rendering/theme.css` 的 `--message-mono` / `--terminal-mono`；`ProcessTerminal` 用后者），保证用户只填一个字体时仍保留 CJK/monospace 回退。
+
+**验证**：隔离实例（4401，临时 data dir，demo）HTTP 实测 PATCH `' Inter , system-ui , "SF Pro Text" '` → `"Inter", system-ui, "SF Pro Text"` 且落盘一致；ego 实测加载后 documentElement 变量、body 字体栈与 `--message-mono`/`--terminal-mono` 计算值均以用户列表开头，设置页三个输入回显正确，编辑后提交、清空后变量移除并恢复内置栈。门禁 `npm run check` exit 0（97 文件 1020 过/4 跳过 + build）；新增 `tests/fonts.test.ts`（归一化）与 `tests/ui-preferences.test.tsx`（变量发布/清除），`tests/runtime.test.ts` 覆盖归一化落盘。
+
 ## 2026-11-04 提示词与运行时修订
 
 本节修订下文旧批次中的子会话工具继承、计划入口、团队等待和 WeTrack 覆盖规则。完整决定与证据见 [评审实施记录](prompts/review-2026-11-04.md)。

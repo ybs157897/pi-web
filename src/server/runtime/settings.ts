@@ -9,6 +9,7 @@ import type {
   ProviderInput, ProviderTestResult, UpdateAppSettingsInput, WorkspaceSummary,
 } from '../../shared/types.ts'
 import type { AppStateStore } from '../state/app-state.ts'
+import { normalizeFontFamily } from '../../shared/fonts.ts'
 import type { RuntimeModels } from '../model/catalog.ts'
 import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from '../model/allowlist.ts'
 import { RuntimeError } from '../runtime-errors.ts'
@@ -65,6 +66,9 @@ export function createSettings(deps: SettingsDeps) {
       if (input.fontSize !== undefined) state.settings.fontSize = input.fontSize
       if (input.codeFontSize !== undefined) state.settings.codeFontSize = input.codeFontSize
       if (input.terminalFontSize !== undefined) state.settings.terminalFontSize = input.terminalFontSize
+      if (input.textFontFamily !== undefined) state.settings.textFontFamily = normalizeFontFamily(input.textFontFamily)
+      if (input.codeFontFamily !== undefined) state.settings.codeFontFamily = normalizeFontFamily(input.codeFontFamily)
+      if (input.terminalFontFamily !== undefined) state.settings.terminalFontFamily = normalizeFontFamily(input.terminalFontFamily)
       if (input.transcriptView !== undefined) state.settings.transcriptView = input.transcriptView
       if (input.collapseTiming !== undefined) state.settings.collapseTiming = input.collapseTiming
       if (input.performanceUsage !== undefined) state.settings.performanceUsage = input.performanceUsage

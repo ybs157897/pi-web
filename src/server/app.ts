@@ -116,6 +116,7 @@ const shortcutsSchema = z.object(Object.fromEntries(SHORTCUT_COMMANDS.map(name =
 const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional(), locale: z.enum(['zh', 'en']).optional(),
   fontSize: z.number().int().min(12).max(20).optional(), codeFontSize: z.number().int().min(10).max(16).optional(), terminalFontSize: z.number().int().min(10).max(20).optional(),
+  textFontFamily: z.string().max(500).optional(), codeFontFamily: z.string().max(500).optional(), terminalFontFamily: z.string().max(500).optional(),
   transcriptView: z.enum(TRANSCRIPT_VIEW_MODES).optional(), collapseTiming: z.enum(COLLAPSE_TIMINGS).optional(),
   performanceUsage: z.enum(PERFORMANCE_USAGE_MODES).optional(),
   codingViews: z.boolean().optional(), busySendMode: z.enum(['followUp', 'steer']).optional(), defaultModel: modelRef.nullable().optional(),

@@ -100,6 +100,10 @@ export interface AppSettings {
   fontSize: number
   codeFontSize: number
   terminalFontSize: number
+  /** User font lists placed ahead of the built-in stack; `''` keeps the built-in stack. */
+  textFontFamily: string
+  codeFontFamily: string
+  terminalFontFamily: string
   transcriptView: TranscriptViewMode
   collapseTiming: CollapseTiming
   performanceUsage: PerformanceUsageMode

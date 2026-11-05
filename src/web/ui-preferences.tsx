@@ -4,6 +4,7 @@ import type { AppSettings } from '../shared/types.ts'
 
 export const DEFAULT_UI_SETTINGS: AppSettings = {
   theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
+  textFontFamily: '', codeFontFamily: '', terminalFontFamily: '',
   transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true,
   busySendMode: 'followUp', defaultThinkingLevel: 'off', defaultAccessMode: 'fullAccess', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false,
   showAnalysisConversations: false,
@@ -46,11 +47,23 @@ export function UiPreferencesProvider({ value, children }: { value: AppSettings;
         '--dsh-terminal-font-delta': `${value.terminalFontSize - 13}px`,
       }
       for (const [name, setting] of Object.entries(variables)) document.body.style.setProperty(name, setting)
+      // Font lists live on the document root so the body-level stacks inherit
+      // them, and an empty list removes the property instead of leaving a
+      // dangling comma in the fallback stack.
+      const families = {
+        '--dsh-font-family-text': value.textFontFamily,
+        '--dsh-font-family-code': value.codeFontFamily,
+        '--dsh-font-family-terminal': value.terminalFontFamily,
+      }
+      for (const [name, family] of Object.entries(families)) {
+        if (family === '') document.documentElement.style.removeProperty(name)
+        else document.documentElement.style.setProperty(name, family)
+      }
     }
     apply()
     if (value.theme === 'system') media.addEventListener('change', apply)
     return () => { media.removeEventListener('change', apply) }
-  }, [value.theme, value.locale, value.fontSize, value.codeFontSize, value.terminalFontSize])
+  }, [value.theme, value.locale, value.fontSize, value.codeFontSize, value.terminalFontSize, value.textFontFamily, value.codeFontFamily, value.terminalFontFamily])
   return <UiPreferencesContext.Provider value={preferences}>{children}</UiPreferencesContext.Provider>
 }
 

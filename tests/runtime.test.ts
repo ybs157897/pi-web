@@ -241,6 +241,20 @@ describe('Pi Durable runtime', () => {
     expect(completed.todos?.map(item => item.content)).toContain('Draft the migration plan')
   })
 
+  it('normalizes user font lists and persists them with the settings', async () => {
+    const { runtime, dataDir } = await fixture()
+    const saved = await runtime.updateSettings({
+      textFontFamily: ' Inter , system-ui , "SF Pro Text" ',
+      codeFontFamily: 'JetBrains Mono',
+      terminalFontFamily: '   ',
+    })
+    expect(saved.textFontFamily).toBe('"Inter", system-ui, "SF Pro Text"')
+    expect(saved.codeFontFamily).toBe('"JetBrains Mono"')
+    expect(saved.terminalFontFamily).toBe('')
+    const onDisk = JSON.parse(await readFile(join(dataDir, 'app-state.json'), 'utf8')) as { settings: Record<string, unknown> }
+    expect(onDisk.settings.textFontFamily).toBe('"Inter", system-ui, "SF Pro Text"')
+  })
+
   it('asks a question, folds the answer back in, and injects the reply only once', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})

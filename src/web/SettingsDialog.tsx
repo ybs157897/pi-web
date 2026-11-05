@@ -9,6 +9,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccessMode, AppSettings, CodemodeMode, CollapseTiming, McpServerView, McpView, ModelCatalog, ProviderInput, PerformanceUsageMode, TranscriptViewMode, UpdateAppSettingsInput } from '../shared/types.ts'
 import { api } from './api.ts'
+import { normalizeFontFamily } from '../shared/fonts.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
 import { ModelsPanel } from './ModelSettings.tsx'
@@ -174,7 +175,13 @@ export default function SettingsDialog(props: SettingsDialogProps) {
             <SettingRow title={t('语言', 'Language')}><Choice label={t('语言', 'Language')} value={settings.locale} disabled={pending} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} onChange={value => void update({ locale: value as AppSettings['locale'] })} /></SettingRow>
             <SettingRow stacked title={t('外观', 'Appearance')}><div className={css.themeCards}>{themes.map(option => <button key={option.value} className={css.themeCard} type="button" aria-pressed={settings.theme === option.value} disabled={pending} onClick={() => void update({ theme: option.value })}>{option.icon}<span>{option.label}</span></button>)}</div></SettingRow>
             <SettingRow title={t('字号大小', 'Font size')} description={t('仅影响会话内容的字号', 'Applies to conversation content')}><div className={css.fontControls}><SizeSelect value={settings.fontSize} min={12} max={20} label={t('正文字号', 'Text size')} disabled={pending} onChange={fontSize => void update({ fontSize })} /><button className={css.moreButton} type="button" aria-label={t('更多字体设置', 'More font settings')} aria-expanded={moreFonts} onClick={() => setMoreFonts(value => !value)}><IconSettingsOutlineRegular size={14} /></button></div></SettingRow>
-            {moreFonts && <div className={css.subSettings}><SettingRow title={t('代码字号', 'Code font size')}><SizeSelect value={settings.codeFontSize} min={10} max={16} label={t('代码字号', 'Code size')} disabled={pending} onChange={codeFontSize => void update({ codeFontSize })} /></SettingRow><SettingRow title={t('终端字号', 'Terminal font size')}><SizeSelect value={settings.terminalFontSize} min={10} max={20} label={t('终端字号', 'Terminal size')} disabled={pending} onChange={terminalFontSize => void update({ terminalFontSize })} /></SettingRow></div>}
+            {moreFonts && <div className={css.subSettings}>
+              <SettingRow title={t('正文字体', 'Text font')} description={t('用于界面与会话正文。多个字体用逗号分隔，留空使用默认字体', 'Used for the interface and conversation text. Separate fonts with commas; leave empty for the default')}><FontFamilyInput value={settings.textFontFamily} disabled={pending} label={t('正文字体', 'Text font')} onCommit={textFontFamily => void update({ textFontFamily })} /></SettingRow>
+              <SettingRow title={t('代码字体', 'Code font')} description={t('用于代码块、行内代码与工具输出。多个字体用逗号分隔，留空使用默认字体', 'Used for code blocks, inline code, and tool output. Separate fonts with commas; leave empty for the default')}><FontFamilyInput value={settings.codeFontFamily} disabled={pending} label={t('代码字体', 'Code font')} onCommit={codeFontFamily => void update({ codeFontFamily })} /></SettingRow>
+              <SettingRow title={t('代码字号', 'Code font size')}><SizeSelect value={settings.codeFontSize} min={10} max={16} label={t('代码字号', 'Code size')} disabled={pending} onChange={codeFontSize => void update({ codeFontSize })} /></SettingRow>
+              <SettingRow title={t('终端字体', 'Terminal font')} description={t('用于终端与命令输出。多个字体用逗号分隔，留空使用默认字体', 'Used for terminal and command output. Separate fonts with commas; leave empty for the default')}><FontFamilyInput value={settings.terminalFontFamily} disabled={pending} label={t('终端字体', 'Terminal font')} onCommit={terminalFontFamily => void update({ terminalFontFamily })} /></SettingRow>
+              <SettingRow title={t('终端字号', 'Terminal font size')}><SizeSelect value={settings.terminalFontSize} min={10} max={20} label={t('终端字号', 'Terminal size')} disabled={pending} onChange={terminalFontSize => void update({ terminalFontSize })} /></SettingRow>
+            </div>}
             <SettingRow title={t('工作步骤展示', 'Work step display')} description={t('选择希望看到多少工具调用细节', 'Choose how much tool detail to show')}><Choice label={t('工作步骤展示', 'Work step display')} value={settings.transcriptView} disabled={pending} options={[
               { value: 'compact', label: t('简洁', 'Compact') }, { value: 'standard', label: t('标准', 'Standard') },
               { value: 'detailed', label: t('详细', 'Detailed') }, { value: 'verbose', label: t('完全展开', 'Expanded') },
@@ -290,6 +297,35 @@ function mcpStatusName(status: McpServerView['status'], t: (chinese: string, eng
     case 'disabled': return t('已禁用', 'Disabled')
   }
 }
+/**
+ * DSH's font-family field: comma-separated installed family names, committed
+ * on blur or Enter and normalized by the shared rules; an empty value restores
+ * the built-in stack.
+ */
+function FontFamilyInput({ value, label, disabled, onCommit }: { value: string; label: string; disabled?: boolean; onCommit: (value: string) => void }) {
+  const { t } = useUiPreferences()
+  const [draft, setDraft] = useState(value)
+  useEffect(() => { setDraft(value) }, [value])
+  const commit = () => {
+    const next = normalizeFontFamily(draft)
+    setDraft(next)
+    if (next !== value) onCommit(next)
+  }
+  return <input
+    className={css.fontFamilyInput}
+    type="text"
+    value={draft}
+    disabled={disabled}
+    aria-label={label}
+    placeholder={t('默认', 'Default')}
+    spellCheck={false}
+    autoComplete="off"
+    onChange={event => setDraft(event.currentTarget.value)}
+    onBlur={commit}
+    onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }}
+  />
+}
+
 /** DSH's font-size control: a filled value box, the unit, then the menu chevron. */
 function SizeSelect({ value, min, max, label, disabled, onChange }: { value: number; min: number; max: number; label: string; disabled?: boolean; onChange: (value: number) => void }) {
   const [open, setOpen] = useState(false)
