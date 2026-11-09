@@ -2,5 +2,6 @@
   "_comment": "常驻文档字数上限。计数单位：汉字数 + 非 CJK 词数（scripts/verify-doc-budgets.ts）。上限是护栏：先搬走、再压缩、最后才提额；棘轮只收紧。新增常驻文档（docs/README.md、subsystems/README.md、postmortem/README.md、defensive-patterns/README.md）在创建时加入本清单。",
   "AGENTS.md": 650,
   "docs/AGENTS.md": 1800,
-  "docs/architecture.md": 4200
+  "docs/architecture.md": 4200,
+  "docs/subsystems/README.md": 600
 }

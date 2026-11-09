@@ -2,6 +2,10 @@
 
 The browser renders host DTOs with ZCode-aligned message components and a shell using the pinned DSH theme. The HTTP server owns input validation and streaming transport. The runtime owns Pi Durable, its SQLite session, provider configuration, and conversation metadata.
 
+## 组成
+
+产品分三层：浏览器前端 `src/web/` 渲染 host DTO 与应用壳；HTTP 服务器（[app.ts](../src/server/app.ts)）把 HTTP 映射到 [contracts.ts](../src/server/contracts.ts) 定义的 `Runtime` 接口，负责输入校验与流式传输；runtime 由 [runtime/index.ts](../src/server/runtime/index.ts) 的 `createRuntime` 装配，持有 Pi Durable、SQLite 会话、provider 配置与会话元数据。数据归属见 Data ownership，服务端各目录的一句话职责见 Server layout，一条用户消息的端到端路径见请求循环。
+
 ## Data ownership
 
 A UI conversation maps to a Pi `Conversation`, not its storage-level `Session`. Entries and Pi documents own messages, active generation, tools, inbox, agent configuration, and usage. Application metadata owns titles, pinning, and archiving. Browser storage owns drafts and display preferences.
@@ -36,10 +40,19 @@ The runtime imports existing Pi configuration read-only and keeps project-specif
 | `agents/` | Built-in delegation profiles (`general-purpose`, the read-only `Explore`) and the child-model resolver the delegation tools share |
 | `model/` | Provider catalog, model allowlist, deterministic demo model |
 | `plugins/` | Marketplace manifest/source/store, plugin reference injection, page host bridge |
-| `skills/`, `memory/`, `workspace/`, `mcp/`, `automation/`, `platform/` | The feature named by the directory (`workspace/git/` holds branches/worktree/commit-message; `automation/` holds the calendar-aligned recurrence and scheduler behind the `automations` runtime feature, which keeps each run in a capped, newest-first history) |
+| `skills/` | `SkillStore` 与 `skills` 扩展：五个技能根的扫描、目录诊断与 `skill_save` 写边界 |
+| `memory/` | 工作区记忆：section 策略（`policy.ts`）、纯文件协议存储（`store.ts`）与后台提取（`extraction.ts`） |
+| `workspace/` | 工作区文件与根 AGENTS.md 指令读取；`git/` 持有分支/worktree/commit message |
+| `mcp/` | `McpRegistry`：用户级 `mcp.json` 只读导入、连接管理与 `mcp__<server>__<tool>` 工具注册 |
+| `automation/` | `automations` runtime 功能背后的日历对齐 recurrence 与调度器，每次 run 存入有上限、最新在前的历史 |
+| `platform/` | 平台差异面（目录选择器等宿主集成） |
 | `state/` | Global home, one-time migration, `app-state.json` |
 
 Features receive their dependencies as arguments and never import the composition root. `runtime/index.ts` only wires state: it opens stores and the harness, installs tool extensions, creates each feature and returns the `Runtime`; cross-feature cycles (detail projection ↔ team catalog) are resolved with late-bound callbacks rather than module-level singletons.
+
+## 请求循环
+
+一条用户消息的端到端路径：浏览器带幂等 request id 提交 → `app.ts` 校验后调 `Runtime.submit`（[contracts.ts](../src/server/contracts.ts)）→ [runtime/conversations.ts](../src/server/runtime/conversations.ts) 经队列语义把输入交给 Pi conversation（[runtime/queue.ts](../src/server/runtime/queue.ts)：对排队中消息的编辑先 abort 原提交、再以派生 request id 重提，重试不会产生第二条输入）→ 每个请求由已安装扩展组装 section：`runtime-policy`（[work-policy.ts](../src/server/conversation/work-policy.ts)）注入 [runtime-core.md](../src/server/conversation/prompts/runtime-core.md) 行为政策、工作区根 AGENTS.md 与工作策略，memory、skills、plan、goal 等扩展各自贡献（安装顺序见 [runtime/index.ts](../src/server/runtime/index.ts)）→ 模型经 `model/` 目录与允许列表解析后流式调用（轨迹扩展同步把每次外发请求连同首 token 延迟记入会话内 JSONL，[trajectory.ts](../src/server/conversation/trajectory.ts)）→ 模型发出的工具调用经执行环境（[execution-env.ts](../src/server/conversation/execution-env.ts)：`NodeExecutionEnv`，macOS `workspaceWrite` 另包 `sandbox-exec`）与 `execution-policy` 的 plan/访问检查后执行，工具结果成为新条目 → `detailFromView`（[runtime/conversations.ts](../src/server/runtime/conversations.ts)）把 Pi 状态投影成完整 `ConversationDetail` 快照 → watch 监听器推送新快照，`app.ts` 的 SSE `/api/conversations/:id/events` 分帧下发 → 浏览器按稳定消息身份流式渲染（见 Streaming 与 UI integration）。
 
 ## Default runtime policy
 
@@ -89,6 +102,10 @@ The plugin market is an application-owned store under `<dataDir>/plugins/`, sepa
 
 Enabled plugins project two capabilities. Skills become read-only `SkillStore` roots with ids `<pluginId>:<skillName>` and `source: 'plugin'`; they are re-read on each catalog request. MCP servers are merged into `McpRegistry` beside the user-level `mcp.json`, named `plugin_<plugin>_<server>`, with `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` expanded, the plugin directory as `cwd`, and `codemode` exposure unless the manifest says otherwise. Every capability-changing mutation calls `PluginStore`'s change listener: the runtime awaits `McpRegistry.reload()`, then reinstalls the `codemode` namespaces, `mcp` tools, `tool_search` (only when a deferred tool exists), and finally `execution-policy`, which must always capture the latest tool snapshot. Old MCP connections stay open for a 10s grace period so in-flight calls finish; failures isolate to one server's `status: 'error'`. `ui.surfaces` are validated and shown but not rendered until P2. Plugin packages never execute JavaScript in the host: the only execution surface is the declared MCP subprocess.
 
+## 接缝
+
+扩展沿两条缝接入会话：扩展注册与 section/工具注册。扩展注册集中在 [runtime/index.ts](../src/server/runtime/index.ts) 的 registry——按固定顺序 `install` 工具扩展（`coding-tools`、`research-tools`、todo/goal/plan/skill/subagent/team/interaction 等）与 section 型扩展（`runtime-policy`、memory、compaction），`execution-policy` 必须最后安装以捕获最新工具快照，MCP 工具集每次变更后整组重装（机制见 Code mode and MCP）。section 是提示词侧的缝：每个扩展按请求渲染自己的 section（清单与注入条件见 [section-catalog.md](section-catalog.md)），工具目录同理见 [tool-catalog.md](tool-catalog.md)。插件是应用层的缝：技能包成为只读 `SkillStore` 根、MCP server 并入 `McpRegistry`（见 Plugins）。技能根的扫描顺序与写边界见 Skills。执行层还有一条环境缝：远程或非 `node:local` 环境下 shell/pwsh 回退 Pi 平台工具模型（见 Platforms 与检索与 Shell 子系统页）。
+
 ## Platforms
 
 The server runs on macOS, Linux and Windows. The platform-sensitive surface is deliberately small and split by capability; the complete Windows matrix and machine-check list live in [docs/windows-support.md](windows-support.md).
@@ -100,3 +117,22 @@ The server runs on macOS, Linux and Windows. The platform-sensitive surface is d
 - **Skills and prompt assets.** `SkillStore` resolves the bundled `skills/` directory, user-level `~/.pi-web/skills/` and `~/.agents/skills/`, and workspace `.agents/skills/` and `.pi-web/skills/` through `node:path`, `realpath` and `stat`/`lstat`; directories follow symlinks while files stay symlink-free. Its HTTP resource protocol uses `/` and rejects backslashes, drive letters, UNC and traversal; skill names reject Windows reserved device names, and frontmatter accepts BOM/CRLF. Writes use a same-directory temporary file and `rename`; Windows ACL/symlink-reparse behavior still needs real-machine verification. The default `runtime-policy` reads `src/server/conversation/prompts/runtime-core.md` from a file URL at module load, so packaged distributions must ship that prompt next to the server module.
 - **Desktop integration.** "Open config file" uses `open`, `xdg-open`, or `cmd /c start` by platform; the Windows `cmd` path can mis-handle `%`, `&` or `^` in the path. Graceful shutdown listens for SIGINT and SIGTERM: Ctrl+C works on Windows, while closing the console or `taskkill` terminates the process without running `app.shutdown()`/`runtime.close()`; SQLite recovers from its WAL on the next start.
 - **Verification.** The 2026-10-20 macOS baseline passes `npm run typecheck`, 20 test files / 241 Vitest cases and `npm run build`. That is not Windows evidence. Windows toolchain prerequisites (Node, Git for Windows, optional native packages, `node:sqlite`), limitations (no `workspaceWrite`, incomplete graceful shutdown, ACL-only security gap, non-portable tests and known path defects) and the Windows machine-check list live in [docs/windows-support.md](windows-support.md).
+
+## 扩展点阅读顺序
+
+改不同对象前先读对应的 subsystems 现状页（`docs/subsystems/`，一主题一页），再动 `src/`：
+
+- todo 工具与任务提醒 → [todo](subsystems/todo.md)
+- 计划模式的工具收窄与拦截 → [plan-mode](subsystems/plan-mode.md)
+- 提问/等待类交互（ask user question、等待应答） → [interactions](subsystems/interactions.md)
+- goal 的创建约束与自动续跑 → [goal](subsystems/goal.md)
+- 子智能体委派、内置档案与结算 → [subagent](subsystems/subagent.md)
+- team 会话与子会话目录 → [team](subsystems/team.md)
+- 上下文压缩三层策略 → [compaction](subsystems/compaction.md)
+- 请求轨迹与旁路调用采集 → [trajectory](subsystems/trajectory.md)
+- 前端消息渲染与状态机 → [rendering](subsystems/rendering.md)
+- 工作区记忆协议与后台提取 → [memory](subsystems/memory.md)
+- 插件市场、MCP 合并与技能根投影 → [plugins](subsystems/plugins.md)
+- 检索/shell 工具语义与过滤规则 → [search-and-shell](subsystems/search-and-shell.md)
+
+决策理由与未决项在 [spec.md](spec.md)；评审时强制执行的规则在 `docs/defensive-patterns/`；操作指南在 `docs/cookbook/`。
