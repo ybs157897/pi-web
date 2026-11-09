@@ -1,5 +1,7 @@
 # 项目记忆系统实施方案（参照 ZCode Memory）
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状见 [memory.md](../subsystems/memory.md)。
+
 状态：已实施（2026-10-26，Phase 1–3）。代码级设计见 [memory-design.md](./memory-design.md)；`docs/spec.md` 记录了落地范围与验收判据，`docs/architecture.md` 的「Workspace memory」小节记录了最终挂点。Phase 4（只读查看 UI、语义召回、Dream、custom agent 记忆）仍未开始。
 
 > 代码级落地设计见 [memory-design.md](./memory-design.md)（基于 ZCode memory 全部源码与 pi-web 挂点的逐行对照分析，含每个函数的行为设计、中文提示词定稿、wrap/沙盒/提取循环的代码骨架与测试矩阵）。本文保留决策记录角色；两文冲突时以 memory-design.md 为准。

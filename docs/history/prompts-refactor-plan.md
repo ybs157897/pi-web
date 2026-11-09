@@ -1,5 +1,7 @@
 # 提示词改造计划与实施说明
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 ## 实施状态（2026-10-28）
 
 刀 1–8 已按参考提交逐刀 cherry-pick 到 main（9 个提交全部干净落地，无冲突；runtime.ts 上与 f5da931 的 auto-merge 已核对为区域不相交）。实际 commit id 对应关系：

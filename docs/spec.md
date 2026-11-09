@@ -1,5 +1,24 @@
 # Pi Durable Web
 
+> 体例：本文是 [docs/AGENTS.md](AGENTS.md) 定义的决策记录层——编年体「定了 / 判据 / 未决」，带日期回注，是**历史权威，不是现状权威**；机制现状看 [subsystems/](subsystems/README.md) 与 [architecture.md](architecture.md)。
+
+## 未决汇总（2026-11-09 整理）
+
+按主题归并的当前未决项，链接到首次记录的日期段；已了结的列在表后，防止重翻。
+
+| 主题 | 未决内容 | 首记 |
+|---|---|---|
+| Windows 实机验证 | koffi/COM 选择器、长路径/UNC、WAL 恢复、ACL、Git Bash 探测、Skills、MCP 等实机验收与 Windows CI；`npm test` 平台化 POSIX 断言；`test:live:tools`/`test:live:codemode` 写死 workspaceWrite 在 Windows 不可用 | [2026-10-19](#2026-10-19) |
+| WeTrack 对接 | 真实 rd-cli 未在本机配置（node 假 CLI 验证、Windows 侧验证过）；工具按会话类型门控；远端列表一致性游标；缺陷详情弹窗/排序/定时刷新；`advanced-query` 分页；真实 WeTrack 连接未测 | [2026-10-30](#2026-10-30) |
+| 工作区记忆 Phase 4 | 记忆查看/编辑/搜索/导出 UI、semantic-recall、Dream/`memory_update`、custom agent 三 scope、跨机器同步、`workspaceIdentity`；提取媒体剥离；cursor 重启丢失 | [2026-10-26](#2026-10-26) |
+| 插件 P3 剩余 | 工作区级启用覆盖、官方市场分片；无内置官方源；更新签名/审核未定义；`mcp.json` 修改需重启（插件 MCP 不需要） | [2026-10-27](#2026-10-27) |
+| ZCode 差距（模型设置） | 额度/套餐卡、按模型启用、拖拽排序、品牌 logo、模板选择器（前两项依赖 Pi 缺失的数据模型）；「模型能力」三项无 Pi 字段；override 逐字段标记；供应商强制 schema 用不上（`json_schema` 400 + 无 per-request samplingParams 入口） | [2026-10-21](#2026-10-21) |
+| 渲染细节 | 卡头折叠状态刷新丢失（parity CH-9）；partial 状态无「生成中」提示；模型重试时卡片重长 | [2026-10-21](#2026-10-21) |
+| 右侧状态卡分区 | goal 逐迭代列表；终端与工作流分区（需 shell runner 补 workId/取消接口、workflow 运行模型） | [2026-10-30](#2026-10-30) |
+| 团队与并发 | teammate 整体交互转接；多个进程共享 dataDir 的 CAS；WeTrack 页面证据链接跳转 | [2026-11-04](#2026-11-04) |
+
+已了结（原文未回改，以本表为准）：Pi 停止语义（2026-10-19 已改保留队列）；doc 排版系列未决（功能 2026-10-26 整体下线，卡片细节/场景探针等条目失效）；`changes.binary`/`oversized` 与 review 面板（2026-11-03 随 176e3f2 落地）；轨迹查看 UI 与 TTFT（2026-11-03 已落地 TrajectoryPane 与 Proxy 方案）；真实模型凭据阻挡（2026-10-26 起恢复并完成多轮 live 验收）。
+
 ## 2026-10-18
 
 - 定了：新建独立项目，以 Pi Durable 1.3.0 为执行与持久化内核（2026-11-03 注：Pi 全家桶已升 ^1.4.0 并迁移 `checkpointWhen`，见文末条目），DSH 0.2.1-rc.2 展示组件与主题为视觉基础。

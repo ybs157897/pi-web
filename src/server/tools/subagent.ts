@@ -252,7 +252,7 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           const parentId = api.conversationId
           const background = args.run_in_background === true
           // The scan and the creation are separate commits: a table read inside the creating commit
-          // throws ReadAfterWrite (docs/families.md A6).
+          // throws ReadAfterWrite (docs/history/families.md A6).
           const existing = await api.commit(async (tx) => {
             const page = await tx.scanConversations({ ownerTaskId: api.taskId }, 1)
             return page.items[0]?.id

@@ -1,6 +1,6 @@
 # 插件市场与插件运行时（plugins）
 
-> 状态：现状参考（2026-11-09 自 [plugin-marketplace-design.md](../plugin-marketplace-design.md) 抽取，P0–P2 已上线、P3 部分交付）。决策与验收历史见 [spec.md](../spec.md) 对应日期段（2026-10-27）。
+> 状态：现状参考（2026-11-09 自 [plugin-marketplace-design.md](../history/plugin-marketplace-design.md) 抽取，P0–P2 已上线、P3 部分交付）。决策与验收历史见 [spec.md](../spec.md) 对应日期段（2026-10-27）。
 
 插件体系分三层：市场与安装（目录、来源、安装事务）、能力投影到对话（技能根、MCP server、`@` 引用 reminder）、插件 UI 宿主（sandbox 页面与 bridge）。插件不提供 JS 扩展——插件代码只通过其声明的 MCP 子进程运行；安装一个插件等于信任该子进程以当前用户权限运行。状态独立于 `app-state.json`，全部落在 `<dataDir>/plugins/`。
 
@@ -82,4 +82,4 @@ MCP `tools/call` 结果的 `_meta.ui` 经 `pluginUiDescriptorFromMeta` 白名单
 
 - P3 剩余项有意延后：真正的零重载 page plane（Chromium 重新挂载 iframe 仍会重载页面）、工作区级启用覆盖（MCP registry 全局，需按会话过滤工具）、插件命令映射（`commands` 保持 unsupported 诊断）、官方市场分片（[spec.md](../spec.md) 2026-10-27 未决及 2026-11-03 回注）。
 - 市场无内置官方源（默认市场源未定）；插件更新的签名/审核流程未定义（[spec.md](../spec.md) 2026-10-27 未决）。
-- `mcp.json` 自身修改需重启；git 来源仅接受 HTTPS；更新确认会为目录版本变化临时物化一次包（[plugin-marketplace-design.md §14](../plugin-marketplace-design.md)）。
+- `mcp.json` 自身修改需重启；git 来源仅接受 HTTPS；更新确认会为目录版本变化临时物化一次包（[plugin-marketplace-design.md §14](../history/plugin-marketplace-design.md)）。

@@ -1,5 +1,7 @@
 # 插件市场与插件 UI 集成设计
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状见 [plugins.md](../subsystems/plugins.md)。
+
 > 状态：P0、P1、P2 已实施（2026-10-27）；P3 可选增强部分前置。
 > P0 落地：`src/shared/plugins.ts`、`src/server/plugin-{types,manifest,source,store}.ts`、`src/web/PluginsPanel.tsx`、`src/web/plugin-store-model.ts`，以及 `runtime.ts` / `app.ts` / `SkillStore` / 设置页的接线；测试见 `tests/plugin-{manifest,source,store,runtime,store-model}.test.ts`。
 > P1 落地：`McpManager` 重构为可重载的 `McpRegistry`（`src/server/mcp.ts`）、插件 MCP 投影（`PluginStore.mcpServers()`）、runtime 的 `refreshMcpExtensions()`、更新/describe 与 GitHub/git 来源，以及 `GET /api/plugins/events` SSE 与设置页的更新按钮/安装确认；测试见 `tests/mcp.test.ts`、`tests/plugin-store.test.ts`、`tests/plugin-runtime.test.ts`、`tests/http.test.ts`。

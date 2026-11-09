@@ -678,7 +678,7 @@ export type TeamToolOptions = {
   /**
    * Durable evidence about one provisioned member session. The spawn replay path and the
    * provisioning reconciliation both need reads the tool API cannot perform inside its own commit
-   * (`docs/families.md` A6), so the runtime answers them from the conversation table.
+   * (`docs/history/families.md` A6), so the runtime answers them from the conversation table.
    */
   memberSession: MemberSessionProbe
   /** Validate and clamp an explicit teammate model pick (fresh context only) against the catalog. */
@@ -1126,7 +1126,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         }, context)
       }
 
-      // 2. Create the task-owned child and its identity link in one commit (docs/families.md A6).
+      // 2. Create the task-owned child and its identity link in one commit (docs/history/families.md A6).
       //    A replayed call reuses the child already recorded for this name.
       // A fresh spawn with an explicit model overrides only model/thinkingLevel — never tools or
       // instructions, which keep cloning the Lead's composition (DSH teammates are Lead copies).
@@ -1145,7 +1145,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
           ? toConversationId(plan.conversationId)
           : await api.commit(async (tx) => {
             // Read the board and the fork boundary before the conversation write: a table/doc read
-            // after a write can queue (docs/families.md A6).
+            // after a write can queue (docs/history/families.md A6).
             const doc = await tx.doc(Team, leadId)
             const stored = doc.members.find(member => member.name === name)
             const ref = await tx.doc(TeamAnchors, leadId)
@@ -1533,7 +1533,7 @@ export async function lastCompletedTurnEntry(tx: Tx, conversationId: Conversatio
  * Fork the Lead's completed-turn prefix into a task-owned child. Before the first completed turn
  * the prefix is empty, so the child starts fresh — DSH's `prepareContinuable` returns `{}` in that
  * case and the child behaves like a spawn (`index.ts:72-77`). `cutoff` must be read before the
- * commit's first table write (docs/families.md A6).
+ * commit's first table write (docs/history/families.md A6).
  */
 async function forkLeadConversation(tx: Tx, leadId: ConversationId, cutoff: EntryId | undefined, taskId: TaskId): Promise<{ id: ConversationId }> {
   const ownership = { kind: 'task' as const, taskId }

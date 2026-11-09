@@ -1,5 +1,7 @@
 # 整族功能：DSH 机制 → Pi Durable 落点
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 基准：DSH `687f282e86`（0.2.1-rc.2）对照 Pi Durable ^1.4.0（`package.json:31-34`，已由 1.3.0 升级；§8 假设表仍是 1.3.0 上的验证结论，升级 1.4.0 后未重验）与本仓库 `src/server/runtime/` / `conversation/projection.ts` / `shared/types.ts`。
 本文件是实施蓝图：每族写清「DSH 机制 → Pi 等价物 → pi-web 最小切片」，与 `docs/parity.md` 的状态表配套。
 

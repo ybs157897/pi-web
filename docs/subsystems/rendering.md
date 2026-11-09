@@ -2,7 +2,7 @@
 
 > 状态：现状参考（2026-11-09 自 docs/rendering-state-machines.md 与 docs/zcode-process-rendering-gaps.md 抽取）。决策与验收历史见 docs/spec.md 对应日期段。
 
-本页覆盖会话流（transcript）的动态渲染：durable 消息日志如何折叠成回合（run）的渲染模型，以及流式帧与落盘帧之间保持界面不跳变的机制——消息身份、块级流式状态、回答区归属、四台状态机与末尾运行指示器。完整的转移矩阵、缺陷编号（V1–V5）与 ego 验收记录留在 [rendering-state-machines.md](../rendering-state-machines.md)，本页只写今天成立的行为。
+本页覆盖会话流（transcript）的动态渲染：durable 消息日志如何折叠成回合（run）的渲染模型，以及流式帧与落盘帧之间保持界面不跳变的机制——消息身份、块级流式状态、回答区归属、四台状态机与末尾运行指示器。完整的转移矩阵、缺陷编号（V1–V5）与 ego 验收记录留在 [rendering-state-machines.md](../history/rendering-state-machines.md)，本页只写今天成立的行为。
 
 ## 渲染模型
 
@@ -71,7 +71,7 @@ process 排序后，「连续 2 个及以上」的同类工具行折成 UI 合�
 
 ## 已知限制
 
-- 陈旧 live slot：上一 run 遗留的 running tool slot 可能挂到新 run 的分组里，依赖 harness 投影原子性兜底，低概率未修（[rendering-state-machines.md](../rendering-state-machines.md) S3 尾注）。
+- 陈旧 live slot：上一 run 遗留的 running tool slot 可能挂到新 run 的分组里，依赖 harness 投影原子性兜底，低概率未修（[rendering-state-machines.md](../history/rendering-state-machines.md) S3 尾注）。
 - 思考摘要行是 140ms 的单次进入动画，不是 ZCode 的排队 enter/exit（[ReasoningBlock.module.css:5](../../src/web/message-rendering/ReasoningBlock.module.css#L5)）。
-- 失败状态词带 title tooltip，但没有 ZCode 的 tooltip 内复制按钮（[ToolCard.tsx:197](../../src/web/ToolCard.tsx#L197)）；`list_files` 摘要按用户要求明示（「搜索列表」），有意偏离 ZCode。两者均见 [zcode-process-rendering-gaps.md](../zcode-process-rendering-gaps.md) 的「仍保留的部分对齐」。
+- 失败状态词带 title tooltip，但没有 ZCode 的 tooltip 内复制按钮（[ToolCard.tsx:197](../../src/web/ToolCard.tsx#L197)）；`list_files` 摘要按用户要求明示（「搜索列表」），有意偏离 ZCode。两者均见 [zcode-process-rendering-gaps.md](../history/zcode-process-rendering-gaps.md) 的「仍保留的部分对齐」。
 - 工作区的目标 / 终端 / 工作流分区未实现，目标分区只渲染当前目标与轮次预算（[spec.md](../spec.md) 2026-10-31 段未决）。

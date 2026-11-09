@@ -1,8 +1,10 @@
 # Pi Web 项目增强提示词
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 用途：交给负责开发本仓库的编程 Agent。复制下方正文即可使用。它要求实现和验证项目能力；不要把整份开发任务书注入应用内的每一次模型请求。
 
-配套文件：[运行时系统提示词](runtime-system.md)、[源码依据与使用说明](sources-and-integration.md)。基线核对日期：2026-10-19；执行时重新核对当前工作树。
+配套文件：[运行时系统提示词](../prompts/runtime-system.md)、[源码依据与使用说明](prompts-sources-and-integration.md)。基线核对日期：2026-10-19；执行时重新核对当前工作树。
 
 ---
 

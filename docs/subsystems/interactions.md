@@ -18,7 +18,7 @@
 
 ## 投影与渲染
 
-投影合并三源：转录里的工具调用参数（题目）、工具结果（pending）、reply entry（迟到回答与放弃），再叠加 doc 里的权威记录（含 plan-review，`superseded` 映射为 wire 状态 `continued`；[projection.ts:939](../../src/server/conversation/projection.ts#L939)）。交互答复并入提问调用的那个 run（含 legacy callId 回退与 compaction 安全回退），一问一答不把回合切成两段（[projection.ts:690](../../src/server/conversation/projection.ts#L690)）。渲染层：question/plan-review 待答期间，该 run 的后续正文不进回答区，过渡文留在工作分组，屏障解除点是最后一条交互回复 payload 之后（[render-model.ts:336](../../src/web/render-model.ts#L336)；状态机记录见 [rendering-state-machines.md](../rendering-state-machines.md) S5）。目标自动续跑在存在 pending 交互时不启动（[goal.ts:360](../../src/server/tools/goal.ts#L360)）。
+投影合并三源：转录里的工具调用参数（题目）、工具结果（pending）、reply entry（迟到回答与放弃），再叠加 doc 里的权威记录（含 plan-review，`superseded` 映射为 wire 状态 `continued`；[projection.ts:939](../../src/server/conversation/projection.ts#L939)）。交互答复并入提问调用的那个 run（含 legacy callId 回退与 compaction 安全回退），一问一答不把回合切成两段（[projection.ts:690](../../src/server/conversation/projection.ts#L690)）。渲染层：question/plan-review 待答期间，该 run 的后续正文不进回答区，过渡文留在工作分组，屏障解除点是最后一条交互回复 payload 之后（[render-model.ts:336](../../src/web/render-model.ts#L336)；状态机记录见 [rendering-state-machines.md](../history/rendering-state-machines.md) S5）。目标自动续跑在存在 pending 交互时不启动（[goal.ts:360](../../src/server/tools/goal.ts#L360)）。
 
 ## UI
 

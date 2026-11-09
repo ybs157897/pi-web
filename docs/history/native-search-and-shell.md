@@ -1,5 +1,7 @@
 # Native search and shell execution
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状见 [search-and-shell.md](../subsystems/search-and-shell.md)。
+
 This change moves workspace content search onto native ripgrep and gives both shell tools the
 same execution contract: a 15-second foreground budget, a full-output log, and search-friendly
 exit semantics.

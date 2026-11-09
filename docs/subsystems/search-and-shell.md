@@ -1,6 +1,6 @@
 # 检索与 Shell（search-and-shell）
 
-> 状态：现状参考（2026-11-09 自 docs/native-search-and-shell.md 抽取，对照 src/server/tools/research.ts、src/server/tools/search/、src/server/tools/shell/ 源码复核）；实施背景与测试清单见 [native-search-and-shell.md](../native-search-and-shell.md)，决策记录见 [spec.md](../spec.md)。
+> 状态：现状参考（2026-11-09 自 docs/native-search-and-shell.md 抽取，对照 src/server/tools/research.ts、src/server/tools/search/、src/server/tools/shell/ 源码复核）；实施背景与测试清单见 [native-search-and-shell.md](../history/native-search-and-shell.md)，决策记录见 [spec.md](../spec.md)。
 
 ## 四个检索工具
 

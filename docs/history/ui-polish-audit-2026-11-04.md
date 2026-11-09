@@ -1,5 +1,7 @@
 # UI 打磨审计 · 2026-11-04
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 对 pi-web 当前 UI 做的第一轮诊断评审（三区布局 / AI 输出渲染 / 任务 / 文件）。
 方法：CDP 无头 Chrome 采集 12 个场景截图（`artifacts/ui-audit/`）+ 每场景几何断言 + CSS token 逃逸 grep + 人工/VLM rubric 评审。
 采集脚本：`artifacts/ui-audit/capture.mjs`、`capture2.mjs`（一次性工具，非正式测试设施）。

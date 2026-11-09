@@ -178,7 +178,7 @@ Plan 模式只做只读研究和计划审阅。命令式语言要求实施时，
 
 批准计划只关闭 Plan，不提升访问权限。只读会话的计划卡用于确认方案，批准后仍不实施。一次性 `subagent` 子会话只向委派方交付结论，执行层禁止其独立审批、向用户提问、操作目标、继续委派或创建团队；Explore 继续保持只读检索，code mode 使用同一限制。已有目标的状态和暂停约束不会因当前工具缺失而消失。
 
-WeTrack 分析先读取版本，再通过 `expectedRevision` 保存尝试；过期写入拒绝。本次无法定论的原因与已有可靠结论分开保存和展示，预算耗尽不会抹掉先前分析。待处理列表支持 `offset` 翻页，未配置数据源会明确报错。详见[本次实施与验证记录](docs/prompts/review-2026-11-04.md)。
+WeTrack 分析先读取版本，再通过 `expectedRevision` 保存尝试；过期写入拒绝。本次无法定论的原因与已有可靠结论分开保存和展示，预算耗尽不会抹掉先前分析。待处理列表支持 `offset` 翻页，未配置数据源会明确报错。详见[本次实施与验证记录](docs/history/prompts-review-2026-11-04.md)。
 
 每次请求自动加载绑定工作区根目录的 `AGENTS.md`，附来源、作用域与内容哈希，最多 32 KiB；缺失、过大、符号链接或读取异常会明确记录，不静默截取规则。不会加载工作区上级指令，也不会递归扫描全仓库。模型处理子目录文件时，只在该目录及其父目录按需读取实际存在的 `AGENTS.md`，不要求递归发现全仓库规则。项目规则和 Preset 不能扩大用户授权或宿主权限。
 
@@ -358,7 +358,7 @@ Windows 上跑验证前先看 [Windows](#windows)：shell 相关验证走 `pwsh`
 
 ## UI 来源
 
-- AI 输出参考 ZCode 3.16.2；实现与验收见 [docs/zcode-markdown-rendering-plan.md](docs/zcode-markdown-rendering-plan.md)。
+- AI 输出参考 ZCode 3.16.2；实现与验收见 [docs/zcode-markdown-rendering-plan.md](docs/history/zcode-markdown-rendering-plan.md)。
 - 代码查看器：`@pierre/diffs@1.1.22`；正文解析：`streamdown@2.5.0`；图标：`lucide-react@1.17.0`。
 - 应用外壳、设置和部分专用面板的 DSH 展示组件：`@deepseek-ai/dsh-client-ui-primitives@0.2.1-rc.2`。
 - 问题清单页的 antd 6 组件（`BorderBeam` / `Listy` / `Tabs` / `Tag`），按需加载，不进入首屏。

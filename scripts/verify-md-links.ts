@@ -23,7 +23,6 @@ const root = resolve(import.meta.dirname, '..')
 
 /** Grandfathered legacy dead links: a `file` entry skips a whole source file, a `file:line` entry one link. */
 const GRANDFATHERED: string[] = [
-  'AGENTS.md:23',
 ]
 
 /** Snapshot-template placeholders in link targets (<ROOT>, <PLATFORM>, <DATE>, <TZ>, …). */

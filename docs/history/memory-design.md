@@ -1,5 +1,7 @@
 # 项目记忆系统落地设计（逐行对照 ZCode 实现）
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状见 [memory.md](../subsystems/memory.md)。
+
 状态：已实施（2026-10-26，Phase 1–3）。落地代码：`src/server/memory/store.ts`、`src/server/memory/policy.ts`、`src/server/memory/extraction.ts`，以及 `src/server/runtime/` / `src/server/conversation/execution-env.ts` / `src/server/conversation/execution-policy.ts` 的装配（2026-11-03 注：7b007fc 分层重组——旧单文件 `runtime.ts` 拆为 `src/server/runtime/` 目录，`execution-env.ts` / `execution-policy.ts` 移入 `src/server/conversation/`，本文出现的旧路径以此注为准）；测试见 `tests/memory*.test.ts`、`tests/runtime-policy.test.ts`、`tests/execution-policy.test.ts`。本文保留设计时的行号引用，代码位置以文件为准；实现中与本文的差异：① 索引读取复用有界读取；② 提取快照会剥掉主会话的 system 消息（否则会带上主会话的工具目录）；③ 提取指令改为末尾 user 消息（真实模型验收发现 system-only 指令会被模型视为对话已结束，返回空文本）；④ workspaceWrite 的可写根会按真实路径规范化，避免 macOS `/var` 符号链接下的嵌套目录误拒。
 
 参照系文件（ZCode 仓内，下文以 `core/` = `apps/zcode-cli/packages/core/src/`）：

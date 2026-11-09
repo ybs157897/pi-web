@@ -1,5 +1,7 @@
 # Inspector 侧栏外壳对齐 ZCode 批次计划（inspector-shell-parity）
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 日期：2026-11-01。参照：本机 ZCode v3.16.2 源码（`~/Documents/ybs/code/work/ZCode`）。
 规格来源：四份探索报告（GitPane / 侧栏外壳 / 浏览器+划词+轨迹 / pi-web 现状接线），关键结论已内化到本文，原始行号见报告。
 

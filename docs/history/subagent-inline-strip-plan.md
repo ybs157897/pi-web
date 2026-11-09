@@ -1,5 +1,7 @@
 # 子智能体正文一行条（SubagentRunStrip）实施文档
 
+> 历史快照（2026-11-09 冻结）：已完结批次的点时文档，不是现状权威。现状参考见 [docs/subsystems/](../subsystems/README.md) 或 [docs/spec.md](../spec.md)。
+
 > 状态：已实施（分支 `devin/subagent-strip`）。自动化验证：`npm run typecheck` 通过；
 > `tests/subagent-run-model.test.ts` 14 项通过；与 render-model（59）、transcript-live-state（1）、
 > rendering-interactions（14）、subagent-pane（8）、process-presentation（8）合计 6 文件 104 项全绿。

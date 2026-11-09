@@ -1,6 +1,6 @@
 # 工作区记忆（memory）
 
-> 状态：现状参考（2026-11-09 自 [memory-design.md](../memory-design.md) 与 [memory-plan.md](../memory-plan.md) 抽取）。决策与验收历史见 [spec.md](../spec.md) 对应日期段（2026-10-26、2026-11-03 f0106a6）。
+> 状态：现状参考（2026-11-09 自 [memory-design.md](../history/memory-design.md) 与 [memory-plan.md](../history/memory-plan.md) 抽取）。决策与验收历史见 [spec.md](../spec.md) 对应日期段（2026-10-26、2026-11-03 f0106a6）。
 
 跨会话的项目记忆：每个工作区一份纯文件记忆目录，会话内自动注入索引、写入自动盖章、成功 run 后后台提取新事实。开关是设置 `memoryEnabled`（默认关）；关闭态不删除已写入的记忆文件。与 compaction 的分工：compaction 维持当前会话连续性，memory 保存跨会话可复用事实，两者互不读写对方状态。
 
@@ -64,6 +64,6 @@ memory extension 持有 write/edit 的 wraps（[policy.ts:69](../../src/server/m
 
 ## 已知限制
 
-- Phase 4 整体未开始：记忆只读查看/编辑/删除/搜索/导出 UI、semantic-recall、Dream 与 `memory_update`、custom agent 三 scope 记忆、跨机器同步、`workspaceIdentity` 独立隔离键（[spec.md](../spec.md) 2026-10-26 未决；设计预留见 [memory-plan.md §7](../memory-plan.md)）。
+- Phase 4 整体未开始：记忆只读查看/编辑/删除/搜索/导出 UI、semantic-recall、Dream 与 `memory_update`、custom agent 三 scope 记忆、跨机器同步、`workspaceIdentity` 独立隔离键（[spec.md](../spec.md) 2026-10-26 未决；设计预留见 [memory-plan.md §7](../history/memory-plan.md)）。
 - 提取快照携带原始用户图片，未做媒体剥离（[spec.md](../spec.md) 2026-10-26 未决）。
 - cursor 是进程内内存态，重启丢失后首个 run 按全量历史重看一次（[spec.md](../spec.md) 2026-10-26 未决）。

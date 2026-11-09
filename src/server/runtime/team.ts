@@ -246,7 +246,7 @@ export function createTeam(deps: TeamDeps) {
   /**
    * Resolve one direct child of `parentId`. DSH's control tools authorize by live lineage; Pi exposes
    * no such check, so ownership is enforced here: any conversation this parent did not create is a
-   * NOT_FOUND rather than a control target (`docs/families.md` A7).
+   * NOT_FOUND rather than a control target (`docs/history/families.md` A7).
    */
   const requireChild = async (parentId: ConversationId, childValue: string): Promise<Awaited<ReturnType<typeof requireConversation>>> => {
     const childId = parseConversationId(childValue)

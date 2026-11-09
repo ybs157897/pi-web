@@ -13,7 +13,7 @@
 
 ## 2026-11-04 提示词与运行时修订
 
-本节修订下文旧批次中的子会话工具继承、计划入口、团队等待和 WeTrack 覆盖规则。完整决定与证据见 [评审实施记录](prompts/review-2026-11-04.md)。
+本节修订下文旧批次中的子会话工具继承、计划入口、团队等待和 WeTrack 覆盖规则。完整决定与证据见 [评审实施记录](history/prompts-review-2026-11-04.md)。
 
 - **一次性子会话**：借鉴 ZCode 子会话禁止独立计划审批及 DSH 默认一层的执行层约束；Pi 用持久 Subagents 身份统一收窄 direct/callable/deferred 并在工具执行处拒绝，旧子会话/重放同样生效。Explore 保留 Pi 严格只读工具集，不照搬 ZCode shell 白名单；general-purpose 专注实现与多步操作，只读检索路由到 Explore。没有移植交互转接系统，需要用户决定时回报委派方。
 - **计划权限**：批准只关闭 Plan，不提升访问权限。只读卡片显示确认方案，答复不要求实施；入口/提交/提问分别按实际路由生成，子会话计划交回父级。
@@ -24,8 +24,7 @@
 
 ## 历史对照基准
 
-基准：`deepseek-ai/deepseek-harness` HEAD `687f282e86`（dsh 0.2.1-rc.2），本地 `dsh web` 与 pi-web demo 同 1440×900 / 浅色 / 中文逐屏截图对照。
-证据目录：`artifacts/ego-compare/shots`（gitignored，仅本机）。
+基准：`deepseek-ai/deepseek-harness` HEAD `687f282e86`（dsh 0.2.1-rc.2），本地 `dsh web` 与 pi-web demo 同 1440×900 / 浅色 / 中文逐屏截图对照。证据目录：`artifacts/ego-compare/shots`（gitignored，仅本机）。
 
 状态：`待修` / `进行中` / `已修` / `不做`（附原因）。
 
@@ -38,7 +37,6 @@
 | DF-1 | 插件市场按 ZCode 数据模型原生实现（2026-10-27 起取代原「不展示插件管理界面」决策） | 设置 → 扩展 → 插件市场：本地目录 / HTTPS / GitHub / git 来源、安装 / 更新 / 卸载 / 启停、安装确认（展示 MCP 命令与能力）、插件技能接入技能目录、插件 MCP 工具热重载；P2 补齐 `@` 引用 reminder、`_meta.ui` 内联卡、右侧插件 tab 与 JSON-RPC bridge。原「所有内置扩展工具恒开启」仍成立，不做逐插件工具开关。 | 已实现（P0+P1+P2） |
 | DF-2 | 代码模式与 MCP 按 Pi Durable ^1.4.0 语义开启（2026-11 由 1.3.0 升级，`package.json:31-34`） | `codemode` 工具 + QuickJS 沙箱 + `details.calls` 子调用；MCP 由用户级 `mcp.json` 与已启用插件的 `mcpServers` 合并而成（stdio/HTTP、`mcp__<server>__<tool>`、exposure、`tool_search`），插件能力变化时热重载。DSH 对应的是 PTC `run_code` preset 与插件市场的 MCP 配置，UI/配置模型不同，不做逐屏对照。 | 有意差异（Pi 原生能力） |
 | DF-3 | ~~回答的最终结论按「设计文档」版式渲染~~（差异已随功能移除，2026-10-26） | 「结论文档排版」整体下线：前端渲染层（`DocText` / `DocBlock` / `DocInline` / `doc-split` / `doc-inline`、`DocBody.module.css` / `DocBlock.module.css`）、设置项 `docStyle`、模型契约 `doc-style-instruction.ts`，以及为 doc 块 JSON 载荷引入的「结构化输出」模型能力开关（b3093f6）一并删除；移除时结论与过程回答统一走库的 `MarkdownText`；2026-10-27 的 ZCode 输出迁移见 DF-4。历史会话里已有的 ```` ```doc ```` 围栏按普通代码块显示。详见 `docs/spec.md` 2026-10-26。 | 已移除（用户要求） |
-
 | DF-4 | AI 输出改按 ZCode（2026-10-27） | 回答、代码、表格/图表/图片、思考、常见工具过程与已更改文件摘要以 ZCode 3.16.2 源码和 3.16.3 实机为参考；宿主执行、权限、问答、计划和子会话语义保留。新正文不再使用 DSH Markdown/CodeBlock，终端不再依赖 DSH 内部 DOM。详见 `docs/zcode-markdown-rendering-plan.md`。 | 有意差异（用户要求，已实施） |
 | DF-5 | 折叠的「已工作」分组头带正文预览（2026-10-31） | DSH 的 turn-process 折叠头只有时长（`已完成，用时 X`）；pi-web 的「回答」只取最后一条纯文本 assistant 消息，和工具调用同一条消息里的正文（例如提问前的方案说明）会随分组一起折叠，读者只剩中途开始的半截回答。分组折叠时在时长后补一条单行、静音色、可省略的正文预览（取被折叠正文里最长的一段的首行，去 markdown 标记、120 字截断），展开即消失。DSH 数据里已有 `messageCount/toolCallCount/subagentCount`，未采用。| 有意差异（用户要求，已实施） |
 
@@ -121,7 +119,7 @@
 
 ## 整族功能（DSH 0.2.1-rc.2 → Pi Durable）
 
-机制映射、假设验证与实现顺序见 [families.md](families.md)。
+机制映射、假设验证与实现顺序见 [families.md](history/families.md)。
 
 | 族 | 状态 |
 |---|---|
