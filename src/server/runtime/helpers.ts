@@ -38,7 +38,6 @@ export type ConversationMetadata = {
   queueCreatedAt: Record<string, number>
   requestReceipts: Record<string, { fingerprint: string; submissionId: number | null; status: 'pending' | 'accepted' }>
   workspaceId: string | null
-  presetId: string | null
   accessMode: AccessMode
   feedback: Record<string, 'up' | 'down' | null>
   queueEdits: Record<string, {
@@ -67,7 +66,6 @@ export const META = defineDoc<ConversationMetadata>({
     queueCreatedAt: {},
     requestReceipts: {},
     workspaceId: null,
-    presetId: null,
     accessMode: 'fullAccess',
     feedback: {},
     queueEdits: {},
@@ -316,7 +314,6 @@ export function cloneMetadata(value: Readonly<ConversationMetadata>): Conversati
     queueCreatedAt: { ...value.queueCreatedAt },
     requestReceipts: structuredClone(value.requestReceipts),
     workspaceId: value.workspaceId,
-    presetId: value.presetId,
     accessMode: value.accessMode,
     feedback: { ...value.feedback },
     queueEdits: structuredClone(value.queueEdits),

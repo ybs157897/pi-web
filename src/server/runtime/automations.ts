@@ -1,22 +1,29 @@
 /**
  * Automation CRUD, scheduling and run bookkeeping.
  *
- * A run is an ordinary conversation plus its prompt, so this module only owns the
- * schedule, the `lastRun` record and the guard rails around deletion; creating and
- * submitting the conversation is delegated to the conversation feature.
+ * A task owns a two-line RRULE rule and a delivery target. `new` and `new_once`
+ * runs are ordinary conversations plus a prompt, so this module only owns the
+ * schedule and the run record; creating and submitting the conversation is
+ * delegated to the conversation feature. `session` deliveries message an existing
+ * conversation instead, which has no run outcome of its own — arrival is the
+ * result, recorded as `delivered`.
+ *
+ * Legacy records (an `enabled` flag plus `intervalMs` or a four-unit calendar
+ * schedule) are migrated in `recover()` before any timer is armed.
  */
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type {
-  AgentPreset, Automation, AutomationRun, AutomationSchedule, ConversationDetail, CreateAutomationInput, CreateConversationInput,
-  ModelRef as UiModelRef, SubmitInput, UpdateAutomationInput, WorkspaceSummary,
+  Automation, AutomationRun, AutomationStatus, AutomationTarget, ConversationDetail,
+  CreateAutomationInput, CreateConversationInput, ModelRef as UiModelRef, SubmitInput, UpdateAutomationInput,
+  WorkspaceSummary,
 } from '../../shared/types.ts'
+import { compileRule, systemTimeZone, type AutomationFrequency, type TimingDraft } from '../../shared/automation-timing.ts'
 import type { AppStateStore } from '../state/app-state.ts'
 import type { RuntimeModels } from '../model/catalog.ts'
 import { AutomationScheduler } from '../automation/scheduler.ts'
-import { nextRunAt } from '../automation/recurrence.ts'
-import { parseTimeOfDay } from '../../shared/automation-schedule.ts'
+import { nextRunOf, parseRule } from '../automation/recurrence.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import { CTX, safeFailure } from './helpers.ts'
 
@@ -34,35 +41,115 @@ export interface AutomationsDeps {
   requireConversation(value: string): Promise<RuntimeConversation>
   currentDetail(id: ConversationId): Promise<ConversationDetail>
   selectedWorkspace(id: string | undefined): WorkspaceSummary
-  selectedPreset(id: string | null | undefined): AgentPreset | undefined
   assertModelAllowed(model: UiModelRef | undefined, label: string): void
   create(input: CreateConversationInput): Promise<ConversationDetail>
   submit(value: string, input: SubmitInput): Promise<{ submissionId: string }>
 }
 
+/** How many finished runs the history keeps; the list is a tail, not an archive. */
+const MAX_RUN_HISTORY = 50
+
+/** The scheduled-trigger framing a delivered prompt carries, so a model can tell it from a fresh user turn. */
+export function framedPrompt(automation: Automation, plannedAt: number): string {
+  return [
+    '[SCHEDULE REMINDER]',
+    'This is a scheduled message from the user',
+    `schedule_id_json: ${JSON.stringify(automation.id)}`,
+    `occurrence_at: ${new Date(plannedAt).toISOString()}`,
+    `reminder_prompt_json: ${JSON.stringify(automation.prompt)}`,
+  ].join('\n')
+}
+
+/** The legacy shape still present in an app-state written before RRULE support. */
+interface LegacyAutomation extends Partial<Automation> {
+  enabled?: boolean
+  intervalMs?: number
+  schedule?: {
+    unit: 'hour' | 'day' | 'week' | 'month'
+    timeOfDay?: string
+    dayOfWeek?: number
+    dayOfMonth?: number
+  }
+}
+
+const LEGACY_UNIT_FREQUENCY: Record<'hour' | 'day' | 'week' | 'month', AutomationFrequency> = {
+  hour: 'hourly', day: 'daily', week: 'weekly', month: 'monthly',
+}
+
+function legacyDraft(legacy: LegacyAutomation, timeZone: string): TimingDraft | undefined {
+  const intervalMs = legacy.intervalMs
+  if (typeof intervalMs === 'number' && Number.isFinite(intervalMs)) {
+    return {
+      frequency: 'minutes', interval: String(Math.max(1, Math.round(intervalMs / 60_000))),
+      weekdays: [1], monthDay: 1, date: '', time: '00:00', timeZone,
+    }
+  }
+  const schedule = legacy.schedule
+  if (schedule === undefined) return undefined
+  return {
+    frequency: LEGACY_UNIT_FREQUENCY[schedule.unit] ?? 'daily',
+    interval: '1',
+    weekdays: [schedule.dayOfWeek ?? 1],
+    monthDay: schedule.dayOfMonth ?? 1,
+    date: '',
+    time: schedule.timeOfDay ?? '00:00',
+    timeZone,
+  }
+}
+
+/**
+ * Bring one stored record onto the current shape. Idempotent: a record that
+ * already carries `status`, `target` and an RRULE (or none) is returned as-is.
+ */
+export function migrateAutomation(raw: LegacyAutomation, now: number): Automation {
+  const timeZone = raw.timeZone ?? systemTimeZone()
+  if (raw.status !== undefined && raw.target !== undefined && (raw.rrule !== undefined || legacyDraft(raw, timeZone) === undefined)) {
+    return raw as Automation
+  }
+  const status: AutomationStatus = raw.status ?? (raw.enabled === false ? 'paused' : 'active')
+  const target: AutomationTarget = raw.target ?? 'new'
+  let rrule = raw.rrule
+  if (rrule === undefined) {
+    const draft = legacyDraft(raw, timeZone)
+    rrule = draft === undefined ? undefined : compileRule(draft, now)
+  }
+  const migrated: Automation = {
+    ...(raw as Automation),
+    status: rrule === undefined && status === 'active' ? 'paused' : status,
+    target,
+    ...(rrule === undefined ? {} : { rrule, timeZone }),
+  }
+  delete (migrated as LegacyAutomation).enabled
+  delete (migrated as LegacyAutomation).intervalMs
+  delete (migrated as LegacyAutomation).schedule
+  return migrated
+}
+
 export function createAutomations(deps: AutomationsDeps) {
   const {
     appState, modelRuntime, isClosed, requireConversation, currentDetail,
-    selectedWorkspace, selectedPreset, assertModelAllowed, create, submit,
+    selectedWorkspace, assertModelAllowed, create, submit,
   } = deps
 
   const automationTasks = new Set<Promise<void>>()
   let runAutomation: (id: string) => Promise<{ automation: Automation; conversationId: string }>
   const automationScheduler = new AutomationScheduler()
-  /** How many finished runs the history keeps; the list is a tail, not an archive. */
-  const MAX_RUN_HISTORY = 50
   /**
-   * When the task fires next. A calendar schedule wins over the plain interval, and
-   * a stored `nextRunAt` keeps the due time stable across restarts.
+   * When the task fires next. A stored `nextRunAt` keeps the due time stable
+   * across restarts; otherwise the rule is asked for its next occurrence.
    */
   const dueAt = (automation: Automation, from: number): number | undefined => {
-    if (automation.schedule !== undefined) return nextRunAt(automation.schedule, from)
-    if (automation.intervalMs !== undefined) return from + automation.intervalMs
-    return undefined
+    if (automation.rrule === undefined) return undefined
+    try {
+      return nextRunOf(automation.rrule, from)
+    } catch {
+      // A stored rule that no longer parses cannot fire; `recover` pauses it.
+      return undefined
+    }
   }
   const scheduleAutomation = (automation: Automation): void => {
     automationScheduler.cancel(automation.id)
-    if (isClosed() || !automation.enabled) return
+    if (isClosed() || automation.status !== 'active') return
     const at = automation.nextRunAt ?? dueAt(automation, Date.now())
     if (at === undefined) return
     automationScheduler.schedule(automation.id, at, () => {
@@ -72,79 +159,74 @@ export function createAutomations(deps: AutomationsDeps) {
   const automations = (): Automation[] => appState.snapshot().automations
 
   const validateAutomation = (input: CreateAutomationInput | UpdateAutomationInput): void => {
-    if (input.name !== undefined && (!input.name.trim() || input.name.length > 120)) throw new RuntimeError('INVALID_INPUT', 'Automation 名称无效')
+    if (input.name !== undefined && (!input.name.trim() || input.name.length > 120)) throw new RuntimeError('INVALID_INPUT', 'Automation 名称必须是 1 到 120 个字符')
     if (input.prompt !== undefined && (!input.prompt.trim() || input.prompt.length > 100_000)) throw new RuntimeError('INVALID_INPUT', 'Automation 提示词无效')
-    if (input.intervalMs !== undefined && input.intervalMs !== null && (!Number.isSafeInteger(input.intervalMs) || input.intervalMs < 60_000 || input.intervalMs > 365 * 24 * 60 * 60 * 1000)) {
-      throw new RuntimeError('INVALID_INPUT', 'Automation interval 必须在 1 分钟到 1 年之间')
+    if (input.rrule !== undefined && input.rrule !== null) {
+      if (typeof input.rrule !== 'string' || input.rrule.trim() === '') throw new RuntimeError('INVALID_INPUT', 'Automation 重复规则不能为空')
+      try {
+        parseRule(input.rrule)
+      } catch (error) {
+        throw new RuntimeError('INVALID_INPUT', `Automation 重复规则无效：${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-    if (input.schedule !== undefined && input.schedule !== null) {
-      const schedule = input.schedule
-      if (!['hour', 'day', 'week', 'month'].includes(schedule.unit)) throw new RuntimeError('INVALID_INPUT', 'Automation 重复单位无效')
-      if (schedule.timeOfDay !== undefined) {
-        const time = parseTimeOfDay(schedule.timeOfDay)
-        const raw = /^(\d{1,2}):(\d{2})$/u.exec(schedule.timeOfDay.trim())
-        if (raw === null || time.hour !== Number(raw[1]) || time.minute !== Number(raw[2])) {
-          throw new RuntimeError('INVALID_INPUT', 'Automation 时间格式应为 HH:MM')
-        }
-      }
-      if (schedule.unit === 'week' && schedule.dayOfWeek !== undefined && (schedule.dayOfWeek < 0 || schedule.dayOfWeek > 6)) {
-        throw new RuntimeError('INVALID_INPUT', 'Automation 星期应在 0-6 之间')
-      }
-      if (schedule.unit === 'month' && schedule.dayOfMonth !== undefined && (schedule.dayOfMonth < 1 || schedule.dayOfMonth > 31)) {
-        throw new RuntimeError('INVALID_INPUT', 'Automation 月份日期应在 1-31 之间')
-      }
+    if (input.target !== undefined && !['session', 'new_once', 'new'].includes(input.target)) {
+      throw new RuntimeError('INVALID_INPUT', 'Automation 执行位置无效')
+    }
+    if (input.status !== undefined && !['active', 'paused', 'ended'].includes(input.status)) {
+      throw new RuntimeError('INVALID_INPUT', 'Automation 状态无效')
     }
     if (input.model && !modelRuntime.models.getModel(input.model.provider, input.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', 'Automation 模型不在 Pi 模型目录中')
     assertModelAllowed(input.model, 'Automation 模型')
     if (input.workspaceId) selectedWorkspace(input.workspaceId)
-    if (input.presetId) selectedPreset(input.presetId)
   }
 
   const assertAutomationResourcesExist = (
     workspaceId: string | undefined,
-    presetId: string | undefined,
     workspaces: readonly WorkspaceSummary[],
-    presets: readonly AgentPreset[],
   ): void => {
     if (workspaceId && !workspaces.some(workspace => workspace.id === workspaceId)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
-    if (presetId && !presets.some(preset => preset.id === presetId)) throw new RuntimeError('NOT_FOUND', 'Agent preset 不存在')
   }
 
-  const assertNoAutomationReferences = (items: readonly Automation[], resource: 'workspace' | 'preset', id: string): void => {
-    const references = items.filter(item => (resource === 'workspace' ? item.workspaceId : item.presetId) === id)
+  const assertNoAutomationReferences = (items: readonly Automation[], id: string): void => {
+    const references = items.filter(item => item.workspaceId === id)
     if (references.length === 0) return
-    const resourceName = resource === 'workspace' ? '工作区' : 'Agent preset'
     const automationList = references.map(item => `${item.name}（${item.id}）`).join('、')
-    throw new RuntimeError('CONFLICT', `${resourceName}仍被以下 Automation 引用：${automationList}。请先修改或删除这些 Automation`)
+    throw new RuntimeError('CONFLICT', `工作区仍被以下 Automation 引用：${automationList}。请先修改或删除这些 Automation`)
   }
 
   const createAutomation = async (input: CreateAutomationInput): Promise<Automation> => {
     validateAutomation(input)
+    const target: AutomationTarget = input.target ?? 'new'
+    if (target === 'session') {
+      if (input.sessionId === undefined || input.sessionId.trim() === '') throw new RuntimeError('INVALID_INPUT', '执行位置为「当前会话」时必须指定会话')
+      await requireConversation(input.sessionId)
+    }
     const now = Date.now()
-    const intervalMs = input.intervalMs
-    const schedule = input.schedule
-    const enabled = input.enabled ?? (intervalMs !== undefined || schedule !== undefined)
+    const rrule = input.rrule
+    const status: AutomationStatus = input.status ?? (rrule === undefined ? 'paused' : 'active')
+    if (status === 'active' && rrule === undefined) throw new RuntimeError('INVALID_INPUT', '没有重复规则的任务只能手动运行')
     const candidate: Automation = {
       id: randomUUID(),
       name: input.name.trim(),
       prompt: input.prompt,
-      enabled,
-      ...(intervalMs !== undefined ? { intervalMs } : {}),
-      ...(schedule !== undefined ? { schedule } : {}),
+      status,
+      target,
+      ...(rrule === undefined ? {} : { rrule, timeZone: input.timeZone ?? systemTimeZone() }),
+      ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
       ...(input.model ? { model: { ...input.model } } : {}),
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-      ...(input.presetId ? { presetId: input.presetId } : {}),
       ...(input.accessMode ? { accessMode: input.accessMode } : {}),
       ...(input.builtin ? { builtin: input.builtin } : {}),
       createdAt: now,
       updatedAt: now,
     }
-    if (enabled) {
+    if (status === 'active') {
       const at = dueAt(candidate, now)
-      if (at !== undefined) candidate.nextRunAt = at
+      if (at === undefined) candidate.status = 'ended'
+      else candidate.nextRunAt = at
     }
     const stored = await appState.update(state => {
-      assertAutomationResourcesExist(candidate.workspaceId, candidate.presetId, state.workspaces, state.presets)
+      assertAutomationResourcesExist(candidate.workspaceId, state.workspaces)
       state.automations.push(candidate)
       return structuredClone(candidate)
     })
@@ -161,31 +243,36 @@ export function createAutomations(deps: AutomationsDeps) {
       if (input.prompt !== undefined) current.prompt = input.prompt
       if (input.model !== undefined) current.model = input.model ? { ...input.model } : undefined
       if (input.workspaceId !== undefined) current.workspaceId = input.workspaceId
-      if (input.presetId !== undefined) current.presetId = input.presetId
       if (input.accessMode !== undefined) current.accessMode = input.accessMode
-      let scheduleChanged = false
-      if (input.schedule === null) {
-        if (current.schedule !== undefined) scheduleChanged = true
-        delete current.schedule
-      } else if (input.schedule !== undefined) {
-        current.schedule = input.schedule
-        scheduleChanged = true
+      if (input.target !== undefined) current.target = input.target
+      let timingChanged = false
+      if (input.rrule === null) {
+        if (current.rrule !== undefined) timingChanged = true
+        delete current.rrule
+        delete current.timeZone
+      } else if (input.rrule !== undefined) {
+        current.rrule = input.rrule
+        current.timeZone = input.timeZone ?? current.timeZone ?? systemTimeZone()
+        timingChanged = true
+      } else if (input.timeZone !== undefined) {
+        current.timeZone = input.timeZone
+        timingChanged = true
       }
-      if (input.intervalMs === null) {
-        if (current.intervalMs !== undefined) scheduleChanged = true
-        delete current.intervalMs
-      } else if (input.intervalMs !== undefined) {
-        current.intervalMs = input.intervalMs
-        scheduleChanged = true
-      }
-      if (input.enabled !== undefined) current.enabled = input.enabled
-      if (scheduleChanged) {
-        const at = current.enabled ? dueAt(current, Date.now()) : undefined
-        if (at === undefined) delete current.nextRunAt
+      if (input.sessionId === null) delete current.sessionId
+      else if (input.sessionId !== undefined) current.sessionId = input.sessionId
+      if (input.status !== undefined) current.status = input.status
+      // A task without a rule never fires, so it cannot claim to be active.
+      if (current.rrule === undefined && current.status === 'active') current.status = 'paused'
+      if (current.status === 'active' && (timingChanged || current.nextRunAt === undefined)) {
+        const at = dueAt(current, Date.now())
+        if (at === undefined) current.status = 'ended'
         else current.nextRunAt = at
       }
-      if (!current.enabled || (current.intervalMs === undefined && current.schedule === undefined)) delete current.nextRunAt
-      assertAutomationResourcesExist(current.workspaceId, current.presetId, state.workspaces, state.presets)
+      if (current.status !== 'active') delete current.nextRunAt
+      assertAutomationResourcesExist(current.workspaceId, state.workspaces)
+      if (current.target === 'session' && (current.sessionId ?? '') === '') {
+        throw new RuntimeError('INVALID_INPUT', '执行位置为「当前会话」时必须指定会话')
+      }
       current.updatedAt = Date.now()
       return structuredClone(current)
     })
@@ -205,6 +292,17 @@ export function createAutomations(deps: AutomationsDeps) {
     })
   }
 
+  /** Remove every task whose rule is exhausted. */
+  const purgeEnded = async (): Promise<number> => {
+    const ended = appState.snapshot().automations.filter(item => item.status === 'ended')
+    for (const automation of ended) automationScheduler.cancel(automation.id)
+    await appState.update(state => {
+      state.automations = state.automations.filter(item => item.status !== 'ended')
+      return structuredClone(state.automations)
+    })
+    return ended.length
+  }
+
   /** The run history is a tail: newest first, capped, and always including `lastRun`. */
   const recordRun = (automation: Automation, run: AutomationRun): void => {
     automation.lastRun = run
@@ -213,8 +311,23 @@ export function createAutomations(deps: AutomationsDeps) {
     automation.runs = runs.slice(0, MAX_RUN_HISTORY)
   }
 
-  const finishAutomation = async (automationId: string, runId: string, conversationId: string): Promise<void> => {
-    let status: NonNullable<Automation['lastRun']>['status'] = 'completed'
+  /** Advance the rule after a run and end the task once nothing is left. */
+  const advance = (automation: Automation, now: number): void => {
+    if (automation.status !== 'active') {
+      delete automation.nextRunAt
+      return
+    }
+    const at = dueAt(automation, now)
+    if (at === undefined) {
+      automation.status = 'ended'
+      delete automation.nextRunAt
+    } else {
+      automation.nextRunAt = at
+    }
+  }
+
+  const finishAutomation = async (automationId: string, runId: string, conversationId: string, plannedAt: number): Promise<void> => {
+    let status: AutomationRun['status'] = 'completed'
     let errorMessage: string | undefined
     try {
       const conversation = await requireConversation(conversationId)
@@ -235,46 +348,105 @@ export function createAutomations(deps: AutomationsDeps) {
       recordRun(automation, {
         id: runId,
         status,
-        conversationId,
+        plannedAt,
         startedAt: automation.lastRun.startedAt,
         finishedAt,
+        conversationId,
         ...(errorMessage ? { error: errorMessage } : {}),
       })
       automation.updatedAt = finishedAt
-      const at = automation.enabled ? dueAt(automation, finishedAt) : undefined
-      if (at === undefined) delete automation.nextRunAt
-      else automation.nextRunAt = at
+      advance(automation, finishedAt)
       return structuredClone(automation)
     })
     if (updated) scheduleAutomation(updated)
+  }
+
+  /** Deliver one occurrence into an existing conversation: arrival is the outcome. */
+  const deliverToSession = async (
+    automation: Automation, runId: string, plannedAt: number,
+  ): Promise<{ automation: Automation; conversationId: string }> => {
+    const sessionId = automation.sessionId
+    if (sessionId === undefined) throw new RuntimeError('CONFLICT', 'Automation 没有关联会话')
+    await requireConversation(sessionId)
+    const text = framedPrompt(automation, plannedAt)
+    await submit(sessionId, { text, requestId: `automation:${runId}`, whenBusy: 'followUp' })
+    const updated = await appState.update(state => {
+      const current = state.automations.find(item => item.id === automation.id)
+      if (current === undefined || current.lastRun?.id !== runId) return undefined
+      const deliveredAt = Date.now()
+      recordRun(current, {
+        id: runId, status: 'delivered', plannedAt, startedAt: deliveredAt,
+        finishedAt: deliveredAt, conversationId: sessionId,
+      })
+      current.updatedAt = deliveredAt
+      advance(current, deliveredAt)
+      return structuredClone(current)
+    })
+    if (updated === undefined) throw new RuntimeError('CONFLICT', 'Automation 运行状态无法读取')
+    scheduleAutomation(updated)
+    return { automation: updated, conversationId: sessionId }
   }
 
   runAutomation = async (id: string): Promise<{ automation: Automation; conversationId: string }> => {
     const current = appState.snapshot().automations.find(item => item.id === id)
     if (!current) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
     if (current.lastRun?.status === 'running') throw new RuntimeError('CONFLICT', 'Automation 已在运行')
+    const plannedAt = current.nextRunAt ?? Date.now()
     const runId = randomUUID()
     const startedAt = Date.now()
     const running = await appState.update(state => {
       const automation = state.automations.find(item => item.id === id)
       if (!automation) throw new RuntimeError('NOT_FOUND', 'Automation 不存在')
       if (automation.lastRun?.status === 'running') throw new RuntimeError('CONFLICT', 'Automation 已在运行')
-      recordRun(automation, { id: runId, status: 'running', startedAt })
+      recordRun(automation, { id: runId, status: 'running', plannedAt, startedAt })
       delete automation.nextRunAt
       automation.updatedAt = startedAt
       return structuredClone(automation)
     })
+    if (running.target === 'session') {
+      try {
+        return await deliverToSession(running, runId, plannedAt)
+      } catch (error) {
+        await appState.update(state => {
+          const automation = state.automations.find(item => item.id === id)
+          if (automation?.lastRun?.id === runId) {
+            recordRun(automation, {
+              id: runId, status: 'failed', plannedAt, startedAt, finishedAt: Date.now(), error: safeFailure(error),
+            })
+            automation.updatedAt = Date.now()
+            advance(automation, Date.now())
+          }
+        })
+        const updated = appState.snapshot().automations.find(item => item.id === id)
+        if (updated) scheduleAutomation(updated)
+        throw error
+      }
+    }
     let conversationId: string | undefined
     try {
-      const detail = await create({
-        title: running.name,
-        ...(running.model ? { model: running.model } : {}),
-        ...(running.workspaceId ? { workspaceId: running.workspaceId } : {}),
-        ...(running.presetId ? { presetId: running.presetId } : {}),
-        ...(running.accessMode ? { accessMode: running.accessMode } : {}),
+      if (running.target === 'new_once' && running.sessionId !== undefined) {
+        // Reuse the conversation reserved by the first delivery, unless it was deleted.
+        try {
+          const existing = await requireConversation(running.sessionId)
+          conversationId = String(existing.id)
+        } catch {
+          conversationId = undefined
+        }
+      }
+      if (conversationId === undefined) {
+        const detail = await create({
+          title: running.name,
+          ...(running.model ? { model: running.model } : {}),
+          ...(running.workspaceId ? { workspaceId: running.workspaceId } : {}),
+          ...(running.accessMode ? { accessMode: running.accessMode } : {}),
+        })
+        conversationId = detail.conversation.id
+      }
+      await submit(conversationId, {
+        text: framedPrompt(running, plannedAt),
+        requestId: `automation:${runId}`,
+        whenBusy: 'reject',
       })
-      conversationId = detail.conversation.id
-      await submit(conversationId, { text: running.prompt, requestId: `automation:${runId}`, whenBusy: 'reject' })
       await appState.update(state => {
         const automation = state.automations.find(item => item.id === id)
         if (automation === undefined || automation.lastRun?.id !== runId) return
@@ -283,30 +455,26 @@ export function createAutomations(deps: AutomationsDeps) {
         if (index >= 0) runs[index] = { ...runs[index]!, conversationId }
         automation.runs = runs
         automation.lastRun = { ...automation.lastRun!, conversationId }
+        // A new_once task adopts its first conversation and reuses it afterwards.
+        if (automation.target === 'new_once' && automation.sessionId === undefined) automation.sessionId = conversationId
       })
     } catch (error) {
       await appState.update(state => {
         const automation = state.automations.find(item => item.id === id)
         if (automation?.lastRun?.id === runId) {
           recordRun(automation, {
-            id: runId,
-            status: 'failed',
-            startedAt,
-            finishedAt: Date.now(),
-            ...(conversationId ? { conversationId } : {}),
-            error: safeFailure(error),
+            id: runId, status: 'failed', plannedAt, startedAt, finishedAt: Date.now(),
+            ...(conversationId ? { conversationId } : {}), error: safeFailure(error),
           })
           automation.updatedAt = Date.now()
-          const at = automation.enabled ? dueAt(automation, Date.now()) : undefined
-          if (at === undefined) delete automation.nextRunAt
-          else automation.nextRunAt = at
+          advance(automation, Date.now())
         }
       })
       const updated = appState.snapshot().automations.find(item => item.id === id)
       if (updated) scheduleAutomation(updated)
       throw error
     }
-    const task = finishAutomation(id, runId, conversationId)
+    const task = finishAutomation(id, runId, conversationId as string, plannedAt)
     automationTasks.add(task)
     void task.finally(() => automationTasks.delete(task)).catch(() => undefined)
     const latest = appState.snapshot().automations.find(item => item.id === id)
@@ -315,8 +483,24 @@ export function createAutomations(deps: AutomationsDeps) {
   }
 
   const recoverAutomations = async (): Promise<void> => {
+    const now = Date.now()
     const recovered = await appState.update(state => {
-      const now = Date.now()
+      const migrated: Automation[] = []
+      for (const raw of state.automations as LegacyAutomation[]) {
+        const automation = migrateAutomation(raw, now)
+        if (automation.rrule !== undefined) {
+          try {
+            parseRule(automation.rrule)
+          } catch {
+            // A rule the engine rejects cannot fire; keep the task visible but paused.
+            automation.status = 'paused'
+            delete automation.nextRunAt
+          }
+        }
+        if (automation.status === 'active' && automation.rrule === undefined) automation.status = 'paused'
+        migrated.push(automation)
+      }
+      state.automations = migrated
       for (const automation of state.automations) {
         if (automation.lastRun?.status === 'running') {
           const interrupted: AutomationRun = {
@@ -328,9 +512,17 @@ export function createAutomations(deps: AutomationsDeps) {
           recordRun(automation, interrupted)
           automation.updatedAt = now
         }
-        const at = automation.enabled ? dueAt(automation, now) : undefined
-        if (at === undefined) delete automation.nextRunAt
-        else if (automation.nextRunAt === undefined) automation.nextRunAt = at
+        if (automation.status !== 'active') {
+          delete automation.nextRunAt
+          continue
+        }
+        const at = automation.nextRunAt === undefined ? dueAt(automation, now) : automation.nextRunAt
+        if (at === undefined) {
+          automation.status = 'ended'
+          delete automation.nextRunAt
+        } else {
+          automation.nextRunAt = at
+        }
       }
       return structuredClone(state.automations)
     })
@@ -345,7 +537,9 @@ export function createAutomations(deps: AutomationsDeps) {
     key: string
     name: string
     prompt: string
-    schedule?: AutomationSchedule
+    rrule?: string
+    timeZone?: string
+    target?: AutomationTarget
     workspaceId?: string
     model?: UiModelRef
     accessMode?: Automation['accessMode']
@@ -358,13 +552,17 @@ export function createAutomations(deps: AutomationsDeps) {
       if (existing.prompt !== spec.prompt) patch.prompt = spec.prompt
       // A rebinding of the shared workspace must not leave the task pointing at the old one.
       if (spec.workspaceId !== undefined && existing.workspaceId !== spec.workspaceId) patch.workspaceId = spec.workspaceId
+      if (spec.rrule !== undefined && existing.rrule !== spec.rrule) patch.rrule = spec.rrule
+      if (spec.timeZone !== undefined && existing.timeZone !== spec.timeZone) patch.timeZone = spec.timeZone
       return Object.keys(patch).length === 0 ? existing : await updateAutomation(existing.id, patch)
     }
     return await createAutomation({
       name: spec.name,
       prompt: spec.prompt,
-      enabled: true,
-      ...(spec.schedule ? { schedule: spec.schedule } : {}),
+      status: 'active',
+      target: spec.target ?? 'new',
+      ...(spec.rrule === undefined ? {} : { rrule: spec.rrule }),
+      ...(spec.timeZone === undefined ? {} : { timeZone: spec.timeZone }),
       ...(spec.workspaceId ? { workspaceId: spec.workspaceId } : {}),
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.accessMode ? { accessMode: spec.accessMode } : {}),
@@ -378,7 +576,6 @@ export function createAutomations(deps: AutomationsDeps) {
     return automation.runs ?? (automation.lastRun === undefined ? [] : [automation.lastRun])
   }
 
-
   return {
     list: automations,
     create: createAutomation,
@@ -386,6 +583,7 @@ export function createAutomations(deps: AutomationsDeps) {
     remove: deleteAutomation,
     run: (id: string) => runAutomation(id),
     runs: runsOf,
+    purgeEnded,
     ensureBuiltin,
     recover: recoverAutomations,
     assertNoAutomationReferences,

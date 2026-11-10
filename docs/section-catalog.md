@@ -13,13 +13,15 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 | runtime-core | ✓ | ✓ | ✓ | ✓ | ✓ | 2955 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | project-instructions | ✓ | ✓ | ✓ | ✓ | — | 302 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 722 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
+| schedule-policy | ✓ | — | — | — | — | 82 | [`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts) |
 | wetrack-analysis | ✓ | — | ✓ | ✓ | — | 611 | [`src/server/tools/wetrack-analysis.ts`](../src/server/tools/wetrack-analysis.ts) |
 | goal-policy | ✓ | ✓ | ✓ | — | — | 491 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
 | skills-policy | ✓ | ✓ | ✓ | ✓ | — | 2407 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
-| codemode | ✓ | ✓ | ✓ | ✓ | — | 1061 | (vendor) @earendil-works/pi-durable |
+| codemode | ✓ | ✓ | ✓ | ✓ | — | 1123 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
 | instructions | — | — | — | ✓ | ✓ | — | (vendor) @earendil-works/pi-durable |
+| personal-instructions | — | — | — | — | — | — | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | memory | — | — | — | — | — | — | [`src/server/memory/policy.ts`](../src/server/memory/policy.ts) |
 | memory-index | — | — | — | — | — | — | [`src/server/memory/policy.ts`](../src/server/memory/policy.ts) |
 | team-policy | — | — | — | — | — | — | [`src/server/tools/team.ts`](../src/server/tools/team.ts) |
@@ -43,6 +45,12 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 - 注入条件：每个请求注入会话事实（工作区、平台、日期、模型、写权限、shell 能力）与工具路由、待办约定；计划模式、只读会话与子会话会收窄其中条款。
 - 实测长度（字符）：default 722 · plan 325 · readonly 656 · subagent-general 722 · subagent-explore 388
 - 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
+
+### section schedule-policy
+
+- 注入条件：`schedule_create` 或 `schedule_edit` 在本请求可调用（直接或经 codemode）时注入定时任务的授权约束；只有 list/view 可见时不注入。
+- 实测长度（字符）：default 82
+- 定义处：[`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts)
 
 ### section wetrack-analysis
 
@@ -71,7 +79,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section codemode
 
 - 注入条件：codemode 工具在 agent 工具集中时由 vendored 扩展注入 codemode 使用规则；模式 on/only/off 改变其中条款。
-- 实测长度（字符）：default 1061 · plan 823 · readonly 1004 · subagent-general 824
+- 实测长度（字符）：default 1123 · plan 823 · readonly 1004 · subagent-general 824
 - 定义处：(vendor) @earendil-works/pi-durable
 
 ### section plan-policy
@@ -85,6 +93,12 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 - 注入条件：vendored pi-durable 的保留 section：委派子会话注入该子会话 agent 的 instructions（内置 profile 的 systemPrompt，见 `src/server/agents/builtins.ts`）；主会话不含。
 - 实测长度（字符）：default 不注入；subagent-general 397 · subagent-explore 427
 - 定义处：(vendor) @earendil-works/pi-durable
+
+### section personal-instructions
+
+- 注入条件：用户级个性化文件（数据目录的 AGENTS.md，设置 → 个性化 编辑）非空时注入，每次请求重读；与项目指令冲突时项目指令优先，Explore 子智能体不注入。
+- 实测长度（字符）：本轮变体未注入。
+- 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
 
 ### section memory
 

@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 import {
-  Button, Checkbox, FileTypeIcon, IconAgentPresetOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular,
+  Button, Checkbox, FileTypeIcon, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconSkillOutlineRegular,
   IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconDatabaseOutlineRegular, IconEditOutlineRegular,
   IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconGaugeOutlineRegular, IconPlanOutlineRegular, IconPlusOutlineRegular,
   IconSendOutlineRegular, IconStopFillRegular, IconWarningOutlineRegular, Input, Menu, MenuItemButton,
   Modal, PermissionIconFullAccessRegular, PermissionIconReadOnlyRegular, PermissionIconWorkspaceWriteRegular,
   Tooltip, observeComposition,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AccessMode, AgentPreset, ModelCatalog, ModelOption, QueueActionInput, QueueItem, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
+import type { AccessMode, ModelCatalog, ModelOption, QueueActionInput, QueueItem, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
 import type { PluginContextEntry } from '../shared/plugin-ui.ts'
 import type { SkillSummary } from '../shared/skills.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
@@ -31,7 +31,6 @@ export interface ComposerProps {
   onSend: (mode?: BusySendMode) => void; onStop: () => void; onRemoveQueue: (id: string) => void
   onSelectModel: (model: ModelOption) => void; onThinkingLevel: (level: ThinkingLevel) => void; onSendMode: (mode: BusySendMode) => void
   hero?: boolean; workspace?: WorkspaceSummary; workspaces?: WorkspaceSummary[]; onSelectWorkspace?: (id: string) => void; onAddWorkspace?: () => void
-  presetId?: string; presets?: AgentPreset[]; onSelectPreset?: (id: string) => void
   accessMode?: AccessMode; accessModes?: AccessMode[]; onAccessMode?: (mode: AccessMode) => void
   onUpdateQueue?: (id: string, action: QueueActionInput) => Promise<void>
   onOpenSettings?: () => void; onNewConversation?: () => void; onCompact?: () => void
@@ -69,7 +68,7 @@ function pluginContextPreview(text: string, max = 80): string {
 export default function Composer(props: ComposerProps) {
   const { value, images, catalog, model, thinkingLevel, busy, disabled = false, queue, sendMode, sending,
     onChange, onAddImages, onRemoveImage, onSend, onStop, onRemoveQueue, onSelectModel, onThinkingLevel,
-    hero = false, workspace, workspaces = [], presets = [], presetId, accessMode = 'fullAccess',
+    hero = false, workspace, workspaces = [], accessMode = 'fullAccess',
     accessModes = ['readOnly', 'fullAccess'], onUpdateQueue, onSearchFiles, onSearchSkills, plan = false, onPlan,
     pluginContexts = [], onRemovePluginContext } = props
   const { t, settings } = useUiPreferences()
@@ -79,7 +78,7 @@ export default function Composer(props: ComposerProps) {
   const queueAttempt = useRef<{ key: string; requestId: string } | null>(null)
   const guard = useRef<ReturnType<typeof observeComposition> | null>(null)
   const modelSearch = useRef<HTMLInputElement>(null)
-  const [menu, setMenu] = useState<'model' | 'search' | 'access' | 'add' | 'workspace' | 'preset' | 'mode' | 'usage' | 'context' | null>(null)
+  const [menu, setMenu] = useState<'model' | 'search' | 'access' | 'add' | 'workspace' | 'mode' | 'usage' | 'context' | null>(null)
   const [modelQuery, setModelQuery] = useState('')
   const [editingQueue, setEditingQueue] = useState<string | null>(null)
   const [queueText, setQueueText] = useState('')
@@ -105,7 +104,6 @@ export default function Composer(props: ComposerProps) {
   const availableModels = useMemo(() => modelChoices.filter(item => item.available), [modelChoices])
   const matchingModels = useMemo(() => availableModels.filter(item => `${item.name} ${item.modelId} ${item.provider}`.toLowerCase().includes(modelQuery.toLowerCase())).slice(0, 60), [availableModels, modelQuery])
   const providerName = (id: string): string => catalog?.providers.find(item => item.id === id)?.name ?? id
-  const selectedPreset = presets.find(item => item.id === presetId)
   const attachmentsPending = images.some(image => image.status !== 'ready')
   const canSend = (value.trim() !== '' || images.length > 0) && !disabled && !sending && !attachmentsPending
   const stats = props.stats
@@ -357,8 +355,6 @@ export default function Composer(props: ComposerProps) {
         ]} selectedId={workspace?.id} onSelect={id => { setMenu(null); if (id === '__add') props.onAddWorkspace?.(); else props.onSelectWorkspace?.(id) }}
           anchor={<button className={css.contextButton} type="button" aria-label={t('选择工作区', 'Choose workspace')} onClick={() => setMenu(menu === 'workspace' ? null : 'workspace')}><IconFolderOpenOutlineRegular size={15} /><span>{workspace?.name ?? t('选择工作区', 'Choose workspace')}</span><IconChevronDownOutlineRegular size={11} /></button>} />
         <GitBranchSwitcher workspaceId={workspace?.id} />
-        {presets.length > 0 && <Menu open={menu === 'preset'} onClose={() => setMenu(null)} portal items={[{ id: '__none', label: t('标准模式（无预设）', 'Standard mode (no preset)') }, ...presets.map(item => ({ id: item.id, label: item.name }))]} selectedId={presetId ?? '__none'}
-          onSelect={id => { props.onSelectPreset?.(id); setMenu(null) }} anchor={<button className={css.contextButton} type="button" onClick={() => setMenu(menu === 'preset' ? null : 'preset')}><IconAgentPresetOutlineRegular size={14} /><span>{selectedPreset?.name ?? t('标准模式', 'Standard mode')}</span><IconChevronDownOutlineRegular size={11} /></button>} />}
       </div>
     </>}
     {queue.length > 0 && <div className={css.queue} aria-label={t('待处理消息', 'Queued messages')}>
@@ -444,7 +440,7 @@ export default function Composer(props: ComposerProps) {
           {skillMatches.map((skill, index) => <button key={skill.id} type="button" role="option" aria-selected={index === selectedSuggestion}
             className={`${css.suggestionItem} ${index === selectedSuggestion ? css.suggestionItemSelected : ''}`}
             onMouseDown={event => event.preventDefault()} onMouseEnter={() => setSelectedSuggestion(index)} onClick={() => chooseSuggestion(index)}>
-            <span className={css.suggestionIcon}><IconAgentPresetOutlineRegular size={16} /></span>
+            <span className={css.suggestionIcon}><IconSkillOutlineRegular size={16} /></span>
             <span className={css.suggestionName}>{skill.name}<small>${skill.source === 'plugin' ? ` · ${skill.pluginName ?? 'plugin'}` : ''}</small></span>
             <span className={css.suggestionDesc}>{skill.description}</span>
           </button>)}

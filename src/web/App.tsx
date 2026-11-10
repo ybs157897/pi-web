@@ -12,7 +12,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
-  AccessMode, AgentPreset, AppSettings, ConversationDetail, ConversationSummary, ModelCatalog,
+  AccessMode, AppSettings, ConversationDetail, ConversationSummary, ModelCatalog,
   ModelOption, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
   UpdateAppSettingsInput,
 } from '../shared/types.ts'
@@ -48,7 +48,6 @@ import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 /** antd is only needed by this page, so it loads as its own chunk on first visit. */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
-import PresetsPanel from './PresetsPanel.tsx'
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
@@ -175,14 +174,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
-  const [presets, setPresets] = useState<AgentPreset[]>([])
   const [appVersion, setAppVersion] = useState('')
   const [accountName, setAccountName] = useState('')
   const [accessModes, setAccessModes] = useState<AccessMode[]>([])
   const [workspaceLoadError, setWorkspaceLoadError] = useState('')
-  const [presetLoadError, setPresetLoadError] = useState('')
   const [workspaceLoading, setWorkspaceLoading] = useState(true)
-  const [presetsLoading, setPresetsLoading] = useState(true)
   const [catalogError, setCatalogError] = useState('')
   const [listError, setListError] = useState('')
   const [detailError, setDetailError] = useState('')
@@ -197,7 +193,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [rowMenuId, setRowMenuId] = useState<string | null>(null)
   const [workspaceMenuId, setWorkspaceMenuId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'models' | 'presets'>('general')
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'models'>('general')
   const [savingProvider, setSavingProvider] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -252,7 +248,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** Plan mode requested before a conversation exists; applied when the session is created. */
   const [newPlan, setNewPlan] = useState(false)
   const [newWorkspaceId, setNewWorkspaceId] = useState<string | undefined>(settings.defaultWorkspaceId)
-  const [newPresetId, setNewPresetId] = useState<string | null | undefined>(settings.defaultPresetId)
   const [newAccessMode, setNewAccessMode] = useState<AccessMode>(settings.defaultAccessMode)
   const [sendMode, setSendMode] = useState<BusySendMode>(settings.busySendMode)
   const [sending, setSending] = useState(false)
@@ -387,9 +382,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       return next
     })
   }, [currentWorkspaceId])
-  const selectedPresetId = activeConversation !== null
-    ? activeConversation.conversation.presetId
-    : newPresetId === null ? undefined : newPresetId ?? settings.defaultPresetId
   const accessMode = activeConversation?.conversation.accessMode ?? newAccessMode ?? settings.defaultAccessMode
   const selectedPending = pending.filter(item => item.conversationId === selectedId)
 
@@ -448,16 +440,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     finally { setWorkspaceLoading(false) }
   }, [t])
 
-  const refreshPresets = useCallback(async (): Promise<void> => {
-    setPresetsLoading(true)
-    try {
-      const result = await api.listPresets()
-      setPresets(result.presets)
-      setPresetLoadError('')
-    } catch (cause) { setPresetLoadError(errorText(cause, t('无法读取 Agent 预设', 'Could not load agent presets'))) }
-    finally { setPresetsLoading(false) }
-  }, [t])
-
   const refreshCapabilities = useCallback(async (): Promise<void> => {
     try {
       const result = await api.getCapabilities()
@@ -472,10 +454,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     void refreshList()
     void refreshCatalog()
     void refreshWorkspaces()
-    void refreshPresets()
     void refreshCapabilities()
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
-  }, [refreshCapabilities, refreshCatalog, refreshList, refreshPresets, refreshWorkspaces])
+  }, [refreshCapabilities, refreshCatalog, refreshList, refreshWorkspaces])
 
   // Runs keep finishing in conversations this tab is not streaming, so the unread dots only refresh
   // when the reader comes back to the window. One list read per return, never a poll.
@@ -515,7 +496,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     // A per-workspace "new session" action carries its choice across this reset.
     setNewWorkspaceId(pendingWorkspaceId.current ?? preferences.defaultWorkspaceId)
     pendingWorkspaceId.current = null
-    setNewPresetId(preferences.defaultPresetId)
     setNewAccessMode(preferences.defaultAccessMode)
     if (selectedId === null) {
       setDetailLoading(false)
@@ -698,13 +678,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     const model = selectedModel
     const preferences = settingsRef.current
     const workspaceId = newWorkspaceId ?? preferences.defaultWorkspaceId ?? workspaces[0]?.id
-    const presetId = newPresetId === null ? undefined : newPresetId ?? preferences.defaultPresetId
     const created = await api.createConversation({
       title,
       ...(model === undefined ? {} : { model: { provider: model.provider, modelId: model.modelId } }),
       thinkingLevel,
       ...(workspaceId === undefined ? {} : { workspaceId }),
-      ...(presetId === undefined ? {} : { presetId }),
       accessMode: newAccessMode ?? preferences.defaultAccessMode,
     })
     // Plan mode is conversation-scoped, so the hero-time request is applied once the session exists.
@@ -718,7 +696,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setPage('chat')
     setSidebarOpen(false)
     return detail
-  }, [newAccessMode, newPlan, newPresetId, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
+  }, [newAccessMode, newPlan, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
 
   const setDraft = useCallback((value: string): void => {
     setDraftState({ scope: activeScope, text: value })
@@ -1122,23 +1100,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     catch (cause) { announce(errorText(cause, t('无法保存默认工作区', 'Could not save the default workspace'))) }
   }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
 
-  const selectPreset = useCallback(async (selection: string): Promise<void> => {
-    const presetId = selection === '__none' ? undefined : selection
-    if (conversationReady && selectedId !== null) {
-      try {
-        const value = await api.updateConversation(selectedId, { presetId: presetId ?? null })
-        setDetail(value)
-        detailRef.current = value
-        updateConversation(value)
-        announce(t('会话预设已更新', 'Conversation preset updated'), true)
-      } catch (cause) { announce(errorText(cause, t('无法切换 Agent 预设', 'Could not change agent preset'))) }
-      return
-    }
-    setNewPresetId(presetId ?? null)
-    try { await onSettingsChange({ defaultPresetId: presetId ?? null }) }
-    catch (cause) { announce(errorText(cause, t('无法保存默认预设', 'Could not save the default preset'))) }
-  }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
-
   const selectAccessMode = useCallback(async (mode: AccessMode): Promise<void> => {
     if (conversationReady && selectedId !== null) {
       try {
@@ -1452,7 +1413,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewModel(undefined)
     setNewThinking(settings.defaultThinkingLevel)
     setNewWorkspaceId(settings.defaultWorkspaceId)
-    setNewPresetId(settings.defaultPresetId)
     setNewAccessMode(settings.defaultAccessMode)
     // ZCode's draft scope: conversation-owned tabs go, workspace documents stay in the bucket,
     // and the empty draft starts with the pane collapsed.
@@ -1469,7 +1429,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     inspectorRequestId.current += 1
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
-  }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultPresetId, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
+  }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
   /** The plugin creator is a new task with the bundled Skill already in the draft. */
   const startPluginCreation = useCallback((): void => {
@@ -2103,14 +2063,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   <div className={css.heroArea}>
                   <Composer hero value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                     busy={false} disabled={detailLoading} queue={[]} sendMode={sendMode} sending={sending}
-                    workspace={currentWorkspace} workspaces={workspaces} presets={presets} presetId={selectedPresetId} accessMode={accessMode}
+                    workspace={currentWorkspace} workspaces={workspaces} accessMode={accessMode}
                     accessModes={accessModes} files={[]}
                     plan={newPlan} onPlan={active => { void setPlan(active) }}
                     onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onRetryImage={retryImage} onSend={mode => { void send(mode) }}
                     onStop={() => { void stop() }} onRemoveQueue={id => { void removeQueue(id) }}
                     onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
                     onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
-                    onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
+                    onAccessMode={mode => { void selectAccessMode(mode) }}
                     onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }} onNewConversation={startNewConversation}
                     onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
                     pluginContexts={pluginContexts} onRemovePluginContext={removePluginContext} />
@@ -2183,15 +2143,15 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     </div>}
                     <Composer value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                       busy={busy} disabled={detailLoading || !conversationReady && detailError === ''} queue={activeDetail.queue}
-                      sendMode={sendMode} sending={sending} workspace={currentWorkspace} workspaces={workspaces} presets={presets}
-                      presetId={selectedPresetId} accessMode={accessMode} accessModes={accessModes}
+                      sendMode={sendMode} sending={sending} workspace={currentWorkspace} workspaces={workspaces}
+                      accessMode={accessMode} accessModes={accessModes}
                       plan={activeDetail === null ? newPlan : activeDetail.plan?.active === true} onPlan={active => { void setPlan(active) }}
                       files={[]} stats={conversationStats(activeDetail.messages)}
                       onChange={setDraft} onAddImages={addImages} onRemoveImage={removeImage} onRetryImage={retryImage} onSend={mode => { void send(mode) }}
                       onStop={() => { void stop() }} onRemoveQueue={id => { void removeQueue(id) }}
                       onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
                       onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
-                      onSelectPreset={id => { void selectPreset(id) }} onAccessMode={mode => { void selectAccessMode(mode) }}
+                      onAccessMode={mode => { void selectAccessMode(mode) }}
                       onUpdateQueue={updateQueue} onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
                       onCompact={() => { void compact() }}
                       onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
@@ -2202,7 +2162,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
               <WetrackPage workspaces={workspaces} onOpenConversation={id => { void openConversation(id) }} />
             </Suspense>}
-            {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId} presetId={selectedPresetId}
+            {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId}
+              workspaces={workspaces} onNewConversation={startNewConversation}
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>
           {showInspector && <>
@@ -2292,9 +2253,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       </section>
       <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={currentWorkspaceId}
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}
-        presetsPanel={<PresetsPanel presets={presets} models={catalog?.models ?? []} defaultPresetId={settings.defaultPresetId}
-          loading={presetsLoading} error={presetLoadError} onRefresh={() => { void refreshPresets() }}
-          onChange={setPresets} onSetDefault={id => { void onSettingsChange({ defaultPresetId: id ?? null }).catch(cause => { announce(errorText(cause, t('无法保存默认预设', 'Could not save the default preset'))) }) }} />}
         onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider}
         onCreatePlugin={startPluginCreation} />
       <WorkspaceDialog open={workspaceDialogOpen} workspaces={workspaces} currentWorkspaceId={currentWorkspaceId}

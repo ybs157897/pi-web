@@ -124,13 +124,11 @@ export interface AppSettings {
   memoryEnabled: boolean
   /** Show defect-analysis sessions in the ordinary sidebar; they are list-only by default. */
   showAnalysisConversations: boolean
-  defaultPresetId?: string
   defaultWorkspaceId?: string
   shortcuts?: Partial<Record<ShortcutCommand, string>>
 }
-export type UpdateAppSettingsInput = Omit<Partial<AppSettings>, 'defaultModel' | 'defaultPresetId' | 'defaultWorkspaceId' | 'shortcuts'> & {
+export type UpdateAppSettingsInput = Omit<Partial<AppSettings>, 'defaultModel' | 'defaultWorkspaceId' | 'shortcuts'> & {
   defaultModel?: ModelRef | null
-  defaultPresetId?: string | null
   defaultWorkspaceId?: string | null
   shortcuts?: AppSettings['shortcuts'] | null
 }
@@ -156,6 +154,14 @@ export interface McpServerView {
   /** Set when the server comes from an installed plugin instead of the user-level `mcp.json`. */
   pluginId?: string
 }
+/** The user-level personalization instructions the settings editor reads and writes. */
+export interface PersonalizationView {
+  content: string
+  /** Absolute path of the `AGENTS.md` behind the editor, so the panel can show where it lives. */
+  filePath: string
+  limitBytes: number
+}
+
 /** The Pi MCP configuration as the browser sees it. */
 export interface McpView {
   /** Absolute path of the user-level Pi MCP file the runtime imported. */
@@ -298,56 +304,38 @@ export interface GitWorktreeDiff {
 }
 
 
-export interface AgentPreset {
-  id: string
-  name: string
-  description?: string
-  instructions: string
-  extensions: string[]
-  tools: string[]
-  model?: ModelRef
-  thinkingLevel?: ThinkingLevel
-  accessMode: AccessMode
-}
-export type CreateAgentPresetInput = Omit<AgentPreset, 'id'> & { id?: string }
-export type UpdateAgentPresetInput = Partial<Omit<AgentPreset, 'id'>>
-
 export interface AutomationRun {
   id: string
-  status: 'running' | 'completed' | 'failed' | 'interrupted'
-  conversationId?: string
-  startedAt: number
+  /** `delivered` is a message dropped into an existing session: arrival is the outcome. */
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'delivered'
+  /** The occurrence that fired, which can differ from the delivery moment; absent on pre-RRULE records. */
+  plannedAt?: number
+  /** The moment the run or delivery actually started. */
+  startedAt?: number
   finishedAt?: number
+  conversationId?: string
   error?: string
 }
 
-/** How often an automation repeats. */
-export type AutomationIntervalUnit = 'hour' | 'day' | 'week' | 'month'
+/** A task is `ended` once its rule has no future occurrence left. */
+export type AutomationStatus = 'active' | 'paused' | 'ended'
 
-/**
- * A calendar-aligned repeat. An automation with this repeats at a wall-clock time
- * (local time), not every N minutes: `day` fires at `timeOfDay`, `week` on
- * `dayOfWeek`, `month` on `dayOfMonth`, and `hour` fires at the minute part of
- * `timeOfDay` every hour.
- */
-export interface AutomationSchedule {
-  unit: AutomationIntervalUnit
-  /** "HH:MM" in local time. */
-  timeOfDay?: string
-  /** 0 = Sunday … 6 = Saturday; used by `week`. */
-  dayOfWeek?: number
-  /** 1–31; used by `month`, clamped to the month's length. */
-  dayOfMonth?: number
-}
+/** Where one occurrence goes. `session` messages an existing conversation. */
+export type AutomationTarget = 'session' | 'new_once' | 'new'
 
 export interface Automation {
   id: string
   name: string
   prompt: string
-  enabled: boolean
-  intervalMs?: number
-  /** Calendar-aligned repeat; takes precedence over `intervalMs` when both are set. */
-  schedule?: AutomationSchedule
+  status: AutomationStatus
+  /** Two-line RFC 5545 rule (DTSTART + RRULE). Absent means "manual": run on demand only. */
+  rrule?: string
+  /** IANA zone the rule's wall clock is written in. */
+  timeZone?: string
+  /** Where occurrences are delivered; migrated legacy tasks are `new`. */
+  target: AutomationTarget
+  /** `session`: the conversation to message. `new_once`: the reused conversation once created. */
+  sessionId?: string
   nextRunAt?: number
   createdAt: number
   updatedAt: number
@@ -360,16 +348,15 @@ export interface Automation {
   accessMode?: AccessMode
   model?: ModelRef
   workspaceId?: string
-  presetId?: string
 }
-export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partial<Pick<Automation, 'enabled' | 'intervalMs' | 'schedule' | 'accessMode' | 'builtin'>> & {
+export type CreateAutomationInput = Pick<Automation, 'name' | 'prompt'> & Partial<Pick<Automation, 'status' | 'rrule' | 'timeZone' | 'target' | 'sessionId' | 'accessMode' | 'builtin'>> & {
   model?: ModelRef
   workspaceId?: string
-  presetId?: string
 }
-export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'intervalMs' | 'schedule'> & {
-  intervalMs?: number | null
-  schedule?: AutomationSchedule | null
+export type UpdateAutomationInput = Omit<Partial<CreateAutomationInput>, 'rrule' | 'sessionId'> & {
+  /** `null` turns the task into a manual one. */
+  rrule?: string | null
+  sessionId?: string | null
 }
 
 /** One WeTrack list row. Unknown scalar fields survive, matching the plugin's list contract. */
@@ -565,7 +552,6 @@ export interface ConversationSummary {
   thinkingLevel: ThinkingLevel
   cwd: string
   workspaceId?: string
-  presetId?: string
   accessMode?: AccessMode
   /** Analysis conversations belong to the issues page unless the settings opt into the sidebar. */
   kind?: 'defectAnalysis'
@@ -796,7 +782,6 @@ export interface CreateConversationInput {
   model?: ModelRef
   thinkingLevel?: ThinkingLevel
   workspaceId?: string
-  presetId?: string
   accessMode?: AccessMode
   kind?: 'defectAnalysis'
 }
@@ -807,7 +792,6 @@ export interface UpdateConversationInput {
   model?: ModelRef
   thinkingLevel?: ThinkingLevel
   workspaceId?: string
-  presetId?: string | null
   accessMode?: AccessMode
 }
 export interface EditQueueInput extends SubmitInput { whenBusy: 'steer' | 'followUp' }

@@ -30,7 +30,7 @@
 - Windows 原生目录选择器（koffi + COM `IFileOpenDialog`）代码已接入，但从未在 Windows 实机验证；失败时没有可用回退，当前属于高风险路径。
 - Git 分支能力要求服务进程 PATH 中有 `git.exe`；它与 shell 工具相互独立。
 - **测试不可移植**：Windows 上仍有 POSIX 权限断言和 Skills 路径断言会失败；符号链接测试还取决于 Windows Developer Mode/权限。
-- 本轮围绕五项跨平台缺陷完成源码修复：长间隔自动化分段等待、拒绝删除被 Automation 引用的工作区/Agent preset、快捷键 schema 支持 10 个键、Provider 有未保存变更时要求先保存再测试/发现模型、摘要校验拒绝模板占位内容。Windows 行为仍需实机验收。
+- 本轮围绕五项跨平台缺陷完成源码修复：长间隔自动化分段等待、拒绝删除被 Automation 引用的工作区、快捷键 schema 支持 10 个键、Provider 有未保存变更时要求先保存再测试/发现模型、摘要校验拒绝模板占位内容。Windows 行为仍需实机验收。
 
 ## 状态口径
 
@@ -62,7 +62,7 @@
 | `read`/`write`/`edit` 工具 | 支持（静态） | Pi `NodeExecutionEnv` 使用 Node fs；edit 处理 CRLF/BOM；Windows ACL/只读属性错误待实机。 |
 | `pwsh` 工具 | 支持（静态，待实机） | 项目自定义 `createWindowsPowerShellTool`（`src/server/tools/shell/windows.ts:143-197`）：探测 `PI_WEB_PWSH_PATH` → `where.exe pwsh.exe` → System32 `powershell.exe`（`windows.ts:60-80`）；本地执行把 `workdir`（`resolveWorkdir` 限制在工作区内，`common.ts:23-43`）直接作为 spawn cwd 走共享 runner，`Set-Location -LiteralPath` 只剩非本地 env 的 pi-durable 兜底；支持 `workdir`/`description`/`timeout`（默认 300 秒）；脚本强制 UTF-8 输出并以 `-ExecutionPolicy Bypass` 运行；递归 `Get-ChildItem …` 管道进 `Select-String` 在 spawn 前被拒绝并指向 `grep` 工具。 |
 | `bash` 工具 | 不支持（Windows 不注册） | `bash` 只在 macOS/Linux 注册；Windows 使用 `pwsh`，与 DSH 的平台组合一致。非 Windows 的本地 bash 同样支持 `workdir`/`description`/`timeout`，递归 `grep`/`rg` 在 spawn 前被拦截。 |
-| `workspaceWrite` 访问模式 | 不支持（设计限制） | 仅 macOS `sandbox-exec`；Windows capabilities 正确降级为 readOnly/fullAccess。旧数据中的 default/session/preset 值需迁移。 |
+| `workspaceWrite` 访问模式 | 不支持（设计限制） | 仅 macOS `sandbox-exec`；Windows capabilities 正确降级为 readOnly/fullAccess。旧数据中的 default/session 值需迁移。 |
 | Code mode/QuickJS | 支持（静态） | QuickJS-WASI + worker_threads，无 Windows 原生扩展；Windows 脚本里的 `tools.pwsh` 走原生 PowerShell，`tools.bash` 不可用。 |
 | MCP（stdio / Streamable HTTP） | 有条件 | pi-mcp 的 stdio 使用 cross-spawn（支持 `.cmd`/PATHEXT），关闭时用 `taskkill /T /F`；HTTP 使用全局 fetch。代理/TLS、`npx` shim、强杀残留待实机。 |
 | 待办（todo） | 支持 | 纯进程内 doc/工具/面板，无 OS 依赖。 |
@@ -72,11 +72,10 @@
 | 问答（ask_user_question） | 有条件 | 主流程无 OS 依赖；Enter/Escape 的 IME 组合态保护不完整，微软拼音可能误提交/误关闭。 |
 | 子代理（subagent） | 有条件 | 会话/投影/轮询无 OS 依赖；跟进输入和面板 Escape 的 IME 保护不完整。 |
 | 智能体团队（team） | 支持（静态） | 共享任务板、成员、wait_agent 均为进程内实现；无 OS API。 |
-| 自动化（automation） | 支持（源码已修复长间隔） | 长间隔按绝对期限分段等待，避免 Node 将超长 `setTimeout` 截断为 1 ms；Windows 长期运行与重启恢复仍待实机验收。删除仍被 automation 引用的工作区或 preset 会返回冲突，需先处理引用。 |
+| 自动化（automation） | 支持（源码已修复长间隔） | 长间隔按绝对期限分段等待，避免 Node 将超长 `setTimeout` 截断为 1 ms；Windows 长期运行与重启恢复仍待实机验收。删除仍被 automation 引用的工作区会返回冲突，需先处理引用。 |
 | Skills（技能） | 有条件/待实机 | 服务端路径校验显式处理 Windows 保留名、反斜杠、盘符和 UNC；frontmatter 支持 BOM/CRLF；保存使用同目录 rename。测试本身有 `/` 与 symlink 权限假设；Windows 实机未验。 |
 | Git 分支（列表/切换/新建并切换） | 有条件/待实机 | 服务端/API/UI 已完成，macOS 单测与 demo 浏览器已验；要求 PATH 有 `git.exe`；Git 不存在与「不是仓库」当前返回同一 issue；无 Windows/Git 集成测试。 |
 | 反馈、Session 日志下载 | 有条件 | 浏览器 Blob 下载跨平台；导出名过滤 `\/:*?"<>|`，但未处理 `CON/PRN/AUX/NUL/COM1/LPT1` 等 Windows 保留设备名。 |
-| Agent Preset | 有条件 | app-state 持久化正常；旧数据中的 `workspaceWrite` preset 在 Windows 无法保存，Presets 下拉也没有该选项，迁移说明需点名。 |
 | 打开配置文件 | 有条件/待实机 | Win32 使用 `cmd /c start "" <path>`；路径含 `%`、`&`、`^` 等 cmd 元字符时可能失败或被解释。 |
 | 优雅关闭 | 有条件 | 只监听 SIGINT/SIGTERM；Windows 不投递 SIGTERM，关闭控制台/任务管理器/`taskkill` 不走 `app.shutdown()`/`runtime.close()`，MCP/bash 子进程可能残留。Ctrl+C 正常。 |
 | `node:sqlite` 持久化 | 有条件 | Node 22.19 Windows 版自带 `node:sqlite`；NTFS WAL、Defender、OneDrive、强制结束后的恢复需实机验证。 |
@@ -150,16 +149,13 @@
 ### 自动化
 
 - 长间隔现在按绝对到期时间分段等待，单次定时不会超过 Node 的 timeout 上限，到期前会重新计算剩余时间。
-- 删除仍被 Automation 引用的工作区或 Agent preset 会返回 `CONFLICT`；先修改或删除相关 Automation，再删除资源。
+- 删除仍被 Automation 引用的工作区会返回 `CONFLICT`；先修改或删除相关 Automation，再删除资源。
 - 这些实现已通过本轮 macOS 检查；Windows 长时间运行、休眠唤醒与重启恢复仍需实机验证。
 
-### 反馈、Session 导出、Preset 与旧数据迁移
+### 反馈、Session 导出与旧数据迁移
 
 - Session 导出使用浏览器 Blob，跨平台可用；文件名已过滤 `\/:*?"<>|`，但还需处理 Windows 保留设备名（如 `CON.jsonl`）和控制字符。
-- Agent Preset 中的 `workspaceWrite`：
-  - 旧 `~/.pi-web`（或迁移前的项目 `.data`）从 macOS/Linux 迁到 Windows 后，默认 accessMode、每个会话的 metadata、每个 Agent Preset 都可能仍是 `workspaceWrite`。
-  - Windows capability 和无 OS 沙盒的保存校验都会拒绝它；Presets 下拉只提供 readOnly/fullAccess。仅改默认会话设置不够，必须逐个修正 preset 和已存在会话。
-- 迁移前请停止旧服务并备份 `~/.pi-web`；复制后重新添加工作区，修正 `defaultWorkspaceId`、旧会话 `workspaceId`、accessMode 与 preset。首次以默认目录启动时，旧项目 `.data` 与 `~/.pi/agent` 会自动导入一次到 `~/.pi-web`。
+- 迁移前请停止旧服务并备份 `~/.pi-web`；复制后重新添加工作区，修正 `defaultWorkspaceId`、旧会话 `workspaceId` 与 accessMode。首次以默认目录启动时，旧项目 `.data` 与 `~/.pi/agent` 会自动导入一次到 `~/.pi-web`。
 
 ## 一、Windows 专属缺陷与限制
 
@@ -238,9 +234,9 @@
 
 ### W12（中）旧数据迁移说明不完整，不能只改 accessMode
 
-- 从 macOS/Linux 复制 `~/.pi-web` 后，旧工作区绝对路径、`settings.defaultWorkspaceId`、每个会话 metadata 的 `workspaceId`、Agent Preset 的 accessMode 都可能失效。
+- 从 macOS/Linux 复制 `~/.pi-web` 后，旧工作区绝对路径、`settings.defaultWorkspaceId`、每个会话 metadata 的 `workspaceId` 与 accessMode 都可能失效。
 - 启动时 runtime 会优先沿用旧 `defaultWorkspaceId`；仅重新添加工作区不足以保证会话绑定正确。
-- 必须在停服、备份后：重新添加工作区 → 修正默认工作区 → 重绑/清理旧会话 → 把 default/session/preset 的 `workspaceWrite` 改成 readOnly/fullAccess。
+- 必须在停服、备份后：重新添加工作区 → 修正默认工作区 → 重绑/清理旧会话 → 把 default/session 的 `workspaceWrite` 改成 readOnly/fullAccess。
 
 ### W13（中低）chmod 不是 Windows ACL
 
@@ -294,11 +290,6 @@
 - Composer 卡片自身也有 `onDrop` 并再次调用 `onAddImages`（约 `:310`），没有 `stopPropagation()`，document 监听也没有检查 `defaultPrevented`。
 - 从 Windows 资源管理器拖入卡片时可能重复添加，批量文件还可能触发「超过 4 张/8 个」的假错误。
 
-### X7（中）旧 workspaceWrite preset 迁移会报错
-
-- 旧 preset 的 accessMode 可能仍是 `workspaceWrite`；Presets 面板下拉只有 readOnly/fullAccess（`src/web/PresetsPanel.tsx:156-157`）。
-- runtime 保存 preset 时在非 macOS 返回 UNSUPPORTED（`src/server/runtime/presets.ts:49`；`workspaceWriteAvailable` 即 `platform !== 'darwin'`，见 `src/server/runtime/index.ts:133`）。迁移文档必须明确逐个修正 preset，而不能只提默认/会话。
-
 ### X8（中低）测试按 POSIX 语义写死
 
 - `tests/runtime.test.ts:495-497` 断言 `0o600/0o700`；Windows 文件/目录 mode 与 POSIX 不同，必失败。
@@ -350,7 +341,7 @@
 
    Git Bash 可用 POSIX 写法；生产模式先 `npm run build`，再 `npm start`。
 10. 访问模式只能用 `fullAccess`（默认）/`readOnly`；`workspaceWrite` 不可用。
-11. 从 macOS/Linux 迁移 `~/.pi-web` 前：停止旧服务、备份 `~/.pi-web`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId、preset 和所有 accessMode，再启动 Windows 服务。旧项目 `.data` 与 `~/.pi/agent` 会在首次启动时自动导入一次。
+11. 从 macOS/Linux 迁移 `~/.pi-web` 前：停止旧服务、备份 `~/.pi-web`；复制后重新添加工作区，修正默认工作区、旧会话 workspaceId 和所有 accessMode，再启动 Windows 服务。旧项目 `.data` 与 `~/.pi/agent` 会在首次启动时自动导入一次。
 12. 预期门禁：本轮 macOS `npm run check` 和 HTTP smoke 已通过；Windows 的 shell 测试已按平台切换（Windows 跑 `pwsh` 用例、跳过 `bash` 用例），仍可能有个别 POSIX/Skills 断言失败；`test:live:tools`/`test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`，`test:live:skills` 与 `test:live:workflow` 需真实模型与实机记录。
 
 ## 五、建议修复优先级
@@ -369,7 +360,7 @@
 2. 修工具绝对/临时路径打开逻辑：支持工作区外只读预览或明确提示，而不是一律 400。
 3. 修 AVIF 服务端白名单、拖放双触发和附件名/大小上限一致性；附件改为临时文件 + 原子 rename。
 4. 补 IME 保护：重命名、新建文件夹、目标、问答、子代理跟进及 Escape 路径。
-5. 迁移文档补充 preset、defaultWorkspaceId、旧会话 workspaceId；帮助用户处理 `workspaceWrite`。
+5. 迁移文档补充 defaultWorkspaceId、旧会话 workspaceId；帮助用户处理 `workspaceWrite`。
 6. JSON 配置读取支持 UTF-8 BOM；Windows ACL 用 `icacls` 验证而不是依赖 chmod。
 7. Git 分支把 Git 不存在与不是仓库分开报错；补 Git Bash 与 Git.exe 两条前提的独立诊断。
 
@@ -391,7 +382,7 @@
 5. 原生目录选择器：含中文/空格/深路径、UNC、`\\?\` 长路径、取消、ESC、关窗、DPI、多显示器、置顶、请求取消/超时；模拟 koffi/COM/worker 失败确认可回退。
 6. 内置目录浏览器：盘符、UNC（当前预计失败）、隐藏属性、新建文件夹（含 `..\x`）、搜索与超长路径。
 7. 工作区文件：正常相对路径、反斜杠/盘符/临时绝对路径、@ 引用、Inspector 打开、下载、附件拖拽/剪贴板/截图/中文名/非法字符名/201–255 字符名。
-8. 设置：验证快捷键保存/恢复默认、访问模式只显示 readOnly/fullAccess、打开配置文件、旧 workspaceWrite preset 迁移。
+8. 设置：验证快捷键保存/恢复默认、访问模式只显示 readOnly/fullAccess、打开配置文件。
 9. 模型：默认模型、Provider 新增/测试/发现/删除、凭据不泄漏、ACL（`icacls`）验证。
 10. 新增能力：Skills 的列表/加载/保存/校验/重启复用/只读与 plan 限制；默认任务规划的 todo/目标路由；MCP stdio（含 `.cmd`/中文路径）与 HTTP；Git 分支列表/切换/新建/非法名/未提交覆盖/冲突/detached/worktree；自动化短间隔与 >24 天分段等待（验证到期前不执行）；`test:live:workflow`。
 11. 协作：子代理、团队面板、目标、计划、待办、问答；用微软拼音在各输入框按 Enter/Escape 选词，确认不误提交。

@@ -67,6 +67,7 @@
     "micromark-util-types": "^2.0.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "rrule": "^2.8.1",
     "shiki": "^4.4.3",
     "simple-icons": "16.31.0",
     "streamdown": "^2.5.0",

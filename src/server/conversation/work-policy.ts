@@ -4,12 +4,13 @@ import { defineExtension, section, type Extension } from '@earendil-works/pi-dur
 import { Plans } from '../tools/plan.ts'
 import { Subagents } from './subagent-policy.ts'
 import { loadProjectInstructions, renderProjectInstructions } from '../workspace/instructions.ts'
+import { readPersonalization, renderPersonalization } from '../state/personalization.ts'
 import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
 
 export const WORK_POLICY_EXTENSION_NAME = 'runtime-policy'
 
 // Read once when the server module loads. This is the canonical core prompt for this process;
-// documentation and Preset instructions are not consulted at request time.
+// documentation is not consulted at request time.
 export const RUNTIME_CORE_PROMPT = readFileSync(new URL('./prompts/runtime-core.md', import.meta.url), 'utf8').trim()
 
 type TodoRoute = 'direct' | 'codemode'
@@ -115,6 +116,19 @@ function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undef
 
 const runtimeCoreSection = section('runtime-core', () => RUNTIME_CORE_PROMPT)
 
+/**
+ * The user-level personalization file is re-read on every request, like the project one, so the
+ * editor's save applies to the next request without restarting the process. Explore subagents
+ * skip it for the same reason they skip the project file: they are read-only retrieval agents.
+ */
+function personalInstructionsSection(dataDir: string) {
+  return section('personal-instructions', async (input, context) => {
+    const identity = await input.read.snapshot(Subagents, input.conversationId, context)
+    if (identity?.record?.profile === 'Explore') return undefined
+    return renderPersonalization(await readPersonalization(dataDir))
+  })
+}
+
 // Re-read on every request so edits to the workspace's root instructions take effect immediately.
 const projectInstructionsSection = section('project-instructions', async (input, context) => {
   // Explore subagents are read-only retrieval agents (ZCode's injectAgentsMd: false): the project's
@@ -161,9 +175,9 @@ const workPolicySection = section('work-policy', async (input, context) => {
 })
 
 /** Default behavior policy. This extension deliberately contributes no tools or hooks. */
-export function createWorkPolicyExtension(): Extension {
+export function createWorkPolicyExtension(options: { dataDir: string }): Extension {
   return defineExtension({
     name: WORK_POLICY_EXTENSION_NAME,
-    sections: [runtimeCoreSection, projectInstructionsSection, workPolicySection],
+    sections: [runtimeCoreSection, personalInstructionsSection(options.dataDir), projectInstructionsSection, workPolicySection],
   })
 }

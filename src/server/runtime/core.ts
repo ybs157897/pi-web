@@ -9,7 +9,7 @@ import type {
   AgentChange, Conversation, ConversationId, ConversationRecord, ConversationView, Cursor, Extension, Harness, ToolRegistration,
 } from '@earendil-works/pi-durable'
 import type {
-  AccessMode, AgentPreset, ConversationDetail, ModelRef as UiModelRef, SubagentSummary,
+  AccessMode, ConversationDetail, ModelRef as UiModelRef, SubagentSummary,
   TeamView, ThinkingLevel, WorkspaceSummary,
 } from '../../shared/types.ts'
 import type { AppStateStore } from '../state/app-state.ts'
@@ -73,7 +73,6 @@ export function createCore(deps: CoreDeps) {
       metadata.updatedAt = Date.now()
       metadata.workspaceId ??= defaultWorkspace()?.id ?? null
       metadata.accessMode ??= appState.snapshot().settings.defaultAccessMode
-      metadata.presetId ??= null
       metadata.feedback ??= {}
       metadata.queueEdits ??= {}
     }, CTX)
@@ -159,13 +158,6 @@ export function createCore(deps: CoreDeps) {
     return workspaceFiles.workspace(resolved)
   }
 
-  const selectedPreset = (id: string | null | undefined): AgentPreset | undefined => {
-    if (!id) return undefined
-    const preset = appState.snapshot().presets.find(item => item.id === id)
-    if (!preset) throw new RuntimeError('NOT_FOUND', 'Agent preset 不存在')
-    return preset
-  }
-
   const modelAllowlist = (): readonly string[] => appState.snapshot().settings.modelAllowlist
 
   /** An explicit pick outside the project allowlist is refused; `label` names what picked it. */
@@ -210,7 +202,7 @@ export function createCore(deps: CoreDeps) {
     assertModelAllowed(model, '会话模型')
   }
 
-  const buildAgentChange = async (workspaceId: string, accessMode: AccessMode, preset?: AgentPreset, overrides: {
+  const buildAgentChange = async (workspaceId: string, accessMode: AccessMode, overrides: {
     model?: UiModelRef
     thinkingLevel?: ThinkingLevel
   } = {}): Promise<AgentChange> => {
@@ -221,30 +213,20 @@ export function createCore(deps: CoreDeps) {
     const codemodeMode = state.settings.codemodeMode
     // Every installed extension is on: plugin switches are no longer exposed, so the legacy
     // per-plugin state must not disable anything. Pi code mode is the one presentation switch:
-    // `off` removes the extension everywhere, `on`/`only` keep a preset's own extension list.
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...(preset ? preset.extensions : installed.map(extension => extension.name))])]
+    // `off` removes the extension everywhere, `on`/`only` keep the native tool visible.
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...installed.map(extension => extension.name)])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
-      if (!extension) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的插件：${name}`)
+      if (!extension) throw new RuntimeError('INVALID_INPUT', `插件未安装：${name}`)
       return extension
     })
     const registeredTools = extensions.flatMap(extension => (extension.tools ?? []).map(tool => ({ extension, tool })))
-    const requestedTools = preset
-      ? new Set(preset.tools.filter(name => codemodeMode !== 'off' || name !== CODEMODE_TOOL_NAME))
-      : undefined
     const tools: ToolRegistration[] = registeredTools.flatMap(({ tool }) => {
-      // Tools are always on; only a preset's tool list narrows them further.
-      if (requestedTools && !requestedTools.has(tool.name)) return []
+      // Tools are always on.
       if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name) && !tool.name.startsWith('wetrack_analysis_')) return []
       return [tool]
     })
-    if (requestedTools) {
-      const registeredNames = new Set(registeredTools.map(({ tool }) => tool.name))
-      for (const name of requestedTools) {
-        if (!registeredNames.has(name)) throw new RuntimeError('INVALID_INPUT', `Preset 引用了未安装的工具：${name}`)
-      }
-    }
     // Pi's `codemode.mode: only`: the model sees just the script tool; the enabled tools
     // stay callable by nested calls, which is what scripts reach. `null` clears a stored
     // filter when the conversation leaves `only`, so an `undefined` (change nothing) is
@@ -252,12 +234,11 @@ export function createCore(deps: CoreDeps) {
     const modelTools = codemodeMode === 'only' && extensions.some(extension => extension.name === CODEMODE_EXTENSION_NAME)
       ? tools.filter(tool => tool.name === CODEMODE_TOOL_NAME)
       : null
-    const requestedModel = overrides.model ?? preset?.model
+    const requestedModel = overrides.model
     let model = requestedModel ?? state.settings.defaultModel ?? modelRuntime.defaultModel
     if (model && !modelRuntime.models.getModel(model.provider, model.modelId)) {
-      // An explicit pick or preset must fail loudly; a stale stored default
-      // resolves to a model that actually exists instead of blocking a new
-      // conversation.
+      // An explicit pick must fail loudly; a stale stored default resolves to
+      // a model that actually exists instead of blocking a new conversation.
       if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
       model = await firstAvailableAllowedModel()
       if (!model) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型未出现在 Pi 模型目录中')
@@ -268,14 +249,13 @@ export function createCore(deps: CoreDeps) {
     if (model && !modelWithinAllowlist(modelAllowlist(), model)) {
       // An explicit pick is refused; a stored default the allowlist no longer
       // covers only resolves to an allowed model instead of blocking the run.
-      if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', `${overrides.model ? '所选模型' : 'Preset 模型'}不在模型白名单内`)
+      if (requestedModel) throw new RuntimeError('MODEL_UNAVAILABLE', '所选模型不在模型白名单内')
       const fallback = await firstAvailableAllowedModel()
       if (!fallback) throw new RuntimeError('MODEL_UNAVAILABLE', '配置的模型不在模型白名单内')
       model = fallback
     }
-    const thinkingLevel = overrides.thinkingLevel ?? preset?.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
+    const thinkingLevel = overrides.thinkingLevel ?? state.settings.defaultThinkingLevel ?? modelRuntime.defaultThinkingLevel
     if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
-    const instructions = preset?.instructions
     // Store what the model will actually send. A configured level list can
     // narrow after the conversation last chose one; keeping the unsupported
     // value in `pi.agent` makes the composer label disagree with the request.
@@ -290,7 +270,6 @@ export function createCore(deps: CoreDeps) {
       modelTools,
       ...(model ? { model } : {}),
       ...(effectiveThinking ? { thinkingLevel: effectiveThinking } : {}),
-      ...(instructions ? { instructions } : {}),
     }
   }
 
@@ -320,11 +299,10 @@ export function createCore(deps: CoreDeps) {
         if (busy) continue
         const metadata = await ensureMetadata(record.id)
         const settings = appState.snapshot().settings
-        const preset = selectedPreset(metadata.presetId ?? settings.defaultPresetId)
         const workspace = selectedWorkspace(metadata.workspaceId ?? undefined)
         const accessMode = metadata.accessMode ?? settings.defaultAccessMode
         const agent = await conversation.agent(CTX)
-        const change = await buildAgentChange(workspace.id, accessMode, preset, {
+        const change = await buildAgentChange(workspace.id, accessMode, {
           ...(agent.model ? { model: agent.model } : {}),
           ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
         })
@@ -346,7 +324,6 @@ export function createCore(deps: CoreDeps) {
     detailFromView,
     currentDetail,
     selectedWorkspace,
-    selectedPreset,
     modelAllowlist,
     assertModelAllowed,
     firstAllowedModel,

@@ -1,7 +1,7 @@
 # codemode-off
 
-sections (8274 chars): runtime-core 2955, project-instructions 302, work-policy 722, wetrack-analysis 611, goal-policy 491, skills-policy 2407, delegation-policy 786
-tools (34; descriptions 16019 chars; parameters 9000 chars): read, write, edit, bash, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
+sections (8356 chars): runtime-core 2955, project-instructions 302, work-policy 722, schedule-policy 82, wetrack-analysis 611, goal-policy 491, skills-policy 2407, delegation-policy 786
+tools (38; descriptions 16523 chars; parameters 13747 chars): read, write, edit, bash, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update
 
 ## section runtime-core
 
@@ -93,6 +93,12 @@ Workspace <ROOT>/workspace/AGENTS.md applies to the workspace root and its desce
 非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。简单问题或单步改动跳过待办。
 只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。
 </work-policy>
+
+## section schedule-policy
+
+<schedule-policy>
+只有在用户明确要求时才创建或修改定时任务；当前正在执行的定时任务所依据的既有授权继续有效。
+</schedule-policy>
 
 ## section wetrack-analysis
 

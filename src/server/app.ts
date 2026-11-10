@@ -33,7 +33,6 @@ const createSchema = z.object({
   model: modelRef.optional(),
   thinkingLevel: z.enum(thinkingLevels).optional(),
   workspaceId: identifier.optional(),
-  presetId: identifier.optional(),
   accessMode: z.enum(accessModes).optional(),
   kind: z.literal('defectAnalysis').optional(),
 }).strict()
@@ -45,7 +44,6 @@ const updateSchema = z.object({
   model: modelRef.optional(),
   thinkingLevel: z.enum(thinkingLevels).optional(),
   workspaceId: identifier.optional(),
-  presetId: identifier.nullable().optional(),
   accessMode: z.enum(accessModes).optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 
@@ -125,30 +123,23 @@ const settingsSchema = z.object({
   codemodeMode: z.enum(CODEMODE_MODES).optional(),
   memoryEnabled: z.boolean().optional(),
   showAnalysisConversations: z.boolean().optional(),
-  defaultPresetId: identifier.nullable().optional(), defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
+  defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 const workspaceSchema = z.object({ path: z.string().min(1).max(4096).refine(value => !value.includes('\0')), name: z.string().trim().min(1).max(120).optional() }).strict()
-const presetSchema = z.object({
-  id: identifier.optional(), name: z.string().trim().min(1).max(120), description: z.string().max(1000).optional(),
-  instructions: z.string().max(32_000), extensions: z.array(z.string().min(1).max(160)).max(100),
-  tools: z.array(z.string().min(1).max(160)).max(500), model: modelRef.optional(), thinkingLevel: z.enum(thinkingLevels).optional(), accessMode: z.enum(accessModes),
-}).strict()
-const automationScheduleSchema = z.object({
-  unit: z.enum(['hour', 'day', 'week', 'month']),
-  timeOfDay: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u).optional(),
-  dayOfWeek: z.number().int().min(0).max(6).optional(),
-  dayOfMonth: z.number().int().min(1).max(31).optional(),
-}).strict()
+const automationRuleSchema = z.string().trim().min(1).max(2_000)
 const automationSchema = z.object({
-  name: z.string().trim().min(1).max(120), prompt: z.string().trim().min(1).max(100_000), enabled: z.boolean().optional(),
-  intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).optional(),
-  schedule: automationScheduleSchema.optional(),
+  name: z.string().trim().min(1).max(120), prompt: z.string().trim().min(1).max(100_000),
+  status: z.enum(['active', 'paused', 'ended']).optional(),
+  rrule: automationRuleSchema.optional(),
+  // An IANA zone carries a slash (`Asia/Shanghai`), so the identifier pattern does not apply.
+  timeZone: z.string().min(1).max(80).regex(/^[A-Za-z0-9_+\-/]+$/u).optional(),
+  target: z.enum(['session', 'new_once', 'new']).optional(), sessionId: identifier.optional(),
   accessMode: z.enum(['readOnly', 'workspaceWrite', 'fullAccess']).optional(),
-  model: modelRef.optional(), workspaceId: identifier.optional(), presetId: identifier.optional(),
+  model: modelRef.optional(), workspaceId: identifier.optional(),
 }).strict()
 const automationPatchSchema = automationSchema.partial().extend({
-  intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).nullable().optional(),
-  schedule: automationScheduleSchema.nullable().optional(),
+  rrule: automationRuleSchema.nullable().optional(),
+  sessionId: identifier.nullable().optional(),
 }).refine(value => Object.keys(value).length > 0)
 const wetrackWorkspaceSchema = z.object({ workspaceId: identifier.nullable().optional(), thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional() }).strict()
 const pluginMarketplaceSchema = z.object({ source: z.string().trim().min(1).max(4_096) }).strict()
@@ -627,8 +618,15 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
 
   app.get('/api/capabilities', c => c.json(runtime.capabilities()))
   app.get('/api/settings', c => c.json(runtime.settings()))
-  app.get('/api/mcp', c => c.json(runtime.mcp()))
   app.patch('/api/settings', async c => c.json(await runtime.updateSettings(await readJson(c.req.raw, settingsSchema))))
+  // The personalization editor reads and writes the user-level AGENTS.md; the byte limit is
+  // enforced server-side because that same file also feeds the prompt.
+  app.get('/api/personalization', async c => c.json(await runtime.personalization()))
+  app.put('/api/personalization', async c => {
+    const input = await readJson(c.req.raw, z.object({ content: z.string() }).strict())
+    return c.json(await runtime.savePersonalization(input.content))
+  })
+  app.get('/api/mcp', c => c.json(runtime.mcp()))
   app.post('/api/settings/open-config', async c => {
     await runtime.openConfigFile()
     return c.json({ ok: true })
@@ -810,10 +808,6 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const input = await readJson(c.req.raw, branchNameSchema)
     return c.json(await runtime.createGitBranch(pathId(c.req.param('id')), { branchName: input.branchName }))
   })
-  app.get('/api/presets', c => c.json({ presets: runtime.presets() }))
-  app.post('/api/presets', async c => c.json({ preset: await runtime.createPreset(await readJson(c.req.raw, presetSchema)) }, 201))
-  app.patch('/api/presets/:id', async c => c.json({ preset: await runtime.updatePreset(pathId(c.req.param('id')), await readJson(c.req.raw, presetSchema.omit({ id: true }).partial().refine(value => Object.keys(value).length > 0))) }))
-  app.delete('/api/presets/:id', async c => { await runtime.deletePreset(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.get('/api/providers/:id', async c => c.json({ provider: await runtime.provider(pathId(c.req.param('id'))) }))
   app.delete('/api/providers/:id', async c => { await runtime.deleteProvider(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.post('/api/providers/:id/test', async c => {
@@ -843,7 +837,15 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.patch('/api/automations/:id', async c => c.json({ automation: await runtime.updateAutomation(pathId(c.req.param('id')), await readJson(c.req.raw, automationPatchSchema)) }))
   app.delete('/api/automations/:id', async c => { await runtime.deleteAutomation(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.post('/api/automations/:id/run-now', async c => c.json(await runtime.runAutomation(pathId(c.req.param('id'))), 202))
-  app.get('/api/automations/:id/runs', c => c.json({ runs: runtime.automationRuns(pathId(c.req.param('id'))) }))
+  app.get('/api/automations/:id/runs', c => {
+    const query = c.req.query()
+    const limit = query.limit === undefined ? 20 : Math.min(100, Math.max(1, Number(query.limit)))
+    const offset = query.offset === undefined ? 0 : Math.max(0, Number(query.offset))
+    const runs = runtime.automationRuns(pathId(c.req.param('id')))
+    const page = Number.isFinite(limit) && Number.isFinite(offset) ? runs.slice(offset, offset + limit) : runs.slice(0, 20)
+    return c.json({ runs: page, total: runs.length })
+  })
+  app.post('/api/automations/purge-ended', async c => c.json({ removed: await runtime.purgeEndedAutomations() }))
   app.get('/api/wetrack/defects', async c => c.json(await runtime.wetrackDefects()))
   app.get('/api/wetrack/defects/:defectNumber', async c => {
     const defectNumber = c.req.param('defectNumber')

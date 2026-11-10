@@ -14,8 +14,10 @@
 | [trajectory.md](trajectory.md) | 轨迹采集与导出：三钩子、JSONL 行类型、导出 API 与 Inspector tab |
 | [rendering.md](rendering.md) | 渲染状态机：消息身份、块级流式、四台状态机、pending 交互屏障 |
 | [memory.md](memory.md) | 工作区记忆：存储布局、注入与省略条件、写入放行、后台提取 |
+| [personalization.md](personalization.md) | 个性化指令：用户级 AGENTS.md 的存储与上限、注入顺序、设置页与 API |
 | [plugins.md](plugins.md) | 插件市场：来源与安装事务、插件技能/MCP/UI、引用注入 |
 | [search-and-shell.md](search-and-shell.md) | 搜索与 shell 工具面：四个检索工具、原生 grep 回退、平台二选一 |
+| [automations.md](automations.md) | 自动化任务：RRULE 规则与迁移、三态与 target 投递、运行记录、四个模型工具与 `schedule-policy` |
 
 提示词体系的现状参考在 [docs/prompts/runtime-system.md](../prompts/runtime-system.md) 与生成的 [section-catalog](../section-catalog.md)。
 

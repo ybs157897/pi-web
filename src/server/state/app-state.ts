@@ -4,7 +4,6 @@ import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 import type {
   AccessMode,
-  AgentPreset,
   AppSettings,
   Automation,
   AutomationRun,
@@ -43,7 +42,6 @@ const settingsSchema = z.object({
   memoryEnabled: z.boolean().default(false),
   /** Defect analysis stays out of the ordinary conversation sidebar unless explicitly enabled. */
   showAnalysisConversations: z.boolean().default(false),
-  defaultPresetId: z.string().min(1).optional(),
   defaultWorkspaceId: z.string().min(1).optional(),
   shortcuts: z.partialRecord(z.enum(SHORTCUT_COMMANDS), z.string().min(1).max(80)).optional(),
 }).strict()
@@ -56,26 +54,18 @@ const workspaceSchema = z.object({
 }).strict()
 /** Historical plugin switch state: still parsed for old files, but never read — tools are always on. */
 const pluginStateSchema = z.object({ enabled: z.boolean(), tools: z.record(z.string(), z.boolean()) }).strict()
-const presetSchema = z.object({
-  id: z.string().min(1).max(128),
-  name: z.string().min(1).max(120),
-  description: z.string().max(1000).optional(),
-  instructions: z.string().max(32_000),
-  extensions: z.array(z.string().min(1).max(160)).max(100),
-  tools: z.array(z.string().min(1).max(160)).max(500),
-  model: modelRef.optional(),
-  thinkingLevel: thinking.optional(),
-  accessMode,
-}).strict()
 const automationRunSchema = z.object({
   id: z.string().min(1),
-  status: z.enum(['running', 'completed', 'failed', 'interrupted']),
+  status: z.enum(['running', 'completed', 'failed', 'interrupted', 'delivered']),
+  /** Absent only on a record written before occurrences were tracked. */
+  plannedAt: z.number().finite().optional(),
   conversationId: z.string().optional(),
-  startedAt: z.number().finite(),
+  startedAt: z.number().finite().optional(),
   finishedAt: z.number().finite().optional(),
   error: z.string().max(500).optional(),
 }).strict()
-const automationScheduleSchema = z.object({
+/** Pre-RRULE calendar repeat; accepted only so an older file still loads and can be migrated. */
+const legacyAutomationScheduleSchema = z.object({
   unit: z.enum(['hour', 'day', 'week', 'month']),
   timeOfDay: z.string().regex(/^\d{1,2}:\d{2}$/u).optional(),
   dayOfWeek: z.number().int().min(0).max(6).optional(),
@@ -85,9 +75,15 @@ const automationSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().min(1).max(120),
   prompt: z.string().min(1).max(100_000),
-  enabled: z.boolean(),
+  status: z.enum(['active', 'paused', 'ended']).optional(),
+  rrule: z.string().min(1).max(2_000).optional(),
+  timeZone: z.string().min(1).max(80).optional(),
+  target: z.enum(['session', 'new_once', 'new']).optional(),
+  sessionId: z.string().min(1).optional(),
+  /** Legacy fields, migrated on load by the automations service. */
+  enabled: z.boolean().optional(),
   intervalMs: z.number().int().min(60_000).max(365 * 24 * 60 * 60 * 1000).optional(),
-  schedule: automationScheduleSchema.optional(),
+  schedule: legacyAutomationScheduleSchema.optional(),
   nextRunAt: z.number().finite().optional(),
   createdAt: z.number().finite(),
   updatedAt: z.number().finite(),
@@ -97,8 +93,12 @@ const automationSchema = z.object({
   accessMode: accessMode.optional(),
   model: modelRef.optional(),
   workspaceId: z.string().optional(),
-  presetId: z.string().optional(),
-}).strict()
+}).strict().transform(value => ({
+  ...value,
+  // A pre-RRULE file carries `enabled` and no status; a legacy task always opened a new session.
+  status: value.status ?? (value.enabled === false ? 'paused' as const : 'active' as const),
+  target: value.target ?? 'new' as const,
+}))
 const feedbackEntrySchema = z.object({
   text: z.string().min(1).max(2_000),
   createdAt: z.number().finite(),
@@ -110,7 +110,6 @@ const appStateSchema = z.object({
   workspaces: z.array(workspaceSchema),
   /** Legacy plugin switches, kept only so pre-existing files still parse. */
   plugins: z.record(z.string(), pluginStateSchema),
-  presets: z.array(presetSchema),
   automations: z.array(automationSchema),
   feedback: z.array(feedbackEntrySchema).default([]),
 }).strict()
@@ -124,7 +123,6 @@ export type PersistedAppState = {
   workspaces: WorkspaceSummary[]
   /** Legacy plugin switches: retained for schema compatibility, ignored at runtime. */
   plugins: Record<string, { enabled: boolean; tools: Record<string, boolean> }>
-  presets: AgentPreset[]
   automations: Automation[]
   feedback: FeedbackEntry[]
 }
@@ -167,6 +165,31 @@ function migrateFeedback(value: unknown): unknown {
   const state = value as Record<string, unknown>
   if (state.feedback === undefined || Array.isArray(state.feedback)) return value
   return { ...state, feedback: [] }
+}
+
+/**
+ * The retired Agent preset feature: preset list, the default-preset setting and
+ * per-automation preset references all read as gone. Legacy keys never survive
+ * the read, so the strict schema keeps accepting older files.
+ */
+function migratePresets(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const state = { ...(value as Record<string, unknown>) }
+  delete state.presets
+  if (typeof state.settings === 'object' && state.settings !== null && !Array.isArray(state.settings)) {
+    const settings = { ...(state.settings as Record<string, unknown>) }
+    delete settings.defaultPresetId
+    state.settings = settings
+  }
+  if (Array.isArray(state.automations)) {
+    state.automations = (state.automations as unknown[]).map(entry => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry
+      const automation = { ...(entry as Record<string, unknown>) }
+      delete automation.presetId
+      return automation
+    })
+  }
+  return state
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -240,7 +263,7 @@ export class AppStateStore {
     let state: PersistedAppState
     try {
       const raw: unknown = JSON.parse(await readFile(path, 'utf8'))
-      const parsed = appStateSchema.safeParse(migrateFeedback(migrateLegacySettings(raw)))
+      const parsed = appStateSchema.safeParse(migratePresets(migrateFeedback(migrateLegacySettings(raw))))
       if (!parsed.success) throw new Error('应用数据格式不受支持')
       state = parsed.data
     } catch (error) {
@@ -250,7 +273,6 @@ export class AppStateStore {
         settings: defaultSettings(options.defaultThinkingLevel, options.defaultWorkspace?.id),
         workspaces: options.defaultWorkspace === undefined ? [] : [structuredClone(options.defaultWorkspace)],
         plugins: {},
-        presets: [],
         automations: [],
         feedback: [],
       }

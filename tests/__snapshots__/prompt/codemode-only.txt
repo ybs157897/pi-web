@@ -1,6 +1,6 @@
 # codemode-only
 
-sections (14156 chars): runtime-core 2955, project-instructions 302, work-policy 1179, wetrack-analysis 611, goal-policy 591, skills-policy 2475, delegation-policy 812, codemode 5231
+sections (14425 chars): runtime-core 2955, project-instructions 302, work-policy 1179, schedule-policy 82, wetrack-analysis 611, goal-policy 591, skills-policy 2475, delegation-policy 812, codemode 5418
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -98,6 +98,12 @@ Workspace <ROOT>/workspace/AGENTS.md applies to the workspace root and its desce
 只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。
 </work-policy>
 
+## section schedule-policy
+
+<schedule-policy>
+只有在用户明确要求时才创建或修改定时任务；当前正在执行的定时任务所依据的既有授权继续有效。
+</schedule-policy>
+
 ## section wetrack-analysis
 
 <wetrack-analysis>
@@ -188,6 +194,17 @@ declare const tools: { write(args: {
   content: string;
   // Path to the file to write (relative or absolute)
   path: string;
+}): Promise<string>; };
+```
+
+### `schedule_view`
+View one scheduled task by id.
+
+codemode tool declaration:
+```ts
+declare const tools: { schedule_view(args: {
+  // Task id.
+  id: string;
 }): Promise<string>; };
 ```
 

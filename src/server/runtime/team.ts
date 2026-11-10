@@ -158,7 +158,6 @@ export function createTeam(deps: TeamDeps) {
     metadata.title = label
     metadata.titleSource = 'user'
     metadata.workspaceId = parent.workspaceId ?? defaultWorkspace()?.id ?? null
-    metadata.presetId = parent.presetId ?? null
     metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
     await inheritPlanConstraint(tx, childId, parentId)
   }

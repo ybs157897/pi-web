@@ -1,6 +1,6 @@
 # Pi Web 运行时系统提示词
 
-用途：应用内 Agent 的默认行为核心与按需能力片段。稳定核心由默认 `runtime-policy` Extension 的 `runtime-core` section 注入所有 Preset；核心文件在服务模块加载时读取一次，不依赖 Preset instructions。扩展不注册工具，待办指导按当前请求的真实可调用工具动态生成；计划模式遵循独立的 `plan-policy`。编辑 Preset 只影响后续使用它的新会话，不自动更新已有会话。
+用途：应用内 Agent 的默认行为核心与按需能力片段。稳定核心由默认 `runtime-policy` Extension 的 `runtime-core` section 注入所有会话；核心文件在服务模块加载时读取一次，文档副本不参与请求组装。扩展不注册工具，待办指导按当前请求的真实可调用工具动态生成；计划模式遵循独立的 `plan-policy`。
 
 下方“稳定核心”只引用运行时规范源，避免文档副本与实际注入内容漂移。后续片段由 Host 按真实能力和角色选择注入，不要全部无条件拼接。Skill 的能力路由已由实际 `skills-policy` section 提供，使用本文件时注意去重；问题单和环境管理片段仍是待接入模板。任何提示词改动以 `tests/prompt-snapshot.test.ts` 的完整请求快照及 `tests/team.test.ts` 的团队快照 diff 为评审门（`npx vitest run tests/prompt-snapshot.test.ts -u` 刷新），并以真实模型行为验收为准——2026-10-28 的刀 10 验收正是靠快照外的行为对照（workflow todo 断言 × 基线对比）拦下一处文案回归，详见 [来源与集成说明](../history/prompts-sources-and-integration.md)。
 
@@ -21,7 +21,7 @@
 ```text
 Skill 是完成特定工作的可复用方法，不是新的权限。用户点名已有 Skill，或任务明确符合其触发条件时，先读取该 Skill 的 SKILL.md，再按需读取它引用的资料和脚本。只加载当前需要的内容；不要仅凭关键词载入大量 Skill。
 
-找不到指定 Skill 或读取失败时说明具体缺口，继续可以独立完成的工作。不要把 Agent Preset、普通提示词模板或 MCP 工具误称为已加载 Skill。
+找不到指定 Skill 或读取失败时说明具体缺口，继续可以独立完成的工作。不要把普通提示词模板或 MCP 工具误称为已加载 Skill。
 
 用户要求创建或维护 Skill 时，优先使用当前实际提供的 skill-creator 和资源管理工具：先检查已有实现，再生成或更新最小 SKILL.md，校验格式和引用，按权限保存，完成加载检查，并以一个代表性任务验证使用效果。必要时才添加 scripts、references、assets。不要擅自覆盖现有 Skill、修改全局目录、安装依赖或执行新脚本。
 

@@ -11,7 +11,7 @@ export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Ex
     sections: extension.sections?.map(item => ({
       ...item,
       render: async (input, context) => {
-        // A Preset can select an extension without exposing its tool.
+        // An installed extension may be present without its tool being exposed.
         if (!input.agent.tools.some(tool => tool.name === CODEMODE_TOOL_NAME)) return undefined
         const direct = new Set(input.agent.tools.filter(tool => tool.name !== CODEMODE_TOOL_NAME).map(tool => tool.name))
         const shared = input.agent.callable.filter(tool => direct.has(tool.name))

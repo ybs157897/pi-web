@@ -4,6 +4,13 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
+import { compileRule, systemTimeZone } from '../src/shared/automation-timing.ts'
+
+/** A minute-interval rule anchored now, for the restart-recovery cases. */
+const everyMinutes = (minutes: number): string => compileRule({
+  frequency: 'minutes', interval: String(minutes), weekdays: [1], monthDay: 1,
+  date: '', time: '00:00', timeZone: systemTimeZone(),
+}, Date.now()) as string
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { Harness, createRegistry, defineTask, type Conversation, type ConversationId, type TaskId } from '@earendil-works/pi-durable'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
@@ -233,7 +240,7 @@ describe('Pi Durable runtime', () => {
       },
       workspaces: [],
       plugins: { todo: { enabled: false, tools: { todo_write: false } } },
-      presets: [], automations: [], feedback: {},
+      automations: [], feedback: {},
     })
     const created = await runtime.create({})
     await runtime.submit(created.conversation.id, { text: '[todo] 旧插件开关', requestId: 'legacy-plugin-run' })
@@ -580,7 +587,7 @@ describe('Pi Durable runtime', () => {
     const automation = await runtime.createAutomation({
       name: 'Paused workspace task',
       prompt: 'Inspect this workspace',
-      enabled: false,
+      status: 'paused',
       workspaceId: workspace.id,
     })
 
@@ -609,7 +616,7 @@ describe('Pi Durable runtime', () => {
     const creating = runtime.createAutomation({
       name: 'Racing task',
       prompt: 'Inspect this workspace',
-      enabled: false,
+      status: 'paused',
       workspaceId: workspace.id,
     })
     await expect(deleting).resolves.toBeUndefined()
@@ -618,33 +625,10 @@ describe('Pi Durable runtime', () => {
     expect(runtime.workspaces().some(item => item.id === workspace.id)).toBe(false)
   })
 
-  it('blocks deleting a preset referenced by an automation until it is reassigned', async () => {
-    const { runtime } = await fixture()
-    const first = await runtime.createPreset({
-      name: 'Scheduled preset', instructions: '', extensions: [], tools: [], accessMode: 'readOnly',
-    })
-    const second = await runtime.createPreset({
-      name: 'Replacement preset', instructions: '', extensions: [], tools: [], accessMode: 'readOnly',
-    })
-    const automation = await runtime.createAutomation({
-      name: 'Preset task', prompt: 'Run with the selected preset', enabled: false, presetId: first.id,
-    })
-
-    await expect(runtime.deletePreset(first.id)).rejects.toMatchObject({
-      code: 'CONFLICT',
-      message: expect.stringContaining(`${automation.name}（${automation.id}）`),
-    })
-    expect(runtime.presets().some(item => item.id === first.id)).toBe(true)
-
-    await runtime.updateAutomation(automation.id, { presetId: second.id })
-    await runtime.deletePreset(first.id)
-    expect(runtime.presets().some(item => item.id === first.id)).toBe(false)
-  })
-
   it('recovers an overdue automation after the runtime restarts', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
     const automation = await runtime.createAutomation({
-      name: 'Restarted task', prompt: 'Verify startup recovery', enabled: true, intervalMs: 60_000,
+      name: 'Restarted task', prompt: 'Verify startup recovery', status: 'active', rrule: everyMinutes(1),
     })
     await runtime.close()
 
@@ -669,9 +653,8 @@ describe('Pi Durable runtime', () => {
 
   it('does not run a 30-day automation immediately after restart', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
-    const intervalMs = 30 * 24 * 60 * 60 * 1000
     const automation = await runtime.createAutomation({
-      name: 'Long interval task', prompt: 'Wait for its due time', enabled: true, intervalMs,
+      name: 'Long interval task', prompt: 'Wait for its due time', status: 'active', rrule: everyMinutes(30 * 24 * 60),
     })
     await runtime.close()
 

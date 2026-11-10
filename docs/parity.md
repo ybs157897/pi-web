@@ -422,7 +422,6 @@
 | ZC-1 | 空态标题改为 ZCode 的按时间问候 + 背景 Logo（Logo 形状换成 Pi 的 π） | `packages/ui/src/v4/ConversationDraftEmptyState.tsx`：分段 `:20`、问候选择 `:32-44`、跨边界刷新 `:46-60`、20–30px 自适应 `:73-90`、背景 Logo `:204-240`（400×320、5:4、`min(72vw,25rem)`、上移 40px、70% 渐隐遮罩、`foreground-subtlest`）；文案 `i18n/locales/zh-CN.ts:5207-5212` / `en-US.ts:5573-5578` | `src/web/greeting.ts`（分段/文案/字号纯函数）、`Composer.tsx` hero 问候块（定时换档 + ResizeObserver 测量；背景为 Georgia π 的 1px 描边，沿用 ZCode 的 400×320 尺寸/位置/渐隐遮罩）、`Composer.module.css` | 已修（2026-10-20：`tests/greeting.test.ts` 3 例覆盖全部分段、跨午夜与字号下限；CDP 固定 08:00 截图 `09-greeting-morning.png`，核对 30px 文案、400×320 π 描边 Logo、70% 渐隐与 390px 窄屏收缩） |
 | ZC-2 | 侧栏移除头部「新建会话」图标按钮与「新会话」行的快捷键徽标 | 不适用（ZCode 侧栏结构不同；用户直接要求隐藏） | `src/web/App.tsx`（`sidebarHeader` / `newChat`）；`App.module.css` 去掉 `.newChatKeys` | 已修 |
 | ZC-3 | 侧栏折叠后文字重影 | 不适用（ZCode 无此折叠态） | 根因是折叠态 `font-size:0` 只压住按钮文本、压不住绝对定位的快捷键徽标；徽标移除后消失，另在折叠态显式隐藏按钮文本 | 已修 |
-| ZC-4 | 空态隐藏单模式预设选择器 | 不适用（ZCode 空态无模式选择器） | `src/web/Composer.tsx` hero 上下文行：`presets.length === 0` 时不渲染 | 已修 |
 | ZC-5 | Git 分支切换（列表 / 切换 / 新建并切换） | UI：`packages/ui/src/GitBranchSwitcher.tsx`（搜索 + 列表 + 当前分支 `data-branch-current` 置顶 + 底部「新建分支并切换」，`:110`/`:298`/`:312`/`:338`）；hook：`packages/ui/src/hooks/useGitBranchSwitcher.ts`（展开即重读 `:115`、成功后刷新 Git 状态 `:233`/`:350`、HEAD 变化丢弃本地快照 `:97-112`）；服务：`packages/services/src/git/repo/gitCliRepo.ts`（`for-each-ref refs/heads` `:990`、`switch --no-guess` `:1141`、`switch --no-guess -c` `:1227-1228`、`check-ref-format --branch` `:606`、进行中操作标记位 `:616-633`）；错误归一：`packages/services/src/git/repo/gitCliHelpers.ts:64`（issue code 全集见 `packages/shared/src/git.ts:26-35`）；设计文档 `docs/git/branch-switching-service-design.md`（不做 stash/force/remote 浏览） | `src/server/git-branches.ts`（列表/切换/新建 + 结构化 issue）、`GET/POST /api/workspaces/:id/git/*`、`src/web/GitBranchSwitcher.tsx`（hero 上下文行与输入工具条） | 已修（2026-10-19：`tests/git-branches.test.ts` 8 例覆盖列表/切换/no-op/detached/新建/非法名/重复名/目标不存在/tracked 覆盖/冲突索引；demo 实例 4329 + CDP `artifacts/zcode-branch-check/verify.mjs` 17/17 通过，截图 `01-hero`…`08-blocked-switch`：菜单搜索、分支置顶、切换、新建、阻塞原因与受影响文件） |
 
 有意差异（本批次）：
@@ -531,7 +530,7 @@ DSH 客户端在 `settings/document-updated`、`credentials/*-updated`、`llm/ad
 | `models.json` | 设置页直接读写 | Provider 与模型目录（Pi 格式 `providers`） |
 | `auth.json` | 设置页直接读写 | Provider 凭据；删除自定义 Provider 时一并删除 |
 | `mcp.json` | 启动时只读导入 | MCP 服务器配置 |
-| `app-state.json` | 应用读写 | 界面偏好、工作区、Preset、自动化任务 |
+| `app-state.json` | 应用读写 | 界面偏好、工作区、自动化任务 |
 | `pi-durable.sqlite` | Pi Durable 读写 | 会话、消息、工具执行记录 |
 
 实现要点：
@@ -590,7 +589,7 @@ DSH 对照：
 pi-web 修复：
 
 - `runtime.catalog()`：把 `settings.defaultModel` 与 Pi 全局默认一起校验。优先选择目录中存在且 `available` 的候选，其次第一个可用模型，再退到存在但暂不可用的默认；只有“有效默认已不在目录/已不被白名单允许”时才把修正写回 app-state，凭据暂时缺失的有效默认不会被覆盖。
-- `buildAgentChange()`：默认模型在目录中不存在（或没有默认）时回退到 `firstAvailableAllowedModel()`（优先已配置凭据的 provider），显式选择的模型或 Preset 模型仍然报 `MODEL_UNAVAILABLE`。
+- `buildAgentChange()`：默认模型在目录中不存在（或没有默认）时回退到 `firstAvailableAllowedModel()`（优先已配置凭据的 provider），显式选择的模型仍然报 `MODEL_UNAVAILABLE`。
 - 前端 `selectedModel`：新会话只接受目录中 `available` 的请求默认；失效时使用 catalog 已验证的 `defaultModel`，再退到第一个可用模型。已有会话保留自身选择，不会被静默改标签。
 - 新增 `tests/models.test.ts` 用例：失效默认被替换为目录内模型并用于新建会话；显式请求不存在的模型仍被拒绝。
 

@@ -52,6 +52,10 @@ const TOOL_SOURCES: Record<string, string> = {
   grep: 'src/server/tools/research.ts',
   browser: 'src/server/tools/browser.ts',
   todo_write: 'src/server/tools/todo.ts',
+  schedule_create: 'src/server/tools/schedule.ts',
+  schedule_edit: 'src/server/tools/schedule.ts',
+  schedule_list: 'src/server/tools/schedule.ts',
+  schedule_view: 'src/server/tools/schedule.ts',
   wetrack_analysis_save: 'src/server/tools/wetrack-analysis.ts',
   wetrack_analysis_get: 'src/server/tools/wetrack-analysis.ts',
   wetrack_analysis_detail: 'src/server/tools/wetrack-analysis.ts',
@@ -89,6 +93,7 @@ const TOOL_SOURCES: Record<string, string> = {
  */
 const NON_TOOL_NAMES: Record<string, string> = {
   todo: 'defineExtension name, not a tool',
+  schedule: 'defineExtension name, not a tool',
   interactions: 'defineExtension name, not a tool',
   plan: 'defineExtension name, not a tool',
   goal: 'defineExtension name, not a tool',

@@ -5,7 +5,7 @@
  * the allowlist currently hides.
  */
 import type {
-  AccessMode, AgentPreset, AppSettings, ModelCatalog, ModelRef as UiModelRef, ProviderConfigSummary,
+  AccessMode, AppSettings, ModelCatalog, ModelRef as UiModelRef, ProviderConfigSummary,
   ProviderInput, ProviderTestResult, UpdateAppSettingsInput, WorkspaceSummary,
 } from '../../shared/types.ts'
 import type { AppStateStore } from '../state/app-state.ts'
@@ -19,7 +19,6 @@ export interface SettingsDeps {
   appState: AppStateStore
   modelRuntime: RuntimeModels
   workspaceWriteAvailable: boolean
-  selectedPreset(id: string): AgentPreset | undefined
   assertOpen(): void
   syncIdleAgents(): Promise<void>
   assertModelAllowed(model: UiModelRef | undefined, label: string): void
@@ -29,7 +28,7 @@ export interface SettingsDeps {
 }
 
 export function createSettings(deps: SettingsDeps) {
-  const { appState, modelRuntime, workspaceWriteAvailable, selectedPreset, assertOpen, syncIdleAgents, assertModelAllowed, modelAllowlist, launchWorkspace } = deps
+  const { appState, modelRuntime, workspaceWriteAvailable, assertOpen, syncIdleAgents, assertModelAllowed, modelAllowlist, launchWorkspace } = deps
 
   const settings = (): AppSettings => appState.snapshot().settings
 
@@ -55,7 +54,6 @@ export function createSettings(deps: SettingsDeps) {
     if (input.defaultWorkspaceId && !appState.snapshot().workspaces.some(item => item.id === input.defaultWorkspaceId)) {
       throw new RuntimeError('NOT_FOUND', '默认工作区不存在')
     }
-    if (input.defaultPresetId) selectedPreset(input.defaultPresetId)
     if (input.defaultAccessMode === 'workspaceWrite' && !workspaceWriteAvailable) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
@@ -82,8 +80,6 @@ export function createSettings(deps: SettingsDeps) {
       if (input.showAnalysisConversations !== undefined) state.settings.showAnalysisConversations = input.showAnalysisConversations
       if (input.defaultModel === null) delete state.settings.defaultModel
       else if (input.defaultModel !== undefined) state.settings.defaultModel = { ...input.defaultModel }
-      if (input.defaultPresetId === null) delete state.settings.defaultPresetId
-      else if (input.defaultPresetId !== undefined) state.settings.defaultPresetId = input.defaultPresetId
       if (input.defaultWorkspaceId === null) {
         if (launchWorkspace === undefined) delete state.settings.defaultWorkspaceId
         else state.settings.defaultWorkspaceId = launchWorkspace.id

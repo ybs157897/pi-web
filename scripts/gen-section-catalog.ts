@@ -40,8 +40,10 @@ type Variant = typeof VARIANT_ORDER[number]
  */
 const SECTION_SOURCES: Record<string, string> = {
   'runtime-core': 'src/server/conversation/work-policy.ts',
+  'personal-instructions': 'src/server/conversation/work-policy.ts',
   'project-instructions': 'src/server/conversation/work-policy.ts',
   'work-policy': 'src/server/conversation/work-policy.ts',
+  'schedule-policy': 'src/server/tools/schedule.ts',
   'wetrack-analysis': 'src/server/tools/wetrack-analysis.ts',
   'goal-policy': 'src/server/tools/goal.ts',
   'skills-policy': 'src/server/tools/skill.ts',
@@ -57,8 +59,10 @@ const SECTION_SOURCES: Record<string, string> = {
 /** One-line injection condition per section, summarized from each registration's render logic. */
 const SECTION_NOTES: Record<string, string> = {
   'runtime-core': '每个模型请求无条件注入：进程启动时读取的 `conversation/prompts/runtime-core.md` 固定核心提示词。',
+  'personal-instructions': '用户级个性化文件（数据目录的 AGENTS.md，设置 → 个性化 编辑）非空时注入，每次请求重读；与项目指令冲突时项目指令优先，Explore 子智能体不注入。',
   'project-instructions': '工作区根存在 AGENTS.md 时注入其内容（每次请求重读）；Explore 子智能体不注入项目指令。',
   'work-policy': '每个请求注入会话事实（工作区、平台、日期、模型、写权限、shell 能力）与工具路由、待办约定；计划模式、只读会话与子会话会收窄其中条款。',
+  'schedule-policy': '`schedule_create` 或 `schedule_edit` 在本请求可调用（直接或经 codemode）时注入定时任务的授权约束；只有 list/view 可见时不注入。',
   'wetrack-analysis': '本请求可调用 `wetrack_analysis_save`（直接或经 codemode）时注入 WeTrack 分析记录的写入时机。',
   'goal-policy': 'goal 工具（`get_goal` 等）任一可路由时注入目标创建与自动续跑规则；计划模式下只保留禁止条款。',
   'skills-policy': 'skill 工具可调用时注入技能目录约定，并对比上次已展示内容提示新增技能。',

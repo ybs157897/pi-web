@@ -406,10 +406,6 @@ describe('model allowlist in the runtime', () => {
 
     await expect(runtime.create({ model: { provider: 'wl-beta', modelId: 'glm-x' } }))
       .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('所选模型不在模型白名单内') })
-    await expect(runtime.createPreset({
-      name: 'Scoped', instructions: 'instructions', extensions: [], tools: [],
-      model: { provider: 'wl-beta', modelId: 'glm-x' }, accessMode: 'fullAccess',
-    })).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('Preset 模型不在模型白名单内') })
     await expect(runtime.createAutomation({
       name: 'Scoped', prompt: 'prompt', model: { provider: 'wl-beta', modelId: 'glm-x' },
     })).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('Automation 模型不在模型白名单内') })

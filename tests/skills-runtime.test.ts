@@ -87,14 +87,10 @@ describe('Skills through the application runtime', () => {
     expect(await readFile(join(workspace, '.agents/skills/demo-verifier/SKILL.md'), 'utf8')).toBe(DEMO_SKILL)
   })
 
-  it('keeps preset tool allowlists and passes configured skill tools to child conversations', async () => {
+  it('passes configured skill tools to child conversations', async () => {
     const { runtime, workspace } = await fixture()
     await mkdir(join(workspace, '.agents/skills/demo-verifier'), { recursive: true })
     await writeFile(join(workspace, '.agents/skills/demo-verifier/SKILL.md'), DEMO_SKILL)
-    const preset = await runtime.createPreset({ name: 'Read files only', instructions: '', extensions: ['coding-tools'], tools: ['read'], accessMode: 'readOnly' })
-    const restricted = await runtime.create({ title: 'No skill tools', presetId: preset.id })
-    const denied = await run(runtime, restricted.conversation.id, '[skills-use]')
-    expect(denied.messages.find(message => message.role === 'tool' && message.toolName === 'skill_load')?.isError).toBe(true)
     const parent = await runtime.create({ title: 'Delegate skill use', accessMode: 'readOnly' })
     const delegated = await run(runtime, parent.conversation.id, '[skills-delegate]')
     const result = delegated.messages.find(message => message.role === 'tool' && message.toolName === 'subagent')!

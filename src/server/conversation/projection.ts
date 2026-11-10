@@ -1037,7 +1037,6 @@ export function projectConversation(
     // The owner edge is what keeps a subagent session out of the sidebar and control routes.
     ...(view.conversation.owner ? { origin: 'subagent' as const, parentId: String(view.conversation.owner.conversationId) } : {}),
     ...(metadata.workspaceId ? { workspaceId: metadata.workspaceId } : {}),
-    ...(metadata.presetId ? { presetId: metadata.presetId } : {}),
     accessMode: metadata.accessMode,
     ...(options.kind === 'defectAnalysis' ? { kind: options.kind } : {}),
     ...(summaryRunId ? { runId: summaryRunId } : {}),

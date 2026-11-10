@@ -20,6 +20,10 @@
 | grep | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | browser | [src/server/tools/browser.ts](../src/server/tools/browser.ts) | ✓ | — | — | ✓ | — |
 | todo_write | [src/server/tools/todo.ts](../src/server/tools/todo.ts) | ✓ | — | ✓ | ✓ | — |
+| schedule_create | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
+| schedule_edit | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
+| schedule_list | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
+| schedule_view | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
 | wetrack_analysis_save | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
 | wetrack_analysis_get | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
 | wetrack_analysis_detail | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
@@ -426,6 +430,177 @@ Record and update a task list to plan multi-step work and show progress; skip tr
 ```
 
 Source: [src/server/tools/todo.ts](../src/server/tools/todo.ts)
+
+## tool schedule_create
+
+Create a scheduled task. At each occurrence of rrule, prompt is delivered to the target session as a scheduled message from the user. The result includes the task id and the next occurrence. After downtime, only the latest missed occurrence is delivered.
+
+```json
+{
+  "type": "object",
+  "required": [
+    "title",
+    "prompt",
+    "rrule",
+    "target"
+  ],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Task name of at most 120 characters in the user's language: action plus object. Omit timing, status, ids, and bracketed suffixes."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Instruction delivered at each occurrence."
+    },
+    "rrule": {
+      "type": "string",
+      "description": "RFC 5545 subset: one DTSTART line, a newline, and one RRULE line. DTSTART ends in Z for UTC or carries TZID with an IANA time zone; a fixed offset such as UTC+5 is Etc/GMT-5, with the sign reversed. A TZID rule keeps local clock time across daylight-saving changes; generated nonexistent local times are skipped, and repeated ones occur once, at the earlier instant. DTSTART may be in the past; delivery starts with the first occurrence after creation. A one-time delivery is RRULE:FREQ=DAILY;COUNT=1. Supported: FREQ=MINUTELY, HOURLY, DAILY, WEEKLY, MONTHLY, YEARLY; COUNT at most 1000; UNTIL as a UTC instant ending in Z. MINUTELY and HOURLY accept no BY parts, so set the clock time in DTSTART. BYMONTHDAY and ordinal BYDAY require MONTHLY or YEARLY; BYYEARDAY and BYWEEKNO require YEARLY; an ordinal BYDAY cannot combine with BYWEEKNO. Example: \"DTSTART;TZID=Asia/Shanghai:20260901T080000\\nRRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\""
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "this_session"
+        },
+        {
+          "type": "string",
+          "const": "new_once"
+        },
+        {
+          "type": "string",
+          "const": "new"
+        }
+      ],
+      "description": "this_session delivers to this session; new_once delivers to the same new session every time, opened at the first delivery; new opens a different new session for every delivery. New sessions use this session's working directory. Use this_session for reminders and for follow-ups to this conversation; use new_once or new for independent work, such as a recurring report, and whenever the user asks for a new conversation."
+    }
+  }
+}
+```
+
+Source: [src/server/tools/schedule.ts](../src/server/tools/schedule.ts)
+
+## tool schedule_edit
+
+Update, pause, resume, or delete one scheduled task by id. Deleting does not retract queued messages.
+
+```json
+{
+  "type": "object",
+  "required": [
+    "id",
+    "action"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Task id."
+    },
+    "action": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "type": "string",
+          "const": "delete"
+        }
+      ],
+      "description": "update applies the provided fields, at least one; delete removes the task."
+    },
+    "title": {
+      "type": "string",
+      "description": "New task name of at most 120 characters."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "New instruction delivered at each occurrence."
+    },
+    "rrule": {
+      "type": "string",
+      "description": "RFC 5545 subset: one DTSTART line, a newline, and one RRULE line. DTSTART ends in Z for UTC or carries TZID with an IANA time zone; a fixed offset such as UTC+5 is Etc/GMT-5, with the sign reversed. A TZID rule keeps local clock time across daylight-saving changes; generated nonexistent local times are skipped, and repeated ones occur once, at the earlier instant. DTSTART may be in the past; delivery starts with the first occurrence after creation. A one-time delivery is RRULE:FREQ=DAILY;COUNT=1. Supported: FREQ=MINUTELY, HOURLY, DAILY, WEEKLY, MONTHLY, YEARLY; COUNT at most 1000; UNTIL as a UTC instant ending in Z. MINUTELY and HOURLY accept no BY parts, so set the clock time in DTSTART. BYMONTHDAY and ordinal BYDAY require MONTHLY or YEARLY; BYYEARDAY and BYWEEKNO require YEARLY; an ordinal BYDAY cannot combine with BYWEEKNO. Example: \"DTSTART;TZID=Asia/Shanghai:20260901T080000\\nRRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\""
+    },
+    "target": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "this_session"
+        },
+        {
+          "type": "string",
+          "const": "new_once"
+        },
+        {
+          "type": "string",
+          "const": "new"
+        }
+      ],
+      "description": "this_session delivers to this session; new_once delivers to the same new session every time, opened at the first delivery; new opens a different new session for every delivery. New sessions use this session's working directory. Use this_session for reminders and for follow-ups to this conversation; use new_once or new for independent work, such as a recurring report, and whenever the user asks for a new conversation."
+    },
+    "active": {
+      "type": "boolean",
+      "description": "false pauses the task; true resumes only if its timing has a future occurrence. Otherwise provide a new rrule."
+    },
+    "expectedUpdatedAt": {
+      "type": "string",
+      "description": "updatedAt from the latest result that returned this task; if the task changed after that result, the result is schedule_conflict and nothing changes."
+    }
+  }
+}
+```
+
+Source: [src/server/tools/schedule.ts](../src/server/tools/schedule.ts)
+
+## tool schedule_list
+
+List scheduled tasks, including tasks created from other sessions. Active tasks come first, ordered by next occurrence.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "active": {
+      "type": "boolean",
+      "description": "true for active tasks only; false for paused and ended tasks only; omitted for all tasks."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500,
+      "description": "Page size from 1 to 500; defaults to 100."
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of tasks to skip; defaults to 0."
+    }
+  }
+}
+```
+
+Source: [src/server/tools/schedule.ts](../src/server/tools/schedule.ts)
+
+## tool schedule_view
+
+View one scheduled task by id.
+
+```json
+{
+  "type": "object",
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Task id."
+    }
+  }
+}
+```
+
+Source: [src/server/tools/schedule.ts](../src/server/tools/schedule.ts)
 
 ## tool wetrack_analysis_save
 

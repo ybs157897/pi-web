@@ -5,7 +5,6 @@ import type { InstallPluginInput, PluginDescription, PluginOverview } from '../s
 import type {
   AddWorkspaceInput,
   AccessMode,
-  AgentPreset,
   AppSettings,
   AskUserQuestionAnswerItem,
   Automation,
@@ -13,7 +12,6 @@ import type {
   ChildMessageInput,
   ConversationDetail,
   ConversationSummary,
-  CreateAgentPresetInput,
   CreateAutomationInput,
   CreateConversationInput,
   CreateGitBranchInput,
@@ -31,6 +29,7 @@ import type {
   GitBranchSnapshot,
   McpView,
   ModelCatalog,
+  PersonalizationView,
   ProviderConfigSummary,
   ProviderInput,
   ProviderTestResult,
@@ -40,7 +39,6 @@ import type {
   SwitchGitBranchInput,
   TeamView,
   ThinkingLevel,
-  UpdateAgentPresetInput,
   UpdateAppSettingsInput,
   UpdateAutomationInput,
   UpdateConversationInput,
@@ -96,6 +94,9 @@ export interface Runtime {
   testProvider(id: string, modelId?: string): Promise<ProviderTestResult>
   discoverProvider(id: string): Promise<{ models: Array<{ id: string; name: string }> }>
   settings(): AppSettings
+  /** User-level personalization instructions: the app home's `AGENTS.md`, edited from Settings. */
+  personalization(): Promise<PersonalizationView>
+  savePersonalization(content: string): Promise<PersonalizationView>
   /** The imported user-level Pi MCP configuration and each server's connection state. */
   mcp(): McpView
   capabilities(): { accessModes: AccessMode[] }
@@ -148,10 +149,6 @@ export interface Runtime {
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<PluginOverview>
   /** Wake on every plugin store mutation so an open settings panel can refetch immediately. */
   watchPlugins(listener: () => void): () => void
-  presets(): AgentPreset[]
-  createPreset(input: CreateAgentPresetInput): Promise<AgentPreset>
-  updatePreset(id: string, input: UpdateAgentPresetInput): Promise<AgentPreset>
-  deletePreset(id: string): Promise<void>
   feedback(id: string, entryId: string, rating: 'up' | 'down' | null): Promise<void>
   /** Append operator feedback text to the application state. */
   sendFeedback(input: { text: string; userAgent?: string }): Promise<void>
@@ -163,6 +160,8 @@ export interface Runtime {
   runAutomation(id: string): Promise<{ automation: Automation; conversationId: string }>
   /** One task's run history, newest first. */
   automationRuns(id: string): AutomationRun[]
+  /** Delete every task whose rule is exhausted; returns how many went away. */
+  purgeEndedAutomations(): Promise<number>
   /** WeTrack issues for the standalone list page; this data never enters a conversation. */
   wetrackDefects(): Promise<WetrackDefectList>
   /** One defect's full detail for the issues page modal. */

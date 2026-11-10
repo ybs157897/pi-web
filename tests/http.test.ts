@@ -69,7 +69,7 @@ class FakeRuntime implements Runtime {
   async update(id: string, input: UpdateConversationInput): Promise<ConversationDetail> {
     this.calls.push(`update:${id}`)
     const detail = await this.detail(id)
-    detail.conversation = { ...detail.conversation, ...input, presetId: input.presetId ?? detail.conversation.presetId, updatedAt: NOW + 1 }
+    detail.conversation = { ...detail.conversation, ...input, updatedAt: NOW + 1 }
     this.details.set(id, detail)
     return detail
   }
@@ -266,16 +266,22 @@ class FakeRuntime implements Runtime {
     defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false, showAnalysisConversations: false,
   }
   settings() { return this.settingsValue }
+  personalizationValue: Protocol.PersonalizationView = { content: '', filePath: '/tmp/pi-web-test/AGENTS.md', limitBytes: 100 * 1024 }
+  async personalization() { this.calls.push('personalization'); return this.personalizationValue }
+  async savePersonalization(content: string) {
+    this.calls.push('save-personalization')
+    this.personalizationValue = { ...this.personalizationValue, content }
+    return this.personalizationValue
+  }
   mcp(): Protocol.McpView {
     return { configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] }
   }
   capabilities(): { accessModes: Protocol.AccessMode[] } { return { accessModes: ['readOnly', 'workspaceWrite', 'fullAccess'] } }
   async updateSettings(input: Protocol.UpdateAppSettingsInput) {
     this.calls.push('settings:' + JSON.stringify(input))
-    const { defaultModel, defaultPresetId, defaultWorkspaceId, shortcuts, ...rest } = input
+    const { defaultModel, defaultWorkspaceId, shortcuts, ...rest } = input
     this.settingsValue = { ...this.settingsValue, ...rest }
     if (defaultModel !== undefined) { if (defaultModel === null) delete this.settingsValue.defaultModel; else this.settingsValue.defaultModel = defaultModel }
-    if (defaultPresetId !== undefined) { if (defaultPresetId === null) delete this.settingsValue.defaultPresetId; else this.settingsValue.defaultPresetId = defaultPresetId }
     if (defaultWorkspaceId !== undefined) { if (defaultWorkspaceId === null) delete this.settingsValue.defaultWorkspaceId; else this.settingsValue.defaultWorkspaceId = defaultWorkspaceId }
     if (shortcuts !== undefined) { if (shortcuts === null) delete this.settingsValue.shortcuts; else this.settingsValue.shortcuts = shortcuts }
     return this.settingsValue
@@ -365,10 +371,6 @@ class FakeRuntime implements Runtime {
     if (input.pluginId === 'missing@market') throw new RuntimeError('PLUGIN_UI_UNAVAILABLE', 'Plugin UI server is unavailable')
     return { contents: [{ uri: input.uri, text: 'resource' }] }
   }
-  presets(): Protocol.AgentPreset[] { return [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: ['coding'], tools: ['read'], accessMode: 'readOnly' }] }
-  async createPreset(input: Protocol.CreateAgentPresetInput) { return { ...input, id: input.id ?? 'preset-new' } }
-  async updatePreset(id: string, input: Protocol.UpdateAgentPresetInput) { return { ...this.presets()[0]!, ...input, id } }
-  async deletePreset(id: string) { this.calls.push('delete-preset:' + id) }
   async provider(id: string): Promise<Protocol.ProviderConfigSummary> { return { id, name: 'Test', source: 'project', configured: true, custom: true, credentialConfigured: true, api: 'openai-completions', models: [{ id: 'model-1', name: 'Model' }], baseUrl: 'https://example.test/v1' } }
   async deleteProvider(id: string) { this.calls.push('delete-provider:' + id) }
   async testProvider(id: string, modelId = 'model-1'): Promise<Protocol.ProviderTestResult> { return { providerId: id, modelId, status: 'connected', checkedAt: NOW } }
@@ -378,12 +380,20 @@ class FakeRuntime implements Runtime {
   async sendFeedback(input: { text: string; userAgent?: string }) { this.calls.push('send-feedback'); this.lastFeedback = input }
   async openConfigFile() { this.calls.push('open-config') }
   async retry(id: string, entryId: string, requestId: string) { this.calls.push(`retry:${id}:${entryId}:${requestId}`); return { conversationId: 'retried-conv', submissionId: 'retried-submission' } }
-  automations(): Protocol.Automation[] { return [{ id: 'auto-1', name: 'Scheduled task', prompt: 'Check', enabled: false, createdAt: NOW, updatedAt: NOW }] }
-  async createAutomation(input: Protocol.CreateAutomationInput): Promise<Protocol.Automation> { return { ...input, id: 'auto-new', enabled: input.enabled ?? false, createdAt: NOW, updatedAt: NOW } }
-  async updateAutomation(id: string, input: Protocol.UpdateAutomationInput): Promise<Protocol.Automation> { return { ...this.automations()[0]!, ...input, id, intervalMs: input.intervalMs ?? undefined, schedule: input.schedule ?? undefined } }
+  automations(): Protocol.Automation[] { return [{ id: 'auto-1', name: 'Scheduled task', prompt: 'Check', status: 'paused', target: 'new', createdAt: NOW, updatedAt: NOW }] }
+  async createAutomation(input: Protocol.CreateAutomationInput): Promise<Protocol.Automation> { return { ...input, id: 'auto-new', status: input.status ?? 'paused', target: input.target ?? 'new', createdAt: NOW, updatedAt: NOW } }
+  async updateAutomation(id: string, input: Protocol.UpdateAutomationInput): Promise<Protocol.Automation> {
+    const { rrule, sessionId, ...rest } = input
+    return {
+      ...this.automations()[0]!, ...rest, id,
+      ...(rrule === null ? { rrule: undefined } : rrule === undefined ? {} : { rrule }),
+      ...(sessionId === null ? { sessionId: undefined } : sessionId === undefined ? {} : { sessionId }),
+    }
+  }
   async deleteAutomation(id: string) { this.calls.push('delete-automation:' + id) }
   async runAutomation(id: string) { return { automation: { ...this.automations()[0]!, id }, conversationId: 'scheduled-conv' } }
   automationRuns(id: string): Protocol.AutomationRun[] { return this.automations()[0]?.runs ?? [] }
+  async purgeEndedAutomations() { this.calls.push('purge-ended'); return 0 }
   async wetrackDefects(): Promise<Protocol.WetrackDefectList> {
     this.calls.push('wetrack-defects')
     return {
@@ -905,7 +915,7 @@ describe('management API', () => {
     }
   })
 
-  it('updates settings, workspace bindings and presets through typed routes', async () => {
+  it('updates settings and workspace bindings through typed routes', async () => {
     const { app, runtime } = createTestApp()
     expect((await (await app.request('/api/capabilities')).json()).accessModes).toContain('workspaceWrite')
     const settings = await app.request('/api/settings', json('PATCH', { locale: 'en', fontSize: 16, defaultModel: null, shortcuts: { search: 'Mod+p' } }))
@@ -930,6 +940,16 @@ describe('management API', () => {
     const mcp = await app.request('/api/mcp')
     expect(mcp.status).toBe(200)
     expect(await mcp.json()).toEqual({ configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] })
+    const personalization = await app.request('/api/personalization')
+    expect(personalization.status).toBe(200)
+    expect(await personalization.json()).toEqual({ content: '', filePath: '/tmp/pi-web-test/AGENTS.md', limitBytes: 100 * 1024 })
+    const saved = await app.request('/api/personalization', json('PUT', { content: '# Personal\n- Short answers.\n' }))
+    expect(saved.status).toBe(200)
+    expect((await saved.json()).content).toBe('# Personal\n- Short answers.\n')
+    expect(runtime.calls).toContain('save-personalization')
+    // The body is a strict one-field document: an unknown field is refused before the runtime.
+    expect((await app.request('/api/personalization', json('PUT', { text: 'x' }))).status).toBe(400)
+    expect((await app.request('/api/personalization', json('PUT', { content: 42 }))).status).toBe(400)
     const workspace = await app.request('/api/workspaces', json('POST', { path: '/tmp/pi-web-test', name: 'Project' }))
     expect(workspace.status).toBe(201)
     expect((await workspace.json()).workspace.name).toBe('Project')
@@ -976,8 +996,6 @@ describe('management API', () => {
     expect((await app.request('/api/plugins/demo@market', json('PATCH', { enabled: false }))).status).toBe(200)
     expect((await app.request('/api/plugins/demo@market', { method: 'DELETE' })).status).toBe(200)
     expect((await app.request('/api/plugins/not-an-id', json('PATCH', { enabled: false }))).status).toBe(400)
-    expect((await app.request('/api/presets', json('POST', { name: 'Review', instructions: 'Review', tools: ['read'], extensions: ['coding'], accessMode: 'readOnly' }))).status).toBe(201)
-    expect((await app.request('/api/presets/preset-1', { method: 'DELETE' })).status).toBe(200)
   })
 
   it('lists and switches local git branches for a workspace', async () => {
@@ -1033,8 +1051,12 @@ describe('management API', () => {
     expect((await app.request('/api/conversations/conv-1/feedback', json('POST', { entryId: 'entry-1', rating: 'up' }))).status).toBe(200)
     expect((await app.request('/api/conversations/conv-1/feedback', json('POST', { entryId: 'entry-1', rating: 'unknown' }))).status).toBe(400)
     expect((await app.request('/api/conversations/conv-1/retry', json('POST', { entryId: 'entry-1', requestId: 'retry-1' }))).status).toBe(202)
-    expect((await app.request('/api/automations', json('POST', { name: 'Task', prompt: 'Check', enabled: false, intervalMs: 60000 }))).status).toBe(201)
-    expect((await app.request('/api/automations/auto-1', json('PATCH', { intervalMs: null }))).status).toBe(200)
+    const rule = 'DTSTART;TZID=Asia/Shanghai:20261110T090000\nRRULE:FREQ=DAILY'
+    expect((await app.request('/api/automations', json('POST', {
+      name: 'Task', prompt: 'Check', status: 'active', target: 'new', rrule: rule, timeZone: 'Asia/Shanghai',
+    }))).status).toBe(201)
+    expect((await app.request('/api/automations/auto-1', json('PATCH', { rrule: null }))).status).toBe(200)
+    expect((await app.request('/api/automations/purge-ended', { method: 'POST' })).status).toBe(200)
     expect((await app.request('/api/automations/auto-1/run-now', { method: 'POST' })).status).toBe(202)
     expect((await app.request('/api/automations/auto-1', { method: 'DELETE' })).status).toBe(200)
     const defects = await app.request('/api/wetrack/defects')
@@ -1338,7 +1360,7 @@ describe('application state file', () => {
       codingViews: true, busySendMode: 'followUp', defaultThinkingLevel: 'medium', defaultAccessMode: 'fullAccess',
     },
     workspaces: [legacyWorkspace],
-    plugins: {}, presets: [], automations: [], feedback: {},
+    plugins: {}, automations: [], feedback: {},
   }
 
   it('reads a legacy state file whose feedback record predates the entries array', async () => {
@@ -1350,6 +1372,31 @@ describe('application state file', () => {
       expect(store.snapshot().feedback).toEqual([])
       await store.recordFeedback({ text: 'first', createdAt: NOW })
       expect(JSON.parse(await readFile(store.path, 'utf8')).feedback).toEqual([{ text: 'first', createdAt: NOW }])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a legacy state file that still carries the retired preset feature', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
+    await writeFile(join(root, 'app-state.json'), JSON.stringify({
+      ...legacyState,
+      settings: { ...legacyState.settings, defaultPresetId: 'preset-1' },
+      presets: [{ id: 'preset-1', name: 'Preset', instructions: '', extensions: [], tools: [], accessMode: 'readOnly' }],
+      automations: [{ id: 'auto-1', name: 'Task', prompt: 'Run', status: 'active', rrule: 'FREQ=DAILY', presetId: 'preset-1', workspaceId: 'ws-legacy', createdAt: NOW, updatedAt: NOW }],
+    }))
+    try {
+      const store = await AppStateStore.open({ dataDir: root, defaultWorkspace: legacyWorkspace })
+      const stored = store.snapshot()
+      expect('presets' in stored).toBe(false)
+      expect('defaultPresetId' in stored.settings).toBe(false)
+      expect(stored.automations[0] && 'presetId' in stored.automations[0]).toBe(false)
+      // The legacy keys leave the file on the first write, mirroring the settings migration.
+      await store.recordFeedback({ text: 'first', createdAt: NOW })
+      const rewritten = JSON.parse(await readFile(store.path, 'utf8'))
+      expect(rewritten.presets).toBeUndefined()
+      expect(rewritten.settings.defaultPresetId).toBeUndefined()
+      expect(rewritten.automations[0].presetId).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

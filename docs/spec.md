@@ -225,3 +225,8 @@
 - 定了（后续提示词批次取舍）：保留委派时明确只读/写入授权、必要返回格式，以及子会话实际验证结果和未运行项；主会话按证据缺口、冲突和风险补查，不机械重复已经通过的检查。
 - 否了：舍弃写工具后的 todo 提醒、强制待办阈值与冲突状态规则、重复的 core/plan 扩写，以及存在假通过和不受证据支持归因的 live-plan-check 脚本/批次报告。未提交增量已完整备份，运行时保持 2c3c009 的已验证实现。
 - 判据：类型检查通过；agent-builtins 与完整请求快照共 31 项通过，快照只反映保留的两处源码文案；独立只读复核确认被舍弃的运行时修改和脚本入口不存在。未提交、未推送。
+
+## 2026-11-10
+
+- 定了（移除 Agent preset 功能）：`AgentPreset` 类型、`/api/presets` 路由、`runtime/presets.ts`、设置页「Agent 预设」面板、Composer 预设选择器与会话/自动化上的 `presetId`、`settings.defaultPresetId` 全部删除；`buildAgentChange` 回到全量安装扩展与工具，模型/思考等级只走显式选择与全局默认两条链。旧 `app-state.json` 在加载期剥离 `presets`、`settings.defaultPresetId` 与 automation `presetId`（首次写盘后文件干净），会话 metadata 中的残留 `presetId` 不再读取。
+- 判据：`npm run typecheck` 与全量 vitest 通过；新增 app-state 迁移用例；runtime-policy 中以 preset 为载体的无工具/自定义指令用例随功能删除（readOnly、plan 与 codemode 边界仍由其余用例覆盖）。

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
-  Button, IconAgentPresetOutlineRegular, IconApiOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular,
+  Button, IconApiOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular,
   IconSkillOutlineRegular, IconPluginPinwheelOutlineRegular,
-  IconSettingsOutlineRegular, IconDatabaseOutlineRegular,
+  IconSettingsOutlineRegular, IconDatabaseOutlineRegular, IconPersonalizationOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular,
   IconChevronLeftOutlineRegular, Menu, Modal, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -13,16 +13,17 @@ import { normalizeFontFamily } from '../shared/fonts.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
 import { ModelsPanel } from './ModelSettings.tsx'
+import PersonalizationPanel from './PersonalizationPanel.tsx'
 import SkillsPanel from './SkillsPanel.tsx'
 import PluginsPanel from './PluginsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
-export type SettingsTab = 'general' | 'models' | 'presets' | 'mcp' | 'skills' | 'plugins'
+export type SettingsTab = 'general' | 'personalization' | 'models' | 'mcp' | 'skills' | 'plugins'
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
   settings?: AppSettings; onSettingsChange?: (patch: UpdateAppSettingsInput) => Promise<unknown>
-  initialTab?: SettingsTab; presetsPanel?: ReactNode
+  initialTab?: SettingsTab
   onRefreshCatalog?: () => Promise<void>; accessModes?: AccessMode[]
   /** Provider of the model in use right now, shown as DSH's 正在使用 badge. */
   activeProvider?: string
@@ -38,7 +39,7 @@ const API_OPTIONS = [
 
 /** DSH's two-column settings shell; every control updates the project configuration. */
 export default function SettingsDialog(props: SettingsDialogProps) {
-  const { open, catalog, saving, onClose, onSave, initialTab = 'general', presetsPanel, onRefreshCatalog } = props
+  const { open, catalog, saving, onClose, onSave, initialTab = 'general', onRefreshCatalog } = props
   const { t, settings: contextSettings } = useUiPreferences()
   const settings = props.settings ?? contextSettings ?? DEFAULT_UI_SETTINGS
   const [tab, setTab] = useState<SettingsTab>(initialTab)
@@ -63,14 +64,14 @@ export default function SettingsDialog(props: SettingsDialogProps) {
       icon: <IconSettingsOutlineRegular size={16} />,
     },
     {
+      id: 'personalization', label: t('个性化', 'Personalization'), group: t('基础设置', 'Basics'),
+      description: t('添加自定义指令，应用于本机所有工作区的后续请求。', 'Add custom instructions that apply to later requests in every local workspace.'),
+      icon: <IconPersonalizationOutlineRegular size={16} aria-hidden="true" />,
+    },
+    {
       id: 'models', label: t('模型设置', 'Models'), group: t('模型与能力', 'Models'),
       description: t('管理模型提供商、API 密钥与每个模型的参数。', 'Manage model providers, API keys, and each model’s parameters.'),
       icon: <IconDatabaseOutlineRegular size={16} />,
-    },
-    {
-      id: 'presets', label: t('Agent 预设', 'Agent presets'), group: t('模型与能力', 'Models'),
-      description: t('保存一组指令、工具与模型配置，新建会话时直接套用。', 'Save instructions, tools, and model settings to reuse in new conversations.'),
-      icon: <IconAgentPresetOutlineRegular size={16} />,
     },
     {
       id: 'plugins', label: t('插件市场', 'Plugins'), group: t('扩展', 'Extensions'),
@@ -198,8 +199,8 @@ export default function SettingsDialog(props: SettingsDialogProps) {
             <SettingRow title={t('繁忙时的发送行为', 'Send while running')} description={t('Enter 和发送按钮的行为；另一快捷键使用相反方式', 'Behavior of Enter and Send; the alternate shortcut uses the other mode')}><Choice label={t('繁忙时的发送行为', 'Send while running')} value={settings.busySendMode} disabled={pending} options={[{ value: 'followUp', label: t('排队发送', 'Queue message') }, { value: 'steer', label: t('立即插入', 'Steer now') }]} onChange={value => void update({ busySendMode: value as AppSettings['busySendMode'] })} /></SettingRow>
             <SettingRow title={t('默认模型', 'Default model')} description={t('用于新建会话，不改变正在运行的请求', 'Used for new conversations; active requests stay unchanged')}><select className={css.nativeSelect} aria-label={t('默认模型', 'Default model')} disabled={pending} value={settings.defaultModel ? JSON.stringify(settings.defaultModel) : '__inherit'} onChange={event => void update({ defaultModel: event.currentTarget.value === '__inherit' ? null : JSON.parse(event.currentTarget.value) })}><option value="__inherit">{t('使用 Pi 默认配置', 'Use Pi defaults')}</option>{available.map(model => <option key={`${model.provider}/${model.modelId}`} value={JSON.stringify({ provider: model.provider, modelId: model.modelId })}>{model.name} · {model.provider}</option>)}</select></SettingRow>
           </div>}
+          {tab === 'personalization' && <PersonalizationPanel />}
           {tab === 'models' && <ModelsPanel catalog={catalog} saving={saving} onSave={onSave} onRefresh={onRefreshCatalog} />}
-          {tab === 'presets' && (presetsPanel ?? <p role="status">{t('正在加载预设…', 'Loading presets…')}</p>)}
           {tab === 'plugins' && <PluginsPanel onCreatePlugin={props.onCreatePlugin} />}
           {tab === 'mcp' && <div className={css.mcp}>
             <div className={css.mcpHead}>

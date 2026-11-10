@@ -13,7 +13,7 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import type { Usage } from '@earendil-works/pi-ai'
 import type { Runtime, RuntimeOptions } from '../contracts.ts'
 import type {
-  WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceSummary,
+  PersonalizationView, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackDefectDetail, WetrackDefectList, WetrackDefectReport, WorkspaceSummary,
 } from '../../shared/types.ts'
 import { createModelRuntime } from '../model/catalog.ts'
 import { createDemoModelRuntime } from '../model/demo.ts'
@@ -24,10 +24,11 @@ import { builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackR
 import { listWetrackAnalyses, readWetrackAnalysis } from '../automation/wetrack-analysis.ts'
 import { createWetrackAnalysisRuns } from '../automation/wetrack-analysis-runs.ts'
 import {
-  WETRACK_DAILY_AUTOMATION_KEY, WETRACK_DAILY_SCHEDULE, markWetrackDailyProvisioned,
+  WETRACK_DAILY_AUTOMATION_KEY, WETRACK_DAILY_RRULE, markWetrackDailyProvisioned,
   wetrackDailyCoordinatorPrompt, wetrackDailyProvisioned,
 } from '../automation/wetrack-daily.ts'
 import { TodoTools } from '../tools/todo.ts'
+import { createScheduleExtension } from '../tools/schedule.ts'
 import { createWetrackAnalysisExtension } from '../tools/wetrack-analysis.ts'
 import { createGoalExtension } from '../tools/goal.ts'
 import { InteractionTools } from '../tools/interaction.ts'
@@ -37,6 +38,7 @@ import { createTeamTools } from '../tools/team.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
 import { SkillStore } from '../skills/store.ts'
 import { piWebHome } from '../state/home.ts'
+import { MAX_PERSONALIZATION_BYTES, readPersonalization, writePersonalization } from '../state/personalization.ts'
 import { createSkillTools } from '../tools/skill.ts'
 import { createWorkPolicyExtension } from '../conversation/work-policy.ts'
 import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
@@ -63,7 +65,6 @@ import { createExecutionEnv, workspaceWriteSupported } from '../conversation/exe
 import { disposeBackgroundShells } from '../tools/shell/runner.ts'
 import { createAutomations } from './automations.ts'
 import { createWorkspaces } from './workspaces.ts'
-import { createPresets } from './presets.ts'
 import { createSettings } from './settings.ts'
 import { createPlugins } from './plugins.ts'
 import { createTeam } from './team.ts'
@@ -152,7 +153,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
   const {
     assertOpen, requireConversation, ensureMetadata, withMetadata, markConversationSeen,
-    detailFromView, currentDetail, selectedWorkspace, selectedPreset, modelAllowlist,
+    detailFromView, currentDetail, selectedWorkspace, modelAllowlist,
     assertModelAllowed, firstAvailableAllowedModel, assertConversationModelAllowed,
     buildAgentChange, syncIdleAgents,
   } = core
@@ -178,7 +179,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
   const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
-  registry.install(createWorkPolicyExtension())
+  registry.install(createWorkPolicyExtension({ dataDir }))
   registry.install(createCompactionExtension({ harness: () => harness }))
   // After the compaction extension, so a captured request reflects the exact post-prune shape.
   registry.install(createTrajectoryExtension({
@@ -197,6 +198,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(ResearchTools)
   registry.install(BrowserTools)
   registry.install(TodoTools)
+  // The task store is host-level, so the tools resolve the feature lazily: it is
+  // constructed below, after the services these tools do not need at install time.
+  registry.install(createScheduleExtension({
+    automations: {
+      list: () => automationsFeature().list(),
+      create: input => automationsFeature().create(input),
+      update: (id, input) => automationsFeature().update(id, input),
+      remove: id => automationsFeature().remove(id),
+      run: id => automationsFeature().run(id),
+    },
+  }))
   // Analysis records outlive the conversation that wrote them: the issues page reads them back
   // with no conversation of its own, so the store lives on the app data directory.
   registry.install(createWetrackAnalysisExtension({
@@ -374,7 +386,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         const parent = await tx.doc(META, conversation.parent.conversationId)
         metadata.title = parent.title === DEFAULT_TITLE ? 'Fork' : `${parent.title} (fork)`
         metadata.workspaceId = parent.workspaceId ?? defaultWorkspace()?.id ?? null
-        metadata.presetId = parent.presetId ?? null
         metadata.accessMode = parent.accessMode ?? appState.snapshot().settings.defaultAccessMode
         metadata.feedback = {}
         metadata.queueEdits = {}
@@ -411,7 +422,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const conversationsService = createConversations({
     appState, harness: () => harness, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
     ensureMetadata, withMetadata, markConversationSeen, detailFromView, currentDetail,
-    selectedWorkspace, selectedPreset, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
+    selectedWorkspace, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
     defaultWorkspace,
   })
 
@@ -424,14 +435,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
 
   const settingsService = createSettings({
-    appState, modelRuntime, workspaceWriteAvailable, selectedPreset, assertOpen, syncIdleAgents,
+    appState, modelRuntime, workspaceWriteAvailable, assertOpen, syncIdleAgents,
     assertModelAllowed, modelAllowlist, launchWorkspace,
-  })
-
-  const presetsService = createPresets({
-    appState, modelRuntime, installedExtensions: () => registry.snapshot().installed(),
-    assertModelAllowed, workspaceWriteAvailable,
-    assertNoAutomationReferences: (...args) => automationsFeature().assertNoAutomationReferences(...args),
   })
 
   const workspacesService = createWorkspaces({
@@ -444,7 +449,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const automationsFeature = (): ReturnType<typeof createAutomations> => {
     automationsService ??= createAutomations({
       appState, modelRuntime, isClosed: () => runtimeClosed, requireConversation, currentDetail,
-      selectedWorkspace, selectedPreset, assertModelAllowed,
+      selectedWorkspace, assertModelAllowed,
       create: (input) => conversationsService.create(input),
       submit: (value, input) => conversationsService.submit(value, input),
     })
@@ -532,7 +537,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       key: WETRACK_DAILY_AUTOMATION_KEY,
       name: '问题清单每日分析',
       prompt: wetrackDailyCoordinatorPrompt(),
-      schedule: WETRACK_DAILY_SCHEDULE,
+      rrule: WETRACK_DAILY_RRULE,
       workspaceId: binding.workspaceId,
       accessMode: 'readOnly' as const,
       ...(model === undefined ? {} : { model }),
@@ -579,6 +584,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     flushRefresh: () => pluginRefreshTail.catch(() => undefined),
   })
 
+  /** The editor reads the same file the prompt section reads, so a save applies to the next request. */
+  const personalizationView = async (): Promise<PersonalizationView> => {
+    const record = await readPersonalization(dataDir)
+    return { content: record.content, filePath: record.filePath, limitBytes: MAX_PERSONALIZATION_BYTES }
+  }
+
   return {
     list: () => conversationsService.list(),
     create: (input) => conversationsService.create(input),
@@ -621,6 +632,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     testProvider: (id, modelId) => settingsService.testProvider(id, modelId),
     discoverProvider: (id) => settingsService.discoverProvider(id),
     settings: () => settingsService.settings(),
+    personalization: async (): Promise<PersonalizationView> => personalizationView(),
+    savePersonalization: async (content: string): Promise<PersonalizationView> => {
+      await writePersonalization(dataDir, content)
+      return personalizationView()
+    },
     mcp: () => mcp.view(),
     capabilities: () => settingsService.capabilities(),
     updateSettings: (input) => settingsService.updateSettings(input),
@@ -661,10 +677,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     pluginUiPage: (input) => pluginsService.uiPage(input),
     pluginUiCall: (input) => pluginsService.uiCall(input),
     pluginUiReadResource: (input) => pluginsService.uiReadResource(input),
-    presets: () => presetsService.list(),
-    createPreset: (input) => presetsService.create(input),
-    updatePreset: (id, input) => presetsService.update(id, input),
-    deletePreset: (id) => presetsService.remove(id),
     feedback: (value, entryValue, rating) => conversationsService.feedback(value, entryValue, rating),
     sendFeedback,
     automations: () => automationsFeature().list(),
@@ -673,6 +685,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     deleteAutomation: (id) => automationsFeature().remove(id),
     runAutomation: (id) => automationsFeature().run(id),
     automationRuns: (id) => automationsFeature().runs(id),
+    purgeEndedAutomations: () => automationsFeature().purgeEnded(),
     wetrackDefects,
     wetrackDefect,
     wetrackReport,

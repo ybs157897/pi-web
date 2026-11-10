@@ -1,8 +1,8 @@
 import type {
-  AccessMode, AddWorkspaceInput, AgentPreset, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
-  CreateAgentPresetInput, CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
-  McpView, ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult,
-  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAgentPresetInput, UpdateAutomationInput, UpdateConversationInput,
+  AccessMode, AddWorkspaceInput, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
+  CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
+  McpView, ModelCatalog, PersonalizationView, ProviderConfigSummary, ProviderInput, ProviderTestResult,
+  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
   WetrackDefectDetail, WetrackDefectList, WetrackDefectReport,
   WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
@@ -173,6 +173,13 @@ export const api = {
   getSettings(): Promise<AppSettings> {
     return request('/api/settings')
   },
+  /** The user-level personalization instructions and the file the editor writes. */
+  getPersonalization(): Promise<PersonalizationView> {
+    return request('/api/personalization')
+  },
+  savePersonalization(content: string): Promise<PersonalizationView> {
+    return request('/api/personalization', { method: 'PUT', body: JSON.stringify({ content }) })
+  },
   /** The imported Pi MCP catalog: configuration path, servers, their tools and connection states. */
   getMcp(): Promise<McpView> {
     return request('/api/mcp')
@@ -302,18 +309,6 @@ export const api = {
   trajectory(id: string): Promise<string> {
     return requestText(`/api/conversations/${encodeURIComponent(id)}/trajectory`)
   },
-  listPresets(): Promise<{ presets: AgentPreset[] }> {
-    return request('/api/presets')
-  },
-  createPreset(input: CreateAgentPresetInput): Promise<{ preset: AgentPreset }> {
-    return request('/api/presets', { method: 'POST', body: JSON.stringify(input) })
-  },
-  updatePreset(id: string, patch: UpdateAgentPresetInput): Promise<{ preset: AgentPreset }> {
-    return request(`/api/presets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
-  },
-  deletePreset(id: string): Promise<{ ok: boolean }> {
-    return request(`/api/presets/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  },
   listAutomations(): Promise<{ automations: Automation[] }> {
     return request('/api/automations')
   },
@@ -329,8 +324,11 @@ export const api = {
   runAutomation(id: string): Promise<{ automation: Automation; conversationId?: string }> {
     return request(`/api/automations/${encodeURIComponent(id)}/run-now`, { method: 'POST' })
   },
-  automationRuns(id: string): Promise<{ runs: AutomationRun[] }> {
-    return request(`/api/automations/${encodeURIComponent(id)}/runs`)
+  automationRuns(id: string, limit = 20, offset = 0): Promise<{ runs: AutomationRun[]; total: number }> {
+    return request(`/api/automations/${encodeURIComponent(id)}/runs?limit=${limit}&offset=${offset}`)
+  },
+  purgeEndedAutomations(): Promise<{ removed: number }> {
+    return request('/api/automations/purge-ended', { method: 'POST' })
   },
   wetrackDefects(): Promise<WetrackDefectList> {
     return request('/api/wetrack/defects')

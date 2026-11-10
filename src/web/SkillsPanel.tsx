@@ -198,7 +198,7 @@ export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
     </header>
 
     <p className={css.creatorHint}>
-      {t('创建技能：在当前会话输入“帮我创建一个……技能”。工具是否可用及技能能否保存，取决于当前会话的访问权限和 Agent 预设开放的工具范围。', 'To create a skill, ask in the current chat: “Create a skill for …”. Available actions and saving depend on this conversation’s access mode and the tools enabled by its Agent preset.')}
+      {t('创建技能：在当前会话输入“帮我创建一个……技能”。工具是否可用及技能能否保存，取决于当前会话的访问权限。', 'To create a skill, ask in the current chat: “Create a skill for …”. Available actions and saving depend on this conversation’s access mode.')}
     </p>
 
     <div className={css.workspacePicker}>

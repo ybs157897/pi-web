@@ -30,7 +30,7 @@ export interface WorkspacesDeps {
   list(): Promise<ConversationSummary[]>
   withMetadata(id: ConversationId, update: (metadata: { workspaceId: string | null }) => void): Promise<void>
   parseConversationId(value: string): ConversationId
-  assertNoAutomationReferences(items: readonly Automation[], resource: 'workspace' | 'preset', id: string): void
+  assertNoAutomationReferences(items: readonly Automation[], id: string): void
   /** One conversation's bound model, for the commit-message suggestion. */
   conversationModel(value: string): Promise<{ provider: string; modelId: string } | undefined>
 }
@@ -78,10 +78,10 @@ export function createWorkspaces(deps: WorkspacesDeps) {
   const deleteWorkspace = async (id: string): Promise<void> => {
     const state = appState.snapshot()
     if (!state.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
-    assertNoAutomationReferences(state.automations, 'workspace', id)
+    assertNoAutomationReferences(state.automations, id)
     await appState.update(async current => {
       if (!current.workspaces.some(workspace => workspace.id === id)) throw new RuntimeError('NOT_FOUND', '工作区不存在')
-      assertNoAutomationReferences(current.automations, 'workspace', id)
+      assertNoAutomationReferences(current.automations, id)
       const currentRemaining = current.workspaces.filter(workspace => workspace.id !== id)
       const currentFallback = currentRemaining.find(workspace => workspace.id === current.settings.defaultWorkspaceId) ?? currentRemaining[0]
       for (const summary of await list()) {

@@ -12,7 +12,7 @@ import type {
   AgentChange, Conversation, ConversationId, ConversationRecord, ConversationView, Cursor, Harness, Submission, TaskId,
 } from '@earendil-works/pi-durable'
 import type {
-  AccessMode, AgentPreset, AskUserQuestionAnswerItem, ConversationDetail, ConversationSummary,
+  AccessMode, AskUserQuestionAnswerItem, ConversationDetail, ConversationSummary,
   CreateConversationInput, GoalUpdateRequest, ModelRef as UiModelRef, SubmitInput, ThinkingLevel,
   UpdateConversationInput, WorkspaceSummary,
 } from '../../shared/types.ts'
@@ -53,13 +53,11 @@ export interface ConversationsDeps {
   currentDetail(id: ConversationId): Promise<ConversationDetail>
   selectedWorkspace(id: string | undefined): WorkspaceSummary
   defaultWorkspace(): WorkspaceSummary | undefined
-  selectedPreset(id: string | null | undefined): AgentPreset | undefined
   assertModelAllowed(model: UiModelRef | undefined, label: string): void
   assertConversationModelAllowed(conversation: Conversation): Promise<void>
   buildAgentChange(
     workspaceId: string,
     accessMode: AccessMode,
-    preset?: AgentPreset,
     overrides?: { model?: UiModelRef; thinkingLevel?: ThinkingLevel },
   ): Promise<AgentChange>
 }
@@ -68,7 +66,7 @@ export function createConversations(deps: ConversationsDeps) {
   const {
     appState, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
     ensureMetadata, withMetadata, markConversationSeen, detailFromView, currentDetail,
-    selectedWorkspace, selectedPreset, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
+    selectedWorkspace, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
     defaultWorkspace,
   } = deps
   const harness = (): Harness => deps.harness()
@@ -107,13 +105,11 @@ export function createConversations(deps: ConversationsDeps) {
     }
     const workspace = selectedWorkspace(input.workspaceId ?? settings.defaultWorkspaceId)
     const analysis = input.kind === 'defectAnalysis'
-    const presetId = analysis ? null : input.presetId ?? settings.defaultPresetId ?? null
-    const preset = selectedPreset(presetId)
-    const accessMode = analysis ? 'readOnly' : input.accessMode ?? preset?.accessMode ?? settings.defaultAccessMode
+    const accessMode = analysis ? 'readOnly' : input.accessMode ?? settings.defaultAccessMode
     if (accessMode === 'workspaceWrite' && !await workspaceWriteSupported(workspace.path)) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
-    const agent = await buildAgentChange(workspace.id, accessMode, preset, {
+    const agent = await buildAgentChange(workspace.id, accessMode, {
       ...(input.model ? { model: input.model } : {}),
       ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
     })
@@ -126,7 +122,6 @@ export function createConversations(deps: ConversationsDeps) {
     }
     await withMetadata(conversation.id, (metadata) => {
       metadata.workspaceId = workspace.id
-      metadata.presetId = presetId
       metadata.accessMode = accessMode
       if (title) {
         metadata.title = title
@@ -143,27 +138,20 @@ export function createConversations(deps: ConversationsDeps) {
     const currentMetadata = await ensureMetadata(id)
     const settings = appState.snapshot().settings
     const workspace = selectedWorkspace(input.workspaceId ?? currentMetadata.workspaceId ?? undefined)
-    const presetId = input.presetId === undefined ? currentMetadata.presetId : input.presetId
-    const preset = selectedPreset(presetId ?? settings.defaultPresetId)
-    const presetChanged = input.presetId !== undefined
-    const accessMode = input.accessMode ?? (presetChanged ? preset?.accessMode ?? currentMetadata.accessMode : currentMetadata.accessMode)
-    const configurationChanged = input.workspaceId !== undefined || input.presetId !== undefined || input.accessMode !== undefined || input.model !== undefined || input.thinkingLevel !== undefined
+    const accessMode = input.accessMode ?? currentMetadata.accessMode
+    const configurationChanged = input.workspaceId !== undefined || input.accessMode !== undefined || input.model !== undefined || input.thinkingLevel !== undefined
     if (accessMode === 'workspaceWrite' && !await workspaceWriteSupported(workspace.path)) {
       throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
     }
     if (configurationChanged) {
       const currentAgent = await conversation.agent(CTX)
-      // Only an explicitly picked model is passed on; a preset without its own
-      // model and the inherited model keep today's resolution through the
-      // default chain, where a stale default falls back inside the allowlist.
-      const explicitModel = input.model ?? (presetChanged ? preset?.model : currentAgent.model)
-      const thinkingLevel = input.thinkingLevel ?? (presetChanged ? preset?.thinkingLevel ?? settings.defaultThinkingLevel : currentAgent.thinkingLevel)
+      const explicitModel = input.model ?? currentAgent.model
+      const thinkingLevel = input.thinkingLevel ?? currentAgent.thinkingLevel
       if (input.model && !modelRuntime.models.getModel(input.model.provider, input.model.modelId)) throw new RuntimeError('MODEL_UNAVAILABLE', '所选模型不在 Pi 模型目录中')
       assertModelAllowed(input.model, '所选模型')
-      if (presetChanged) assertModelAllowed(preset?.model, 'Preset 模型')
-      if (!presetChanged && !input.model) assertModelAllowed(currentAgent.model, '会话模型')
+      if (!input.model) assertModelAllowed(currentAgent.model, '会话模型')
       if (thinkingLevel && !SUPPORTED_THINKING.has(thinkingLevel)) throw new RuntimeError('INVALID_INPUT', '思考等级无效')
-      const change = await buildAgentChange(workspace.id, accessMode, preset, {
+      const change = await buildAgentChange(workspace.id, accessMode, {
         ...(explicitModel ? { model: explicitModel } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       })
@@ -173,7 +161,6 @@ export function createConversations(deps: ConversationsDeps) {
       await withMetadata(id, (metadata) => {
         if (configurationChanged) {
           metadata.workspaceId = workspace.id
-          metadata.presetId = presetId
           metadata.accessMode = accessMode
         }
         if (title !== undefined) {
@@ -511,7 +498,6 @@ export function createConversations(deps: ConversationsDeps) {
     }
     await withMetadata(child.id, draft => {
       draft.workspaceId = metadata.workspaceId ?? defaultWorkspace()?.id ?? null
-      draft.presetId = metadata.presetId
       draft.accessMode = metadata.accessMode
       draft.title = metadata.title
       draft.titleSource = metadata.titleSource

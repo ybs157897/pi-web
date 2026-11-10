@@ -1,11 +1,16 @@
 import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/conversation/work-policy.ts'
 import { Subagents, type SubagentProfile } from '../src/server/tools/subagent.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
+
+/** A data directory with no personalization file: the section must contribute nothing. */
+let dataDir = ''
+beforeAll(async () => { dataDir = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-data-'))) })
+afterAll(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }) })
 
 function promptInput(options: {
   tools?: string[]
@@ -36,7 +41,7 @@ function promptInput(options: {
 }
 
 async function renderPolicy(options: Parameters<typeof promptInput>[0] = {}): Promise<string> {
-  const extension = createWorkPolicyExtension()
+  const extension = createWorkPolicyExtension({ dataDir })
   const sections = extension.sections ?? []
   if (sections.length === 0) throw new Error('Runtime policy extension has no sections')
   const rendered = await Promise.all(sections.map(policy => policy.render(promptInput(options) as never, {} as never)))
@@ -44,7 +49,7 @@ async function renderPolicy(options: Parameters<typeof promptInput>[0] = {}): Pr
 }
 
 async function renderSection(key: string, options: Parameters<typeof promptInput>[0] = {}): Promise<string | undefined> {
-  const extension = createWorkPolicyExtension()
+  const extension = createWorkPolicyExtension({ dataDir })
   const policy = extension.sections?.find(candidate => candidate.key === key)
   if (!policy) throw new Error(`Missing ${key} section`)
   return await (policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>)(promptInput(options) as never, {} as never)
@@ -52,10 +57,10 @@ async function renderSection(key: string, options: Parameters<typeof promptInput
 
 describe('default runtime work policy', () => {
   it('has a stable extension identity and contributes no tools', () => {
-    const extension = createWorkPolicyExtension()
+    const extension = createWorkPolicyExtension({ dataDir })
 
     expect(extension.name).toBe(WORK_POLICY_EXTENSION_NAME)
-    expect(extension.sections?.map(section => section.key)).toEqual(['runtime-core', 'project-instructions', 'work-policy'])
+    expect(extension.sections?.map(section => section.key)).toEqual(['runtime-core', 'personal-instructions', 'project-instructions', 'work-policy'])
     expect(extension.tools).toBeUndefined()
   })
 
@@ -205,6 +210,39 @@ describe('default runtime work policy', () => {
       expect(general).toContain('Root project rules')
     } finally {
       await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('injects the user-level personalization file before project instructions', async () => {
+    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-')))
+    try {
+      await writeFile(join(cwd, 'AGENTS.md'), '# Project\n- Use pnpm.\n', 'utf8')
+      await writeFile(join(dataDir, 'AGENTS.md'), '# Personal\n- Prefer short answers.\n', 'utf8')
+      const section = await renderSection('personal-instructions')
+      expect(section).toContain('<personal_instructions>')
+      expect(section).toContain('Prefer short answers.')
+      expect(section).toContain('Project instructions and explicit task instructions win on conflict')
+      expect(section).toContain('</personal_instructions>')
+
+      const prompt = await renderPolicy({ cwd })
+      // runtime-core quotes the project tag in prose, so locate the project section by its status line.
+      expect(prompt.indexOf('<personal_instructions>')).toBeLessThan(prompt.indexOf(`Workspace ${join(cwd, 'AGENTS.md')} applies`))
+    } finally {
+      await rm(join(dataDir, 'AGENTS.md'), { force: true })
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('omits personalization for Explore subagents and leaves an empty file silent', async () => {
+    try {
+      await writeFile(join(dataDir, 'AGENTS.md'), '', 'utf8')
+      expect(await renderSection('personal-instructions')).toBeUndefined()
+
+      await writeFile(join(dataDir, 'AGENTS.md'), '# Personal\n- Prefer short answers.\n', 'utf8')
+      expect(await renderSection('personal-instructions', { subagentProfile: 'Explore' })).toBeUndefined()
+      expect(await renderSection('personal-instructions', { subagentProfile: 'general-purpose' })).toContain('<personal_instructions>')
+    } finally {
+      await rm(join(dataDir, 'AGENTS.md'), { force: true })
     }
   })
 

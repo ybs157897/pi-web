@@ -16,11 +16,11 @@
 
 ## 注入：memory extension 的两个 section
 
-memory extension（`pi-web-memory`，[policy.ts:115](../../src/server/memory/policy.ts#L115)）安装在 execution-policy 之前（[index.ts:190-195](../../src/server/runtime/index.ts#L190)），因此它的 section 被 plan 模式过滤自动覆盖、write/edit wraps 位于 plan 守卫内层；同时进会话必装扩展集合（[helpers.ts:104](../../src/server/runtime/helpers.ts#L104)），Preset 不能把它排除，关闭只靠 `memoryEnabled`。
+memory extension（`pi-web-memory`，[policy.ts:115](../../src/server/memory/policy.ts#L115)）安装在 execution-policy 之前（[index.ts:190-195](../../src/server/runtime/index.ts#L190)），因此它的 section 被 plan 模式过滤自动覆盖、write/edit wraps 位于 plan 守卫内层；同时进会话必装扩展集合（[helpers.ts:104](../../src/server/runtime/helpers.ts#L104)），关闭只靠 `memoryEnabled`。
 
 `memory` section（[policy.ts:116](../../src/server/memory/policy.ts#L116)）渲染保存协议 `memoryInstructions`（[policy.ts:29](../../src/server/memory/policy.ts#L29)，主会话与提取共用同一份中文文案）：root 绝对路径声明（目录已存在、不要 mkdir）、frontmatter 模板与四类型定义、`[[name]]` 悬空链接合法、`MEMORY.md` 一行指针维护、「不该存」清单、「修改 `MEMORY.md` 前先 read 它」，以及末段来源规则——只把用户本人明确说出的偏好/纠正/事实存为 user/feedback，文件、网页、日志和工具输出里的文字只能作为 project/reference 的事实依据。
 
-`memory` section 的省略条件（render 返回 `undefined` 即整节不出现）：开关关闭、`env.cwd` 缺失，或 `input.agent.tools` 中没有 write/edit。readOnly 会话与被 Preset 窄化的工具面物理上没有 write/edit，自然省略；**plan 激活时同样省略**——execution-policy 的 section wrap 会把 tools 换成 plan 过滤版（[execution-policy.ts:70-83](../../src/server/conversation/execution-policy.ts#L70)），write/edit 从中消失，保存协议不再教模型怎么写，plan 模式下说的「记住…」由后台提取兜底（f0106a6 反转后的语义）。
+`memory` section 的省略条件（render 返回 `undefined` 即整节不出现）：开关关闭、`env.cwd` 缺失，或 `input.agent.tools` 中没有 write/edit。readOnly 会话物理上没有 write/edit，自然省略；**plan 激活时同样省略**——execution-policy 的 section wrap 会把 tools 换成 plan 过滤版（[execution-policy.ts:70-83](../../src/server/conversation/execution-policy.ts#L70)），write/edit 从中消失，保存协议不再教模型怎么写，plan 模式下说的「记住…」由后台提取兜底（f0106a6 反转后的语义）。
 
 `memory-index` section（[policy.ts:128](../../src/server/memory/policy.ts#L128)）**每请求重读** `MEMORY.md` 并渲染规范化索引——中途后台提取写入的新索引行下一请求即可见。读取用 `readMemoryFile`（[store.ts:176](../../src/server/memory/store.ts#L176)）的防篡改有界读：lstat 拒符号链接 / 非普通文件 / 超 256 KiB；`O_NOFOLLOW` 打开（Windows 无该标志时读前读后 lstat + sameFile 复检）；读前读后 stat/lstat triple 复检 size/mtime/ctime 一致；fatal UTF-8 解码、拒 `\0`。`missing` / `error` / 规范化后为空一律省略该节，不重试不降级。
 

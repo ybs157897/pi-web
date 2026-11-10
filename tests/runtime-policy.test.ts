@@ -74,7 +74,7 @@ function expectCore(request: RequestEvidence) {
 }
 
 describe('default policy at the actual Pi provider boundary', () => {
-  it('includes the core, workspace, planning route and goal guidance without a preset or existing goal', async () => {
+  it('includes the core, workspace, planning route and goal guidance without an existing goal', async () => {
     const f = await fixture()
     const conversation = await f.runtime.create({ title: 'Default policy' })
     const detail = await send(f.runtime, conversation.conversation.id, '[prompt-probe] default')
@@ -91,31 +91,15 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(await readdir(f.options.workspace)).toEqual([])
   })
 
-  it('adds only the policy to a no-tool preset and preserves its custom instructions', async () => {
-    const f = await fixture()
-    const preset = await f.runtime.createPreset({ name: 'Translator', instructions: 'ONLY_TRANSLATE_ROLE_928', extensions: [], tools: [], accessMode: 'readOnly' })
-    const conversation = await f.runtime.create({ title: 'Restricted role', presetId: preset.id })
-    await send(f.runtime, conversation.conversation.id, '[prompt-probe] restricted')
-    const request = currentRequest(f.requests, '[prompt-probe] restricted')
-    expectCore(request)
-    expect(request.tools).toEqual([])
-    expect(request.system?.sections?.instructions).toContain('ONLY_TRANSLATE_ROLE_928')
-    expect(request.system?.sections?.['work-policy']).not.toContain('todo_write')
-    expect(request.system?.sections?.['goal-policy']).toBeUndefined()
-    expect(f.runtime.presets().find(item => item.id === preset.id)?.tools).toEqual([])
-  })
-
   it('loads and refreshes only the bound workspace root instructions at the provider boundary', async () => {
     const f = await fixture()
     await writeFile(join(f.root, 'AGENTS.md'), 'OUTSIDE_SCOPE_541')
     await writeFile(join(f.options.workspace, 'AGENTS.md'), 'ROOT_RULE_REVISION_ONE_541')
-    const preset = await f.runtime.createPreset({ name: 'Root context reader', instructions: '', extensions: [], tools: [], accessMode: 'readOnly' })
-    const conversation = await f.runtime.create({ title: 'Root instructions', presetId: preset.id })
+    const conversation = await f.runtime.create({ title: 'Root instructions' })
     await send(f.runtime, conversation.conversation.id, '[prompt-probe] root-one')
     const first = currentRequest(f.requests, '[prompt-probe] root-one')
     expect(first.system?.sections?.['project-instructions']).toContain('ROOT_RULE_REVISION_ONE_541')
     expect(first.system?.sections?.['project-instructions']).not.toContain('OUTSIDE_SCOPE_541')
-    expect(first.tools).toEqual([])
     await writeFile(join(f.options.workspace, 'AGENTS.md'), 'ROOT_RULE_REVISION_TWO_541')
     await send(f.runtime, conversation.conversation.id, '[prompt-probe] root-two')
     const second = currentRequest(f.requests, '[prompt-probe] root-two')
@@ -167,7 +151,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(await readdir(f.options.workspace)).toEqual([])
   })
 
-  it('rejects attempted writes and shell execution in Plan, then restores the same preset tools on exit', async () => {
+  it('rejects attempted writes and shell execution in Plan, then restores the same tools on exit', async () => {
     const f = await fixture()
     await f.runtime.updateSettings({ codemodeMode: 'off' })
     const conversation = await f.runtime.create({ title: 'Plan enforcement', accessMode: 'fullAccess' })
@@ -232,17 +216,6 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(await readdir(f.options.workspace)).toEqual([])
   })
 
-  it('does not advertise a plan submission route when the preset has no such tool', async () => {
-    const f = await fixture()
-    const preset = await f.runtime.createPreset({ name: 'Plan analyst', instructions: '', extensions: ['plan'], tools: [], accessMode: 'readOnly' })
-    const conversation = await f.runtime.create({ title: 'Text plan', presetId: preset.id })
-    await f.runtime.setPlan(conversation.conversation.id, true)
-    await send(f.runtime, conversation.conversation.id, '[prompt-probe] no-plan-tool')
-    const request = currentRequest(f.requests, '[prompt-probe] no-plan-tool')
-    expect(request.tools).toEqual([])
-    expect(request.system?.sections?.['plan-policy']).not.toContain('Submit it with exit_plan_mode')
-  })
-
   it('deduplicates code-mode declarations without hiding their discovery route', async () => {
     const f = await fixture()
     const conversation = await f.runtime.create({ title: 'Compact tool context' })
@@ -253,16 +226,6 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(code).toContain('describeTool')
     expect(code.length).toBeLessThan(2_000)
     expect(code).not.toContain('declare function')
-  })
-
-  it('does not continue an active goal when a preset lacks its completion tools', async () => {
-    const f = await fixture()
-    const preset = await f.runtime.createPreset({ name: 'Goal reader', instructions: '', extensions: ['goal'], tools: ['get_goal'], accessMode: 'readOnly' })
-    const conversation = await f.runtime.create({ title: 'No completion tool', presetId: preset.id })
-    await f.runtime.goal(conversation.conversation.id, { action: 'create', objective: 'Remain inspectable', maxGoalRounds: 3 })
-    const detail = await send(f.runtime, conversation.conversation.id, '[prompt-probe] no-update')
-    expect(currentRequest(f.requests, '[prompt-probe] no-update').tools).toEqual(['get_goal'])
-    expect(detail.goal?.roundsStarted).toBe(0)
   })
 
   it('holds automatic goal rounds while a question waits for the user, then resumes after the answer', async () => {
@@ -317,35 +280,9 @@ describe('default policy at the actual Pi provider boundary', () => {
     expectCore(currentRequest(f.requests, '[prompt-probe] fork'))
   })
 
-  it('upgrades an old stored preset selection on restart without adding tools or replacing instructions', async () => {
-    const f = await fixture()
-    const preset = await f.runtime.createPreset({ name: 'Legacy reader', instructions: 'PERSISTED_READER_ROLE', extensions: ['coding-tools'], tools: ['read'], accessMode: 'readOnly' })
-    const conversation = await f.runtime.create({ title: 'Legacy conversation', presetId: preset.id })
-    await f.runtime.close()
-    const registry = createRegistry()
-    registry.install(CodingTools)
-    const harness = await Harness.open(await openNodeSqliteStorage(join(f.options.dataDir, 'pi-durable.sqlite')), { models: createDemoModelRuntime().models, registry }, BACKGROUND_CONTEXT)
-    try {
-      await harness.commit(async tx => {
-        const state = await tx.doc(AgentDoc, Number(conversation.conversation.id) as ConversationId)
-        state.extensions = ['coding-tools']
-      }, BACKGROUND_CONTEXT)
-    } finally { await harness.close(BACKGROUND_CONTEXT) }
-    await f.restart()
-    await send(f.runtime, conversation.conversation.id, '[prompt-probe] restarted')
-    const request = currentRequest(f.requests, '[prompt-probe] restarted')
-    expectCore(request)
-    expect(request.tools).toEqual(['read'])
-    expect(request.system?.sections?.instructions).toContain('PERSISTED_READER_ROLE')
-  })
-
   it('installs execution guards before recovering a queued edit that starts the scheduler', async () => {
     const f = await fixture()
-    const preset = await f.runtime.createPreset({
-      name: 'Legacy writer', instructions: '', extensions: ['coding-tools'],
-      tools: ['read', 'write', 'edit', SHELL_TOOL], accessMode: 'fullAccess',
-    })
-    const conversation = await f.runtime.create({ title: 'Recovered plan', presetId: preset.id })
+    const conversation = await f.runtime.create({ title: 'Recovered plan', accessMode: 'fullAccess' })
     const id = Number(conversation.conversation.id) as ConversationId
     await f.runtime.setPlan(String(id), true)
     await f.runtime.close()

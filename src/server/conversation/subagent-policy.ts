@@ -32,6 +32,7 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
   'enter_plan_mode', 'exit_plan_mode', 'ask_user_question',
   'get_goal', 'create_goal', 'update_goal', 'subagent', 'spawn_teammate',
   'send_message', 'list_agents', 'wait_agent', 'interrupt_agent',
+  'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view',
 ])
 
 /** This restriction applies at both exposure and execution, including older resumed children. */

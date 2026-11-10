@@ -11,13 +11,17 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { AutomationSchedule } from '../../shared/types.ts'
+import { systemTimeZone } from '../../shared/automation-timing.ts'
 import { analysisProcedure } from './analysis-procedure.ts'
 
 /** Marks the task in the automations list. */
 export const WETRACK_DAILY_AUTOMATION_KEY = 'wetrack-analysis-daily'
-/** Every night at midnight, in local time. */
-export const WETRACK_DAILY_SCHEDULE: AutomationSchedule = { unit: 'day', timeOfDay: '00:00' }
+/**
+ * Every night at midnight, in the machine's zone. DTSTART is a fixed past anchor so
+ * the rule text never changes across days: only the zone can, and a `FREQ=DAILY`
+ * occurrence set always starts from the first midnight after `now`.
+ */
+export const WETRACK_DAILY_RRULE = `DTSTART;TZID=${systemTimeZone()}:20000101T000000\nRRULE:FREQ=DAILY`
 /** Where the "the operator created this once" marker lives. */
 export const WETRACK_DAILY_MARKER = 'wetrack/daily-automation.json'
 

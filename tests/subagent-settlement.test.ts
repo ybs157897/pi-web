@@ -20,7 +20,6 @@ function metadata(overrides: Partial<ConversationMetadata> = {}): ConversationMe
     queueCreatedAt: {},
     requestReceipts: {},
     workspaceId: null,
-    presetId: null,
     accessMode: 'fullAccess',
     feedback: {},
     queueEdits: {},
