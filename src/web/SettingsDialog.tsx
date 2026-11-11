@@ -125,9 +125,8 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     { value: 'system' as const, label: t('跟随系统', 'System'), icon: <IconFollowsystemOutlineRegular size={16} /> },
   ]
   const bindingNames: Record<string, string> = {
-    newConversation: t('新建会话', 'New conversation'), search: t('搜索会话', 'Search conversations'), settings: t('打开设置', 'Open settings'),
-    toggleSidebar: t('切换侧栏', 'Toggle sidebar'), rename: t('重命名会话', 'Rename conversation'),
-    fork: t('分叉会话', 'Fork conversation'), archive: t('归档会话', 'Archive conversation'),
+    newConversation: t('回到任务入口', 'Return to the task entry'), settings: t('打开设置', 'Open settings'),
+    toggleSidebar: t('切换侧栏', 'Toggle sidebar'),
     send: t('发送消息', 'Send message'), newline: t('换行', 'New line'), alternateSend: t('使用另一发送方式', 'Alternate send mode'),
   }
   return <>

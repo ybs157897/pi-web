@@ -1,8 +1,8 @@
 import type {
   AccessMode, AddWorkspaceInput, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
-  CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
+  CreateAutomationInput, CreateConversationInput, CreateTaskInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, PersonalizationView, ProviderConfigSummary, ProviderInput, ProviderTestResult,
-  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAutomationInput, UpdateConversationInput,
+  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, TaskSummary, ThinkingLevel, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
   WetrackDefectDetail, WetrackDefectList, WetrackDefectReport,
   WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
@@ -86,6 +86,13 @@ export const api = {
   async listConversations(): Promise<ConversationSummary[]> {
     const result = await request<{ conversations: ConversationSummary[] }>('/api/conversations')
     return result.conversations
+  },
+  async listTasks(): Promise<TaskSummary[]> {
+    const result = await request<{ tasks: TaskSummary[] }>('/api/tasks')
+    return result.tasks
+  },
+  createTask(input: CreateTaskInput): Promise<ConversationDetail> {
+    return request('/api/tasks', { method: 'POST', body: JSON.stringify(input) })
   },
   createConversation(input: CreateConversationInput): Promise<ConversationDetail> {
     return request('/api/conversations', { method: 'POST', body: JSON.stringify(input) })

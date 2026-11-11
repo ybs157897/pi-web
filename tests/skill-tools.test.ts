@@ -253,18 +253,20 @@ describe('Skills prompt routing', () => {
     const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
     const prompt = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
 
-    expect(prompt).toMatch(/- builtin:skill-creator: Create, adapt.* \(file: .*skills\/skill-creator\/SKILL\.md\)/u)
+    // Paths under the catalog's common root are relative to it; the header names the root.
+    expect(prompt).toMatch(/- builtin:skill-creator: Create, adapt.* \(file: skill-creator\/SKILL\.md\)/u)
+    expect(prompt).toContain('Skill files under')
     expect(prompt).not.toContain('{"id":')
   })
 
   it('drops catalog descriptions once the character budget is exhausted', async () => {
     const path = await workspace()
-    // 120 workspace Skills whose description and when_to_use both sit at the 250-character
-    // display cap: the full pass blows the 20 000-character budget, and even the degraded
-    // id-plus-path pass is long enough that the tail has to be cut with an omitted count.
+    // 240 workspace Skills whose description and when_to_use both sit at the 250-character
+    // display cap: the full pass blows the 20 000-character budget, and the degraded
+    // id-plus-path pass (shortened by the shared-root compaction) still needs a tail cut.
     const description = 'd'.repeat(1_000)
     const whenToUse = 'w'.repeat(1_000)
-    for (let index = 0; index < 120; index += 1) {
+    for (let index = 0; index < 240; index += 1) {
       const name = `bulk-${String(index).padStart(3, '0')}-${'a'.repeat(40)}`
       const directory = join(path, '.agents', 'skills', name)
       await mkdir(directory, { recursive: true })

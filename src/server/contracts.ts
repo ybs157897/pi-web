@@ -14,6 +14,7 @@ import type {
   ConversationSummary,
   CreateAutomationInput,
   CreateConversationInput,
+  CreateTaskInput,
   CreateGitBranchInput,
   GitCommitInput,
   GitChangeSourceId,
@@ -37,6 +38,7 @@ import type {
   SubmitInput,
   SubagentSummary,
   SwitchGitBranchInput,
+  TaskSummary,
   TeamView,
   ThinkingLevel,
   UpdateAppSettingsInput,
@@ -58,6 +60,10 @@ import type {
 /** Runtime operations used by HTTP and deterministic integration tests. */
 export interface Runtime {
   list(): Promise<ConversationSummary[]>
+  /** Every task the single entry started, newest activity first. */
+  tasks(): Promise<TaskSummary[]>
+  /** Create one task conversation and place its first input. */
+  createTask(input: CreateTaskInput): Promise<ConversationDetail>
   create(input: CreateConversationInput): Promise<ConversationDetail>
   detail(id: string): Promise<ConversationDetail>
   update(id: string, input: UpdateConversationInput): Promise<ConversationDetail>

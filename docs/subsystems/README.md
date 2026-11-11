@@ -4,6 +4,7 @@
 
 | 页 | 覆盖 |
 |---|---|
+| [tasks.md](tasks.md) | 单入口与任务：主会话座位、任务会话创建、状态投影、任务列表 API 与前端 |
 | [todo.md](todo.md) | 待办清单：`todo_write` 工具、`pi-web.todos` 文档、清空时机与投影 |
 | [plan-mode.md](plan-mode.md) | 计划模式：`pi-web.plan`、`enter/exit_plan_mode`、`plan-policy` section、执行边界与审批 |
 | [interactions.md](interactions.md) | 统一交互协议：`ask_user_question`、plan-review、回答/放弃路由与三源投影 |

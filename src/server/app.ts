@@ -4,7 +4,7 @@ import { basename, relative } from 'node:path'
 import { userInfo } from 'node:os'
 import { z } from 'zod'
 import packageJson from '../../package.json' with { type: 'json' }
-import type { ConversationDetail, CreateConversationInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
+import type { ConversationDetail, CreateConversationInput, CreateTaskInput, ProviderInput, SubmitInput, UpdateConversationInput } from '../shared/types.ts'
 import { COLLAPSE_TIMINGS, CODEMODE_MODES, PERFORMANCE_USAGE_MODES, SHORTCUT_COMMANDS, TRANSCRIPT_VIEW_MODES } from '../shared/types.ts'
 import type { Runtime } from './contracts.ts'
 import { isDefectNumber } from './automation/wetrack.ts'
@@ -84,6 +84,13 @@ const childMessageSchema = z.object({
 
 const submitSchema = submitObject.refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
 const editQueueSchema = submitObject.extend({ whenBusy: z.enum(['steer', 'followUp']) }).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
+const taskSchema = submitObject.extend({
+  title: z.string().trim().min(1).max(120).optional(),
+  model: modelRef.optional(),
+  thinkingLevel: z.enum(thinkingLevels).optional(),
+  workspaceId: identifier.optional(),
+  accessMode: z.enum(accessModes).optional(),
+}).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0)
 const jsonObject = z.record(z.string(), z.unknown())
 const headersSchema = z.record(z.string().min(1).max(160).regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/), z.string().max(8192).refine(value => !/[\r\n]/.test(value)))
 const providerSchema = z.object({
@@ -341,6 +348,8 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const input = await readJson(c.req.raw, createSchema) as CreateConversationInput
     return c.json(await runtime.create(input), 201)
   })
+  app.get('/api/tasks', async c => c.json({ tasks: await runtime.tasks() }))
+  app.post('/api/tasks', async c => c.json(await runtime.createTask(await readJson(c.req.raw, taskSchema) as CreateTaskInput), 201))
   app.get('/api/conversations/:id/events', async c => {
     const id = identifier.safeParse(c.req.param('id'))
     if (!id.success) return c.json({ error: 'Conversation id is invalid', code: 'invalid_id' }, 400)

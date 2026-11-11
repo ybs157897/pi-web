@@ -55,7 +55,7 @@ type ProjectOptions = {
   subagents?: unknown
   /** Runtime-computed team projection; only a conversation's own detail carries it. */
   team?: unknown
-  kind?: 'defectAnalysis'
+  kind?: 'defectAnalysis' | 'main' | 'task'
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1038,7 +1038,7 @@ export function projectConversation(
     ...(view.conversation.owner ? { origin: 'subagent' as const, parentId: String(view.conversation.owner.conversationId) } : {}),
     ...(metadata.workspaceId ? { workspaceId: metadata.workspaceId } : {}),
     accessMode: metadata.accessMode,
-    ...(options.kind === 'defectAnalysis' ? { kind: options.kind } : {}),
+    ...(options.kind !== undefined ? { kind: options.kind } : {}),
     ...(summaryRunId ? { runId: summaryRunId } : {}),
     ...(summaryRunStartedAt !== undefined ? { runStartedAt: summaryRunStartedAt } : {}),
     ...(summaryDuration !== undefined ? { durationMs: summaryDuration } : {}),

@@ -6,6 +6,8 @@ The browser renders host DTOs with ZCode-aligned message components and a shell 
 
 产品分三层：浏览器前端 `src/web/` 渲染 host DTO 与应用壳；HTTP 服务器（[app.ts](../src/server/app.ts)）把 HTTP 映射到 [contracts.ts](../src/server/contracts.ts) 定义的 `Runtime` 接口，负责输入校验与流式传输；runtime 由 [runtime/index.ts](../src/server/runtime/index.ts) 的 `createRuntime` 装配，持有 Pi Durable、SQLite 会话、provider 配置与会话元数据。数据归属见 Data ownership，服务端各目录的一句话职责见 Server layout，一条用户消息的端到端路径见请求循环。
 
+产品只有一个任务入口：主会话（`conversation-kind.kind === 'main'`，启动时幂等创建）占有入口座位，每个任务是一个 `kind === 'task'` 的 ownerless 会话并回指主会话；界面侧栏按任务维度展示，历史会话不进入任何列表。任务层的创建、状态投影与 API 见 [subsystems/tasks.md](subsystems/tasks.md)。
+
 ## Data ownership
 
 A UI conversation maps to a Pi `Conversation`, not its storage-level `Session`. Entries and Pi documents own messages, active generation, tools, inbox, agent configuration, and usage. Application metadata owns titles, pinning, and archiving. Browser storage owns drafts and display preferences.
@@ -34,7 +36,7 @@ The runtime imports existing Pi configuration read-only and keeps project-specif
 
 | Directory | Owns |
 | --- | --- |
-| `runtime/` | `createRuntime` as a composition root plus the feature modules it assembles: `conversations`, `queue`, `interactions`, `team`, `automations`, `workspaces`, `settings`, `plugins`, `subagent-settle` (settlement of background subagent delegations), with `core.ts` (metadata/detail/model policy) and `helpers.ts` (pure primitives) shared underneath |
+| `runtime/` | `createRuntime` as a composition root plus the feature modules it assembles: `conversations`, `tasks` (the single entry's task sessions), `queue`, `interactions`, `team`, `automations`, `workspaces`, `settings`, `plugins`, `subagent-settle` (settlement of background subagent delegations), with `core.ts` (metadata/detail/model policy) and `helpers.ts` (pure primitives) shared underneath |
 | `conversation/` | Projection, compaction, execution/plan policy, work policy and its prompt asset, session titles, execution environment, per-conversation JSONL trajectory capture (every outbound request with first-token latency, plus side-call records) |
 | `tools/` | Agent tool extensions (`shell/`, `search/`, `todo`, `goal`, `plan`, `research`, `skill`, `subagent`, `team`, `interaction`, `wetrack-analysis`), with `shared/` (shell output decoding) underneath |
 | `agents/` | Built-in delegation profiles (`general-purpose`, the read-only `Explore`) and the child-model resolver the delegation tools share |
@@ -123,6 +125,7 @@ The server runs on macOS, Linux and Windows. The platform-sensitive surface is d
 改不同对象前先读对应的 subsystems 现状页（`docs/subsystems/`，一主题一页），再动 `src/`：
 
 - todo 工具与任务提醒 → [todo](subsystems/todo.md)
+- 单入口、任务会话与任务列表 → [tasks](subsystems/tasks.md)
 - 计划模式的工具收窄与拦截 → [plan-mode](subsystems/plan-mode.md)
 - 提问/等待类交互（ask user question、等待应答） → [interactions](subsystems/interactions.md)
 - goal 的创建约束与自动续跑 → [goal](subsystems/goal.md)

@@ -229,7 +229,7 @@ export default function Composer(props: ComposerProps) {
     { id: 'permission', group: 'command', label: t('权限', 'Permission'), description: t('切换权限预设（沙箱模式与审批策略）', 'Switch the permission preset (sandbox and approvals)'), icon: accessIcon(accessMode), run: () => setMenu('access') },
     { id: 'model', group: 'command', label: t('模型', 'Model'), description: t('选择本会话使用的模型', 'Choose the model for this conversation'), icon: <IconDatabaseOutlineRegular size={16} />, run: () => setMenu('search') },
     { id: 'settings', group: 'command', label: t('设置', 'Settings'), description: t('打开设置对话框', 'Open settings'), icon: <IconGaugeOutlineRegular size={16} />, run: () => props.onOpenSettings?.() },
-    { id: 'new', group: 'command', label: t('新建会话', 'New conversation'), description: t('开始一个新会话', 'Start a new conversation'), icon: <IconPlusOutlineRegular size={16} />, run: () => props.onNewConversation?.() },
+    { id: 'new', group: 'command', label: t('新任务', 'New task'), description: t('回到任务入口', 'Return to the task entry'), icon: <IconPlusOutlineRegular size={16} />, run: () => props.onNewConversation?.() },
     ...(busy ? [{ id: 'stop', group: 'command' as const, label: t('停止', 'Stop'), description: t('停止当前回答', 'Stop the current response'), icon: <IconStopFillRegular size={16} />, run: onStop }] : []),
   ]
   const commandMatches = trigger?.type === 'command' ? commands.filter(item => item.id.startsWith(trigger.query.toLowerCase())) : []
@@ -418,7 +418,7 @@ export default function Composer(props: ComposerProps) {
           </span>
         })}
       </div>}
-      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('发消息或创建任务，/ 调用指令、@ 文件、$ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
+      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('继续这个任务，/ 调用指令、@ 文件、$ 技能', 'Continue this task, / commands, @ files, $ for skills')}
         value={value} disabled={disabled || sending} rows={hero ? 2 : 1} onChange={event => updateValue(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={onKeyDown}
         onPaste={event => { const files = event.clipboardData.files; if (files.length) { event.preventDefault(); onAddImages(files) } }} />
       {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : trigger.type === 'skill' ? t('技能', 'Skills') : t('文件与文件夹', 'Files and folders')}>

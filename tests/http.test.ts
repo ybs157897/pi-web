@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AskUserQuestionAnswerItem, AskUserQuestionItem, ConversationDetail, ConversationSummary, CreateConversationInput, ModelCatalog, ProviderInput, SubmitInput, UpdateConversationInput } from '../src/shared/types.ts'
+import type { AskUserQuestionAnswerItem, AskUserQuestionItem, ConversationDetail, ConversationSummary, CreateConversationInput, CreateTaskInput, ModelCatalog, ProviderInput, SubmitInput, TaskSummary, UpdateConversationInput } from '../src/shared/types.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import type { GoalUpdateRequest } from '../src/shared/types.ts'
 import type * as Protocol from '../src/shared/types.ts'
@@ -50,6 +50,18 @@ class FakeRuntime implements Runtime {
   async list(): Promise<ConversationSummary[]> {
     this.calls.push('list')
     return [...this.details.values()].map(value => value.conversation)
+  }
+
+  async tasks(): Promise<TaskSummary[]> {
+    this.calls.push('tasks')
+    return []
+  }
+
+  async createTask(input: CreateTaskInput): Promise<ConversationDetail> {
+    this.calls.push('createTask')
+    const detail = makeDetail('task-created', input.title ?? 'Task')
+    this.details.set(detail.conversation.id, detail)
+    return detail
   }
 
   async create(input: CreateConversationInput): Promise<ConversationDetail> {
@@ -896,8 +908,8 @@ describe('management API', () => {
       const defaultWorkspace = { id: 'ws-shortcuts', name: 'Shortcuts', path: dataDir, createdAt: NOW, updatedAt: NOW }
       const store = await AppStateStore.open({ dataDir, defaultWorkspace })
       const { app } = createTestApp(new PersistedShortcutsRuntime(store))
-      const edited = resolveShortcuts({ search: 'Mod+p' })
-      expect(Object.keys(edited)).toHaveLength(12)
+      const edited = resolveShortcuts({ toggleSidebar: 'Mod+p' })
+      expect(Object.keys(edited)).toHaveLength(8)
       const editResponse = await app.request('/api/settings', json('PATCH', { shortcuts: edited }))
       expect(editResponse.status).toBe(200)
       expect((await editResponse.json()).shortcuts).toEqual(edited)
@@ -918,7 +930,7 @@ describe('management API', () => {
   it('updates settings and workspace bindings through typed routes', async () => {
     const { app, runtime } = createTestApp()
     expect((await (await app.request('/api/capabilities')).json()).accessModes).toContain('workspaceWrite')
-    const settings = await app.request('/api/settings', json('PATCH', { locale: 'en', fontSize: 16, defaultModel: null, shortcuts: { search: 'Mod+p' } }))
+    const settings = await app.request('/api/settings', json('PATCH', { locale: 'en', fontSize: 16, defaultModel: null, shortcuts: { toggleSidebar: 'Mod+p' } }))
     expect(settings.status).toBe(200)
     expect((await settings.json()).locale).toBe('en')
     expect((await app.request('/api/settings', json('PATCH', { fontSize: 100 }))).status).toBe(400)
@@ -1397,6 +1409,20 @@ describe('application state file', () => {
       expect(rewritten.presets).toBeUndefined()
       expect(rewritten.settings.defaultPresetId).toBeUndefined()
       expect(rewritten.automations[0].presetId).toBeUndefined()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('drops shortcut bindings for commands this build no longer handles', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
+    await writeFile(join(root, 'app-state.json'), JSON.stringify({
+      ...legacyState,
+      settings: { ...legacyState.settings, shortcuts: { search: 'Mod+k', fork: 'Shift+Mod+f', rename: 'Alt+Mod+g', toggleSidebar: 'Mod+b', send: 'Enter' } },
+    }))
+    try {
+      const store = await AppStateStore.open({ dataDir: root, defaultWorkspace: legacyWorkspace })
+      expect(store.snapshot().settings.shortcuts).toEqual({ toggleSidebar: 'Mod+b', send: 'Enter' })
     } finally {
       await rm(root, { recursive: true, force: true })
     }

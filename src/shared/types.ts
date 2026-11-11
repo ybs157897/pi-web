@@ -5,7 +5,7 @@ export type MessageStatus = 'running' | 'completed' | 'error' | 'cancelled'
 
 /** Commands with user-configurable keyboard bindings. Shared by the browser and persisted settings validators. */
 export const SHORTCUT_COMMANDS = [
-  'newConversation', 'search', 'settings', 'toggleSidebar', 'rename', 'fork', 'archive', 'send', 'newline', 'alternateSend',
+  'newConversation', 'settings', 'toggleSidebar', 'send', 'newline', 'alternateSend',
   'toggleInspector', 'toggleInspectorFullView',
 ] as const
 export type ShortcutCommand = typeof SHORTCUT_COMMANDS[number]
@@ -553,8 +553,8 @@ export interface ConversationSummary {
   cwd: string
   workspaceId?: string
   accessMode?: AccessMode
-  /** Analysis conversations belong to the issues page unless the settings opt into the sidebar. */
-  kind?: 'defectAnalysis'
+  /** Analysis conversations belong to the issues page; `main` is the single entry, `task` one task it started. */
+  kind?: 'defectAnalysis' | 'main' | 'task'
   /** DSH's session origin: `subagent` marks a conversation another conversation's task created. */
   origin?: 'subagent'
   /** The parent conversation of a subagent session; the owner edge the control routes check. */
@@ -563,6 +563,37 @@ export interface ConversationSummary {
   runStartedAt?: number
   durationMs?: number
   status?: MessageStatus
+}
+
+/**
+ * What one task is doing right now, read from its conversation:
+ * `waiting` while a question awaits the reader, `queued` while an input waits for a free turn,
+ * `running` during a turn, and the settled states afterwards.
+ */
+export type TaskStatus = 'idle' | 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
+
+/** One unit of authorized work: the conversation the single entry started, as the task list reads it. */
+export interface TaskSummary {
+  id: string
+  title: string
+  status: TaskStatus
+  createdAt: number
+  updatedAt: number
+  model?: ModelRef
+  thinkingLevel: ThinkingLevel
+  cwd: string
+  workspaceId?: string
+  busy: boolean
+  /** A settled reply the reader has not looked at; the task row renders it as a dot. */
+  unread?: boolean
+  runStartedAt?: number
+  durationMs?: number
+  /** The latest assistant text collapsed to one line; the row's preview. */
+  preview?: string
+  /** Why the task needs the reader: the pending question, the failure reason, or the stop note. */
+  attention?: string
+  /** User turns the task has taken, so a follow-up conversation stays distinguishable from a one-shot. */
+  turns: number
 }
 
 /**
@@ -784,6 +815,14 @@ export interface CreateConversationInput {
   workspaceId?: string
   accessMode?: AccessMode
   kind?: 'defectAnalysis'
+}
+/** The single entry's one action: create a task conversation and place its first input. */
+export interface CreateTaskInput extends SubmitInput {
+  title?: string
+  model?: ModelRef
+  thinkingLevel?: ThinkingLevel
+  workspaceId?: string
+  accessMode?: AccessMode
 }
 export interface UpdateConversationInput {
   title?: string

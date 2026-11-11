@@ -142,19 +142,36 @@ describe('trajectory capture and export', () => {
     expect(requests.length).toBeGreaterThanOrEqual(2)
     expect(requests.every(line => Array.isArray(line.messages) && line.messages.length === line.messageCount)).toBe(true)
     const firstRequest = requests[0] as unknown as {
-      messages: Array<{ role: string; sections?: string[]; content: { kind: string; preview?: string } }>
+      messages: Array<{ role: string; sections?: string[]; sectionChars?: Record<string, number>; systemChars?: number; content: { kind: string; preview?: string } }>
       model?: unknown
+      request: number
+      task: string
     }
     expect(JSON.stringify(firstRequest.messages)).toContain(submitted)
     expect(firstRequest.model).toEqual({ provider: 'repro', modelId: 'repro-model' })
     expect(firstRequest.messages[0]).toMatchObject({ role: 'system' })
     expect(Array.isArray(firstRequest.messages[0]?.sections)).toBe(true)
+    // The system outline carries the real prompt size: per-section chars and a total,
+    // even though the system message's own content is empty.
+    const systemOutline = firstRequest.messages[0]!
+    expect(typeof systemOutline.systemChars).toBe('number')
+    expect(systemOutline.systemChars!).toBeGreaterThan(0)
+    expect(systemOutline.sectionChars).toBeTypeOf('object')
+    expect(Object.values(systemOutline.sectionChars!).reduce((sum, n) => sum + n, 0)).toBe(systemOutline.systemChars)
     // Older messages outline shape only: no preview key outside the trailing window.
     const headPreviews = firstRequest.messages.slice(0, -3).filter(message => 'preview' in message.content)
     expect(headPreviews).toHaveLength(0)
     // The tool round's request carries the tool result role in the outline.
     const toolRound = requests[1] as unknown as { messages: Array<{ role: string; content: { kind: string; blocks?: Array<{ type: string }> } }> }
     expect(toolRound.messages.some(message => message.role === 'toolResult')).toBe(true)
+    // Request numbers increase monotonically within the conversation even though each
+    // provider request is its own generation task (the old per-task reset kept them at 1).
+    const numbered = requests as unknown as Array<{ request: number }>
+    expect(numbered[0]!.request).toBe(1)
+    expect(numbered[1]!.request).toBe(2)
+    for (let index = 1; index < numbered.length; index += 1) {
+      expect(numbered[index]!.request).toBe(numbered[index - 1]!.request + 1)
+    }
     // The outline must stay small even when the payload is not: assert the capture keeps
     // request lines well under the verbatim provider body for this fixture.
     const captureText = await readFile(join(dataDir, TRAJECTORY_CAPTURE_DIR, `${conversationId}.jsonl`), 'utf8')

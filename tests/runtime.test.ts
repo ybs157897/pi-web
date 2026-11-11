@@ -689,10 +689,10 @@ describe('Pi Durable runtime', () => {
     expect(team?.tasks[1]?.blockedBy).toEqual(['task-1'])
     expect(team?.tasks[0]?.writeScopes).toEqual(['src/web'])
 
-    // Every teammate is a real child conversation that stays out of the sidebar.
+    // Every teammate is a real child conversation that stays out of the sidebar; the entry seat itself is listed.
     const children = await runtime.children(parent.conversation.id)
     expect(children.map(row => row.label)).toEqual(['资料调研', '面板实现'])
-    expect((await runtime.list()).map(item => item.id)).toEqual([parent.conversation.id])
+    expect((await runtime.list()).filter(item => item.kind !== 'main').map(item => item.id)).toEqual([parent.conversation.id])
     const childDetail = await runtime.detail(children[0]?.id ?? '')
     expect(childDetail.conversation.origin).toBe('subagent')
     expect(childDetail.conversation.parentId).toBe(parent.conversation.id)
@@ -805,7 +805,7 @@ describe('Pi Durable runtime', () => {
     expect(textOf(childDetail.messages.filter(message => message.role === 'assistant').at(-1))).toContain('子智能体一期机制小结')
 
     // Children stay out of the sidebar list, and a child owns no children of its own.
-    expect((await runtime.list()).map(item => item.id)).toEqual([parent.conversation.id])
+    expect((await runtime.list()).filter(item => item.kind !== 'main').map(item => item.id)).toEqual([parent.conversation.id])
     expect(await runtime.children(child?.id ?? '')).toEqual([])
     expect((await runtime.children(parent.conversation.id)).map(row => row.id)).toEqual([child?.id])
   })

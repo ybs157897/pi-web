@@ -16,7 +16,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 | schedule-policy | ✓ | — | — | — | — | 82 | [`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts) |
 | wetrack-analysis | ✓ | — | ✓ | ✓ | — | 611 | [`src/server/tools/wetrack-analysis.ts`](../src/server/tools/wetrack-analysis.ts) |
 | goal-policy | ✓ | ✓ | ✓ | — | — | 491 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
-| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 2407 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
+| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 2387 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
 | codemode | ✓ | ✓ | ✓ | ✓ | — | 1123 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
@@ -67,7 +67,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section skills-policy
 
 - 注入条件：skill 工具可调用时注入技能目录约定，并对比上次已展示内容提示新增技能。
-- 实测长度（字符）：default 2407 · plan 2393 · readonly 2393 · subagent-general 2407
+- 实测长度（字符）：default 2387 · plan 2373 · readonly 2373 · subagent-general 2387
 - 定义处：[`src/server/tools/skill.ts`](../src/server/tools/skill.ts)
 
 ### section delegation-policy

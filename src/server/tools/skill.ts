@@ -203,13 +203,55 @@ function callableInstruction(route: ReturnType<typeof callableToolNames>): strin
  * One catalog line, ZCode-shaped: `- <id>: <description> - <when_to_use> (file: <path>)`.
  * The id stays in the line because `skill_load` takes ids, so a shadowed copy remains reachable;
  * the absolute path means the model can open resources with workspace file tools.
+ * Compact: a when_to_use that only restates the description is dropped, and a path under the
+ * catalog's common root is written relative to it (the section header names the root).
  */
-function catalogLine(skill: SkillSummary, withDescription: boolean): string {
-  const whenToUse = !withDescription || skill.whenToUse === undefined
-    ? ''
-    : ` - ${cleanMessage(skill.whenToUse, MAX_WHEN_TO_USE_LENGTH)}`
-  const description = withDescription ? `: ${cleanMessage(skill.description)}${whenToUse}` : ''
-  return `- ${cleanMessage(skill.id, 128)}${description} (file: ${skill.path})`
+function catalogLine(skill: SkillSummary, withDescription: boolean, root?: string): string {
+  const prefix = root === undefined ? undefined : root.endsWith('/') ? root : `${root}/`
+  const file = prefix !== undefined && skill.path.startsWith(prefix) ? skill.path.slice(prefix.length) : skill.path
+  let description = ''
+  if (withDescription) {
+    const text = cleanMessage(skill.description)
+    const whenToUse = skill.whenToUse === undefined ? '' : cleanMessage(skill.whenToUse, MAX_WHEN_TO_USE_LENGTH)
+    // 同一段话的两种说法只保留信息量大的那个；确实不同的 when_to_use 才附加。
+    const body = whenToUse === '' || whenToUse === text || text.includes(whenToUse)
+      ? text
+      : whenToUse.includes(text) ? whenToUse : `${text} - ${whenToUse}`
+    description = `: ${body}`
+  }
+  return `- ${cleanMessage(skill.id, 128)}${description} (file: ${file})`
+}
+
+/**
+ * The skill root with the largest net saving when paths under it are written relative, or
+ * undefined when no root covers at least two paths with more saved than the header costs.
+ * A catalog mixes several roots (user-level skills in different homes, built-ins, plugins),
+ * so one global common prefix would degrade to `/` and save nothing.
+ */
+function commonFileRoot(paths: readonly string[]): string | undefined {
+  if (paths.length < 2) return undefined
+  const counts = new Map<string, number>()
+  for (const path of paths) {
+    let dir = path.slice(0, path.lastIndexOf('/'))
+    while (dir.length >= 8) {
+      counts.set(dir, (counts.get(dir) ?? 0) + 1)
+      const cut = dir.lastIndexOf('/')
+      if (cut <= 0) break
+      dir = dir.slice(0, cut)
+    }
+  }
+  let best: string | undefined
+  let bestSaving = 0
+  for (const [dir, count] of counts) {
+    if (count < 2) continue
+    // Each shortened line saves the root plus its separator; the header costs about one line.
+    const saving = count * (dir.length + 1) - 70
+    if (saving > bestSaving) {
+      best = dir
+      bestSaving = saving
+    }
+  }
+  return best
 }
 
 /** Keep the catalog inside the character budget, reserving room for the omitted-count footer. */
@@ -228,11 +270,13 @@ function boundedCatalogLines(lines: readonly string[], footer: (count: number) =
 
 function renderCatalog(catalog: SkillCatalog): string {
   if (catalog.skills.length === 0) return 'No Skills were discovered in this workspace.'
+  const root = commonFileRoot(catalog.skills.map(skill => skill.path))
+  const header = root === undefined ? '' : `Skill files under ${root} use (file:) paths relative to it; other paths are absolute.\n`
   const footer = (count: number) => `- ${count} additional Skills are omitted from this bounded catalog.`
-  const full = catalog.skills.map(skill => catalogLine(skill, true)).join('\n')
-  if (full.length <= MAX_CATALOG_CHARS) return full
+  const full = catalog.skills.map(skill => catalogLine(skill, true, root)).join('\n')
+  if (header.length + full.length <= MAX_CATALOG_CHARS) return header + full
   // Over budget: drop every description, keeping only ids and file paths (ZCode behavior).
-  return boundedCatalogLines(catalog.skills.map(skill => catalogLine(skill, false)), footer).join('\n')
+  return header + boundedCatalogLines(catalog.skills.map(skill => catalogLine(skill, false, root)), footer).join('\n')
 }
 
 /** Ids the model last saw in the rendered section; undefined when no usable baseline exists. */

@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowDown, Loader } from 'lucide-react'
+import { ArrowDown, ChevronRight, Loader } from 'lucide-react'
 import {
-  Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
-  IconCheckOutlineRegular, IconChecklistOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
-  IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
-  IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconListPenOutlineRegular,
+  Button, ConnectionIndicator, IconChecklistOutlineRegular, IconClockOutlineRegular,
+  IconDownloadOutlineRegular, IconEllipsisOutlineRegular, IconListPenOutlineRegular,
   IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
-  IconPinFillRegular, IconPinOutlineRegular, IconPlusOutlineRegular, IconSearchOutlineRegular,
-  IconSettingsOutlineRegular, IconSlidersTwoOutlineRegular, IconTrashOutlineRegular, IconUnarchiveOutlineRegular,
-  IconWorkspaceTreeOutlineRegular, Input, Menu, Modal, ShortcutKeys, Tag, Toast, Tooltip, focusWithoutRing, relativeTime,
+  IconPlusOutlineRegular, IconSettingsOutlineRegular,
+  Menu, Modal, ShortcutKeys, Tag, Toast, Tooltip, focusWithoutRing, relativeTime,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
-  AccessMode, AppSettings, ConversationDetail, ConversationSummary, ModelCatalog,
-  ModelOption, ProviderInput, SubagentSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
+  AccessMode, AppSettings, ConversationDetail, ConversationSummary, CreateTaskInput, ModelCatalog,
+  ModelOption, ProviderInput, SubagentSummary, TaskStatus, TaskSummary, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary,
   UpdateAppSettingsInput,
 } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
@@ -28,6 +25,7 @@ import QuestionComposer from './QuestionComposer.tsx'
 import SettingsDialog from './SettingsDialog.tsx'
 import Transcript, { type PendingMessage } from './transcript.tsx'
 import StatusPanel from './StatusPanel.tsx'
+import { TaskChangesView, TaskSummaryView, countTaskChanges } from './TaskViews.tsx'
 import { conversationStats, visibleTranscriptMessages } from './render-model.ts'
 import { latestPlan, sessionPlans, type PlanDocument } from './plan-preview.ts'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
@@ -35,7 +33,7 @@ import Inspector from './Inspector.tsx'
 import { PluginPageHostContext } from './plugin-page-pool.tsx'
 import type { InspectorDiff, InspectorFile } from './Inspector.tsx'
 import { activateTab, closeAllTabs, closeOtherTabs, closeTabs, nextSelectionChatOrdinal, normalizePaneState,
-  openFromLauncher, readPaneMemory, stripConversationScoped, upsertTab, writePaneMemory,
+  openFromLauncher, readPaneMemory, stripConversationScoped, writePaneMemory,
   type InspectorTab, type PaneState } from './inspector-tabs.ts'
 import type { GitChangeSourceId, LastTurnChange } from './GitPane.tsx'
 import { collectChangeFiles } from './ChangedFiles.tsx'
@@ -43,18 +41,17 @@ import SelectionAskPopover from './SelectionAskPopover.tsx'
 import { useSideConversation } from './use-side-conversation.ts'
 import type { SideChatMessage } from './SelectionChatPane.tsx'
 import { buildSideChatPrompt } from './selection-quote.ts'
-import WorkspaceDialog from './WorkspaceDialog.tsx'
-import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 /** antd is only needed by this page, so it loads as its own chunk on first visit. */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
-import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
+import { matchesShortcut, resolveShortcuts, shortcutKeyLabels } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
 type MainPage = 'chat' | 'defects' | 'automations'
-type WorkspaceSort = 'recent' | 'name'
+/** The task workbench's three seats: the live process, the file changes, and the settled summary. */
+type TaskView = 'process' | 'changes' | 'summary'
 interface ScopedDraft { scope: string; text: string }
 /** One attachment as the limits see it: an image flag and its byte size. */
 interface AttachmentSize { image: boolean; size: number }
@@ -64,7 +61,6 @@ interface ToastMessage { id: number; text: string; success?: boolean }
 /** The last failed submission attempt; a retry of the same content reuses its requestId. */
 interface FailedSubmission { requestId: string; fingerprint: string }
 
-const SELECTED_KEY = 'pi-durable-web:selected-conversation'
 const DRAFT_PREFIX = 'pi-durable-web:draft:'
 const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
 /** Dropped files can arrive without a MIME type, so the extension stands in for it. */
@@ -162,14 +158,14 @@ export default function App() {
   </UiPreferencesProvider>
 }
 
-/** Workspace sidebar, conversation surface, and Pi management entry pages. */
+/** The single entry: task list sidebar, the task conversation surface, and Pi management entry pages. */
 function AppShell({ settings, settingsError, onSettingsChange }: {
   settings: AppSettings
   settingsError: string
   onSettingsChange: (patch: UpdateAppSettingsInput) => Promise<AppSettings>
 }) {
   const { t } = useUiPreferences()
-  const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
@@ -184,25 +180,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [detailError, setDetailError] = useState('')
   const [listLoading, setListLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [query, setQuery] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [workspaceSort, setWorkspaceSort] = useState<WorkspaceSort>('recent')
-  const [showArchived, setShowArchived] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editTitle, setEditTitle] = useState('')
-  const [rowMenuId, setRowMenuId] = useState<string | null>(null)
-  const [workspaceMenuId, setWorkspaceMenuId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'models'>('general')
   const [savingProvider, setSavingProvider] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  /** The 「已完成」 section starts folded; the reader expands it on demand. */
+  const [doneCollapsed, setDoneCollapsed] = useState(true)
+  /** The open task's workbench seat; follows the run unless the reader picks one. */
+  const [taskView, setTaskView] = useState<TaskView>('process')
   const [page, setPage] = useState<MainPage>('chat')
-  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
-  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
-  const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false)
-  const [renameWorkspace, setRenameWorkspace] = useState<WorkspaceSummary | null>(null)
   /**
    * ZCode's side pane state: one tab array with a single active id, remembered per workspace in a
    * module memory bucket (no localStorage, like ZCode's taskSidePaneMemory). Document payloads ride
@@ -230,7 +218,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** `ui/update-model-context` chips, scoped like drafts so switching sessions keeps each one. */
   const [pluginContextsByScope, setPluginContextsByScope] = useState<Record<string, PluginContextEntry[]>>({})
   const [pluginSurfaces, setPluginSurfaces] = useState<PluginUiSurfaceView[]>([])
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
@@ -241,7 +228,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [reconnectToken, setReconnectToken] = useState(0)
   const [pending, setPending] = useState<PendingSubmission[]>([])
   const [draftState, setDraftState] = useState<ScopedDraft>({ scope: '__new__', text: loadDraft('__new__') })
-  // Attachments live per scope, so switching conversations keeps what was already added.
+  // Attachments live per scope, so switching tasks keeps what was already added.
   const [imageStore, setImageStore] = useState<Record<string, DraftImage[]>>({})
   const [newModel, setNewModel] = useState<{ provider: string; modelId: string } | undefined>(undefined)
   const [newThinking, setNewThinking] = useState<ThinkingLevel>(settings.defaultThinkingLevel)
@@ -260,9 +247,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const sidebarRef = useRef<HTMLElement | null>(null)
   const mainPanelRef = useRef<HTMLElement | null>(null)
   const sidebarTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const workspaceSearchRef = useRef<HTMLInputElement | null>(null)
-  /** Real row rects keep a workspace menu anchored when its ellipsis hides on hover-out. */
-  const workspaceRowRefs = useRef(new Map<string, HTMLDivElement>())
   const messagesViewport = useRef<HTMLDivElement | null>(null)
   /** Hosts the transcript selection popover's anchor area. */
   const selectionHostRef = useRef<HTMLDivElement | null>(null)
@@ -273,11 +257,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const wasAtBottom = useRef(true)
   const submitLock = useRef(false)
   const detailRef = useRef<ConversationDetail | null>(null)
-  const initialListLoad = useRef(true)
-  const blankIntent = useRef(false)
-  const pendingWorkspaceId = useRef<string | null>(null)
-  const selectedIdRef = useRef<string | null>(selectedId)
-  selectedIdRef.current = selectedId
+  /** The task the workbench seat belongs to; a different id means the reader switched tasks. */
+  const taskViewTaskId = useRef<string | null>(null)
+  /** Set once the reader picks a seat by hand, so a later completion does not yank them to the summary. */
+  const taskViewManual = useRef(false)
+  /** The previous status of the open task, to spot the non-completed → completed transition. */
+  const taskViewPrevStatus = useRef<TaskStatus | undefined>(undefined)
   /** Mirrors the attachment store synchronously, so two batches queued in one tick both see the first. */
   const imageStoreRef = useRef<Record<string, DraftImage[]>>({})
   /** Set once the live event stream drops; the recovery hint must not follow an ordinary re-attach. */
@@ -306,7 +291,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const draft = draftState.scope === activeScope ? draftState.text : ''
   const images = imageStore[activeScope] ?? NO_IMAGES
   const pluginContexts = pluginContextsByScope[activeScope] ?? NO_PLUGIN_CONTEXTS
-  const selectedSummary = conversations.find(item => item.id === selectedId)
+  /** The selected task row, when the open conversation is a task rather than a subagent or a legacy session. */
+  const selectedTask = tasks.find(item => item.id === selectedId)
   const conversationReady = detail?.conversation.id === selectedId
   const activeConversation = conversationReady ? detail : null
   const requestedModel = activeConversation?.conversation.model ?? newModel ?? settings.defaultModel
@@ -371,17 +357,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const selectPaneTab = useCallback((id: string): void => {
     commitPane(activateTab(paneRef.current, id))
   }, [commitPane])
-  // Switching to a workspace expands it once; afterwards its own chevron may
-  // collapse it, including while it is the selected/current workspace.
-  useLayoutEffect(() => {
-    if (currentWorkspaceId === undefined) return
-    setExpandedWorkspaces(current => {
-      if (current.has(currentWorkspaceId)) return current
-      const next = new Set(current)
-      next.add(currentWorkspaceId)
-      return next
-    })
-  }, [currentWorkspaceId])
   const accessMode = activeConversation?.conversation.accessMode ?? newAccessMode ?? settings.defaultAccessMode
   const selectedPending = pending.filter(item => item.conversationId === selectedId)
 
@@ -390,31 +365,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setToast({ id: toastSequence.current, text, success })
   }, [])
 
-  const updateConversation = useCallback((value: ConversationDetail | ConversationSummary): void => {
-    const summary = 'conversation' in value ? value.conversation : value
-    // A subagent session is reached through its parent's catalog, so it never enters the sidebar list.
-    if (summary.origin !== 'subagent') {
-      setConversations(existing => [summary, ...existing.filter(item => item.id !== summary.id)]
-        .sort(compareConversations))
-    }
-    if ('conversation' in value) setDetail(current => current?.conversation.id === summary.id ? value : current)
+  /** Insert or replace one task row in place, so a fresh detail never rebuilds the whole list. */
+  const upsertTask = useCallback((summary: TaskSummary): void => {
+    setTasks(existing => [summary, ...existing.filter(item => item.id !== summary.id)])
   }, [])
 
-  const refreshList = useCallback(async (): Promise<void> => {
+  const refreshTasks = useCallback(async (): Promise<void> => {
     try {
-      const items = await api.listConversations()
-      setConversations(items.sort(compareConversations))
+      const items = await api.listTasks()
+      // An unchanged poll must not re-render the shell (and the transcript) every two seconds.
+      setTasks(current => sameTaskRows(current, items) ? current : items)
       setListError('')
-      const firstLoad = initialListLoad.current
-      initialListLoad.current = false
-      if (firstLoad && selectedIdRef.current === null && !blankIntent.current) {
-        const stored = readStorage(SELECTED_KEY)
-        const next = items.find(item => item.id === stored && !item.archived)
-          ?? items.find(item => !item.archived)
-        if (next !== undefined) setSelectedId(next.id)
-      }
     } catch (cause) {
-      setListError(errorText(cause, t('无法读取会话列表', 'Could not load conversations')))
+      setListError(errorText(cause, t('无法读取任务列表', 'Could not load tasks')))
     } finally {
       setListLoading(false)
     }
@@ -451,26 +414,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, t])
 
   useEffect(() => {
-    void refreshList()
+    void refreshTasks()
     void refreshCatalog()
     void refreshWorkspaces()
     void refreshCapabilities()
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
-  }, [refreshCapabilities, refreshCatalog, refreshList, refreshWorkspaces])
+  }, [refreshCapabilities, refreshCatalog, refreshTasks, refreshWorkspaces])
 
-  // Runs keep finishing in conversations this tab is not streaming, so the unread dots only refresh
-  // when the reader comes back to the window. One list read per return, never a poll.
+  // Every task surface reads the same list, and a task's run can settle without this tab streaming
+  // it, so the list polls. Rows are replaced by id, which keeps an unchanged row's DOM untouched.
   useEffect(() => {
-    const refreshWhenVisible = (): void => {
-      if (document.visibilityState === 'visible') void refreshList()
-    }
-    document.addEventListener('visibilitychange', refreshWhenVisible)
-    window.addEventListener('focus', refreshWhenVisible)
-    return () => {
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
-      window.removeEventListener('focus', refreshWhenVisible)
-    }
-  }, [refreshList])
+    const timer = window.setInterval(() => { void refreshTasks() }, 2000)
+    return () => { window.clearInterval(timer) }
+  }, [refreshTasks])
 
   // DSH re-reads its model directory when the host reports a settings or
   // adapter change. The server pushes the same signal for saves made here,
@@ -493,9 +449,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewModel(undefined)
     const preferences = settingsRef.current
     setNewThinking(preferences.defaultThinkingLevel)
-    // A per-workspace "new session" action carries its choice across this reset.
-    setNewWorkspaceId(pendingWorkspaceId.current ?? preferences.defaultWorkspaceId)
-    pendingWorkspaceId.current = null
+    setNewWorkspaceId(preferences.defaultWorkspaceId)
     setNewAccessMode(preferences.defaultAccessMode)
     if (selectedId === null) {
       setDetailLoading(false)
@@ -508,22 +462,55 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       detailRef.current = value
       setDetail(value)
       setDetailError('')
-      updateConversation(value)
     }).catch(cause => {
-      if (active) setDetailError(errorText(cause, translateRef.current('无法打开此会话', 'Could not open this conversation')))
+      if (active) setDetailError(errorText(cause, translateRef.current('无法打开此任务', 'Could not open this task')))
     }).finally(() => {
       if (active) setDetailLoading(false)
     })
     return () => { active = false }
-  }, [selectedId, updateConversation])
+  }, [selectedId])
 
+  // The open task's stream is fresher than the list poll, so its row is projected in place. A
+  // conversation the task list does not own (subagent, side chat) is never inserted here.
   useEffect(() => {
+    if (detail === null || detail.conversation.id !== selectedId) return
+    const summary = taskFromDetail(detail)
+    if (summary === null) return
+    setTasks(current => current.some(item => item.id === summary.id)
+      ? current.map(item => item.id === summary.id ? summary : item)
+      : current)
+  }, [detail, selectedId])
+
+  // The workbench seat follows the run: a freshly opened task lands on the seat its status asks for,
+  // and a task that completes while the reader has not picked a seat slides to the summary on its own.
+  // Switching tasks resets both the manual flag and the remembered status.
+  useEffect(() => {
+    const status = selectedTask?.status
     if (selectedId === null) {
-      removeStorage(SELECTED_KEY)
+      taskViewTaskId.current = null
+      taskViewManual.current = false
+      taskViewPrevStatus.current = undefined
+      setTaskView('process')
       return
     }
-    writeStorage(SELECTED_KEY, selectedId)
-  }, [selectedId])
+    if (taskViewTaskId.current !== selectedId) {
+      taskViewTaskId.current = selectedId
+      taskViewManual.current = false
+      taskViewPrevStatus.current = status
+      setTaskView(status === 'completed' ? 'summary' : 'process')
+      return
+    }
+    if (taskViewPrevStatus.current !== 'completed' && status === 'completed' && !taskViewManual.current) {
+      setTaskView('summary')
+    }
+    taskViewPrevStatus.current = status
+  }, [selectedId, selectedTask?.status])
+
+  /** A seat the reader picks by hand; later completions must not override it. */
+  const switchTaskView = useCallback((view: TaskView): void => {
+    taskViewManual.current = true
+    setTaskView(view)
+  }, [])
 
   useEffect(() => {
     if (draftState.scope !== activeScope) return
@@ -548,7 +535,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const follow = wasAtBottom.current
       detailRef.current = value
       setDetail(value)
-      updateConversation(value)
       setPending(existing => existing.filter(item => item.conversationId !== selectedId || !isAcknowledged(value, item)))
       if (follow && viewport !== null) requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight })
     }, state => {
@@ -572,7 +558,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       source.close()
       setConnection(undefined)
     }
-  }, [conversationReady, reconnectToken, selectedId, updateConversation])
+  }, [conversationReady, reconnectToken, selectedId])
 
   useEffect(() => {
     if (connection !== 'recovered') return
@@ -659,7 +645,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [mobile, sidebarOpen])
 
   const selectConversation = useCallback((id: string): void => {
-    blankIntent.current = false
     setPage('chat')
     if (id === selectedId) {
       setSidebarOpen(false)
@@ -672,31 +657,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       if (viewport !== null) focusWithoutRing(viewport)
     })
   }, [mobile, selectedId])
-
-  const createConversation = useCallback(async (title = t('新对话', 'New conversation')): Promise<ConversationDetail> => {
-    blankIntent.current = false
-    const model = selectedModel
-    const preferences = settingsRef.current
-    const workspaceId = newWorkspaceId ?? preferences.defaultWorkspaceId ?? workspaces[0]?.id
-    const created = await api.createConversation({
-      title,
-      ...(model === undefined ? {} : { model: { provider: model.provider, modelId: model.modelId } }),
-      thinkingLevel,
-      ...(workspaceId === undefined ? {} : { workspaceId }),
-      accessMode: newAccessMode ?? preferences.defaultAccessMode,
-    })
-    // Plan mode is conversation-scoped, so the hero-time request is applied once the session exists.
-    const detail = newPlan ? await api.setPlan(created.conversation.id, true) : created
-    setNewPlan(false)
-    setConversations(existing => [detail.conversation, ...existing.filter(item => item.id !== detail.conversation.id)]
-      .sort(compareConversations))
-    setDetail(detail)
-    detailRef.current = detail
-    setSelectedId(detail.conversation.id)
-    setPage('chat')
-    setSidebarOpen(false)
-    return detail
-  }, [newAccessMode, newPlan, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
 
   const setDraft = useCallback((value: string): void => {
     setDraftState({ scope: activeScope, text: value })
@@ -820,9 +780,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     const submittedText = contextBlock === '' ? text : text === '' ? contextBlock : `${text}\n\n${contextBlock}`
     submitLock.current = true
     setSending(true)
-    let targetId = selectedId
-    let target = detail?.conversation.id === selectedId ? detail : null
-    // The requestId is only known once the target exists (see below); the optimistic entry carries it from then on.
+    const targetId = selectedId
     const pendingId = `pending:${crypto.randomUUID()}`
     const firstPending: PendingSubmission = {
       id: pendingId,
@@ -835,35 +793,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setPending(existing => [...existing, firstPending])
     setDraftState({ scope: activeScope, text: '' })
     writeImages(activeScope, [])
-    try {
-      if (targetId === null) {
-        const title = text.trim().split(/\r?\n/u)[0]?.slice(0, 44) || t('文件对话', 'File conversation')
-        target = await createConversation(title)
-        targetId = target.conversation.id
-        setDraftState({ scope: targetId, text: '' })
-        writeImages(targetId, [])
-        setPending(existing => existing.map(item => item.id === pendingId ? { ...item, conversationId: targetId as string } : item))
-      }
-      if (targetId === null) throw new Error(t('未能创建会话', 'Could not create conversation'))
-      // Retrying the exact same failed submission reuses its requestId, so a message the server already
-      // accepted is not sent twice when only the response was lost. Any change in content earns a fresh id.
-      const fingerprint = submissionFingerprint(targetId, text, ready)
-      const remembered = lastFailedSubmit.current
-      const requestId = remembered !== null && remembered.fingerprint === fingerprint ? remembered.requestId : crypto.randomUUID()
-      lastFailedSubmit.current = { requestId, fingerprint }
-      setPending(existing => existing.map(item => item.id === pendingId ? { ...item, requestId } : item))
-      const imageAttachments = ready.filter(item => isImageType(item.mimeType))
-      const fileAttachments = ready.filter(item => !isImageType(item.mimeType))
-      const result = await api.submit(targetId, {
-        text: submittedText,
-        requestId,
-        ...(target?.conversation.busy ? { whenBusy: requestedMode ?? sendMode } : {}),
-        ...(imageAttachments.length === 0 ? {} : { images: imageAttachments.map(image => ({ data: image.data, mimeType: image.mimeType })) }),
-        ...(fileAttachments.length === 0 ? {} : { files: fileAttachments.map(file => ({ name: file.file.name, mimeType: file.mimeType, data: file.data })) }),
-      })
+    const imageAttachments = ready.filter(item => isImageType(item.mimeType))
+    const fileAttachments = ready.filter(item => !isImageType(item.mimeType))
+    const attachmentInput = {
+      ...(imageAttachments.length === 0 ? {} : { images: imageAttachments.map(image => ({ data: image.data, mimeType: image.mimeType })) }),
+      ...(fileAttachments.length === 0 ? {} : { files: fileAttachments.map(file => ({ name: file.file.name, mimeType: file.mimeType, data: file.data })) }),
+    }
+    // Retrying the exact same failed submission reuses its requestId, so a message the server already
+    // accepted is not sent twice when only the response was lost. Any change in content earns a fresh id.
+    const fingerprint = submissionFingerprint(targetId ?? '__new__', text, ready)
+    const remembered = lastFailedSubmit.current
+    const requestId = remembered !== null && remembered.fingerprint === fingerprint ? remembered.requestId : crypto.randomUUID()
+    lastFailedSubmit.current = { requestId, fingerprint }
+    setPending(existing => existing.map(item => item.id === pendingId ? { ...item, requestId } : item))
+    /** Shared tail: the server accepted the input, so the pending row settles and the scope's chips are consumed. */
+    const finish = (conversationId: string, submissionId: string | undefined, created: ConversationDetail | undefined): void => {
       lastFailedSubmit.current = null
-      // The server accepted the message, so this scope's chips are consumed. A scope that
-      // gained another entry while the request was in flight keeps nothing stale either.
       setPluginContextsByScope(current => {
         if (current[activeScope] === undefined) return current
         const next = { ...current }
@@ -873,21 +818,65 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const accepted: PendingSubmission = {
         ...firstPending,
         requestId,
-        conversationId: targetId,
-        submissionId: result.submissionId,
+        conversationId,
+        ...(submissionId === undefined ? {} : { submissionId }),
         status: 'accepted',
       }
-      const latest = detailRef.current
-      const alreadyVisible = latest?.conversation.id === targetId && isAcknowledged(latest, accepted)
+      const currentDetail = created ?? detailRef.current
+      const alreadyVisible = currentDetail?.conversation.id === conversationId && isAcknowledged(currentDetail, accepted)
       setPending(existing => alreadyVisible
         ? existing.filter(item => item.id !== pendingId)
         : existing.map(item => item.id === pendingId ? accepted : item))
+      if (created !== undefined) {
+        // A created task starts on its own scope; plan mode is conversation-scoped, so it now applies.
+        setNewPlan(false)
+        detailRef.current = created
+        setDetail(created)
+        const summary = taskFromDetail(created)
+        if (summary !== null) upsertTask(summary)
+        setSelectedId(conversationId)
+        setPage('chat')
+        setSidebarOpen(false)
+        setDraftState({ scope: conversationId, text: '' })
+        writeImages(conversationId, [])
+      }
       wasAtBottom.current = true
       setJumpToBottomVisible(false)
       requestAnimationFrame(() => {
         const viewport = messagesViewport.current
         if (viewport !== null) viewport.scrollTop = viewport.scrollHeight
       })
+    }
+    try {
+      if (targetId === null) {
+        const input: CreateTaskInput = {
+          text: submittedText,
+          requestId,
+          whenBusy: 'reject',
+          ...attachmentInput,
+          ...(selectedModel === undefined ? {} : { model: selectedModel }),
+          thinkingLevel,
+          ...(currentWorkspaceId === undefined ? {} : { workspaceId: currentWorkspaceId }),
+          accessMode,
+        }
+        let created = await api.createTask(input)
+        if (newPlan) {
+          created = await api.setPlan(created.conversation.id, true).catch(cause => {
+            announce(errorText(cause, t('无法开启计划模式', 'Could not turn on plan mode')))
+            return created
+          })
+        }
+        finish(created.conversation.id, undefined, created)
+      } else {
+        const target = detailRef.current?.conversation.id === targetId ? detailRef.current : null
+        const result = await api.submit(targetId, {
+          text: submittedText,
+          requestId,
+          ...(target?.conversation.busy ? { whenBusy: requestedMode ?? sendMode } : {}),
+          ...attachmentInput,
+        })
+        finish(targetId, result.submissionId, undefined)
+      }
     } catch (cause) {
       setPending(existing => existing.filter(item => item.id !== pendingId))
       if (targetId !== null) {
@@ -905,12 +894,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       submitLock.current = false
       setSending(false)
     }
-  }, [activeScope, announce, createConversation, detail, draftState, pluginContextsByScope, selectedId, sendMode, t, writeImages])
+  }, [accessMode, activeScope, announce, currentWorkspaceId, draftState, newPlan, pluginContextsByScope, selectedId, selectedModel, sendMode, t, thinkingLevel, upsertTask, writeImages])
 
   /** `ui/message` from a plugin page submits straight to the open conversation, leaving the draft alone. */
   const sendPluginMessage = useCallback(async (text: string): Promise<void> => {
     if (selectedId === null) {
-      announce(t('请先开始一个会话', 'Start a conversation first'))
+      announce(t('请先开始一个任务', 'Start a task first'))
       return
     }
     try {
@@ -965,7 +954,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (selectedId === null || !conversationReady) {
       setNewPlan(active)
       announce(active
-        ? t('新会话将以计划模式开始：先出计划，批准后再执行', 'The new conversation will start in plan mode')
+        ? t('新任务将以计划模式开始：先出计划，批准后再执行', 'The new task will start in plan mode')
         : t('已取消计划模式', 'Plan mode cancelled'), true)
       return
     }
@@ -973,12 +962,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const value = await api.setPlan(selectedId, active)
       detailRef.current = value
       setDetail(value)
-      updateConversation(value)
       announce(active
         ? t('已进入计划模式：先出计划，批准后再执行', 'Plan mode on: plan first, execute after approval')
         : t('已退出计划模式', 'Plan mode off'), true)
     } catch (cause) { announce(errorText(cause, t('无法切换计划模式', 'Could not switch plan mode'))) }
-  }, [announce, conversationReady, selectedId, t, updateConversation])
+  }, [announce, conversationReady, selectedId, t])
 
   /** Hand focus back to the composer, which is what dismissing the plan review does. */
   const focusComposer = useCallback((): void => {
@@ -994,9 +982,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, selectedId, t])
 
   /**
-   * Remember the model/level the operator last chose so the next new
-   * conversation (or a newly opened browser window) starts there. The default
-   * model is also the settings fallback, so this is the same global value.
+   * Remember the model/level the operator last chose so the next new task (or
+   * a newly opened browser window) starts there. The default model is also the
+   * settings fallback, so this is the same global value.
    */
   const rememberModelSelection = useCallback((level: ThinkingLevel, model?: { provider: string; modelId: string }): void => {
     const patch: UpdateAppSettingsInput = {
@@ -1024,10 +1012,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const value = await api.updateConversation(selectedId, { model: selection, thinkingLevel: level })
       setDetail(value)
       detailRef.current = value
-      updateConversation(value)
       rememberModelSelection(level, selection)
     } catch (cause) { announce(errorText(cause, t('切换模型失败', 'Could not change model'))) }
-  }, [activeConversation, announce, conversationReady, newThinking, rememberModelSelection, selectedId, t, updateConversation])
+  }, [activeConversation, announce, conversationReady, newThinking, rememberModelSelection, selectedId, t])
 
   const chooseThinking = useCallback(async (level: ThinkingLevel): Promise<void> => {
     if (selectedId === null || !conversationReady) {
@@ -1039,38 +1026,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const value = await api.updateConversation(selectedId, { thinkingLevel: level })
       setDetail(value)
       detailRef.current = value
-      updateConversation(value)
       rememberModelSelection(level, selectedModel)
     } catch (cause) { announce(errorText(cause, t('更改思考等级失败', 'Could not change reasoning level'))) }
-  }, [announce, conversationReady, rememberModelSelection, selectedId, selectedModel, t, updateConversation])
-
-  const patchConversation = useCallback(async (id: string, patch: {
-    title?: string; pinned?: boolean; archived?: boolean;
-  }): Promise<void> => {
-    try {
-      const updated = await api.updateConversation(id, patch)
-      updateConversation(updated)
-      announce(patch.title === undefined ? t('会话已更新', 'Conversation updated') : t('会话标题已保存', 'Title saved'), true)
-      if (patch.archived !== undefined && patch.archived !== showArchived && id === selectedId) {
-        blankIntent.current = true
-        setSelectedId(null)
-        setDetail(null)
-        detailRef.current = null
-      }
-    } catch (cause) { announce(errorText(cause, t('会话更新失败', 'Could not update conversation'))) }
-  }, [announce, selectedId, showArchived, t, updateConversation])
+  }, [announce, conversationReady, rememberModelSelection, selectedId, selectedModel, t])
 
   const forkFrom = useCallback(async (entryId: string): Promise<void> => {
     if (selectedId === null) return
     try {
       const forked = await api.fork(selectedId, entryId)
-      setConversations(existing => [forked.conversation, ...existing.filter(item => item.id !== forked.conversation.id)]
-        .sort(compareConversations))
       setDetail(forked)
       detailRef.current = forked
       setSelectedId(forked.conversation.id)
-      announce(t('已从此处创建分支会话', 'Forked from this message'), true)
-    } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork conversation'))) }
+      announce(t('已从这条消息创建分支', 'Forked from this message'), true)
+    } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork the conversation'))) }
   }, [announce, selectedId, t])
 
   const saveProvider = useCallback(async (input: ProviderInput): Promise<void> => {
@@ -1090,15 +1058,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         const value = await api.updateConversation(selectedId, { workspaceId })
         setDetail(value)
         detailRef.current = value
-        updateConversation(value)
-        announce(t('会话工作区已更新', 'Conversation workspace updated'), true)
-      } catch (cause) { announce(errorText(cause, t('无法切换会话工作区', 'Could not change the conversation workspace'))) }
+        announce(t('工作区已更新', 'Workspace updated'), true)
+      } catch (cause) { announce(errorText(cause, t('无法切换工作区', 'Could not change the workspace'))) }
       return
     }
     setNewWorkspaceId(workspaceId)
     try { await onSettingsChange({ defaultWorkspaceId: workspaceId }) }
     catch (cause) { announce(errorText(cause, t('无法保存默认工作区', 'Could not save the default workspace'))) }
-  }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
+  }, [announce, conversationReady, onSettingsChange, selectedId, t])
 
   const selectAccessMode = useCallback(async (mode: AccessMode): Promise<void> => {
     if (conversationReady && selectedId !== null) {
@@ -1106,14 +1073,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         const value = await api.updateConversation(selectedId, { accessMode: mode })
         setDetail(value)
         detailRef.current = value
-        updateConversation(value)
       } catch (cause) { announce(errorText(cause, t('无法更改访问级别', 'Could not change access mode'))) }
       return
     }
     setNewAccessMode(mode)
     try { await onSettingsChange({ defaultAccessMode: mode }) }
     catch (cause) { announce(errorText(cause, t('无法保存默认访问级别', 'Could not save the default access mode'))) }
-  }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
+  }, [announce, conversationReady, onSettingsChange, selectedId, t])
 
   const addWorkspace = useCallback(async (input: { path: string; name?: string }): Promise<WorkspaceSummary> => {
     const result = await api.createWorkspace(input)
@@ -1123,26 +1089,18 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return result.workspace
   }, [announce, t])
 
-  const saveWorkspaceName = useCallback(async (workspace: WorkspaceSummary, name: string): Promise<void> => {
-    try {
-      const result = await api.renameWorkspace(workspace.id, { name })
-      setWorkspaces(current => current.map(item => item.id === workspace.id ? result.workspace : item))
-      announce(t('工作区名称已更新', 'Workspace name updated'), true)
-    } catch (cause) { announce(errorText(cause, t('无法重命名工作区', 'Could not rename workspace'))) }
-  }, [announce, t])
-
   const navigate = useCallback((next: MainPage): void => {
     setPage(next)
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
   }, [mobile])
 
-  const openConversation = useCallback(async (id: string): Promise<void> => {
+  /** Open a conversation the task list does not own (automation run, defect analysis, subagent). */
+  const openConversation = useCallback((id: string): void => {
     setPage('chat')
     setSidebarOpen(false)
-    if (!conversations.some(item => item.id === id)) await refreshList()
     setSelectedId(id)
-  }, [conversations, refreshList])
+  }, [])
 
   const openWorkspaceBrowser = useCallback((workspaceId: string, path = ''): void => {
     inspectorRequestId.current += 1
@@ -1253,7 +1211,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (selectedId === null) return
     try {
       const result = await api.retry(selectedId, { entryId, requestId: crypto.randomUUID() })
-      await openConversation(result.conversationId)
+      openConversation(result.conversationId)
     } catch (cause) { announce(errorText(cause, t('重新运行失败', 'Could not retry this response'))) }
   }, [announce, openConversation, selectedId, t])
 
@@ -1265,35 +1223,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { throw new ApiFailure(errorText(cause, t('无法更新排队消息', 'Could not update queued message')), cause instanceof ApiFailure ? cause.code : undefined) }
   }, [announce, selectedId, t])
 
-  const copySessionId = useCallback(async (item: ConversationSummary): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(item.id)
-      announce(t('Session ID 已复制', 'Session ID copied'), true)
-    } catch (cause) { announce(errorText(cause, t('无法复制 Session ID', 'Could not copy the Session ID'))) }
-  }, [announce, t])
-
-  const forkConversation = useCallback(async (item: ConversationSummary): Promise<void> => {
-    try {
-      const source = detailRef.current?.conversation.id === item.id ? detailRef.current : await api.getConversation(item.id)
-      const entryId = [...source.messages].reverse().find(message => message.role === 'user' && message.entryId !== undefined)?.entryId
-      if (entryId === undefined) {
-        announce(t('此会话还没有可分叉的用户消息', 'This conversation has no user message to fork from'))
-        return
-      }
-      const forked = await api.fork(item.id, entryId)
-      setConversations(current => [forked.conversation, ...current.filter(row => row.id !== forked.conversation.id)].sort(compareConversations))
-      detailRef.current = forked
-      setDetail(forked)
-      setSelectedId(forked.conversation.id)
-      setPage('chat')
-      setSidebarOpen(false)
-      announce(t('已创建分支会话', 'Forked conversation created'), true)
-    } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork this conversation'))) }
-  }, [announce, t])
-
   /** DSH's session-log export: one JSON object per line, taken from the durable conversation. */
-  const downloadSessionLog = useCallback(async (item?: ConversationSummary): Promise<void> => {
-    const id = item?.id ?? selectedId
+  const downloadSessionLog = useCallback(async (): Promise<void> => {
+    const id = selectedId
     if (id === null) return
     try {
       const detail = detailRef.current?.conversation.id === id ? detailRef.current : await api.getConversation(id)
@@ -1330,39 +1262,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [addWorkspace, announce, refreshWorkspaces, t])
 
-  const confirmDeleteWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
-    setDeleteWorkspace(undefined)
-    try {
-      await api.deleteWorkspace(workspace.id)
-      announce(t(`已删除工作区 ${workspace.name}`, `Deleted workspace ${workspace.name}`), true)
-      // The server rebound this workspace's sessions and its default; reload both views.
-      await refreshWorkspaces()
-      await refreshList()
-      if (browseTab?.workspaceId === workspace.id) {
-        closePaneTabs(['browse'])
-        setInspectorOpen(false)
-      }
-    } catch (cause) { announce(errorText(cause, t('无法删除工作区', 'Could not delete the workspace'))) }
-  }, [announce, browseTab?.workspaceId, closePaneTabs, refreshList, refreshWorkspaces, t])
-
-  const filteredConversations = useMemo(() => conversations
-    .filter(item => settings.showAnalysisConversations || item.kind !== 'defectAnalysis')
-    .filter(item => item.archived === showArchived)
-    .filter(item => `${item.title}\n${item.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort(compareConversations), [conversations, query, settings.showAnalysisConversations, showArchived])
-  const sortedWorkspaces = useMemo(() => [...workspaces].sort((a, b) => workspaceSort === 'name'
-    ? a.name.localeCompare(b.name) : b.updatedAt - a.updatedAt), [workspaces, workspaceSort])
-  const workspaceNeedle = query.trim().toLocaleLowerCase()
-  const filteredWorkspaces = sortedWorkspaces.filter(workspace => workspaceNeedle === ''
-    || `${workspace.name}\n${workspace.path}`.toLocaleLowerCase().includes(workspaceNeedle)
-    || filteredConversations.some(item => item.workspaceId === workspace.id || item.workspaceId === undefined && item.cwd === workspace.path))
-  const knownWorkspaceIds = useMemo(() => new Set(workspaces.map(workspace => workspace.id)), [workspaces])
-  const ungrouped = filteredConversations.filter(item => item.workspaceId === undefined || !knownWorkspaceIds.has(item.workspaceId))
   const busy = activeConversation?.conversation.busy === true
   const activeDetail = activeConversation
-  const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
-  const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
-  const showConversationHeader = page === 'chat' && hasMessages
+  /** The entry page owns the empty selection; a selected task renders its conversation, loading or not. */
+  const hero = page === 'chat' && selectedId === null
+  const showConversationHeader = page === 'chat' && selectedId !== null
+  /** The task list reads newest activity first; stable for equal timestamps. */
+  const sortedTasks = useMemo(() => [...tasks].sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt), [tasks])
+  /** The sidebar's three seats, each still newest-first: what needs the reader, what is live, what settled. */
+  const attentionTasks = useMemo(() => sortedTasks.filter(task => task.status === 'waiting' || task.status === 'failed' || task.status === 'cancelled'), [sortedTasks])
+  const activeTasks = useMemo(() => sortedTasks.filter(task => task.status === 'running' || task.status === 'queued'), [sortedTasks])
+  const doneTasks = useMemo(() => sortedTasks.filter(task => task.status === 'completed' || task.status === 'idle'), [sortedTasks])
+  /** The row's state label: running and waiting are the two states that need the reader. */
+  const selectedTaskStatus = selectedTask?.status ?? (busy ? 'running' : undefined)
   // Every pane open path ensures a tab exists, so the open flag alone decides visibility.
   const showInspector = inspectorOpen
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
@@ -1394,18 +1306,25 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return []
   }, [activeDetail])
 
-  const startRename = (item: ConversationSummary): void => {
-    setEditingId(item.id)
-    setEditTitle(item.title)
-    setRowMenuId(null)
-  }
-  const saveRename = (id: string): void => {
-    const title = editTitle.trim()
-    if (title !== '') void patchConversation(id, { title })
-    setEditingId(null)
-  }
-  const startNewConversation = useCallback((): void => {
-    blankIntent.current = true
+  /** Distinct changed paths for the 变更 tab badge and the summary stat; cheap, no line diffing. */
+  const taskChangeCount = useMemo(() => activeDetail === null ? 0 : countTaskChanges(activeDetail.messages), [activeDetail])
+  /** The workbench head and seats belong to tasks; a subagent or legacy session keeps the plain process. */
+  const taskHeadVisible = activeDetail !== null && selectedTask !== undefined
+  /** The head's current-action line: the live verb, the pending question, the failure, or the state word. */
+  const taskHeadAction = ((): string => {
+    if (selectedTaskStatus === undefined) return ''
+    if (selectedTaskStatus === 'running') return t('执行中', 'Executing')
+    if (selectedTaskStatus === 'waiting') return selectedTask?.attention ?? taskStatusLabel(selectedTaskStatus, t)
+    if (selectedTaskStatus === 'failed') return activeDetail?.error ?? taskStatusLabel(selectedTaskStatus, t)
+    return taskStatusLabel(selectedTaskStatus, t)
+  })()
+  /** Workspace asset URL for images quoted in the summary answer, same seat the transcript uses. */
+  const resolveWorkspaceImage = useCallback((path: string): string | undefined =>
+    currentWorkspaceId === undefined ? undefined
+      : `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/asset?${new URLSearchParams({ path }).toString()}`,
+  [currentWorkspaceId])
+
+  const startNewTask = useCallback((): void => {
     setPage('chat')
     setSelectedId(null)
     setDetail(null)
@@ -1428,25 +1347,18 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorFullView(false)
     inspectorRequestId.current += 1
     setSidebarOpen(false)
-    if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
-  }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
+    requestAnimationFrame(() => requestAnimationFrame(focusComposer))
+  }, [commitPane, focusComposer, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
   /** The plugin creator is a new task with the bundled Skill already in the draft. */
   const startPluginCreation = useCallback((): void => {
     const text = '$plugin-creator '
     writeStorage(`${DRAFT_PREFIX}__new__`, text)
-    startNewConversation()
+    startNewTask()
     setSettingsOpen(false)
     setDraftState({ scope: '__new__', text })
     requestAnimationFrame(() => requestAnimationFrame(focusComposer))
-  }, [focusComposer, startNewConversation])
-
-  /** DSH's workspace row action: start a session that already belongs to that workspace. */
-  const startNewConversationIn = useCallback((workspaceId: string): void => {
-    if (selectedId === null) { setNewWorkspaceId(workspaceId); return }
-    pendingWorkspaceId.current = workspaceId
-    startNewConversation()
-  }, [selectedId, startNewConversation])
+  }, [focusComposer, startNewTask])
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent): void => {
@@ -1457,12 +1369,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const shortcuts = resolveShortcuts(settings.shortcuts)
       if (matchesShortcut(event, shortcuts.newConversation)) {
         event.preventDefault()
-        startNewConversation()
-      } else if (matchesShortcut(event, shortcuts.search)) {
-        event.preventDefault()
-        setPage('chat')
-        setSearchOpen(true)
-        requestAnimationFrame(() => { if (workspaceSearchRef.current !== null) focusWithoutRing(workspaceSearchRef.current) })
+        startNewTask()
       } else if (matchesShortcut(event, shortcuts.settings)) {
         event.preventDefault()
         setSettingsInitialTab('general')
@@ -1471,62 +1378,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         event.preventDefault()
         if (mobile) setSidebarOpen(value => !value)
         else setSidebarCollapsed(value => !value)
-      } else if (matchesShortcut(event, shortcuts.rename) || matchesShortcut(event, shortcuts.fork) || matchesShortcut(event, shortcuts.archive)) {
-        // DSH binds these to the session row the reader is on; pi-web applies them to the open one.
-        const current = conversationsRef.current.find(item => item.id === selectedIdRef.current)
-        if (current === undefined) return
-        event.preventDefault()
-        if (matchesShortcut(event, shortcuts.rename)) startRename(current)
-        else if (matchesShortcut(event, shortcuts.fork)) void forkConversation(current)
-        else void patchConversation(current.id, { archived: !current.archived })
       }
     }
     document.addEventListener('keydown', onShortcut, true)
     return () => { document.removeEventListener('keydown', onShortcut, true) }
-  }, [mobile, settings.shortcuts, startNewConversation, startRename, forkConversation, patchConversation])
-
-  const conversationsRef = useRef(conversations)
-  conversationsRef.current = conversations
-
-  const shortcutFor = (source: AppSettings, command: ShortcutCommand): { keys: readonly string[] } => {
-    const chord = resolveShortcuts(source.shortcuts)[command]
-    return { keys: shortcutKeyLabels(chord) }
-  }
-
-  const sessionMenuEntries = (item: ConversationSummary): MenuEntry[] => [
-    { id: 'pin', label: item.pinned ? t('取消置顶', 'Unpin session') : t('置顶会话', 'Pin session'), icon: item.pinned ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} /> },
-    { id: 'rename', shortcut: shortcutFor(settings, 'rename'), label: t('重命名', 'Rename'), icon: <IconEditOutlineRegular size={14} /> },
-    { id: 'fork', shortcut: shortcutFor(settings, 'fork'), label: t('分叉会话', 'Fork conversation'), icon: <IconBranchOutlineRegular size={14} /> },
-    { id: 'copyId', label: t('复制 Session ID', 'Copy Session ID'), icon: <IconCopyOutlineRegular size={14} /> },
-    { id: 'log', label: t('导出日志', 'Export log'), icon: <IconDownloadOutlineRegular size={14} /> },
-    { id: 'archive', shortcut: shortcutFor(settings, 'archive'), label: item.archived ? t('取消归档', 'Unarchive session') : t('归档会话', 'Archive session'), icon: item.archived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
-  ]
-
-  const renderSession = (item: ConversationSummary) => <SessionRow key={item.id} item={item} selected={item.id === selectedId}
-    editing={editingId === item.id} editTitle={editTitle} menuOpen={rowMenuId === item.id}
-    onSelect={() => { selectConversation(item.id) }} onEditTitle={setEditTitle}
-    onSaveTitle={() => { saveRename(item.id) }} onCancelTitle={() => { setEditingId(null) }}
-    onToggleMenu={() => { setRowMenuId(current => current === item.id ? null : item.id) }} onMenuClose={() => { setRowMenuId(null) }}
-    actions={sessionMenuEntries(item)} onAction={action => {
-      setRowMenuId(null)
-      if (action === 'rename') startRename(item)
-      else if (action === 'copyId') void copySessionId(item)
-      else if (action === 'log') void downloadSessionLog(item)
-      else if (action === 'fork') void forkConversation(item)
-      else if (action === 'pin') void patchConversation(item.id, { pinned: !item.pinned })
-      else if (action === 'archive') void patchConversation(item.id, { archived: !item.archived })
-    }} />
-
-  const workspaceActions = (workspace: WorkspaceSummary): MenuEntry[] => {
-    const entries: MenuEntry[] = [
-      { id: 'select', label: t('设为当前工作区', 'Use this workspace'), icon: <IconCheckOutlineRegular size={14} /> },
-      { id: 'browse', label: t('浏览文件', 'Browse files'), icon: <IconFolderOpenOutlineRegular size={14} /> },
-      { id: 'rename', label: t('重命名', 'Rename'), icon: <IconEditOutlineRegular size={14} /> },
-    ]
-    // DSH only offers removal while another workspace can take the rebound sessions.
-    if (workspaces.length > 1) entries.push({ id: 'delete', label: t('删除工作区', 'Delete workspace'), icon: <IconTrashOutlineRegular size={14} /> })
-    return entries
-  }
+  }, [mobile, settings.shortcuts, startNewTask])
 
   /**
    * ZCode parity: closing the pane only collapses it. The tab bucket keeps its tabs, so reopening
@@ -1646,14 +1502,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [openPaneTab, t])
   const openTrajectoryPane = useCallback((): void => {
     if (selectedId === null) {
-      announce(t('先打开一个会话再查看模型轨迹', 'Open a conversation to view its model trajectory'))
+      announce(t('先打开一个任务再查看模型轨迹', 'Open a task to view its model trajectory'))
       return
     }
-    const title = selectedSummary?.title !== undefined && selectedSummary.title !== ''
-      ? selectedSummary.title
+    const title = selectedTask?.title !== undefined && selectedTask.title !== ''
+      ? selectedTask.title
       : t('模型调用轨迹', 'Model trajectory')
     openPaneTab({ id: `trajectory:${selectedId}`, type: 'trajectory', conversationId: selectedId, title, openedAt: Date.now() })
-  }, [announce, openPaneTab, selectedId, selectedSummary, t])
+  }, [announce, openPaneTab, selectedId, selectedTask, t])
   const openNewTabPane = useCallback((): void => {
     openPaneTab({ id: 'new-tab', type: 'new-tab', title: t('新标签页', 'New tab'), openedAt: Date.now() })
   }, [openPaneTab, t])
@@ -1824,7 +1680,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
           requestAnimationFrame(() => { if (sidebarTriggerRef.current !== null) focusWithoutRing(sidebarTriggerRef.current) })
         }} />}
       <aside ref={sidebarRef} className={`${css.sidebar} ${sidebarCollapsed && !mobile ? css.sidebarCollapsed : ''} ${mobile ? sidebarOpen ? css.sidebarMobileOpen : css.sidebarMobileClosed : ''}`}
-        aria-label={t('主导航和会话列表', 'Navigation and conversations')} tabIndex={-1}
+        aria-label={t('主导航和任务列表', 'Navigation and tasks')} tabIndex={-1}
         role={mobile && sidebarOpen ? 'dialog' : undefined} aria-modal={mobile && sidebarOpen ? true : undefined}
         aria-hidden={mobile && !sidebarOpen ? true : undefined}>
         <div className={css.sidebarHeader}>
@@ -1837,8 +1693,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               icon={<IconPanelLeftOutlineRegular size={15} />} onClick={() => { setSidebarCollapsed(value => !value) }} />
           </Tooltip>}
         </div>
-        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startNewConversation}>
-          {t('新会话', 'New conversation')}
+        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startNewTask}>
+          {t('新任务', 'New task')}
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
           <button type="button" className={css.navItem} data-active={page === 'defects' || undefined}
@@ -1850,102 +1706,46 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             <IconClockOutlineRegular size={16} /><span>{t('自动化任务', 'Automations')}</span>
           </button>
         </nav>
-        <div className={css.workspaceHeader}>
-          {searchOpen
-            ? <Input ref={workspaceSearchRef} className={css.workspaceSearchInput} value={query} onChange={event => { setQuery(event.currentTarget.value) }}
-              placeholder={t('搜索工作区和会话', 'Search workspaces and conversations')} aria-label={t('搜索工作区和会话', 'Search workspaces and conversations')} />
-            : <span>{t('工作区', 'Workspaces')}</span>}
-          <div className={css.workspaceTools}>
-            <Tooltip label={searchOpen ? t('关闭搜索', 'Close search') : t('搜索', 'Search')} side="top" portal>
-              <Button variant="ghost" size="sm" aria-label={searchOpen ? t('关闭搜索', 'Close search') : t('搜索工作区和会话', 'Search workspaces and conversations')}
-                icon={<IconSearchOutlineRegular size={15} />} onClick={() => {
-                  setSearchOpen(value => !value)
-                  if (searchOpen) setQuery('')
-                }} />
-            </Tooltip>
-            <Menu open={themeMenuOpen} onClose={() => { setThemeMenuOpen(false) }}
-              onSelect={id => {
-                setThemeMenuOpen(false)
-                if (id === 'recent' || id === 'name') setWorkspaceSort(id)
-                else if (id === 'archived') setShowArchived(value => !value)
-              }}
-              selectedId={workspaceSort} items={[
-                { id: 'recent', label: t('按最近活动排序', 'Sort by recent activity'), icon: <IconClockOutlineRegular size={14} /> },
-                { id: 'name', label: t('按名称排序', 'Sort by name'), icon: <IconFlatListOutlineRegular size={14} /> },
-                { id: 'archived', label: showArchived ? t('显示最近会话', 'Show active conversations') : t('显示已归档会话', 'Show archived conversations'), icon: showArchived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
-              ]} portal anchor={<Tooltip label={t('视图选项', 'View options')} side="top" portal>
-                <Button variant="ghost" size="sm" aria-label={t('视图选项', 'View options')} icon={<IconSlidersTwoOutlineRegular size={15} />}
-                  onClick={() => { setThemeMenuOpen(value => !value) }} />
-              </Tooltip>} />
-            <Tooltip label={t('添加工作区', 'Add workspace')} side="top" portal>
-              <Button variant="ghost" size="sm" aria-label={t('添加工作区', 'Add workspace')} icon={<IconPlusOutlineRegular size={15} />}
-                onClick={() => { void addWorkspaceFromPicker() }} />
-            </Tooltip>
-          </div>
+        <div className={css.taskHeader}>
+          <span>{t('任务', 'Tasks')}</span>
+          <Tooltip label={t('添加工作区', 'Add workspace')} side="top" portal>
+            <Button variant="ghost" size="sm" aria-label={t('添加工作区', 'Add workspace')} icon={<IconPlusOutlineRegular size={15} />}
+              onClick={() => { void addWorkspaceFromPicker() }} />
+          </Tooltip>
         </div>
-        <div className={css.workspaceList}>
+        <div className={css.taskList}>
           {workspaceLoadError !== '' && <div className={css.listNotice} role="alert"><span>{workspaceLoadError}</span>
             <button type="button" onClick={() => { void refreshWorkspaces() }}>{t('重试', 'Retry')}</button></div>}
           {workspaceLoadError === '' && workspaces.length === 0 && !workspaceLoading && <p className={css.listEmpty}>{t('添加一个文件夹开始工作', 'Add a folder to get started')}</p>}
-          {workspaceLoading && <SessionSkeleton />}
-          {!workspaceLoading && filteredWorkspaces.map(workspace => {
-            const workspaceMatches = workspaceNeedle !== '' && `${workspace.name}\n${workspace.path}`.toLocaleLowerCase().includes(workspaceNeedle)
-            const matchesWorkspace = (item: ConversationSummary): boolean => item.workspaceId === workspace.id || item.workspaceId === undefined && item.cwd === workspace.path
-            const sessions = (workspaceMatches
-              ? conversations.filter(item => (settings.showAnalysisConversations || item.kind !== 'defectAnalysis') && item.archived === showArchived && matchesWorkspace(item))
-              : filteredConversations.filter(matchesWorkspace)).sort(compareConversations)
-            const isExpanded = expandedWorkspaces.has(workspace.id) || workspaceNeedle !== ''
-            const viewEntries = workspaceActions(workspace)
-            return <div className={css.workspaceGroup} key={workspace.id}>
-              <div className={css.workspaceRow} data-selected={workspace.id === currentWorkspaceId || undefined}
-                data-workspace-row={workspace.id}
-                ref={node => {
-                  if (node === null) workspaceRowRefs.current.delete(workspace.id)
-                  else workspaceRowRefs.current.set(workspace.id, node)
-                }}>
-                <button type="button" className={css.workspaceToggle} aria-label={workspace.name} aria-expanded={isExpanded} onClick={() => {
-                  setExpandedWorkspaces(current => { const next = new Set(current); if (next.has(workspace.id)) next.delete(workspace.id); else next.add(workspace.id); return next })
-                }}>
-                  <IconChevronRightOutlineRegular className={isExpanded ? css.chevronOpen : ''} size={13} />
-                  {isExpanded ? <IconFolderOpenOutlineRegular size={16} /> : <IconFolderCloseRegular size={16} />}
-                  <span className={css.workspaceName}>{workspace.name}</span>
-                </button>
-                <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal align="end"
-                  getAnchorRect={() => {
-                    const row = workspaceRowRefs.current.get(workspace.id)
-                      ?? document.querySelector<HTMLElement>(`[data-workspace-row="${CSS.escape(workspace.id)}"]`)
-                    return row?.getBoundingClientRect() ?? null
-                  }}
-                  onSelect={id => {
-                    setWorkspaceMenuId(null)
-                    if (id === 'select') void selectWorkspace(workspace.id)
-                    else if (id === 'browse') openWorkspaceBrowser(workspace.id)
-                    else if (id === 'rename') setRenameWorkspace(workspace)
-                    else if (id === 'delete') setDeleteWorkspace(workspace)
-                  }} anchor={<button type="button" className={css.rowIconButton}
-                    aria-label={t(`工作区“${workspace.name}”的操作`, `Actions for ${workspace.name}`)}
-                    onClick={() => { setWorkspaceMenuId(value => value === workspace.id ? null : workspace.id) }}><IconEllipsisOutlineRegular size={16} /></button>} />
-                <Tooltip label={t('新会话', 'New session')} side="bottom" align="end" delayMs={500} portal>
-                  <button type="button" className={css.rowIconButton}
-                    aria-label={t(`在“${workspace.name}”中新建会话`, `New session in ${workspace.name}`)}
-                    onClick={() => { startNewConversationIn(workspace.id) }}><IconNewChatOutlineRegular size={16} /></button>
-                </Tooltip>
-                </span>
-              </div>
-              {isExpanded && <HoverCardGroup className={css.workspaceSessions}>
-                {sessions.map(renderSession)}
-                {sessions.length === 0 && <span className={css.emptySessions}>{query.trim() !== '' ? t('没有匹配的会话', 'No matching conversations') : t('暂无会话', 'No conversations')}</span>}
-              </HoverCardGroup>}
+          {listLoading && <TaskSkeleton />}
+          {!listLoading && attentionTasks.length > 0 && <section className={css.taskSection}>
+            <div className={css.taskSectionHead}>
+              <span className={css.taskSectionLabel}>{t('需要你', 'Needs you')}</span>
+              <span className={css.taskSectionBadge}>{attentionTasks.length}</span>
             </div>
-          })}
-          {ungrouped.length > 0 && <div className={css.workspaceGroup}>
-            <div className={css.workspaceLabel}><IconWorkspaceTreeOutlineRegular size={15} /><span>{t('未分组', 'Ungrouped')}</span></div>
-            <HoverCardGroup className={css.workspaceSessions}>{ungrouped.map(renderSession)}</HoverCardGroup>
-          </div>}
-          {!workspaceLoading && filteredConversations.length === 0 && query.trim() !== '' && <p className={css.listEmpty}>{t('没有匹配的会话', 'No matching conversations')}</p>}
+            {attentionTasks.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId}
+              onSelect={() => { selectConversation(task.id) }} />)}
+          </section>}
+          {!listLoading && activeTasks.length > 0 && <section className={css.taskSection}>
+            <div className={css.taskSectionHead}>
+              <span className={css.taskSectionLabel}>{t('进行中', 'In progress')}</span>
+            </div>
+            {activeTasks.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId}
+              onSelect={() => { selectConversation(task.id) }} />)}
+          </section>}
+          {!listLoading && doneTasks.length > 0 && <section className={css.taskSection}>
+            <button type="button" className={css.taskSectionHead} data-toggle aria-expanded={!doneCollapsed}
+              onClick={() => { setDoneCollapsed(value => !value) }}>
+              <span className={css.taskSectionLabel}>{t('已完成', 'Completed')}</span>
+              <span className={css.taskSectionCount}>{doneTasks.length}</span>
+              <ChevronRight size={13} className={css.taskSectionChevron} data-open={!doneCollapsed || undefined} aria-hidden="true" />
+            </button>
+            {!doneCollapsed && doneTasks.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId}
+              onSelect={() => { selectConversation(task.id) }} />)}
+          </section>}
+          {!listLoading && listError === '' && sortedTasks.length === 0 && <p className={css.listEmpty}>{t('还没有任务：在下方输入框描述你要做的事', 'No tasks yet: describe what you need in the composer below')}</p>}
           {!listLoading && listError !== '' && <div className={css.listNotice} role="alert"><span>{listError}</span>
-            <button type="button" onClick={() => { setListLoading(true); void refreshList() }}>{t('重试', 'Retry')}</button></div>}
+            <button type="button" onClick={() => { setListLoading(true); void refreshTasks() }}>{t('重试', 'Retry')}</button></div>}
         </div>
         <div className={css.sidebarFoot}>
           {/* DSH's footer is the account row; the settings entry lives inside its menu. */}
@@ -1982,7 +1782,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       <section ref={mainPanelRef} className={css.mainPanel} tabIndex={-1} aria-label={t('主内容', 'Main content')}
         aria-hidden={mobile && sidebarOpen ? true : undefined}>
         {mobile && !showConversationHeader && <button type="button" className={css.mobileSidebarButton}
-          aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
+          aria-label={t('打开任务列表', 'Open task list')} onClick={() => { setSidebarOpen(true) }}>
           <IconPanelLeftOutlineRegular size={16} />
         </button>}
         <PluginPageHostContext.Provider value={pluginPagePool}>
@@ -1995,18 +1795,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               {showConversationHeader && <>
                 <header className={css.topbar}>
                   <div className={css.topbarStart}>
-                    {mobile && <Tooltip label={t('会话列表', 'Conversation list')} side="bottom" portal>
-                      <Button ref={sidebarTriggerRef} variant="ghost" size="sm" aria-label={t('打开会话列表', 'Open conversation list')}
+                    {mobile && <Tooltip label={t('任务列表', 'Task list')} side="bottom" portal>
+                      <Button ref={sidebarTriggerRef} variant="ghost" size="sm" aria-label={t('打开任务列表', 'Open task list')}
                         icon={<IconPanelLeftOutlineRegular size={16} />} onClick={() => { setSidebarOpen(true) }} />
                     </Tooltip>}
                     <div className={css.conversationHeading}>
                       {activeDetail?.conversation.parentId !== undefined
                         ? <SubagentBreadcrumb conversation={activeDetail.conversation}
-                          parentTitle={conversations.find(item => item.id === activeDetail.conversation.parentId)?.title}
+                          parentTitle={tasks.find(item => item.id === activeDetail.conversation.parentId)?.title}
                           onOpen={id => { selectConversation(id) }} t={t} />
-                        : <span className={css.conversationTitle}>{activeDetail?.conversation.title ?? selectedSummary?.title ?? t('新对话', 'New conversation')}</span>}
-                      <span className={css.cwd}>{currentWorkspace?.name ?? activeDetail?.conversation.cwd ?? selectedSummary?.cwd ?? ''}
-                        {busy && <span className={css.running}>{t('运行中', 'Running')}</span>}</span>
+                        : <span className={css.conversationTitle}>{activeDetail?.conversation.title ?? selectedTask?.title ?? t('任务', 'Task')}</span>}
+                      <span className={css.cwd}>{currentWorkspace?.name ?? activeDetail?.conversation.cwd ?? selectedTask?.cwd ?? ''}
+                        {selectedTaskStatus !== undefined && <span className={css.taskState} data-status={selectedTaskStatus}>
+                          {taskStatusLabel(selectedTaskStatus, t)}
+                        </span>}</span>
                     </div>
                     {/* DSH puts the descendant count and the team action between the title and the header actions. */}
                     {activeDetail !== null && <SubagentPanel conversationId={activeDetail.conversation.id}
@@ -2021,7 +1823,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   <div className={css.topbarActions}>
                     <ConnectionIndicator state={connection} disconnectedLabel={t('连接中断 · 重新连接', 'Connection lost · reconnect')}
                       connectingLabel={t('正在连接', 'Connecting')} recoveredLabel={t('连接已恢复', 'Connection restored')}
-                      reconnectActionLabel={t('重新连接会话', 'Reconnect conversation')} restartActionLabel={t('再次尝试连接', 'Try again')}
+                      reconnectActionLabel={t('重新连接任务', 'Reconnect task')} restartActionLabel={t('再次尝试连接', 'Try again')}
                       onReconnect={() => { setConnection('connecting'); setReconnectToken(value => value + 1) }} />
                     <Menu open={moreMenuOpen} onClose={() => { setMoreMenuOpen(false) }} onSelect={id => {
                       setMoreMenuOpen(false)
@@ -2044,10 +1846,29 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                   </div>
                 </header>
               </>}
+              {taskHeadVisible && selectedTaskStatus !== undefined && <div className={css.taskHead}>
+                <div className={css.taskHeadInfo}>
+                  <span className={css.taskHeadBadge} data-status={selectedTaskStatus}>
+                    <span className={css.taskHeadDot} aria-hidden="true" />
+                    {taskStatusLabel(selectedTaskStatus, t)}
+                  </span>
+                  {taskHeadAction !== '' && <span className={css.taskHeadAction} title={taskHeadAction}>{taskHeadAction}</span>}
+                </div>
+                <div className={css.taskViewTabs} role="tablist" aria-label={t('任务视图', 'Task view')}>
+                  <button type="button" role="tab" aria-selected={taskView === 'process'} className={css.taskViewTab}
+                    data-active={taskView === 'process' || undefined} onClick={() => { switchTaskView('process') }}>{t('过程', 'Process')}</button>
+                  <button type="button" role="tab" aria-selected={taskView === 'changes'} className={css.taskViewTab}
+                    data-active={taskView === 'changes' || undefined} onClick={() => { switchTaskView('changes') }}>
+                    {t('变更', 'Changes')}{taskChangeCount > 0 && <span className={css.taskViewTabBadge}>{taskChangeCount}</span>}
+                  </button>
+                  <button type="button" role="tab" aria-selected={taskView === 'summary'} className={css.taskViewTab}
+                    data-active={taskView === 'summary' || undefined} onClick={() => { switchTaskView('summary') }}>{t('总结', 'Summary')}</button>
+                </div>
+              </div>}
               {hero
                 ? <>
                   <div className={css.heroHeader}>
-                    <span />
+                    <span className={css.entryLabel}>{t('任务入口', 'Task entry')}</span>
                     <Tooltip label={inspectorOpen ? t('关闭侧栏', 'Close inspector') : t('打开侧栏', 'Open inspector')} side="bottom" portal>
                       <Button variant="ghost" size="sm" aria-label={inspectorOpen ? t('关闭侧栏', 'Close inspector') : t('打开侧栏', 'Open inspector')}
                         icon={<IconPanelLeftOutlineRegular className={css.panelToggleIcon} size={16} />}
@@ -2071,7 +1892,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
                     onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
                     onAccessMode={mode => { void selectAccessMode(mode) }}
-                    onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }} onNewConversation={startNewConversation}
+                    onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }} onNewConversation={startNewTask}
                     onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
                     pluginContexts={pluginContexts} onRemovePluginContext={removePluginContext} />
                   </div>
@@ -2083,12 +1904,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       if (selectedId === null) return
                       setDetailLoading(true)
                       void api.getConversation(selectedId).then(value => {
-                        detailRef.current = value; setDetail(value); setDetailError(''); updateConversation(value)
-                      }).catch(cause => { setDetailError(errorText(cause, t('无法打开此会话', 'Could not open this conversation'))) })
+                        detailRef.current = value; setDetail(value); setDetailError('')
+                      }).catch(cause => { setDetailError(errorText(cause, t('无法打开此任务', 'Could not open this task'))) })
                         .finally(() => { setDetailLoading(false) })
                     }}>{t('重试', 'Retry')}</Button>
                   </div>}
-                  {activeDetail !== null && <div ref={selectionHostRef} className={`${css.chatLayout} ${statusPanelVisible ? css.withStatusPanel : ''}`}>
+                  {activeDetail !== null && <div ref={selectionHostRef} className={`${css.chatLayout} ${taskView === 'process' && statusPanelVisible ? css.withStatusPanel : ''}`}>
+                    {taskView === 'process' && <>
                     <SelectionAskPopover containerRef={selectionHostRef} onAsk={quote => { void openSelectionChat(quote) }} />
                     <div className={css.messagesPane}>
                     <div className={css.messagesViewport} ref={messagesViewport} tabIndex={-1} onScroll={event => { syncViewportScroll(event.currentTarget) }}>
@@ -2135,12 +1957,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         detailRef.current = value
                         setDetail(value)
                         setDetailError('')
-                        updateConversation(value)
                       }} />
                     {activeDetail.compaction?.running !== true && activeDetail.compaction?.failure !== undefined && <div className={css.compactionNotice} data-state="error" role="alert">
                       <span>{t('上下文压缩失败', 'Context compaction failed')}</span>
                       <span className={css.compactionHint}>{activeDetail.compaction.failure}</span>
                     </div>}
+                    </>}
+                    {taskView === 'changes' && <TaskChangesView messages={activeDetail.messages}
+                      onInspectDiff={inspectDiff} onOpenFile={path => { void openWorkspaceFile(path) }} t={t} />}
+                    {taskView === 'summary' && <TaskSummaryView detail={activeDetail} changeCount={taskChangeCount}
+                      onOpenFile={(path, line) => { void openWorkspaceFile(path, undefined, line) }}
+                      resolveFileImage={resolveWorkspaceImage} onViewProcess={() => { switchTaskView('process') }} t={t} />}
                     <Composer value={draft} images={images} catalog={catalog} model={selectedModel} thinkingLevel={thinkingLevel}
                       busy={busy} disabled={detailLoading || !conversationReady && detailError === ''} queue={activeDetail.queue}
                       sendMode={sendMode} sending={sending} workspace={currentWorkspace} workspaces={workspaces}
@@ -2154,17 +1981,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       onAccessMode={mode => { void selectAccessMode(mode) }}
                       onUpdateQueue={updateQueue} onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
                       onCompact={() => { void compact() }}
-                      onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
+                      onNewConversation={startNewTask} onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}
                       pluginContexts={pluginContexts} onRemovePluginContext={removePluginContext} />
                   </div>}
                 </>}
             </>}
             {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
-              <WetrackPage workspaces={workspaces} onOpenConversation={id => { void openConversation(id) }} />
+              <WetrackPage workspaces={workspaces} onOpenConversation={openConversation} />
             </Suspense>}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId}
-              workspaces={workspaces} onNewConversation={startNewConversation}
-              onOpenConversation={id => { void openConversation(id) }} />}
+              workspaces={workspaces} onNewConversation={startNewTask}
+              onOpenConversation={openConversation} />}
           </div>
           {showInspector && <>
             {!inspectorFullView && <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
@@ -2255,11 +2082,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}
         onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider}
         onCreatePlugin={startPluginCreation} />
-      <WorkspaceDialog open={workspaceDialogOpen} workspaces={workspaces} currentWorkspaceId={currentWorkspaceId}
-        busy={false} onClose={() => { setWorkspaceDialogOpen(false) }} onSelect={id => {
-          void selectWorkspace(id)
-          setWorkspaceDialogOpen(false)
-        }} onCreate={addWorkspace} />
       <DirectoryBrowser open={directoryBrowserOpen} onClose={() => { setDirectoryBrowserOpen(false) }}
         onPick={path => {
           setDirectoryBrowserOpen(false)
@@ -2269,14 +2091,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             announce(t(`已添加工作区 ${added.name}`, `Added workspace ${added.name}`), true)
           }).catch(cause => { announce(errorText(cause, t('无法添加工作区', 'Could not add the workspace'))) })
         }} />
-      <WorkspaceRenameDialog workspace={renameWorkspace} onClose={() => { setRenameWorkspace(null) }}
-        onSave={(workspace, name) => { setRenameWorkspace(null); void saveWorkspaceName(workspace, name) }} />
-      <Modal open={deleteWorkspace !== undefined} onClose={() => { setDeleteWorkspace(undefined) }}
-        title={t('删除工作区', 'Delete workspace')} closeLabel={t('关闭', 'Close')}
-        description={t('只从列表移除；目录与文件保持不变，该工作区的会话会转到其它工作区。', 'Removed from the list only. Files stay on disk and this workspace\'s conversations move to another workspace.')}
-        className={css.childModal}
-        footer={<><Button variant="ghost" onClick={() => { setDeleteWorkspace(undefined) }}>{t('取消', 'Cancel')}</Button>
-          <Button variant="primary" onClick={() => { if (deleteWorkspace !== undefined) void confirmDeleteWorkspace(deleteWorkspace) }}>{t('删除', 'Delete')}</Button></>} />
       <Modal open={feedbackOpen} onClose={() => { setFeedbackOpen(false) }} title={t('意见反馈', 'Send feedback')}
         closeLabel={t('关闭', 'Close')} className={css.childModal}
         footer={<><Button variant="ghost" onClick={() => { setFeedbackOpen(false) }}>{t('取消', 'Cancel')}</Button>
@@ -2308,74 +2122,47 @@ function SideConversationPump({ conversationId, active, onFeed }: {
   return null
 }
 
-function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onSelect, onEditTitle, onSaveTitle,
-  onCancelTitle, onToggleMenu, onMenuClose, onAction }: {
-  item: ConversationSummary
+/**
+ * One row of the single entry's task list. The leading cell is the status: a spinner while the task
+ * runs, otherwise a dot coloured by the server's status. The trailing time cell follows DSH's rows.
+ */
+function TaskRow({ task, selected, onSelect }: {
+  task: TaskSummary
   selected: boolean
-  editing: boolean
-  editTitle: string
-  menuOpen: boolean
-  actions: MenuEntry[]
   onSelect: () => void
-  onEditTitle: (value: string) => void
-  onSaveTitle: () => void
-  onCancelTitle: () => void
-  onToggleMenu: () => void
-  onMenuClose: () => void
-  onAction: (action: string) => void
 }) {
   const { t, settings } = useUiPreferences()
+  const unread = task.unread === true && !selected
+  const subtitle = taskRowSubtitle(task, t)
   return (
-    // DSH's hover card: the dark menu material beside the row with its title, relative time and state.
-    <HoverCard grouped openDelayMs={500} disabled={editing || menuOpen}
-      content={<div className={css.sessionHoverCard}>
-        <span className={css.sessionHoverTitle}>{item.title || t('新对话', 'New conversation')}</span>
-        <span className={css.sessionHoverTime}>{hoverTime(item.updatedAt, settings.locale)}</span>
-        <span className={css.sessionHoverState}>
-          <span className={css.sessionHoverDot} aria-hidden="true" />
-          {item.busy ? t('运行中', 'Running') : t('空闲', 'Idle')}
+    <div className={css.taskRow} data-selected={selected || undefined} data-status={task.status}>
+      <button type="button" className={css.taskSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
+        <span className={css.taskSlot}>
+          {task.busy ? (
+            <span className={css.taskSpinner} role="img" aria-label={t('正在运行', 'Running')}>
+              <Loader size={15} aria-hidden="true" />
+            </span>
+          ) : (
+            <span className={css.taskDot} data-status={task.status} role="img" aria-label={taskStatusLabel(task.status, t)} />
+          )}
         </span>
-      </div>}
-      anchor={
-        <div className={css.sessionRow} data-selected={selected || undefined} data-pinned={item.pinned || undefined}
-          data-menu-open={menuOpen || undefined}>
-          {editing
-            ? <div className={css.renameForm}>
-              <input aria-label={t('会话标题', 'Conversation title')} value={editTitle} onChange={event => { onEditTitle(event.currentTarget.value) }}
-                autoFocus onKeyDown={event => {
-                  if (event.key === 'Enter') { event.preventDefault(); onSaveTitle() }
-                  if (event.key === 'Escape') onCancelTitle()
-                }} />
-              <button type="button" aria-label={t('保存标题', 'Save title')} onClick={onSaveTitle}>{t('保存', 'Save')}</button>
-            </div>
-            : <>
-              <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
-                {/* ZCode's leading cell: a spinning loader while the turn runs, a blue dot for a
-                    finished reply the reader has not opened, nothing when idle. */}
-                <span className={css.sessionSlot}>{item.busy ? (
-                  <span className={css.sessionSpinner} role="img" aria-label={t('正在运行', 'Running')}>
-                    <Loader size={16} aria-hidden="true" />
-                  </span>
-                ) : item.unread ? (
-                  <span className={css.sessionUnread} role="img" aria-label={t('有未读回复', 'Unread reply')} />
-                ) : null}</span>
-                <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
-              </button>
-              <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
-              {/* The pin state stays on the row itself; every other action lives in the trailing menu. */}
-              {item.pinned && <span className={css.sessionPin} role="img" aria-label={t('已置顶', 'Pinned')} title={t('已置顶', 'Pinned')}><IconPinFillRegular size={14} /></span>}
-              {/* DSH swaps the trailing time cell for the row's action strip while the row is hovered. */}
-              <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
-                  onSelect={id => { onAction(id) }}
-                  anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
-                    aria-haspopup="menu" aria-expanded={menuOpen}
-                    onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
-              </span>
-            </>}
-        </div>
-      } />
+        <span className={css.taskBody}>
+          <span className={css.taskTitle}>{task.title || t('未命名任务', 'Untitled task')}</span>
+          {subtitle !== '' && <span className={css.taskSubtitle} title={subtitle}>{subtitle}</span>}
+        </span>
+        {unread && <span className={css.taskUnread} role="img" aria-label={t('有未读回复', 'Unread reply')} />}
+        {task.status === 'waiting' && <span className={css.taskWaiting}>{t('等待回答', 'Waiting')}</span>}
+      </button>
+      <time className={css.taskMeta} dateTime={new Date(task.updatedAt).toISOString()}>{hoverTime(task.updatedAt, settings.locale)}</time>
+    </div>
   )
+}
+
+/** The row's second line: why it needs the reader, what it is doing, or its latest reply. */
+function taskRowSubtitle(task: TaskSummary, t: (chinese: string, english: string) => string): string {
+  if (task.status === 'waiting' || task.status === 'failed' || task.status === 'cancelled') return task.attention ?? ''
+  if (task.status === 'running' || task.status === 'queued') return task.preview ?? t('运行中', 'Running')
+  return task.preview ?? ''
 }
 
 /**
@@ -2431,19 +2218,16 @@ function SubagentBreadcrumb({ conversation, parentTitle, onOpen, t }: {
   )
 }
 
-function SessionSkeleton() {  const { t } = useUiPreferences()
-  return <div className={css.skeleton} aria-label={t('正在加载会话', 'Loading conversations')}>
+function TaskSkeleton() {
+  const { t } = useUiPreferences()
+  return <div className={css.skeleton} aria-label={t('正在加载任务', 'Loading tasks')}>
     <span /><span /><span />
   </div>
 }
 
 function LoadingConversation() {
   const { t } = useUiPreferences()
-  return <div className={css.loadingState} role="status"><span className={css.spinner} />{t('正在载入会话', 'Loading conversation')}</div>
-}
-
-function compareConversations(a: ConversationSummary, b: ConversationSummary): number {
-  return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
+  return <div className={css.loadingState} role="status"><span className={css.spinner} />{t('正在载入任务', 'Loading task')}</div>
 }
 
 /** Initial-letter avatar for the local account row, standing in for DSH's account image. */
@@ -2452,20 +2236,7 @@ function accountInitial(name: string): string {
   return first === undefined ? 'π' : first.toLocaleUpperCase()
 }
 
-/** Session row trailing label in DSH's relative buckets, so two surfaces naming the same row agree. */
-function formatUpdated(value: number, locale: 'zh' | 'en'): string {
-  const { unit, n } = relativeTime(value, Date.now())
-  switch (unit) {
-    case 'now': return locale === 'zh' ? '刚刚' : 'just now'
-    case 'minutes': return locale === 'zh' ? `${n} 分钟` : `${n}m`
-    case 'hours': return locale === 'zh' ? `${n} 小时` : `${n}h`
-    case 'days': return locale === 'zh' ? `${n} 天` : `${n}d`
-    case 'months': return locale === 'zh' ? `${n} 个月` : `${n}mo`
-    case 'years': return locale === 'zh' ? `${n} 年` : `${n}y`
-  }
-}
-
-/** DSH's hover-card time line: the same buckets as the row, read as "23天前" instead of a cell label. */
+/** The relative time DSH's rows read: "23 分钟前" rather than a bare cell label. */
 function hoverTime(value: number, locale: 'zh' | 'en'): string {
   const { unit, n } = relativeTime(value, Date.now())
   switch (unit) {
@@ -2476,6 +2247,103 @@ function hoverTime(value: number, locale: 'zh' | 'en'): string {
     case 'months': return locale === 'zh' ? `${n} 个月前` : `${n}mo ago`
     case 'years': return locale === 'zh' ? `${n} 年前` : `${n}y ago`
   }
+}
+
+/** Row equality that ignores array identity, so an unchanged poll keeps the previous state. */
+function sameTaskRows(a: readonly TaskSummary[], b: readonly TaskSummary[]): boolean {
+  return a.length === b.length && a.every((item, index) => {
+    const other = b[index]
+    return other !== undefined && item.id === other.id && item.title === other.title && item.status === other.status
+      && item.updatedAt === other.updatedAt && item.busy === other.busy && item.unread === other.unread
+      && item.thinkingLevel === other.thinkingLevel && item.cwd === other.cwd && item.workspaceId === other.workspaceId
+      && item.model?.provider === other.model?.provider && item.model?.modelId === other.model?.modelId
+      && item.runStartedAt === other.runStartedAt && item.durationMs === other.durationMs
+      && item.preview === other.preview && item.attention === other.attention && item.turns === other.turns
+  })
+}
+
+/** The topbar and row wording for one task state. */
+function taskStatusLabel(status: TaskStatus, t: (chinese: string, english: string) => string): string {
+  switch (status) {
+    case 'running': return t('运行中', 'Running')
+    case 'waiting': return t('等待回答', 'Waiting for answer')
+    case 'queued': return t('排队中', 'Queued')
+    case 'completed': return t('已完成', 'Completed')
+    case 'failed': return t('失败', 'Failed')
+    case 'cancelled': return t('已停止', 'Stopped')
+    case 'idle': return t('空闲', 'Idle')
+  }
+}
+
+/**
+ * The task row a live conversation projects, mirroring the server's `TaskSummary` projection field
+ * for field. The list stays server-authored: this only refreshes a row that already exists.
+ */
+function taskFromDetail(detail: ConversationDetail): TaskSummary | null {
+  const conversation = detail.conversation
+  // A subagent is reached through its parent's catalog; it is never a task row.
+  if (conversation.origin === 'subagent') return null
+  const preview = latestAssistantPreview(detail)
+  const attention = attentionOfDetail(detail)
+  return {
+    id: conversation.id,
+    title: conversation.title,
+    status: taskStatusOfDetail(detail),
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    ...(conversation.model === undefined ? {} : { model: conversation.model }),
+    thinkingLevel: conversation.thinkingLevel,
+    cwd: conversation.cwd,
+    ...(conversation.workspaceId === undefined ? {} : { workspaceId: conversation.workspaceId }),
+    busy: conversation.busy,
+    ...(conversation.unread === true ? { unread: true } : {}),
+    ...(conversation.runStartedAt === undefined ? {} : { runStartedAt: conversation.runStartedAt }),
+    ...(conversation.durationMs === undefined ? {} : { durationMs: conversation.durationMs }),
+    ...(preview === undefined ? {} : { preview }),
+    ...(attention === undefined ? {} : { attention }),
+    turns: detail.messages.filter(message => message.role === 'user').length,
+  }
+}
+
+/** Same precedence as the server's `attentionOf`: the pending question, the failure reason, or the stop note. */
+function attentionOfDetail(detail: ConversationDetail): string | undefined {
+  const status = taskStatusOfDetail(detail)
+  let text: string | undefined
+  if (status === 'waiting') {
+    const pending = detail.interactions?.find(item => item.status === 'pending')
+    text = pending?.questions?.[0]?.question ?? pending?.detail ?? '等待回答'
+  } else if (status === 'failed') {
+    text = detail.error ?? '执行失败'
+  } else if (status === 'cancelled') {
+    text = '已停止'
+  }
+  if (text === undefined) return undefined
+  const collapsed = text.replace(/\s+/gu, ' ').trim()
+  return collapsed === '' ? undefined : collapsed.slice(0, 80)
+}
+
+/** Same precedence as the server's `taskStatusOf`: a pending question, then the live run, then the queue. */
+function taskStatusOfDetail(detail: ConversationDetail): TaskStatus {
+  if (detail.interactions?.some(item => item.status === 'pending') === true) return 'waiting'
+  const conversation = detail.conversation
+  if (conversation.busy) return 'running'
+  if (detail.queue.length > 0) return 'queued'
+  if (conversation.status === 'error') return 'failed'
+  if (conversation.status === 'cancelled') return 'cancelled'
+  if (conversation.status === 'completed') return 'completed'
+  return 'idle'
+}
+
+/** The latest assistant text collapsed to one line, for the row's preview. */
+function latestAssistantPreview(detail: ConversationDetail): string | undefined {
+  for (let index = detail.messages.length - 1; index >= 0; index -= 1) {
+    const message = detail.messages[index]
+    if (message?.role !== 'assistant') continue
+    const text = message.blocks.filter(block => block.type === 'text').map(block => block.text).join(' ')
+      .replace(/\s+/gu, ' ').trim()
+    if (text !== '') return text.slice(0, 120)
+  }
+  return undefined
 }
 
 function isAcknowledged(detail: ConversationDetail, pendingItem: PendingSubmission): boolean {

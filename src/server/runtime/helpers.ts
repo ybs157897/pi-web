@@ -72,8 +72,28 @@ export const META = defineDoc<ConversationMetadata>({
   }),
 })
 
-export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' }>({
+export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' | 'main' | 'task'; parentId?: string }>({
   kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false, initial: () => ({}),
+})
+
+/** 任务的独立持久记录：结算与重试计数不再只依赖会话投影，删除/重试/恢复才有落点。 */
+export const TASK = defineDoc<{
+  originRequestId?: string
+  attempt: number
+  settledAt?: number
+  deletedAt?: number
+  settlement?: { status: 'completed' | 'failed' | 'cancelled'; summary?: string; at: number }
+}>({
+  kind: 'pi-durable-web.task', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false,
+  initial: () => ({ attempt: 1 }),
+})
+
+/** 主会话上的任务结算收件箱：最新结算在前，unshift 后截断到上限。 */
+export const TASK_INBOX = defineDoc<{
+  items: Array<{ taskId: string; title: string; status: 'completed' | 'failed' | 'cancelled'; summary?: string; at: number }>
+}>({
+  kind: 'pi-durable-web.task-inbox', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false,
+  initial: () => ({ items: [] }),
 })
 
 export const CTX: Context = BACKGROUND_CONTEXT

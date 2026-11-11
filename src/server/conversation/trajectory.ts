@@ -142,17 +142,32 @@ export function outlineRequestMessages(messages: readonly Message[]): Array<Reco
   return messages.map((message, index) => {
     const preview = index >= messages.length - OUTLINE_TAIL_MESSAGES
     const record = message as { role?: string; content?: unknown; sections?: unknown }
-    return {
+    const base = {
       role: record.role ?? 'unknown',
-      ...(record.sections !== null && typeof record.sections === 'object'
-        ? { sections: Object.keys(record.sections as Record<string, unknown>) }
-        : {}),
       content: outlineContent(record.content, preview),
+    }
+    if (record.sections === null || typeof record.sections !== 'object') return base
+    // system 提示词的真实文本在 sections 里（content 往往为空）；只记 keys 会漏掉上下文大头。
+    // 补每个 section 的字符数与总体积，供提示词膨胀分析。
+    const sections = record.sections as Record<string, string | null>
+    const sectionChars: Record<string, number> = {}
+    let sectionTotal = 0
+    for (const [name, text] of Object.entries(sections)) {
+      const chars = typeof text === 'string' ? text.length : 0
+      sectionChars[name] = chars
+      sectionTotal += chars
+    }
+    const contentChars = typeof record.content === 'string' ? record.content.length : 0
+    return {
+      ...base,
+      sections: Object.keys(sections),
+      sectionChars,
+      systemChars: contentChars + sectionTotal,
     }
   })
 }
 
-/** One outbound provider request: numbered within its generation task. */
+/** One outbound provider request: numbered monotonically within the conversation. */
 interface RequestSequence {
   task: string
   request: number
@@ -168,11 +183,14 @@ export function createTrajectoryExtension(options: TrajectoryExtensionOptions): 
     const key = String(api.conversationId)
     const task = String(api.taskId)
     const current = sequences.get(key)
-    if (current === undefined || current.task !== task) {
+    if (current === undefined) {
       const fresh = { task, request: 1 }
       sequences.set(key, fresh)
       return fresh
     }
+    // pi-durable 每次 provider 请求都是独立 generation task，按 task 重置会让编号恒为 1。
+    // 编号改为会话内单调递增，task 字段记录当前请求所属 task，request/response 仍按 (task, request) 配对。
+    current.task = task
     current.request += 1
     return current
   }

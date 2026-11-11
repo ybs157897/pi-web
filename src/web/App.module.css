@@ -27,17 +27,13 @@
 
 .sidebarHeader,
 .brand,
-.workspaceTools,
 .topbar,
 .topbarStart,
 .topbarActions,
 .conversationHeading,
-.workspaceHeader,
-.workspaceRow,
-.workspaceToggle,
-.workspaceLabel,
-.sessionRow,
-.sessionSelect,
+.taskHeader,
+.taskRow,
+.taskSelect,
 .sidebarFoot {
   display: flex;
   align-items: center;
@@ -107,14 +103,13 @@
 .navItem[data-active] { background: var(--dsw-alias-interactive-bg-hover); }
 .navItem[data-active] { color: var(--dsw-alias-label-primary); }
 .navItem:focus-visible,
-.workspaceToggle:focus-visible,
-.sessionSelect:focus-visible,
+.taskSelect:focus-visible,
 .accountRow:focus-visible {
   outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: -2px;
 }
 
-.workspaceHeader {
+.taskHeader {
   flex: none;
   justify-content: space-between;
   gap: 4px;
@@ -126,13 +121,10 @@
   font-size: 14px;
   line-height: 20px;
 }
-.workspaceHeader > span { flex: none; }
-.workspaceTools { flex: none; gap: 2px; }
-.workspaceTools :global(button) { width: 28px; height: 28px; }
-.workspaceSearchInput { flex: 1; min-width: 0; }
-.workspaceHeader:has(.workspaceSearchInput) { margin-right: 0; padding-left: 4px; }
+.taskHeader > span { flex: none; }
+.taskHeader :global(button) { width: 28px; height: 28px; }
 
-.workspaceList {
+.taskList {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -142,54 +134,73 @@
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
-.workspaceGroup { min-width: 0; }
-.workspaceRow {
-  position: relative;
-  min-width: 0;
-  height: 34px;
-  border-radius: var(--dsw-radius-md);
-  color: var(--dsw-alias-label-primary);
-}
-.workspaceRow:hover,
-.workspaceRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
-.workspaceToggle {
-  flex: 1;
-  min-width: 0;
-  height: 34px;
-  gap: 5px;
-  border: 0;
-  border-radius: inherit;
-  padding: 0 30px 0 6px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  font-size: 14px;
-  line-height: 22px;
-}
-.workspaceToggle > svg:first-child { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform 150ms var(--ds-ease-in-out); }
-.workspaceToggle > svg:nth-child(2) { flex: none; color: var(--dsw-alias-state-business-primary); }
-.chevronOpen { transform: rotate(90deg); }
-.workspaceName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspaceSessions { min-width: 0; margin: 0 0 2px; }
-.workspaceLabel { gap: 7px; height: 34px; border-radius: var(--dsw-radius-md); padding: 0 8px; color: var(--dsw-alias-label-secondary); font-size: 14px; }
-.workspaceLabel > svg { color: var(--dsw-alias-label-tertiary); }
 
-.sessionRow {
+/* The sidebar's three seats. Each section is a quiet header over its rows; 「需要你」 carries a filled
+   count badge, 「已完成」 a plain count plus a folding chevron. Sections only render when populated. */
+.taskSection { display: flex; flex-direction: column; min-width: 0; }
+.taskSection + .taskSection { margin-top: 6px; }
+.taskSectionHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: left;
+}
+.taskSectionLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.taskSectionHead[data-toggle] { cursor: pointer; transition: background .12s var(--ds-ease-in-out), color .12s var(--ds-ease-in-out); }
+.taskSectionHead[data-toggle]:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+.taskSectionHead[data-toggle]:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+.taskSectionBadge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary-inverted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.taskSectionCount { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.taskSectionChevron { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform .15s var(--ds-ease-in-out); }
+.taskSectionChevron[data-open] { transform: rotate(90deg); }
+
+/* One task row: status cell, title + subtitle, unread dot, relative time. Radius matches DSH's rows;
+   the height grows to a second line only when the row carries a subtitle. */
+.taskRow {
   position: relative;
   min-width: 0;
-  height: 32px;
+  min-height: 32px;
   gap: 0;
   margin: 1px 0;
-  padding: 0 8px;
+  padding: 3px 8px;
   border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
-.sessionRow:hover:not([data-selected]),
-.sessionRow:focus-within:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
-.sessionRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
-.sessionSelect {
+.taskRow:hover:not([data-selected]),
+.taskRow:focus-within:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
+.taskRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
+.taskSelect {
   display: flex;
   flex: 1;
   min-width: 0;
@@ -204,51 +215,24 @@
   text-align: left;
   font: inherit;
 }
-.sessionTitle { flex: 1; min-width: 0; margin: 0 6px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: normal; }
-/* ZCode's leading 16px cell: a spinning loader while the turn runs, nothing when idle. */
-.sessionSlot { display: inline-flex; flex: none; width: 16px; height: 20px; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); }
-.sessionPin { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-label-tertiary); }
-.sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
-.sessionUnread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
-.sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
-/* DSH's trailing action strip: hidden until the row is hovered, then the
-   time cell and the strip swap places so nothing shifts. */
-.rowActions {
-  display: none;
-  flex: none;
-  align-items: center;
-  gap: 15px;
-}
-
-.sessionRow:hover .rowActions,
-.sessionRow[data-menu-open] .rowActions,
-.sessionRow:focus-within .rowActions,
-.workspaceRow:hover .rowActions,
-.workspaceRow:focus-within .rowActions { display: inline-flex; }
-
-.sessionRow:hover .sessionMeta,
-.sessionRow[data-menu-open] .sessionMeta { display: none; }
-
-.rowIconButton {
-  flex: none;
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--dsw-radius-xs);
-  padding: 0;
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-}
-.rowIconButton:hover { color: var(--dsw-alias-label-primary); }
-.renameForm { display: flex; flex: 1; min-width: 0; align-items: center; gap: 4px; padding: 3px; }
-.renameForm input { flex: 1; min-width: 0; height: 26px; border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); padding: 0 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
-.renameForm button { flex: none; border: 0; border-radius: var(--dsw-radius-sm); padding: 4px 6px; background: transparent; color: var(--dsw-alias-link); cursor: pointer; font-size: 11px; }
-.emptySessions,
+.taskBody { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; gap: 1px; margin: 0 6px 0 4px; }
+.taskTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: normal; }
+.taskSubtitle { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.taskSlot { display: inline-flex; flex: none; width: 16px; height: 20px; align-items: center; justify-content: center; }
+.taskSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .taskSpinner { animation: none; } }
+/* The status vocabulary: active states carry the accent, failures the error tone, settled states stay quiet. */
+.taskDot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-label-tertiary); }
+.taskDot[data-status="running"],
+.taskDot[data-status="waiting"],
+.taskDot[data-status="queued"] { background: var(--dsw-alias-state-business-primary); }
+.taskDot[data-status="completed"] { background: var(--dsw-alias-label-secondary); }
+.taskDot[data-status="failed"] { background: var(--dsw-alias-state-error-primary); }
+.taskDot[data-status="cancelled"],
+.taskDot[data-status="idle"] { background: var(--dsw-alias-label-tertiary); }
+.taskUnread { flex: none; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
+.taskWaiting { flex: none; margin-right: 6px; color: var(--dsw-alias-state-business-primary); font-size: 10px; line-height: 16px; white-space: nowrap; }
+.taskMeta { flex: none; max-width: 60px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
 .listEmpty { display: block; padding: 8px; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
 .listNotice { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--dsw-alias-state-error-primary); font-size: 11px; line-height: 16px; }
 .listNotice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -278,6 +262,7 @@
 .primaryPanel { display: flex; min-width: 0; min-height: 0; flex-direction: column; margin-right: 2px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .panelToggleIcon { transform: scaleX(-1); }
 .heroHeader { display: flex; flex: none; align-items: center; justify-content: space-between; height: 40px; padding: 0 10px 0 16px; }
+.entryLabel { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
 .topbar { flex: none; min-width: 0; height: 42px; justify-content: space-between; gap: 12px; padding: 0 18px 0 20px; }
 .topbarStart { flex: 1; min-width: 0; gap: 9px; }
 .conversationHeading { min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; line-height: 17px; }
@@ -292,8 +277,102 @@
 .crumbTag { flex: none; padding: 0 4px; font-size: 10px; line-height: 15px; }
 .conversationTitle { max-width: min(58vw, 680px); overflow: hidden; font-size: 13px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .cwd { display: flex; align-items: center; gap: 8px; max-width: min(60vw, 720px); overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
-.running { flex: none; color: var(--dsw-alias-state-business-primary); }
+.taskState { flex: none; color: var(--dsw-alias-label-secondary); }
+.taskState[data-status="running"],
+.taskState[data-status="waiting"],
+.taskState[data-status="queued"] { color: var(--dsw-alias-state-business-primary); }
+.taskState[data-status="failed"] { color: var(--dsw-alias-state-error-primary); }
+.taskState[data-status="cancelled"],
+.taskState[data-status="idle"] { color: var(--dsw-alias-label-tertiary); }
 .topbarActions { flex: none; gap: 4px; }
+
+/* The task workbench head: a status badge and the current action on the left, the three view seats on
+   the right. The seats reuse DSH's segmented-control language — a translucent track with one raised pill. */
+.taskHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 4px 18px 4px 20px;
+}
+.taskHeadInfo { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
+.taskHeadBadge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.taskHeadDot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-label-tertiary); }
+.taskHeadBadge[data-status="running"] .taskHeadDot,
+.taskHeadBadge[data-status="waiting"] .taskHeadDot,
+.taskHeadBadge[data-status="queued"] .taskHeadDot { background: var(--dsw-alias-state-business-primary); }
+.taskHeadBadge[data-status="completed"] .taskHeadDot { background: var(--dsw-alias-state-success-primary); }
+.taskHeadBadge[data-status="failed"] .taskHeadDot { background: var(--dsw-alias-state-error-primary); }
+.taskHeadBadge[data-status="running"],
+.taskHeadBadge[data-status="waiting"],
+.taskHeadBadge[data-status="queued"] { color: var(--dsw-alias-state-business-primary); }
+.taskHeadBadge[data-status="failed"] { color: var(--dsw-alias-state-error-primary); }
+.taskHeadAction { flex: 1; min-width: 0; overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.taskViewTabs {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.taskViewTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .12s var(--ds-ease-in-out), background .12s var(--ds-ease-in-out);
+}
+.taskViewTab:hover { color: var(--dsw-alias-label-primary); }
+.taskViewTab[data-active] { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-soft); }
+.taskViewTab:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+.taskViewTabBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover-accent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .chatLayout {
   position: relative;
   container-type: inline-size;
@@ -394,32 +473,21 @@
 .sidebarCollapsed .quickNav { align-items: center; gap: 4px; margin-bottom: 8px; }
 .sidebarCollapsed .navItem { width: 36px; height: 36px; justify-content: center; padding: 0; }
 .sidebarCollapsed .navItem span,
-.sidebarCollapsed .workspaceHeader > span,
-.sidebarCollapsed .workspaceSearchInput,
-.sidebarCollapsed .workspaceSessions,
-.sidebarCollapsed .workspaceName,
-.sidebarCollapsed .workspaceToggle > svg:first-child,
-.sidebarCollapsed .workspaceRow .rowActions,
-.sidebarCollapsed .workspaceLabel span,
+.sidebarCollapsed .taskHeader > span,
+.sidebarCollapsed .taskBody,
+.sidebarCollapsed .taskTitle,
+.sidebarCollapsed .taskSubtitle,
+.sidebarCollapsed .taskSectionHead,
+.sidebarCollapsed .taskMeta,
 .sidebarCollapsed .accountLabel { display: none; }
-.sidebarCollapsed .workspaceHeader { justify-content: center; margin-inline: 0; padding: 0; }
-.sidebarCollapsed .workspaceTools { flex-direction: column; gap: 4px; }
-.sidebarCollapsed .workspaceTools > :not(:last-child) { display: none; }
-.sidebarCollapsed .workspaceList { display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
-.sidebarCollapsed .workspaceRow { width: 36px; }
-.sidebarCollapsed .workspaceToggle { width: 36px; justify-content: center; padding: 0; }
-.sidebarCollapsed .workspaceLabel { justify-content: center; }
-.sidebarCollapsed .workspaceRow .rowActions { display: none; }
+.sidebarCollapsed .taskHeader { justify-content: center; margin-inline: 0; padding: 0; }
+.sidebarCollapsed .taskList { display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
+.sidebarCollapsed .taskSection { align-items: center; width: 100%; }
+.sidebarCollapsed .taskSection + .taskSection { margin-top: 2px; }
+.sidebarCollapsed .taskRow { width: 36px; justify-content: center; padding: 0; }
+.sidebarCollapsed .taskSelect { width: 36px; justify-content: center; padding: 0; }
 .sidebarCollapsed .sidebarFoot { justify-content: center; }
 .sidebarCollapsed .accountRow { width: 36px; justify-content: center; padding: 0; }
-
-/* DSH's session hover card, portaled by the primitives' HoverCard: the dark menu material with
-   the toast label colour, showing the row's title, relative time and state. */
-.sessionHoverCard { display: flex; flex-direction: column; gap: 3px; }
-.sessionHoverTitle { overflow: hidden; color: var(--dsw-alias-toast-label); font-size: 14px; font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-.sessionHoverTime { color: var(--dsw-alias-toast-label); font-size: 13px; line-height: 19px; opacity: .55; }
-.sessionHoverState { display: flex; align-items: center; gap: 5px; margin-top: 4px; color: var(--dsw-alias-toast-label); font-size: 13px; line-height: 19px; opacity: .55; }
-.sessionHoverDot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 
 /* Bounded child modal, matching the settings module's preview/dialog sizing. */
 .childModal { width: min(580px, calc(100vw - 48px)); max-height: calc(100% - 24px); }
@@ -430,12 +498,6 @@
 
 @keyframes pulse { from { opacity: .48; } to { opacity: 1; } }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-@media (hover: none) {
-  /* Without hover the strip has to stand in for the time cell permanently. */
-  .rowActions { display: inline-flex; }
-  .sessionRow .sessionMeta { display: none; }
-}
 
 @media (max-width: 760px) {
   .shell { display: block; }
@@ -451,6 +513,9 @@
   .conversationTitle { max-width: 60vw; }
   .cwd { max-width: 58vw; }
   .topbarActions { gap: 0; }
+  .taskHead { min-height: 36px; padding: 3px 10px; gap: 8px; }
+  .taskHeadBadge { padding: 1px 7px; }
+  .taskViewTab { padding: 3px 9px; font-size: 11px; }
   .withInspector { display: block; }
   .inspectorResizer { display: none; }
   .inspectorPane { position: absolute; inset: 0; width: 100%; height: 100%; border-left: 0; }
@@ -460,18 +525,13 @@
 
 @media (max-width: 420px) {
   .brandName small { display: none; }
-  .workspaceHeader { margin-top: 0; }
-  .workspaceSearchInput { font-size: 12px; }
-  .sessionMeta { max-width: 30px; right: 30px; }
-  .sessionSelect { padding-right: 64px; }
   .topbarActions :global([data-connection-indicator]) { max-width: 24px; }
   .conversationTitle { max-width: 47vw; }
   .cwd { max-width: 45vw; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidebar,
-  .workspaceToggle > svg:first-child { transition: none; }
+  .sidebar { transition: none; }
   .spinner,
   .skeleton span { animation: none; }
 }

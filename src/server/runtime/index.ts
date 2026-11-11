@@ -70,6 +70,7 @@ import { createPlugins } from './plugins.ts'
 import { createTeam } from './team.ts'
 import { createQueue } from './queue.ts'
 import { createConversations } from './conversations.ts'
+import { createTasks } from './tasks.ts'
 import { createCore } from './core.ts'
 import { createInteractionReplies } from './interactions.ts'
 import { createSubagentSettlement } from './subagent-settle.ts'
@@ -426,6 +427,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     defaultWorkspace,
   })
 
+  // 单入口的任务面：创建走会话引擎，列表读同一份投影；ensureMain 在启动末尾落座位。
+  const tasksService = createTasks({
+    harness: () => harness,
+    assertOpen,
+    ensureMetadata,
+    create: input => conversationsService.create(input),
+    submit: (value, input) => conversationsService.submit(value, input),
+    currentDetail,
+  })
+
   const queueService = createQueue({
     harness: () => harness, requireConversation, ensureMetadata, withMetadata,
     submitWithReferences: conversationsService.submitWithReferences, workspaceFiles, defaultWorkspace,
@@ -575,6 +586,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // starts its parent's follow-up run once the scheduler is back.
   await subagentSettlement.reconcileBackgroundDelegations()
   harness.resume()
+  // 单入口的座位先落，下面的 agent 同步会把新会话一并纳入。
+  await tasksService.ensureMain()
+  // 座位落定后补齐任务记录：孤儿标失败、终态补结算，收件箱才有完整历史。
+  await tasksService.reconcile()
   // Upgrades add code mode to an existing registry, and the stored agent selection is
   // per conversation: bring idle conversations onto the current presentation before serving.
   await syncIdleAgents()
@@ -592,6 +607,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   return {
     list: () => conversationsService.list(),
+    tasks: () => tasksService.list(),
+    createTask: (input) => tasksService.createTask(input),
     create: (input) => conversationsService.create(input),
     // Reading the detail is what "viewing a conversation" means for the client; the sidebar's
     // unread dot clears on the next list refresh. Internal callers use `currentDetail` directly.

@@ -155,6 +155,23 @@ function migrateLegacySettings(value: unknown): unknown {
 }
 
 /**
+ * Drop shortcut bindings for commands this build no longer handles. The settings schema
+ * rejects unknown command keys, so an older file must lose them before validation rather
+ * than fail as an unreadable configuration.
+ */
+function migrateShortcuts(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const state = value as Record<string, unknown>
+  if (typeof state.settings !== 'object' || state.settings === null || Array.isArray(state.settings)) return value
+  const settings = state.settings as Record<string, unknown>
+  const shortcuts = settings.shortcuts
+  if (typeof shortcuts !== 'object' || shortcuts === null || Array.isArray(shortcuts)) return value
+  const commands = new Set<string>(SHORTCUT_COMMANDS)
+  const kept = Object.fromEntries(Object.entries(shortcuts).filter(([name]) => commands.has(name)))
+  return { ...state, settings: { ...settings, shortcuts: kept } }
+}
+
+/**
  * The retired per-message rating record shares its key with today's operator
  * feedback entries. Ratings cannot be represented as entries, so a legacy
  * record is dropped and the key reads as an empty entry list; every stored
@@ -263,7 +280,7 @@ export class AppStateStore {
     let state: PersistedAppState
     try {
       const raw: unknown = JSON.parse(await readFile(path, 'utf8'))
-      const parsed = appStateSchema.safeParse(migratePresets(migrateFeedback(migrateLegacySettings(raw))))
+      const parsed = appStateSchema.safeParse(migratePresets(migrateFeedback(migrateShortcuts(migrateLegacySettings(raw)))))
       if (!parsed.success) throw new Error('应用数据格式不受支持')
       state = parsed.data
     } catch (error) {

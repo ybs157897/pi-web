@@ -3,10 +3,9 @@ import type { ShortcutCommand } from '../shared/types.ts'
 export type { ShortcutCommand } from '../shared/types.ts'
 
 export const DEFAULT_SHORTCUTS = {
-  newConversation: 'Alt+Mod+n', search: 'Mod+k', settings: 'Alt+Mod+,', toggleSidebar: 'Mod+b',
-  rename: 'Alt+Mod+g', fork: 'Shift+Mod+f', archive: 'Alt+Mod+a',
+  newConversation: 'Alt+Mod+n', settings: 'Alt+Mod+,', toggleSidebar: 'Mod+b',
   send: 'Enter', newline: 'Shift+Enter', alternateSend: 'Mod+Enter',
-  // ZCode's side pane chords; the full-view F chord avoids pi-web's fork (Shift+Mod+f).
+  // ZCode's side pane chords; the full-view F chord stays clear of the browser's own shortcuts.
   toggleInspector: 'Alt+Mod+b', toggleInspectorFullView: 'Alt+Mod+f',
 } satisfies Record<ShortcutCommand, string>
 
