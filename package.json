@@ -23,7 +23,8 @@
     "test:live:skills": "tsx scripts/live-skills-check.ts",
     "test:live:policy": "tsx scripts/live-prompt-policy-check.ts",
     "test:live:workflow": "tsx scripts/live-workflow-check.ts",
-    "test:live:prompt": "tsx scripts/live-prompt-check.ts"
+    "test:live:prompt": "tsx scripts/live-prompt-check.ts",
+    "test:live:bots": "tsx scripts/live-bots-check.ts"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "~4.0.5",

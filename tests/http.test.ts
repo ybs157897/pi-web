@@ -439,6 +439,39 @@ class FakeRuntime implements Runtime {
     return { available: true, directory: '/tmp/reports', file: `${defectNumber}.md`, markdown: '# 结论' }
   }
 
+  async bots(): Promise<Protocol.BotTeamOverview> {
+    return { bots: [], rooms: [], watchdog: {}, init: { running: false }, config: { watchdogIntervalMs: 0 } }
+  }
+  async createBot(input: Protocol.CreateBotInput): Promise<{ bot: Protocol.BotRecord }> {
+    this.calls.push(`create-bot:${input.name}`)
+    throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
+  }
+  async updateBot(): Promise<{ bot: Protocol.BotRecord }> {
+    throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
+  }
+  async initBots(): Promise<{ ok: true }> {
+    return { ok: true }
+  }
+  async updateBotConfig(input: { watchdogIntervalMs: number }): Promise<{ config: { watchdogIntervalMs: number } }> {
+    this.calls.push(`bot-config:${input.watchdogIntervalMs}`)
+    return { config: { watchdogIntervalMs: input.watchdogIntervalMs } }
+  }
+  async createBotRoom(): Promise<{ room: Protocol.BotRoomRecord }> {
+    throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
+  }
+  async postBotRoom(): Promise<{ ok: true; mentioned: string[] }> {
+    return { ok: true, mentioned: [] }
+  }
+  async botRoomLog(): Promise<Protocol.BotRoomFrame[]> {
+    return []
+  }
+  async runBotWatchdog(): Promise<{ report: Protocol.BotWatchdogReport }> {
+    return { report: { runAt: new Date(NOW).toISOString(), entries: [] } }
+  }
+  async botWatchdogReport(): Promise<{ lastRunAt?: string; report?: Protocol.BotWatchdogReport }> {
+    return {}
+  }
+
   async close(): Promise<void> {
     this.closeCount += 1
   }

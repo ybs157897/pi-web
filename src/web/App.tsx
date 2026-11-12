@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDown, Loader } from 'lucide-react'
 import {
-  Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
+  Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconAgentPresetOutlineRegular, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChecklistOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
   IconDownloadOutlineRegular, IconEditOutlineRegular, IconEllipsisOutlineRegular,
   IconFlatListOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconListPenOutlineRegular,
@@ -46,14 +46,15 @@ import { buildSideChatPrompt } from './selection-quote.ts'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
-/** antd is only needed by this page, so it loads as its own chunk on first visit. */
+/** antd is only needed by these pages, so each loads as its own chunk on first visit. */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
+const BotsPage = lazy(() => import('./BotsPage.tsx'))
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'defects' | 'automations'
+type MainPage = 'chat' | 'defects' | 'automations' | 'bots'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
 /** One attachment as the limits see it: an image flag and its byte size. */
@@ -1849,6 +1850,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             aria-label={t('自动化任务', 'Automations')} aria-current={page === 'automations' ? 'page' : undefined} onClick={() => { navigate('automations') }}>
             <IconClockOutlineRegular size={16} /><span>{t('自动化任务', 'Automations')}</span>
           </button>
+          <button type="button" className={css.navItem} data-active={page === 'bots' || undefined}
+            aria-label={t('Bot 团队', 'Bot team')} aria-current={page === 'bots' ? 'page' : undefined} onClick={() => { navigate('bots') }}>
+            <IconAgentPresetOutlineRegular size={16} /><span>{t('Bot 团队', 'Bot team')}</span>
+          </button>
         </nav>
         <div className={css.workspaceHeader}>
           {searchOpen
@@ -2165,6 +2170,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId}
               workspaces={workspaces} onNewConversation={startNewConversation}
               onOpenConversation={id => { void openConversation(id) }} />}
+            {page === 'bots' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载 Bot 团队', 'Loading bot team')}</div>}>
+              <BotsPage onOpenConversation={id => { void openConversation(id) }} />
+            </Suspense>}
           </div>
           {showInspector && <>
             {!inspectorFullView && <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"

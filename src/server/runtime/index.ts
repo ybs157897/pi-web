@@ -35,6 +35,8 @@ import { InteractionTools } from '../tools/interaction.ts'
 import { createPlanExtension, Plans } from '../tools/plan.ts'
 import { createSubagentTools, type ChildModelList, SUBAGENT_MODEL_LIST_LIMIT } from '../tools/subagent.ts'
 import { createTeamTools } from '../tools/team.ts'
+import { createBotsExtension, BOTS_EXTENSION_NAME } from '../bots/extension.ts'
+import { createBotsService } from '../bots/service.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
 import { SkillStore } from '../skills/store.ts'
 import { piWebHome } from '../state/home.ts'
@@ -75,6 +77,7 @@ import { createInteractionReplies } from './interactions.ts'
 import { createSubagentSettlement } from './subagent-settle.ts'
 
 import { CODEMODE_EXTENSION_NAME, CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
+import { AGENT_EXCLUDED_EXTENSIONS } from './core.ts'
 
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const dataDir = resolve(options.dataDir)
@@ -165,6 +168,32 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     detailFromView,
     defaultWorkspace,
   })
+  /** The module-bot team feature; the extension is attached once both objects exist. */
+  const botsService = createBotsService({
+    appState,
+    harness: () => harness,
+    assertOpen,
+    dataDir,
+    buildAgentChange,
+    selectedWorkspace,
+    // Late-bound: conversationsService is assembled further down.
+    conversationError: id => conversationsService.detail(id).then(d => d.error).catch(() => undefined),
+  })
+  // The bots extension is registered but never part of the standard agent composition: bot and
+  // bot-init conversations opt in through an explicit `extensions add`, so ordinary tool
+  // surfaces — and with them the prompt snapshots — stay untouched.
+  const botsExtension = createBotsExtension({
+    roster: botsService.roster,
+    knowledgeBody: botsService.knowledgeBody,
+    postAsBot: botsService.postAsBot,
+    directMessage: botsService.directMessage,
+    readRoom: botsService.readRoom,
+    createBot: botsService.createBot,
+    updateBot: botsService.updateBot,
+    finishInit: botsService.finishInitFromOrchestrator,
+  })
+  botsService.attachExtension(botsExtension)
+  AGENT_EXCLUDED_EXTENSIONS.add(BOTS_EXTENSION_NAME)
 
   /**
    * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
@@ -278,6 +307,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     memberSession: teamService.memberSession,
     resolveChildModel,
   }))
+  // The module-bot extension sits with the other tool extensions; the execution policy
+  // (installed last) still captures its tools so plan mode keeps filtering them.
+  registry.install(botsExtension)
   // Tool-free: it only appends a per-request reminder from the live plugin projection.
   registry.install(createPluginReferenceExtension({
     capabilities: () => pluginReferenceCapabilities(pluginStore.overview()),
@@ -359,11 +391,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         throw new RuntimeError('INVALID_INPUT', '此会话没有可用的工作区，请先在侧栏添加工作区')
       }
       const selectedMode = metadata?.accessMode ?? appState.snapshot().settings.defaultAccessMode
+      const conversationKind = await harness.snapshot(CONVERSATION_KIND, target.conversationId, CTX)
       const memoryRoot = appState.snapshot().settings.memoryEnabled
         ? resolveMemoryRoot({ dataDir, workspacePath: selectedWorkspace.path })
         : undefined
       if (memoryRoot !== undefined && selectedMode !== 'readOnly') void ensureMemoryDirectory(memoryRoot)
-      const extraWriteRoots = memoryRoot !== undefined && selectedMode === 'workspaceWrite' ? [memoryRoot] : []
+      const extraWriteRoots = [
+        ...(memoryRoot !== undefined && selectedMode === 'workspaceWrite' ? [memoryRoot] : []),
+        // The bot-init orchestrator writes the knowledge documents it creates; keep the
+        // sandbox explicitly aware of that directory even though it sits inside the workspace.
+        ...(conversationKind?.kind === 'botInit' ? [resolve(selectedWorkspace.path, 'docs', 'bots')] : []),
+      ]
       return createExecutionEnv(selectedWorkspace.path, selectedMode, extraWriteRoots)
     },
     conversationCreated: async (tx, conversation) => {
@@ -571,6 +609,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await queueService.recover()
   await automationsFeature().recover()
   await teamService.reconcileRosters()
+  // Bot rosters settle crashed busy edges, re-arm their watches and the watchdog timer here,
+  // after the harness exists but before resume lets queued submissions run again.
+  await botsService.reconcile()
   // Before resume: a background delegation lost to a crash settles now, and the injected message
   // starts its parent's follow-up run once the scheduler is back.
   await subagentSettlement.reconcileBackgroundDelegations()
@@ -698,10 +739,21 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (input.workspaceId === null || input.workspaceId === undefined) return analysisRuns.settings()
       return analysisRuns.bindWorkspace(input.workspaceId, input.thinkingLevel)
     },
+    bots: async () => botsService.overview(),
+    createBot: input => botsService.createBot(input).then(bot => ({ bot })),
+    updateBot: (botId, input) => botsService.updateBot(botId, input).then(bot => ({ bot })),
+    initBots: input => botsService.initBots(input),
+    updateBotConfig: input => botsService.updateConfig(input),
+    createBotRoom: input => botsService.createRoom(input).then(room => ({ room })),
+    postBotRoom: (roomId, input) => botsService.postToRoom(roomId, input).then(result => ({ ok: true as const, mentioned: result.mentioned })),
+    botRoomLog: (roomId) => botsService.roomLog(roomId),
+    runBotWatchdog: input => botsService.runWatchdog(input).then(report => ({ report })),
+    botWatchdogReport: async () => botsService.lastWatchdogRun(),
     async close() {
       if (!closePromise) {
         runtimeClosed = true
         automationsService?.close()
+        void botsService.close()
         memoryExtraction.shutdown()
         disposeBackgroundShells()
         unsubscribeModels()

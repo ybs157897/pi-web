@@ -172,10 +172,29 @@ const pluginUiReadResourceSchema = z.object({
 
 const interactionAnswerSchema = z.object({  answers: z.array(z.object({
     id: z.string().min(1).max(160),
-    selected: z.array(z.string().min(1).max(200)).max(64),
+    selected: z.array(z.string().max(200)).max(64),
     custom: z.string().max(4_000).optional(),
   }).strict()).min(1).max(8),
 }).strict()
+
+const botNameSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
+const createBotSchema = z.object({
+  name: botNameSchema,
+  module: z.string().trim().min(1).max(120),
+  globs: z.array(z.string().trim().min(1).max(200)).min(1).max(50),
+  description: z.string().trim().min(1).max(500),
+  model: z.string().trim().max(200).optional(),
+}).strict()
+const updateBotSchema = createBotSchema.omit({ name: true }).partial()
+  .refine(value => Object.keys(value).length > 0, { message: 'update needs a field' })
+const botInitSchema = z.object({ mode: z.enum(['orchestrator', 'preset']).optional() }).strict()
+const botConfigSchema = z.object({ watchdogIntervalMs: z.number().int().min(0).max(2_147_483_647) }).strict()
+const createBotRoomSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  memberIds: z.array(botNameSchema).min(1).max(64),
+}).strict()
+const botRoomPostSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict()
+const botWatchdogRunSchema = z.object({ refreshStale: z.boolean().optional() }).strict()
 
 class ApiFault extends Error {
   constructor(readonly status: 400 | 403 | 413 | 415, readonly code: string, message: string) {
@@ -875,6 +894,19 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     const input = await readJson(c.req.raw, wetrackWorkspaceSchema)
     return c.json(await runtime.updateWetrackAnalysisSettings(input))
   })
+  // Module-bot team: roster overview, CRUD, initialization, rooms, delivery and the watchdog.
+  app.get('/api/bots', async c => c.json(await runtime.bots()))
+  app.post('/api/bots', async c => c.json(await runtime.createBot(await readJson(c.req.raw, createBotSchema)), 201))
+  app.patch('/api/bots/config', async c => c.json(await runtime.updateBotConfig(await readJson(c.req.raw, botConfigSchema))))
+  app.post('/api/bots/init', async c => c.json(await runtime.initBots(await readJson(c.req.raw, botInitSchema))))
+  app.post('/api/bots/watchdog/run', async c => c.json(await runtime.runBotWatchdog(await readJson(c.req.raw, botWatchdogRunSchema))))
+  app.get('/api/bots/watchdog/report', async c => c.json(await runtime.botWatchdogReport()))
+  app.patch('/api/bots/:botId', async c => c.json(await runtime.updateBot(pathId(c.req.param('botId')), await readJson(c.req.raw, updateBotSchema))))
+  app.post('/api/bots/rooms', async c => c.json(await runtime.createBotRoom(await readJson(c.req.raw, createBotRoomSchema)), 201))
+  app.post('/api/bots/rooms/:roomId/posts', async c => c.json(await runtime.postBotRoom(pathId(c.req.param('roomId')), await readJson(c.req.raw, botRoomPostSchema)), 202))
+  // Room frames are passive entries, so they never appear in the conversation
+  // detail projection; this read seam is the only way clients see the room log.
+  app.get('/api/bots/rooms/:roomId/log', async c => c.json(await runtime.botRoomLog(pathId(c.req.param('roomId')))))
 
   app.onError((error, c) => {
     const failure = publicFailure(error)

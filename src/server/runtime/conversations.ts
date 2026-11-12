@@ -29,7 +29,7 @@ import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import {
   CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, SUPPORTED_THINKING, assertSubmit, attachmentReferences, fingerprintSubmit,
-  liveRunTaskId, objectValue, parseConversationId, parseEntryId, safeTitle, submissionContent,
+  isHiddenConversationKind, liveRunTaskId, objectValue, parseConversationId, parseEntryId, safeTitle, submissionContent,
   type ConversationMetadata,
 } from './helpers.ts'
 
@@ -82,6 +82,9 @@ export function createConversations(deps: ConversationsDeps) {
       cursor = page.next
     } while (cursor)
     const summaries = await Promise.all(records.map(async (record) => {
+      // Bot sessions (bot conversations, room logs, watchdog/bot-init runs) are host-managed
+      // surfaces, not sidebar entries; the bots panel reads them through its own overview.
+      if (isHiddenConversationKind((await harness().snapshot(CONVERSATION_KIND, record.id, CTX))?.kind)) return undefined
       const conversation = await harness().conversation(record.id, CTX)
       if (!conversation) return undefined
       const metadata = await ensureMetadata(record.id)

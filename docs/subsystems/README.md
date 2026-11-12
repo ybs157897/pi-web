@@ -10,6 +10,7 @@
 | [goal.md](goal.md) | 目标：`pi-web.goal`、CAS 与权限分界、`onYield` 自动续跑 |
 | [subagent.md](subagent.md) | 子智能体与委派：双 profile、委派契约、子会话裁剪、后台结算、一行条 UI |
 | [team.md](team.md) | 团队与共享任务板：Lead/成员、任务 CAS、send/wait 语义、写域约定 |
+| [bots.md](bots.md) | 模块 bot 团队：常设模块 bot、知识文档约束回写、room 群聊协议、watchdog 巡检 |
 | [compaction.md](compaction.md) | 上下文压缩：压力裁剪、预算触发、缓存感知摘要与系统行编排 |
 | [trajectory.md](trajectory.md) | 轨迹采集与导出：三钩子、JSONL 行类型、导出 API 与 Inspector tab |
 | [rendering.md](rendering.md) | 渲染状态机：消息身份、块级流式、四台状态机、pending 交互屏障 |

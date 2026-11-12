@@ -9,10 +9,19 @@ import type {
   AskUserQuestionAnswerItem,
   Automation,
   AutomationRun,
+  BotInitInput,
+  BotRecord,
+  BotRoomFrame,
+  BotRoomPostInput,
+  BotRoomRecord,
+  BotTeamOverview,
+  BotWatchdogReport,
   ChildMessageInput,
   ConversationDetail,
   ConversationSummary,
   CreateAutomationInput,
+  CreateBotInput,
+  CreateBotRoomInput,
   CreateConversationInput,
   CreateGitBranchInput,
   GitCommitInput,
@@ -41,6 +50,7 @@ import type {
   ThinkingLevel,
   UpdateAppSettingsInput,
   UpdateAutomationInput,
+  UpdateBotInput,
   UpdateConversationInput,
   WorkspaceFile,
   WorkspaceFileEntry,
@@ -176,6 +186,20 @@ export interface Runtime {
   startWetrackAnalysis(input: WetrackAnalysisStartInput): Promise<WetrackAnalysisRun>
   wetrackAnalysisSettings(): Promise<WetrackAnalysisSettings>
   updateWetrackAnalysisSettings(input: { workspaceId?: string | null; thinkingLevel?: ThinkingLevel }): Promise<WetrackAnalysisSettings>
+  /** The module-bot team: roster, rooms, watchdog state and init progress. */
+  bots(): Promise<BotTeamOverview>
+  createBot(input: CreateBotInput): Promise<{ bot: BotRecord }>
+  updateBot(botId: string, input: UpdateBotInput): Promise<{ bot: BotRecord }>
+  /** 'preset' builds the fixed three-bot skeleton synchronously; 'orchestrator' runs in the background. */
+  initBots(input: BotInitInput): Promise<{ ok: true }>
+  updateBotConfig(input: { watchdogIntervalMs: number }): Promise<{ config: { watchdogIntervalMs: number } }>
+  createBotRoom(input: CreateBotRoomInput): Promise<{ room: BotRoomRecord }>
+  /** Log one user post and deliver the framed message to every mentioned bot. */
+  postBotRoom(roomId: string, input: BotRoomPostInput): Promise<{ ok: true; mentioned: string[] }>
+  /** The parsed room log frames; passive entries never reach model context, so this is the read seam. */
+  botRoomLog(roomId: string): Promise<BotRoomFrame[]>
+  runBotWatchdog(input: { refreshStale?: boolean }): Promise<{ report: BotWatchdogReport }>
+  botWatchdogReport(): Promise<{ lastRunAt?: string; report?: BotWatchdogReport }>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */

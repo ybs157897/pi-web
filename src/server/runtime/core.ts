@@ -27,7 +27,7 @@ import { MEMORY_EXTENSION_NAME } from '../memory/policy.ts'
 import { PLUGIN_REFERENCE_EXTENSION_NAME } from '../plugins/reference.ts'
 import { EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
 import {
-  CONVERSATION_KIND, CTX, META, SUPPORTED_THINKING, cloneMetadata, liveRunTaskId, parseConversationId, type ConversationMetadata,
+  CONVERSATION_KIND, CTX, META, SUPPORTED_THINKING, cloneMetadata, isHiddenConversationKind, liveRunTaskId, parseConversationId, type ConversationMetadata,
 } from './helpers.ts'
 import { Todos } from '../tools/todo.ts'
 import { Goals } from '../tools/goal.ts'
@@ -47,6 +47,15 @@ export interface CoreDeps {
   projectTeam(id: ConversationId): Promise<TeamView | undefined>
   subagentSummaries(id: ConversationId): Promise<SubagentSummary[]>
 }
+
+/**
+ * Extensions installed in the registry but never part of the standard agent composition:
+ * their tools and sections are scope-limited to the conversations that opt in through an
+ * explicit `extensions add` (currently the module-bot team). Keeping them out of
+ * `buildAgentChange` is what makes the ordinary tool surface — and with it the prompt
+ * snapshots — identical whether or not the feature is wired.
+ */
+export const AGENT_EXCLUDED_EXTENSIONS = new Set<string>()
 
 export function createCore(deps: CoreDeps) {
   const { appState, modelRuntime, workspaceFiles, isClosed, projectTeam, subagentSummaries, defaultWorkspace } = deps
@@ -114,6 +123,9 @@ export function createCore(deps: CoreDeps) {
       ? undefined
       : appState.snapshot().workspaces.find(item => item.id === fallbackWorkspaceId)
     const team = options.team === true ? await projectTeam(id) : undefined
+    // The wire protocol only names `defectAnalysis`; bot-managed kinds stay host-side (the bots
+    // overview carries them), so they project as kindless conversations.
+    const storedKind = (await harness.snapshot(CONVERSATION_KIND, id, CTX))?.kind
     const detail = projectConversation(view, cloneMetadata(currentMetadata), {
       workspace: fallbackWorkspace?.path,
       defaultModel: settings.defaultModel ?? modelRuntime.defaultModel,
@@ -121,7 +133,7 @@ export function createCore(deps: CoreDeps) {
       interactions: await harness.snapshot(Interactions, id, CTX),
       goal: await harness.snapshot(Goals, id, CTX),
       plan: await harness.snapshot(Plans, id, CTX),
-      kind: (await harness.snapshot(CONVERSATION_KIND, id, CTX))?.kind,
+      kind: storedKind === 'defectAnalysis' ? storedKind : undefined,
       // Only a conversation's own detail carries its children: the sidebar list (`list`) and a
       // child's own detail skip the walk, so the tree is one level and each load stays bounded.
       ...(options.subagents === true ? { subagents: await subagentSummaries(id) } : {}),
@@ -216,6 +228,7 @@ export function createCore(deps: CoreDeps) {
     // `off` removes the extension everywhere, `on`/`only` keep the native tool visible.
     const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...installed.map(extension => extension.name)])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
+      .filter(name => !AGENT_EXCLUDED_EXTENSIONS.has(name))
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)
       if (!extension) throw new RuntimeError('INVALID_INPUT', `插件未安装：${name}`)
@@ -291,6 +304,9 @@ export function createCore(deps: CoreDeps) {
     } while (cursor)
     for (const record of records) {
       try {
+        // Bot-managed conversations carry their own composition (identity instructions and the
+        // opt-in bot extension); re-deriving the standard agent would strip it.
+        if (isHiddenConversationKind((await harness.snapshot(CONVERSATION_KIND, record.id, CTX))?.kind)) continue
         const conversation = await harness.conversation(record.id, CTX)
         if (conversation === undefined) continue
         const viewWatch = await conversation.watch(CTX)

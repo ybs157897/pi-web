@@ -7,6 +7,9 @@ import type {
   AppSettings,
   Automation,
   AutomationRun,
+  BotRecord,
+  BotRoomRecord,
+  BotWatchdogReport,
   ThinkingLevel,
   WorkspaceSummary,
 } from '../../shared/types.ts'
@@ -104,6 +107,62 @@ const feedbackEntrySchema = z.object({
   createdAt: z.number().finite(),
   userAgent: z.string().min(1).max(500).optional(),
 }).strict()
+const botRecordSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(64),
+  module: z.string().min(1).max(120),
+  globs: z.array(z.string().min(1).max(200)).min(1).max(50),
+  description: z.string().min(1).max(500),
+  knowledgePath: z.string().min(1).max(500),
+  model: z.string().max(200).optional(),
+  conversationId: z.string().min(1).max(64),
+  createdAt: z.string().min(1).max(40),
+  status: z.enum(['idle', 'busy', 'error']),
+  lastActiveAt: z.string().min(1).max(40).optional(),
+  knowledgeHash: z.string().min(1).max(80).optional(),
+  knowledgeHealth: z.enum(['fresh', 'stale', 'drift', 'over-limit', 'unknown']),
+  compliance: z.enum(['complied', 'stalled', 'pending']),
+}).strict()
+const botRoomRecordSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  conversationId: z.string().min(1).max(64),
+  memberIds: z.array(z.string().min(1).max(64)).max(64),
+  createdAt: z.string().min(1).max(40),
+}).strict()
+const botWatchdogEntrySchema = z.object({
+  botId: z.string().min(1).max(64),
+  botName: z.string().min(1).max(64),
+  knowledgePath: z.string().min(1).max(500),
+  health: z.enum(['fresh', 'stale', 'drift', 'over-limit', 'unknown']),
+  detail: z.string().max(2_000),
+  suggestion: z.string().max(2_000).optional(),
+}).strict()
+const botWatchdogReportSchema = z.object({
+  runAt: z.string().min(1).max(40),
+  entries: z.array(botWatchdogEntrySchema),
+}).strict()
+/** The module-bot team block; absent files read as an empty team with watchdog scheduling off. */
+const botTeamStateSchema = z.object({
+  bots: z.array(botRecordSchema).default([]),
+  rooms: z.array(botRoomRecordSchema).default([]),
+  config: z.object({ watchdogIntervalMs: z.number().int().min(0).max(2_147_483_647).default(0) }).strict().default({ watchdogIntervalMs: 0 }),
+  watchdog: z.object({
+    lastRunAt: z.string().min(1).max(40).optional(),
+    report: botWatchdogReportSchema.optional(),
+  }).strict().default({}),
+  init: z.object({
+    running: z.boolean().default(false),
+    conversationId: z.string().min(1).max(64).optional(),
+    error: z.string().max(2_000).optional(),
+  }).strict().default({ running: false }),
+}).strict().default({
+  bots: [],
+  rooms: [],
+  config: { watchdogIntervalMs: 0 },
+  watchdog: {},
+  init: { running: false },
+})
 const appStateSchema = z.object({
   version: z.literal(1),
   settings: settingsSchema,
@@ -112,10 +171,20 @@ const appStateSchema = z.object({
   plugins: z.record(z.string(), pluginStateSchema),
   automations: z.array(automationSchema),
   feedback: z.array(feedbackEntrySchema).default([]),
+  bots: botTeamStateSchema,
 }).strict()
 
 /** One operator feedback entry submitted from the web client. */
 export type FeedbackEntry = { text: string; createdAt: number; userAgent?: string }
+
+/** The module-bot team state persisted beside settings; shapes mirror `shared/types.ts`. */
+export type BotTeamState = {
+  bots: BotRecord[]
+  rooms: BotRoomRecord[]
+  config: { watchdogIntervalMs: number }
+  watchdog: { lastRunAt?: string; report?: BotWatchdogReport }
+  init: { running: boolean; conversationId?: string; error?: string }
+}
 
 export type PersistedAppState = {
   version: 1
@@ -125,6 +194,7 @@ export type PersistedAppState = {
   plugins: Record<string, { enabled: boolean; tools: Record<string, boolean> }>
   automations: Automation[]
   feedback: FeedbackEntry[]
+  bots: BotTeamState
 }
 
 const DEFAULT_ACCESS: AccessMode = 'fullAccess'
@@ -275,6 +345,7 @@ export class AppStateStore {
         plugins: {},
         automations: [],
         feedback: [],
+        bots: { bots: [], rooms: [], config: { watchdogIntervalMs: 0 }, watchdog: {}, init: { running: false } },
       }
       await writeJsonAtomic(path, state)
     }

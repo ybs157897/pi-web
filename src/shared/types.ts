@@ -800,3 +800,82 @@ export interface RetryInput { entryId: string; requestId: string }
 export interface RetryResult { conversationId: string; submissionId: string }
 export interface FeedbackInput { entryId: string; rating: 'up' | 'down' | null }
 export interface ApiError { error: string; code?: string }
+
+// ── Module bot team (feat/module-bot-team prototype) ──
+
+export type BotStatus = 'idle' | 'busy' | 'error'
+/** Knowledge doc freshness judged by the watchdog against git history of the bot's globs. */
+export type BotKnowledgeHealth = 'fresh' | 'stale' | 'drift' | 'over-limit' | 'unknown'
+/** Whether the bot wrote back its knowledge doc after its last participation. */
+export type BotCompliance = 'complied' | 'stalled' | 'pending'
+
+export type BotRecord = {
+  id: string
+  name: string
+  module: string
+  globs: string[]
+  description: string
+  /** Workspace-relative markdown path, e.g. docs/bots/<id>.md. */
+  knowledgePath: string
+  model?: string
+  conversationId: string
+  createdAt: string
+  status: BotStatus
+  lastActiveAt?: string
+  knowledgeHash?: string
+  knowledgeHealth: BotKnowledgeHealth
+  compliance: BotCompliance
+}
+
+export type BotRoomRecord = {
+  id: string
+  name: string
+  conversationId: string
+  memberIds: string[]
+  createdAt: string
+}
+
+export type BotWatchdogEntry = {
+  botId: string
+  botName: string
+  knowledgePath: string
+  health: BotKnowledgeHealth
+  detail: string
+  suggestion?: string
+}
+
+export type BotWatchdogReport = {
+  runAt: string
+  entries: BotWatchdogEntry[]
+}
+
+export type BotTeamOverview = {
+  bots: BotRecord[]
+  rooms: BotRoomRecord[]
+  watchdog: { lastRunAt?: string; report?: BotWatchdogReport }
+  init: { running: boolean; conversationId?: string; error?: string }
+  config: { watchdogIntervalMs: number }
+}
+
+export type CreateBotInput = {
+  name: string
+  module: string
+  globs: string[]
+  description: string
+  model?: string
+}
+
+export type UpdateBotInput = Partial<Omit<CreateBotInput, 'name'>>
+
+export type CreateBotRoomInput = { name: string; memberIds: string[] }
+
+export type BotRoomPostInput = { text: string }
+
+export type BotInitInput = {
+  /** 'preset' builds a fixed three-bot skeleton (tests/demo); 'orchestrator' runs a model-driven analysis. */
+  mode?: 'orchestrator' | 'preset'
+}
+
+/** Room log entries carry a sender frame header as the first line of the entry text. */
+export type BotRoomFrame = { sender: { kind: 'user' | 'bot' | 'system'; name?: string }; text: string }
+

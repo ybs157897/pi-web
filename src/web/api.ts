@@ -1,8 +1,9 @@
 import type {
-  AccessMode, AddWorkspaceInput, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
-  CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
+  AccessMode, AddWorkspaceInput, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, BotInitInput, BotRecord, BotRoomFrame, BotRoomPostInput, BotRoomRecord,
+  BotTeamOverview, BotWatchdogReport, ChildMessageInput, ConversationDetail, ConversationSummary, CreateAutomationInput, CreateBotInput, CreateBotRoomInput,
+  CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
   McpView, ModelCatalog, PersonalizationView, ProviderConfigSummary, ProviderInput, ProviderTestResult,
-  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAutomationInput, UpdateConversationInput,
+  RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAutomationInput, UpdateBotInput, UpdateConversationInput,
   UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
   WetrackDefectDetail, WetrackDefectList, WetrackDefectReport,
   WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
@@ -419,5 +420,40 @@ export const api = {
       catch { /* a malformed frame is ignored; the next mutation sends a fresh one */ }
     })
     return source
+  },
+  /** The whole module-bot team: roster, rooms, last watchdog report and init state. */
+  getBots(): Promise<BotTeamOverview> {
+    return request('/api/bots')
+  },
+  createBot(input: CreateBotInput): Promise<{ bot: BotRecord }> {
+    return request('/api/bots', { method: 'POST', body: JSON.stringify(input) })
+  },
+  updateBot(botId: string, input: UpdateBotInput): Promise<{ bot: BotRecord }> {
+    return request(`/api/bots/${encodeURIComponent(botId)}`, { method: 'PATCH', body: JSON.stringify(input) })
+  },
+  /** Start team initialization; 'preset' builds a fixed three-bot skeleton, 'orchestrator' asks a model to split modules. */
+  initBots(input: BotInitInput = {}): Promise<{ ok: boolean }> {
+    return request('/api/bots/init', { method: 'POST', body: JSON.stringify(input) })
+  },
+  updateBotsConfig(input: { watchdogIntervalMs: number }): Promise<{ config: { watchdogIntervalMs: number } }> {
+    return request('/api/bots/config', { method: 'PATCH', body: JSON.stringify(input) })
+  },
+  createBotRoom(input: CreateBotRoomInput): Promise<{ room: BotRoomRecord }> {
+    return request('/api/bots/rooms', { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** Post one user message into a bot room; the response lists which bot names were @mentioned. */
+  postBotRoomMessage(roomId: string, input: BotRoomPostInput): Promise<{ ok: boolean; mentioned: string[] }> {
+    return request(`/api/bots/rooms/${encodeURIComponent(roomId)}/posts`, { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** The parsed room log frames; passive entries never appear in the conversation detail. */
+  getBotRoomLog(roomId: string): Promise<BotRoomFrame[]> {
+    return request(`/api/bots/rooms/${encodeURIComponent(roomId)}/log`)
+  },
+  /** Run the watchdog once; pass refreshStale to also rewrite knowledge docs judged stale. */
+  runBotWatchdog(input: { refreshStale?: boolean } = {}): Promise<{ report: BotWatchdogReport }> {
+    return request('/api/bots/watchdog/run', { method: 'POST', body: JSON.stringify(input) })
+  },
+  getBotWatchdogReport(): Promise<{ lastRunAt?: string; report?: BotWatchdogReport }> {
+    return request('/api/bots/watchdog/report')
   },
 }
