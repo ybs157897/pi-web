@@ -431,6 +431,15 @@ export const api = {
   updateBot(botId: string, input: UpdateBotInput): Promise<{ bot: BotRecord }> {
     return request(`/api/bots/${encodeURIComponent(botId)}`, { method: 'PATCH', body: JSON.stringify(input) })
   },
+  setBotAvatarImage(botId: string, dataUrl: string): Promise<{ bot: BotRecord }> {
+    return request(`/api/bots/${encodeURIComponent(botId)}/avatar`, { method: 'POST', body: JSON.stringify({ dataUrl }) })
+  },
+  clearBotAvatarImage(botId: string): Promise<{ bot: BotRecord }> {
+    return request(`/api/bots/${encodeURIComponent(botId)}/avatar`, { method: 'DELETE' })
+  },
+  getBotKnowledge(botId: string): Promise<{ body?: string }> {
+    return request(`/api/bots/${encodeURIComponent(botId)}/knowledge`)
+  },
   /** Start team initialization; 'preset' builds a fixed three-bot skeleton, 'orchestrator' asks a model to split modules. */
   initBots(input: BotInitInput = {}): Promise<{ ok: boolean }> {
     return request('/api/bots/init', { method: 'POST', body: JSON.stringify(input) })

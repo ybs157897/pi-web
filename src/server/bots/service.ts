@@ -11,7 +11,7 @@
  */
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { JsonValue } from '@earendil-works/chord'
@@ -34,8 +34,12 @@ import {
 
 const execFileAsync = promisify(execFile)
 
+/** Uploaded avatars live beside the state file, one PNG per bot id. */
+const BOT_AVATAR_DIR = 'bot-avatars'
+const BOT_AVATAR_MAX_BYTES = 512 * 1024
+
 /** Mentions a post text carries: `@<botName>` for one member, `@all` for everyone. */
-const MENTION_PATTERN = /@([a-z0-9]+(?:-[a-z0-9]+)*)/gu
+const MENTION_PATTERN = /@([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/gu
 /** The room tail a delivery frame embeds: at most this many entries and this many characters. */
 const ROOM_TAIL_ENTRIES = 12
 const ROOM_TAIL_CHARS = 4_000
@@ -59,13 +63,17 @@ export interface BotsServiceDeps {
   conversationError(conversationId: string): Promise<string | undefined>
 }
 
-/** The lower-kebab-case rule bot names share with team members. */
-const BOT_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
+/**
+ * Bot names are Grok-Bot style short names: a letter followed by letters, digits or hyphens
+ * (`Atlas`, `Kepler`, `Growth-1`). The name doubles as the id, the mention token and the
+ * knowledge file stem, so spaces and punctuation stay out.
+ */
+const BOT_NAME = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u
 
 function requireBotName(value: string): string {
   const name = value.trim()
   if (!BOT_NAME.test(name) || name.length > 64) {
-    throw new RuntimeError('INVALID_INPUT', 'bot 名称必须是 lower-kebab-case，最长 64 个字符')
+    throw new RuntimeError('INVALID_INPUT', 'bot 名称必须以字母开头，只含字母、数字和连字符，最长 64 个字符')
   }
   return name
 }
@@ -258,6 +266,12 @@ export function createBotsService(deps: BotsServiceDeps) {
     const name = requireBotName(input.name)
     const module = requireText(input.module, 'module', 120)
     const description = requireText(input.description, 'description', 500)
+    const avatarShape = input.avatarShape === undefined || input.avatarShape.trim() === ''
+      ? undefined
+      : requireText(input.avatarShape, 'avatarShape', 40)
+    const avatarColor = input.avatarColor === undefined || input.avatarColor.trim() === ''
+      ? undefined
+      : requireText(input.avatarColor, 'avatarColor', 40)
     const globs = [...new Set((input.globs ?? []).map(normalizeGlob))]
     if (globs.length === 0) throw new RuntimeError('INVALID_INPUT', 'globs 不能为空')
     if (state().bots.some(candidate => candidate.id === name)) {
@@ -275,6 +289,8 @@ export function createBotsService(deps: BotsServiceDeps) {
       description,
       knowledgePath: knowledgeRelativePath(name),
       ...(input.model === undefined || input.model.trim() === '' ? {} : { model: input.model.trim() }),
+      ...(avatarShape === undefined ? {} : { avatarShape }),
+      ...(avatarColor === undefined ? {} : { avatarColor }),
       conversationId: '',
       createdAt: now,
       status: 'idle',
@@ -310,7 +326,11 @@ export function createBotsService(deps: BotsServiceDeps) {
       if (draft.bots.bots.some(candidate => candidate.id === record.id)) {
         throw new RuntimeError('CONFLICT', `bot「${name}」已存在`)
       }
-      draft.bots.bots.push({ ...record, conversationId, knowledgeHash: hash })
+      // The first bot of an empty team becomes the lead by default; a user can move the pin.
+      const rest = draft.bots.bots.some(candidate => candidate.lead === true)
+        ? { ...record, conversationId, knowledgeHash: hash }
+        : { ...record, conversationId, knowledgeHash: hash, lead: true }
+      draft.bots.bots.push(rest)
       return structuredClone(draft.bots.bots.at(-1)!)
     })
     await armWatch(stored)
@@ -325,6 +345,12 @@ export function createBotsService(deps: BotsServiceDeps) {
     const globs = input.globs === undefined ? bot.globs : [...new Set(input.globs.map(normalizeGlob))]
     if (globs.length === 0) throw new RuntimeError('INVALID_INPUT', 'globs 不能为空')
     const model = input.model === undefined ? bot.model : input.model.trim() === '' ? undefined : input.model.trim()
+    const avatarShape = input.avatarShape === undefined
+      ? bot.avatarShape
+      : input.avatarShape.trim() === '' ? undefined : requireText(input.avatarShape, 'avatarShape', 40)
+    const avatarColor = input.avatarColor === undefined
+      ? bot.avatarColor
+      : input.avatarColor.trim() === '' ? undefined : requireText(input.avatarColor, 'avatarColor', 40)
     const now = new Date().toISOString()
     const content = await readKnowledgeFile(knowledgeAbsolutePath(defaultWorkspacePath(), bot))
     let hash = bot.knowledgeHash
@@ -332,17 +358,87 @@ export function createBotsService(deps: BotsServiceDeps) {
       // Keep the authored body, re-render the frontmatter over the new identity fields.
       hash = await writeKnowledgeFile(knowledgeAbsolutePath(defaultWorkspacePath(), bot), { ...bot, module, globs }, stripFrontmatter(content), now)
     }
-    const stored = await updateBotRecord(botId, current => {
+    await updateBotRecord(botId, current => {
       current.module = module
       current.globs = globs
       current.description = description
       if (model === undefined) delete current.model
       else current.model = model
+      if (avatarShape === undefined) delete current.avatarShape
+      else current.avatarShape = avatarShape
+      if (avatarColor === undefined) delete current.avatarColor
+      else current.avatarColor = avatarColor
       if (hash !== undefined) current.knowledgeHash = hash
     })
-    const conversation = await harness().conversation(parseConversationId(stored.conversationId), CTX)
-    if (conversation !== undefined) await conversation.configure({ instructions: botSystemPrompt(stored) }, CTX)
-    return stored
+    if (input.lead !== undefined) await setBotLead(botId, input.lead)
+    const refreshed = requireBot(botId)
+    const conversation = await harness().conversation(parseConversationId(refreshed.conversationId), CTX)
+    if (conversation !== undefined) await conversation.configure({ instructions: botSystemPrompt(refreshed) }, CTX)
+    return refreshed
+  }
+
+  /** Promote/demote the team lead; only one bot carries the pin at a time. */
+  const setBotLead = async (botId: string, lead: boolean): Promise<void> => {
+    assertOpen()
+    requireBot(botId)
+    await appState.update(draft => {
+      for (const candidate of draft.bots.bots) {
+        if (candidate.id === botId) {
+          if (lead) candidate.lead = true
+          else delete candidate.lead
+        } else if (lead) {
+          delete candidate.lead
+        }
+      }
+    })
+  }
+
+  /** The bot's knowledge document body, for the detail pane's library tab. */
+  const botKnowledge = async (botId: string): Promise<string | undefined> => {
+    assertOpen()
+    return await knowledgeBody(requireBot(botId))
+  }
+
+  // ── avatar photo ──
+
+  /** Store a cropped 256×256 PNG (data URL) and repoint the record at the versioned file URL. */
+  const setBotAvatarImage = async (botId: string, dataUrl: string): Promise<BotRecord> => {
+    assertOpen()
+    const bot = requireBot(botId)
+    const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/u.exec(dataUrl.trim())
+    if (match === null) throw new RuntimeError('INVALID_INPUT', '头像必须是 PNG data URL')
+    const bytes = Buffer.from(match[1]!, 'base64')
+    if (bytes.byteLength === 0 || bytes.byteLength > BOT_AVATAR_MAX_BYTES) {
+      throw new RuntimeError('INVALID_INPUT', '头像大小必须在 1 字节到 512KB 之间')
+    }
+    const dir = join(deps.dataDir, BOT_AVATAR_DIR)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `${bot.id}.png`), bytes)
+    return updateBotRecord(botId, current => {
+      current.avatarImage = `/api/bots/${encodeURIComponent(bot.id)}/avatar?v=${Date.now()}`
+    })
+  }
+
+  /** Drop the uploaded photo; the procedural silhouette takes over again. */
+  const clearBotAvatarImage = async (botId: string): Promise<BotRecord> => {
+    assertOpen()
+    const bot = requireBot(botId)
+    await rm(join(deps.dataDir, BOT_AVATAR_DIR, `${bot.id}.png`), { force: true })
+    return updateBotRecord(botId, current => {
+      delete current.avatarImage
+    })
+  }
+
+  /** Raw avatar bytes for GET /api/bots/:id/avatar; undefined when the bot never uploaded one. */
+  const botAvatarImageBytes = async (botId: string): Promise<Buffer | undefined> => {
+    assertOpen()
+    const bot = requireBot(botId)
+    try {
+      return await readFile(join(deps.dataDir, BOT_AVATAR_DIR, `${bot.id}.png`))
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined
+      throw error
+    }
   }
 
   // ── bot state: busy/idle edges and compliance ──
@@ -744,9 +840,9 @@ export function createBotsService(deps: BotsServiceDeps) {
 
   const initPreset = async (): Promise<void> => {
     const presets: Array<CreateBotInput> = [
-      { name: 'server-bot', module: 'server', globs: ['src/server/**'], description: '负责 src/server 服务端（runtime、工具、HTTP、自动化）的模块知识与协作。' },
-      { name: 'web-bot', module: 'web', globs: ['src/web/**'], description: '负责 src/web 前端界面与交互的模块知识与协作。' },
-      { name: 'shared-bot', module: 'shared', globs: ['src/shared/**'], description: '负责 src/shared 前后端共享类型与协议契约的模块知识与协作。' },
+      { name: 'Atlas', module: 'server', globs: ['src/server/**'], description: '负责 src/server 服务端（runtime、工具、HTTP、自动化）的模块知识与协作。' },
+      { name: 'Aurora', module: 'web', globs: ['src/web/**'], description: '负责 src/web 前端界面与交互的模块知识与协作。' },
+      { name: 'Kepler', module: 'shared', globs: ['src/shared/**'], description: '负责 src/shared 前后端共享类型与协议契约的模块知识与协作。' },
     ]
     const created: string[] = []
     for (const preset of presets) {
@@ -868,8 +964,13 @@ export function createBotsService(deps: BotsServiceDeps) {
     attachExtension: (extension: Extension): void => { botsExtension = extension },
     roster,
     knowledgeBody,
+    botKnowledge,
+    setBotLead,
     createBot,
     updateBot,
+    setBotAvatarImage,
+    clearBotAvatarImage,
+    botAvatarImageBytes,
     overview,
     initBots,
     finishInitFromOrchestrator,

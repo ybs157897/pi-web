@@ -818,6 +818,13 @@ export type BotRecord = {
   /** Workspace-relative markdown path, e.g. docs/bots/<id>.md. */
   knowledgePath: string
   model?: string
+  /** Grok-Bot avatar silhouette + palette; both fall back to an id hash on render. */
+  avatarShape?: string
+  avatarColor?: string
+  /** Uploaded 256×256 photo URL; when present it replaces the procedural silhouette. */
+  avatarImage?: string
+  /** The team's lead bot: the one pinned at the top of the roster, as Grok Bot promotes one Bot. */
+  lead?: boolean
   conversationId: string
   createdAt: string
   status: BotStatus
@@ -863,6 +870,10 @@ export type CreateBotInput = {
   globs: string[]
   description: string
   model?: string
+  avatarShape?: string
+  avatarColor?: string
+  /** Promote this bot to team lead (demotes the previous one); false clears the pin. */
+  lead?: boolean
 }
 
 export type UpdateBotInput = Partial<Omit<CreateBotInput, 'name'>>

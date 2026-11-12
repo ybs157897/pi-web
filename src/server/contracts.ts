@@ -190,6 +190,14 @@ export interface Runtime {
   bots(): Promise<BotTeamOverview>
   createBot(input: CreateBotInput): Promise<{ bot: BotRecord }>
   updateBot(botId: string, input: UpdateBotInput): Promise<{ bot: BotRecord }>
+  /** Store a cropped 256×256 PNG data URL as the bot's avatar photo. */
+  setBotAvatarImage(botId: string, dataUrl: string): Promise<{ bot: BotRecord }>
+  /** Drop the uploaded photo so the procedural silhouette takes over. */
+  clearBotAvatarImage(botId: string): Promise<{ bot: BotRecord }>
+  /** Raw PNG bytes for the avatar image route; undefined when the bot has no photo. */
+  botAvatarImageBytes(botId: string): Promise<Uint8Array | undefined>
+  /** The bot's knowledge document body (frontmatter stripped) for the library tab. */
+  botKnowledge(botId: string): Promise<{ body?: string }>
   /** 'preset' builds the fixed three-bot skeleton synchronously; 'orchestrator' runs in the background. */
   initBots(input: BotInitInput): Promise<{ ok: true }>
   updateBotConfig(input: { watchdogIntervalMs: number }): Promise<{ config: { watchdogIntervalMs: number } }>

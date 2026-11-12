@@ -449,6 +449,18 @@ class FakeRuntime implements Runtime {
   async updateBot(): Promise<{ bot: Protocol.BotRecord }> {
     throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
   }
+  async setBotAvatarImage(): Promise<{ bot: Protocol.BotRecord }> {
+    throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
+  }
+  async clearBotAvatarImage(): Promise<{ bot: Protocol.BotRecord }> {
+    throw new RuntimeError('NOT_FOUND', 'not implemented in FakeRuntime')
+  }
+  async botAvatarImageBytes(): Promise<Uint8Array | undefined> {
+    return undefined
+  }
+  async botKnowledge(): Promise<{ body?: string }> {
+    return { body: '# knowledge' }
+  }
   async initBots(): Promise<{ ok: true }> {
     return { ok: true }
   }

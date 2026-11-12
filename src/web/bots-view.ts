@@ -16,13 +16,6 @@ export function parseBotRoomFrame(text: string): BotRoomFrame | null {
   return { sender, text: text.slice(match[0].length) }
 }
 
-/** Stable hue for a bot name chip: the same name always reads as the same color. */
-export function botHue(name: string): number {
-  let hash = 0
-  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0
-  return hash % 360
-}
-
 const HEALTH_TONES: Record<BotKnowledgeHealth, { label: string; color: string }> = {
   fresh: { label: '知识新鲜', color: 'green' },
   stale: { label: '知识过期', color: 'orange' },

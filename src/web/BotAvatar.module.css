@@ -1,0 +1,60 @@
+.avatar { display: block; flex: none; overflow: visible; }
+
+/* The silhouette breathes as one piece: the mask rides along, so the eye cut-outs move with it. */
+.avatar[data-bot-avatar-animated] .body {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: breathe 3.8s ease-in-out infinite;
+}
+
+.eyes { transform: translate(var(--gaze-x, 0px), var(--gaze-y, 0px)); transition: transform 180ms ease-out; }
+.eyeState { transform-box: fill-box; transform-origin: center; }
+.eyeBlink { transform-box: fill-box; transform-origin: center; }
+.avatar[data-bot-avatar-animated] .eyeBlink { animation: blink 6.4s infinite; }
+
+/* State vocabulary mirrors Grok Bot's lifecycle/reaction states at avatar scale. */
+.avatar[data-bot-avatar-state='thinking'] .body { animation-duration: 2.6s; }
+.avatar[data-bot-avatar-state='thinking'] .eyeState { transform: scale(.82) translateY(-2%); }
+.avatar[data-bot-avatar-state='thinking'] .eyeBlink { animation-duration: 9s; }
+
+.avatar[data-bot-avatar-state='working'] .body { animation-duration: 1.8s; }
+.avatar[data-bot-avatar-state='working'] .eyeState { transform: scaleX(.72); }
+
+.avatar[data-bot-avatar-state='streaming'] .body { animation-duration: 1.5s; }
+
+.avatar[data-bot-avatar-state='waiting'] .eyeBlink { animation-duration: 8.6s; }
+
+.avatar[data-bot-avatar-state='failed'] .body { animation-duration: 5.2s; }
+.avatar[data-bot-avatar-state='failed'] .eyeState { transform: scaleY(.6) translateY(4%); }
+.avatar[data-bot-avatar-state='failed'] .eyeBlink { animation: none; }
+
+.avatar[data-bot-avatar-state='happy'] .body { animation-duration: 3s; }
+.avatar[data-bot-avatar-state='happy'] .eyeState { transform: scaleY(.52) translateY(-2%); }
+.avatar[data-bot-avatar-state='happy'] .eyeBlink { animation: none; }
+
+.avatar[data-bot-avatar-state='sleeping'] .body { animation-duration: 6.4s; }
+.avatar[data-bot-avatar-state='sleeping'] .eyeState { transform: scaleY(.06); }
+.avatar[data-bot-avatar-state='sleeping'] .eyeBlink { animation: none; }
+
+.photo { display: block; flex: none; border-radius: 50%; object-fit: cover; background: var(--dsw-alias-bg-layer-2); }
+
+.stack { display: inline-flex; align-items: center; flex: none; }
+.stack > * { margin-left: -7px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--dsw-alias-bg-layer-1); }
+.stack > *:first-child { margin-left: 0; }
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.018); }
+}
+
+/* One blink every 6.4s: 160ms closed, then back open. */
+@keyframes blink {
+  0%, 91%, 100% { transform: scaleY(1); }
+  93%, 95.5% { transform: scaleY(.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar[data-bot-avatar-animated] .body,
+  .avatar[data-bot-avatar-animated] .eyeBlink { animation: none; }
+  .eyes { transition: none; }
+}

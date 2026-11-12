@@ -103,7 +103,7 @@ type BotFixture = {
 /** A runtime fixture on a scripted provider; `git: true` also turns the workspace into a repo. */
 async function botFixture(script: ProviderScript, options: { git?: boolean } = {}): Promise<BotFixture> {
   const provider = await scriptedProvider(script)
-  const root = await mkdtemp(join(tmpdir(), 'pi-web-bots-'))
+  const root = await mkdtemp(join(tmpdir(), 'pi-bots-'))
   const dataDir = join(root, 'data')
   const workspace = join(root, 'workspace')
   const piDir = join(root, 'pi')
@@ -195,10 +195,10 @@ describe('module bot team', () => {
     const first = await postJson(app, '/api/bots/init', { mode: 'preset' })
     expect(first.status).toBe(200)
     const state = await overview(runtime)
-    expect(state.bots.map(bot => bot.name).toSorted()).toEqual(['server-bot', 'shared-bot', 'web-bot'])
+    expect(state.bots.map(bot => bot.name).toSorted()).toEqual(['Atlas', 'Aurora', 'Kepler'])
     expect(state.rooms).toHaveLength(1)
     expect(state.rooms[0]!.name).toBe('全队')
-    expect(state.rooms[0]!.memberIds.toSorted()).toEqual(['server-bot', 'shared-bot', 'web-bot'])
+    expect(state.rooms[0]!.memberIds.toSorted()).toEqual(['Atlas', 'Aurora', 'Kepler'])
     expect(state.init.running).toBe(false)
     for (const bot of state.bots) {
       expect(bot.conversationId).not.toBe('')
@@ -221,6 +221,51 @@ describe('module bot team', () => {
     const conversations = await runtime.list()
     expect(conversations.filter(item => item.title.startsWith('bot:') || item.title.startsWith('room:'))).toEqual([])
   }, 40_000)
+
+  it('stores, serves and clears an uploaded avatar photo', async () => {
+    const { app } = await botFixture({ turn: () => textTurn('ok') })
+    await postJson(app, '/api/bots', { name: 'Atlas', module: 'server', globs: ['src/server/**'], description: '服务端模块' })
+    // 1×1 transparent PNG.
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const saved = await postJson(app, '/api/bots/Atlas/avatar', { dataUrl: png })
+    expect(saved.status).toBe(200)
+    const { bot } = await saved.json() as { bot: BotRecord }
+    expect(bot.avatarImage).toContain('/api/bots/Atlas/avatar?v=')
+    const image = await app.request('/api/bots/Atlas/avatar')
+    expect(image.status).toBe(200)
+    expect(image.headers.get('content-type')).toBe('image/png')
+    expect((await image.arrayBuffer()).byteLength).toBeGreaterThan(0)
+    // Only PNG data URLs are accepted.
+    expect((await postJson(app, '/api/bots/Atlas/avatar', { dataUrl: 'https://example.com/x.png' })).status).toBe(400)
+    const cleared = await app.request('/api/bots/Atlas/avatar', { method: 'DELETE' })
+    expect(cleared.status).toBe(200)
+    expect((await cleared.json() as { bot: BotRecord }).bot.avatarImage).toBeUndefined()
+    expect((await app.request('/api/bots/Atlas/avatar')).status).toBe(404)
+  })
+
+  it('keeps exactly one lead bot and serves the knowledge body for the library tab', async () => {
+    const { app } = await botFixture({ turn: () => textTurn('ok') })
+    const makeBot = async (name: string, module: string): Promise<BotRecord> => {
+      const response = await postJson(app, '/api/bots', { name, module, globs: [`src/${module}/**`], description: `${module} 模块` })
+      return (await response.json() as { bot: BotRecord }).bot
+    }
+    const first = await makeBot('Atlas', 'server')
+    expect(first.lead).toBe(true)
+    await makeBot('Aurora', 'web')
+    // Promoting the second bot demotes the first.
+    const patched = await patchJson(app, '/api/bots/Aurora', { lead: true })
+    expect((await patched.json() as { bot: BotRecord }).bot.lead).toBe(true)
+    const state = await (await app.request('/api/bots')).json() as BotTeamOverview
+    expect(state.bots.find(bot => bot.name === 'Atlas')?.lead).toBeUndefined()
+    expect(state.bots.find(bot => bot.name === 'Aurora')?.lead).toBe(true)
+    // The library tab reads the document body without frontmatter.
+    const knowledge = await app.request('/api/bots/Aurora/knowledge')
+    expect(knowledge.status).toBe(200)
+    const { body } = await knowledge.json() as { body?: string }
+    expect(typeof body).toBe('string')
+    expect(body).not.toContain('botId:')
+    expect((await app.request('/api/bots/Nobody/knowledge')).status).toBe(404)
+  })
 
   it('creates and updates bots over HTTP and keeps knowledge frontmatter in sync', async () => {
     const { runtime, workspace, app } = await botFixture({ turn: () => textTurn('ok') })
@@ -261,26 +306,26 @@ describe('module bot team', () => {
     })
     await postJson(app, '/api/bots/init', { mode: 'preset' })
     roomIdCache = (await overview(runtime)).rooms[0]!.id
-    const serverBot = await botByName(runtime, 'server-bot')
-    const posted = await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@server-bot 服务端最近有什么值得注意的变更？' })
+    const serverBot = await botByName(runtime, 'Atlas')
+    const posted = await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@Atlas 服务端最近有什么值得注意的变更？' })
     expect(posted.status).toBe(202)
     const { mentioned } = await posted.json() as { mentioned: string[] }
-    expect(mentioned).toEqual(['server-bot'])
+    expect(mentioned).toEqual(['Atlas'])
     // The framed message reached the bot conversation.
     const frames = await until(async () => {
       const text = await userTextOf(runtime, serverBot.conversationId)
-      return text.includes('[ROOM:全队 FROM:user]') && text.includes('@server-bot') ? text : undefined
+      return text.includes('[ROOM:全队 FROM:user]') && text.includes('@Atlas') ? text : undefined
     })
     expect(frames).toContain('以上是群聊最近消息，你被提及')
     // The bot's reply lands in the room log with its frame header; the user line too.
     const lines = await until(async () => {
       const entries = await roomFrames(runtime, '全队')
-      return entries.some(frame => frame.sender.kind === 'bot' && frame.sender.name === 'server-bot') ? entries : undefined
+      return entries.some(frame => frame.sender.kind === 'bot' && frame.sender.name === 'Atlas') ? entries : undefined
     })
     expect(lines[0]?.sender.kind).toBe('user')
     // The participation settles compliance: the document did not change, so the bot stalled.
     const settled = await until(async () => {
-      const bot = await botByName(runtime, 'server-bot')
+      const bot = await botByName(runtime, 'Atlas')
       return bot.status === 'idle' && bot.compliance === 'stalled' ? bot : undefined
     })
     expect(settled.lastActiveAt).toBeDefined()
@@ -295,12 +340,12 @@ describe('module bot team', () => {
       },
     })
     await postJson(app, '/api/bots/init', { mode: 'preset' })
-    await postJson(app, `/api/bots/rooms/${(await overview(runtime)).rooms[0]!.id}/posts`, { text: '@server-bot 任意问题' })
+    await postJson(app, `/api/bots/rooms/${(await overview(runtime)).rooms[0]!.id}/posts`, { text: '@Atlas 任意问题' })
     const entries = await until(async () => {
       const frames = await roomFrames(runtime, '全队')
       return frames.some(frame => frame.sender.kind === 'bot' && frame.text === '按名字落群聊成功') ? frames : undefined
     })
-    expect(entries.some(frame => frame.sender.name === 'server-bot')).toBe(true)
+    expect(entries.some(frame => frame.sender.name === 'Atlas')).toBe(true)
   }, 40_000)
 
   it('keeps PASS replies silent and out of the room log', async () => {
@@ -314,10 +359,10 @@ describe('module bot team', () => {
     })
     await postJson(app, '/api/bots/init', { mode: 'preset' })
     roomIdCache = (await overview(runtime)).rooms[0]!.id
-    const posted = await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@shared-bot 收到请回复 PASS' })
+    const posted = await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@Kepler 收到请回复 PASS' })
     expect(posted.status).toBe(202)
     await until(async () => {
-      const bot = await botByName(runtime, 'shared-bot')
+      const bot = await botByName(runtime, 'Kepler')
       return bot.status === 'idle' && bot.compliance !== 'pending' ? bot : undefined
     })
     const entries = await roomFrames(runtime, '全队')
@@ -337,16 +382,16 @@ describe('module bot team', () => {
     })
     await postJson(app, '/api/bots/init', { mode: 'preset' })
     roomIdCache = (await overview(runtime)).rooms[0]!.id
-    await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@web-bot 刷新你的知识文档' })
+    await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@Aurora 刷新你的知识文档' })
     const bot = await until(async () => {
-      const current = await botByName(runtime, 'web-bot')
+      const current = await botByName(runtime, 'Aurora')
       return current.status === 'idle' && current.compliance !== 'pending' ? current : undefined
     })
     // The wrap denied the escape write, the knowledge document never changed, so stalled.
     expect(bot.compliance).toBe('stalled')
     await expect(readFile(join(workspace, 'escape.txt'), 'utf8')).rejects.toThrow()
     const entries = await roomFrames(runtime, '全队')
-    expect(entries.some(frame => frame.sender.kind === 'bot' && frame.sender.name === 'web-bot')).toBe(true)
+    expect(entries.some(frame => frame.sender.kind === 'bot' && frame.sender.name === 'Aurora')).toBe(true)
   }, 40_000)
 
   it('marks a compliant participation when the bot updates its document during the run', async () => {
@@ -356,8 +401,8 @@ describe('module bot team', () => {
         if (!userText.includes('[ROOM:')) return textTurn('ok')
         if (toolCount === 0) {
           return toolTurn('write', {
-            path: 'docs/bots/web-bot.md',
-            content: '---\nbotId: web-bot\nmodule: web\nglobs: ["src/web/**"]\nupdatedStamp: 2026-11-12T00:00:00.000Z\n---\n\n# web-bot 知识文档\n\n## 职责\n\n- 已在本轮更新。\n\n## 关键文件\n\n- src/web/App.tsx\n\n## 已知坑\n\n- (none)\n\n## changelog\n\n- 2026-11-12 参与群聊后更新。\n',
+            path: 'docs/bots/Aurora.md',
+            content: '---\nbotId: Aurora\nmodule: web\nglobs: ["src/web/**"]\nupdatedStamp: 2026-11-12T00:00:00.000Z\n---\n\n# Aurora 知识文档\n\n## 职责\n\n- 已在本轮更新。\n\n## 关键文件\n\n- src/web/App.tsx\n\n## 已知坑\n\n- (none)\n\n## changelog\n\n- 2026-11-12 参与群聊后更新。\n',
           })
         }
         if (toolCount === 1) return toolTurn('post_to_room', { roomId: roomIdCache, text: '文档已更新' })
@@ -366,13 +411,13 @@ describe('module bot team', () => {
     })
     await postJson(app, '/api/bots/init', { mode: 'preset' })
     roomIdCache = (await overview(runtime)).rooms[0]!.id
-    await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@web-bot 记录一下这次结论' })
+    await postJson(app, `/api/bots/rooms/${roomIdCache}/posts`, { text: '@Aurora 记录一下这次结论' })
     const bot = await until(async () => {
-      const current = await botByName(runtime, 'web-bot')
+      const current = await botByName(runtime, 'Aurora')
       return current.status === 'idle' && current.compliance === 'complied' ? current : undefined
     })
     expect(bot.knowledgeHash).toBeDefined()
-    const content = await readFile(join(workspace, 'docs/bots/web-bot.md'), 'utf8')
+    const content = await readFile(join(workspace, 'docs/bots/Aurora.md'), 'utf8')
     expect(content).toContain('已在本轮更新')
   }, 40_000)
 
@@ -468,11 +513,11 @@ describe('module bot team', () => {
     await git('add', '.')
     await git('commit', '-m', 'bot skeletons', '--allow-empty')
     // over-limit: blow one document past the body bound (checked before the git freshness step)
-    const overBot = await botByName(runtime, 'web-bot')
+    const overBot = await botByName(runtime, 'Aurora')
     const original = await readFile(join(workspace, overBot.knowledgePath), 'utf8')
     await writeFile(join(workspace, overBot.knowledgePath), `${original}${'很长的一行。'.repeat(1_500)}\n`)
     // unknown: delete another document entirely
-    const unknownBot = await botByName(runtime, 'shared-bot')
+    const unknownBot = await botByName(runtime, 'Kepler')
     await rm(join(workspace, unknownBot.knowledgePath))
     // a server-module commit after the skeletons makes the server bot stale
     await mkdir(join(workspace, 'src/server/extra'), { recursive: true })
@@ -485,14 +530,14 @@ describe('module bot team', () => {
     const byId = new Map(report.entries.map(entry => [entry.botId, entry]))
     expect(byId.get(overBot.id)?.health).toBe('over-limit')
     expect(byId.get(unknownBot.id)?.health).toBe('unknown')
-    expect(byId.get('server-bot')?.health).toBe('stale')
-    expect(byId.get('server-bot')?.detail).toContain('1 条新提交')
-    expect(byId.get('server-bot')?.detail).toContain('feat(server): add extra module')
-    expect(byId.get('server-bot')?.suggestion).toContain('git log')
+    expect(byId.get('Atlas')?.health).toBe('stale')
+    expect(byId.get('Atlas')?.detail).toContain('1 条新提交')
+    expect(byId.get('Atlas')?.detail).toContain('feat(server): add extra module')
+    expect(byId.get('Atlas')?.suggestion).toContain('git log')
     // app state picked the healths up, and the report file landed under the data dir.
     const state = await overview(runtime)
     expect(state.watchdog.lastRunAt).toBe(report.runAt)
-    expect(state.bots.find(bot => bot.id === 'server-bot')?.knowledgeHealth).toBe('stale')
+    expect(state.bots.find(bot => bot.id === 'Atlas')?.knowledgeHealth).toBe('stale')
     expect(JSON.parse(await readFile(join(dataDir, 'bot-watchdog', 'report.json'), 'utf8'))).toMatchObject({ runAt: report.runAt })
     // The report endpoint answers from the stored block.
     const stored = await (await app.request('/api/bots/watchdog/report')).json() as { lastRunAt?: string; report?: { runAt: string } }
@@ -501,10 +546,10 @@ describe('module bot team', () => {
     // refreshStale submits the refresh instruction into the stale bot's own conversation.
     const refreshed = await postJson(app, '/api/bots/watchdog/run', { refreshStale: true })
     expect(refreshed.status).toBe(200)
-    const staleBot = await botByName(runtime, 'server-bot')
+    const staleBot = await botByName(runtime, 'Atlas')
     await until(async () => {
       const text = await userTextOf(runtime, staleBot.conversationId)
-      return text.includes('[watchdog-refresh:server-bot]') && text.includes('feat(server): add extra module') ? text : undefined
+      return text.includes('[watchdog-refresh:Atlas]') && text.includes('feat(server): add extra module') ? text : undefined
     })
   }, 40_000)
 

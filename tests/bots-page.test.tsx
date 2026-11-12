@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { BotRecord, BotRoomFrame, BotTeamOverview } from '../src/shared/types.ts'
 import { setupRenderingDom } from './rendering/setup.ts'
 
@@ -97,32 +97,53 @@ describe('parseBotRoomFrame', () => {
 })
 
 describe('bots page', () => {
-  it('renders the roster with knowledge-health and compliance badges', async () => {
+  it('renders the roster rail and puts health, compliance and globs in the detail drawer', async () => {
     renderPage()
     await waitFor(() => { expect(screen.getByText('bot-a')).toBeTruthy() })
-    for (const health of ['知识新鲜', '知识过期', '知识漂移', '超出限额', '状态未知']) {
-      expect(screen.getByText(health)).toBeTruthy()
+    // Names also appear in the delivery receipt, so scope roster assertions to the rail.
+    const rail = within(document.querySelector('[aria-label="Bot 与群聊"]') as HTMLElement)
+    // Every bot is a single roster row; the module reads as the secondary line.
+    for (const name of ['bot-a', 'bot-b', 'bot-c', 'bot-d', 'bot-e']) {
+      expect(rail.getByText(name)).toBeTruthy()
     }
-    expect(screen.getAllByText('已回写 ✓')).toHaveLength(2)
+    for (const module of ['runtime', 'conversation', 'tools', 'mcp', 'memory']) {
+      expect(rail.getAllByText(new RegExp(module)).length).toBeGreaterThan(0)
+    }
+    // Health and compliance moved into the per-bot drawer, one bot at a time.
+    fireEvent.click(rail.getByText('bot-a'))
+    await waitFor(() => { expect(screen.getByText('知识新鲜')).toBeTruthy() })
+    expect(screen.getAllByText('已回写 ✓')).toHaveLength(1)
+    expect(screen.getByText('src/server/runtime/**')).toBeTruthy()
+    fireEvent.click(rail.getByText('bot-b'))
+    await waitFor(() => { expect(screen.getByText('知识过期')).toBeTruthy() })
     expect(screen.getByText('回写停滞 ⚠')).toBeTruthy()
-    expect(screen.getAllByText('待回写')).toHaveLength(2)
-    expect(screen.getByText('runtime')).toBeTruthy()
-    expect(screen.getAllByText('src/server/runtime/**')).toHaveLength(5)
+    fireEvent.click(rail.getByText('bot-c'))
+    await waitFor(() => { expect(screen.getByText('知识漂移')).toBeTruthy() })
+    fireEvent.click(rail.getByText('bot-d'))
+    await waitFor(() => { expect(screen.getByText('超出限额')).toBeTruthy() })
     expect(screen.getByText('从未活动')).toBeTruthy()
+    fireEvent.click(rail.getByText('bot-e'))
+    await waitFor(() => { expect(screen.getByText('状态未知')).toBeTruthy() })
   })
 
-  it('renders interleaved room messages with name chips and mention chips', async () => {
+  it('renders interleaved room messages with avatars and mention chips', async () => {
     renderPage()
     await waitFor(() => { expect(screen.getByText('全员大厅')).toBeTruthy() })
     await waitFor(() => { expect(document.querySelector('[data-side]')).toBeTruthy() })
     // One user line and one bot line; entries without a frame header are skipped.
     const sides = Array.from(document.querySelectorAll('[data-side]')).map(node => node.getAttribute('data-side'))
     expect(sides).toEqual(['user', 'bot'])
-    expect(document.querySelectorAll('[data-name-chip]')).toHaveLength(1)
-    expect(document.querySelector('[data-name-chip]')?.textContent).toBe('bot-a')
+    // The bot line carries the roster avatar and its name above the bubble, not a color chip.
+    const botRow = document.querySelector('[data-side="bot"]')
+    expect(botRow?.querySelector('[data-bot-avatar]')).toBeTruthy()
+    expect(botRow?.querySelector('[data-bot-avatar]')?.getAttribute('aria-label')).toBe('bot-a avatar')
+    expect(document.querySelectorAll('[data-side="bot"] [data-bot-avatar]')).toHaveLength(1)
     expect(screen.getByText('bot-c 已重新上线')).toBeTruthy()
+    // User text keeps inline mention chips; bot replies render as Markdown, so their mentions
+    // stay visible as plain text instead of chips.
     const mentions = Array.from(document.querySelectorAll('[data-mention]')).map(node => node.textContent)
-    expect(mentions).toEqual(['@bot-a', '@bot-b', '@bot-b'])
+    expect(mentions).toEqual(['@bot-a', '@bot-b'])
+    expect(document.querySelector('[data-side="bot"]')?.textContent).toContain('@bot-b')
     // @nobody is not on the roster, so it stays plain text instead of a chip.
     expect(document.body.textContent).toContain('@nobody')
     expect(screen.queryByText('没有帧头的普通日志')).toBeNull()
@@ -186,7 +207,7 @@ describe('bots page', () => {
     mocks.createBot.mockRejectedValue(new Error('名称冲突'))
     renderPage()
     await waitFor(() => { expect(screen.getByText('bot-a')).toBeTruthy() })
-    fireEvent.click(screen.getByRole('button', { name: '新建 bot' }))
+    fireEvent.click(screen.getAllByRole('button', { name: '新建 bot' })[0]!)
     await waitFor(() => { expect(screen.getByLabelText('名称')).toBeTruthy() })
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'bot-x' } })
     fireEvent.change(screen.getByLabelText('模块'), { target: { value: 'server' } })

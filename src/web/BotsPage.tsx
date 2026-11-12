@@ -1,21 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
-  Alert, App as AntdApp, Button, ConfigProvider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Mentions, Modal, Select, Skeleton, Tabs, Tag,
+  Alert, App as AntdApp, Button, ConfigProvider, Drawer, Dropdown, Empty, Form, Input, InputNumber, Mentions, Modal, Select, Skeleton, Tag, Tooltip,
   theme as antdTheme,
 } from 'antd'
 import type { ThemeConfig } from 'antd'
-import { IconAgentPresetOutlineRegular, IconPlayOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconShieldOutlineRegular, IconUsersOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { FormInstance } from 'antd'
+import {
+  IconAgentPresetOutlineRegular, IconClockOutlineRegular, IconCloseOutlineRegular, IconEditOutlineRegular,
+  IconPinFillRegular, IconPinOutlineRegular, IconPlayOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular,
+  IconSendOutlineRegular, IconSettingsOutlineRegular, IconShieldOutlineRegular, IconSparkleRegular, IconUsersOutlineRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import zhCN from 'antd/locale/zh_CN'
 import enUS from 'antd/locale/en_US'
 import type {
   BotRecord, BotRoomFrame, BotTeamOverview, BotWatchdogReport, CreateBotInput, UpdateBotInput,
 } from '../shared/types.ts'
 import { api } from './api.ts'
-import {
-  botHue, complianceTone, globsSummary, knowledgeHealthTone, relativeTime, splitMentions, statusTone,
-} from './bots-view.ts'
+import { complianceTone, knowledgeHealthTone, relativeTime, splitMentions, statusTone } from './bots-view.ts'
+import { BotAvatar, BotAvatarStack, resolveBotAvatar } from './BotAvatar.tsx'
+import type { BotAvatarState } from './BotAvatar.tsx'
+import { BotAvatarEditorModal } from './BotAvatarEditor.tsx'
+import { AnswerMarkdown } from './AnswerMarkdown.tsx'
+import { markdownLabels } from './render-labels.ts'
+import { BOT_AVATAR_COLORS, BOT_COLOR_POOL, BOT_SHAPE_POOL } from './bot-avatar/shapes.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
+import { suggestBotName } from '../shared/bot-names.ts'
 import css from './BotsPage.module.css'
 
 /** Overview and room-log poll cadence; room frames are passive entries with no SSE. */
@@ -42,6 +52,41 @@ function themeConfig(dark: boolean): ThemeConfig {
   }
 }
 
+/** #rrggbb → rgba() so a bot's own hue can tint surfaces at a controlled alpha. */
+function rgba(hex: string, alpha: number): string {
+  const value = hex.replace('#', '')
+  const r = Number.parseInt(value.slice(0, 2), 16)
+  const g = Number.parseInt(value.slice(2, 4), 16)
+  const b = Number.parseInt(value.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/** The two gradient stops of a bot's avatar palette, theme-resolved. */
+function identityPalette(id: string, shape: string | undefined, color: string | undefined, dark: boolean): { from: string; to: string } {
+  const resolved = resolveBotAvatar(id, shape, color)
+  const palette = BOT_AVATAR_COLORS[resolved.color]
+  return { from: dark ? palette.darkFrom : palette.lightFrom, to: dark ? palette.darkTo : palette.lightTo }
+}
+
+/** A readable identity accent for text: the darker stop on light, the lighter on dark. */
+function identityText(id: string, shape: string | undefined, color: string | undefined, dark: boolean): string {
+  const { from, to } = identityPalette(id, shape, color, dark)
+  return dark ? from : to
+}
+
+/** CSS variables that tint the lead card / detail hero with the bot's own character hue. */
+function tintVars(id: string, shape: string | undefined, color: string | undefined, dark: boolean): CSSProperties {
+  const { from, to } = identityPalette(id, shape, color, dark)
+  return {
+    '--lead-bg': `linear-gradient(165deg, ${rgba(from, dark ? 0.2 : 0.14)}, ${rgba(to, dark ? 0.08 : 0.04)})`,
+    '--lead-border': rgba(to, dark ? 0.34 : 0.26),
+    '--lead-glow': rgba(from, dark ? 0.3 : 0.24),
+    '--lead-ring': rgba(to, 0.5),
+    '--lead-chip': rgba(to, dark ? 0.22 : 0.14),
+    '--lead-chip-text': dark ? from : to,
+  } as CSSProperties
+}
+
 interface RoomEntry extends BotRoomFrame { id: number }
 
 /** Module-bot team console: roster, shared rooms and the knowledge watchdog. */
@@ -61,7 +106,7 @@ export default function BotsPage({ onOpenConversation }: {
 function BotsInner({ onOpenConversation }: {
   onOpenConversation: (id: string) => void
 }) {
-  const { t } = useUiPreferences()
+  const { t, dark } = useUiPreferences()
   const { message } = AntdApp.useApp()
   const [overview, setOverview] = useState<BotTeamOverview>()
   const [loading, setLoading] = useState(true)
@@ -73,13 +118,16 @@ function BotsInner({ onOpenConversation }: {
   const [createBotOpen, setCreateBotOpen] = useState(false)
   const [createRoomOpen, setCreateRoomOpen] = useState(false)
   const [editingBot, setEditingBot] = useState<BotRecord>()
-  const [expandedBotId, setExpandedBotId] = useState<string>()
+  const [detailBotId, setDetailBotId] = useState<string>()
   const [reportOpen, setReportOpen] = useState(false)
   const [report, setReport] = useState<BotWatchdogReport>()
   const [watchdogBusy, setWatchdogBusy] = useState(false)
   const [intervalDraft, setIntervalDraft] = useState<number | null>(null)
   const [posting, setPosting] = useState(false)
   const [draft, setDraft] = useState('')
+  const [unread, setUnread] = useState(0)
+  const streamRef = useRef<HTMLDivElement | null>(null)
+  const lastFrameCount = useRef(0)
   const intervalTouched = useRef(false)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -152,6 +200,27 @@ function BotsInner({ onOpenConversation }: {
   }, [overview?.watchdog.report, report])
   const roomEntries = useMemo(() => roomFrames
     .map((frame, index) => ({ id: index, ...frame })), [roomFrames])
+  // New frames only count as unread while the reader is away from the bottom of the stream.
+  useEffect(() => {
+    const count = roomFrames.length
+    const previous = lastFrameCount.current
+    lastFrameCount.current = count
+    if (count <= previous) return
+    const node = streamRef.current
+    const atBottom = node === null || node.scrollHeight - node.scrollTop - node.clientHeight < 48
+    if (!atBottom) setUnread(value => value + count - previous)
+  }, [roomFrames])
+  // Grok Bot groups its roster by team; the module is the natural group key here.
+  const groups = useMemo(() => {
+    const byModule = new Map<string, BotRecord[]>()
+    for (const bot of bots) {
+      const key = bot.module.trim() === '' ? t('未分组', 'Ungrouped') : bot.module
+      const members = byModule.get(key)
+      if (members === undefined) byModule.set(key, [bot])
+      else members.push(bot)
+    }
+    return [...byModule.entries()]
+  }, [bots, t])
 
   useEffect(() => {
     if (intervalTouched.current || overview?.config === undefined) return
@@ -195,6 +264,13 @@ function BotsInner({ onOpenConversation }: {
     } catch { /* the drawer still shows the snapshot carried by the overview */ }
   }
 
+  const setLead = async (bot: BotRecord, lead: boolean): Promise<void> => {
+    try {
+      await api.updateBot(bot.id, { lead })
+      await refresh()
+    } catch (cause) { message.error(t('设置主 bot 失败', 'Could not change the lead bot') + `：${messageOf(cause)}`) }
+  }
+
   const send = async (): Promise<void> => {
     const room = activeRoom
     const text = draft.trim()
@@ -205,6 +281,11 @@ function BotsInner({ onOpenConversation }: {
       setDraft('')
     } catch (cause) { message.error(t('消息发送失败', 'Could not send the message') + `：${messageOf(cause)}`) }
     finally { setPosting(false) }
+  }
+
+  // The composer's "+" drops an @ so the mention picker opens; it is a real shortcut, not decoration.
+  const insertMention = (): void => {
+    setDraft(current => `${current}${current === '' || current.endsWith(' ') || current.endsWith('\n') ? '' : ' '}@`)
   }
 
   const init = overview?.init
@@ -220,7 +301,11 @@ function BotsInner({ onOpenConversation }: {
   }
 
   const toolbar = <header className={css.toolbar}>
-    <div><h1>{t('模块 Bot 团队', 'Module bot team')}</h1>
+    <div className={css.titleBlock}>
+      <div className={css.titleRow}>
+        <h1>{t('模块 Bot 团队', 'Module bot team')}</h1>
+        {bots.length > 0 && <span className={css.countBadge}>{bots.length}</span>}
+      </div>
       <p>{t('按代码模块分工的 bot 名册、共享群聊与知识看门狗。', 'A roster of module-scoped bots, their shared rooms and the knowledge watchdog.')}</p>
     </div>
     <div className={css.actions}>
@@ -230,6 +315,9 @@ function BotsInner({ onOpenConversation }: {
           && <Button size="small" onClick={() => { onOpenConversation(init.conversationId as string) }}>{t('查看过程', 'View progress')}</Button>}
       </>}
       {init?.error !== undefined && init.error !== '' && <Tag color="error">{init.error}</Tag>}
+      <Button type="primary" icon={<IconPlusOutlineRegular size={14} />} onClick={() => { setCreateBotOpen(true) }}>{t('新建 bot', 'New bot')}</Button>
+      <Button icon={<IconUsersOutlineRegular size={14} />} onClick={() => { setCreateRoomOpen(true) }}>{t('新建群聊', 'New room')}</Button>
+      <span className={css.actionDivider} />
       <Dropdown menu={{
         items: [
           { key: 'orchestrator', label: t('模型分析切分', 'Model-driven split') },
@@ -237,12 +325,10 @@ function BotsInner({ onOpenConversation }: {
         ],
         onClick: ({ key }) => { void initTeam(key as 'orchestrator' | 'preset') },
       }} disabled={init?.running === true}>
-        <Button icon={<IconAgentPresetOutlineRegular size={14} />} loading={initBusy} disabled={init?.running === true}>
-          {t('初始化团队', 'Initialize team')}
-        </Button>
+        <Tooltip title={t('初始化团队', 'Initialize team')}>
+          <Button aria-label={t('初始化团队', 'Initialize team')} icon={<IconAgentPresetOutlineRegular size={15} />} loading={initBusy} disabled={init?.running === true} />
+        </Tooltip>
       </Dropdown>
-      <Button icon={<IconPlusOutlineRegular size={14} />} onClick={() => { setCreateBotOpen(true) }}>{t('新建 bot', 'New bot')}</Button>
-      <Button icon={<IconUsersOutlineRegular size={14} />} onClick={() => { setCreateRoomOpen(true) }}>{t('新建群聊', 'New room')}</Button>
       <Dropdown menu={{
         items: [
           { key: 'check', label: t('仅检查', 'Check only') },
@@ -250,58 +336,171 @@ function BotsInner({ onOpenConversation }: {
         ],
         onClick: ({ key }) => { void runWatchdog(key === 'refresh') },
       }}>
-        <Button icon={<IconShieldOutlineRegular size={14} />} loading={watchdogBusy}>{t('运行看门狗', 'Run watchdog')}</Button>
+        <Tooltip title={t('运行看门狗', 'Run watchdog')}>
+          <Button aria-label={t('运行看门狗', 'Run watchdog')} icon={<IconShieldOutlineRegular size={15} />} loading={watchdogBusy} />
+        </Tooltip>
       </Dropdown>
-      <span className={css.intervalBox}>
-        <span className={css.intervalLabel}>{t('看门狗间隔', 'Watchdog interval')}</span>
-        <InputNumber size="small" min={0} step={10_000} value={intervalDraft}
-          onChange={value => { intervalTouched.current = true; setIntervalDraft(value) }}
-          onBlur={() => { void saveInterval() }}
-          aria-label={t('看门狗间隔毫秒', 'Watchdog interval in ms')} />
-        <span className={css.intervalHint}>{t('毫秒，0=关', 'ms, 0 = off')}</span>
-      </span>
-      <Button icon={<IconPlayOutlineRegular size={14} />} onClick={() => { void openReport() }}>{t('查看报告', 'View report')}</Button>
-      <Button icon={<IconRefreshOutlineRegular size={14} />} onClick={() => { void refresh() }} aria-label={t('刷新', 'Refresh')} />
+      <Tooltip title={t('查看报告', 'View report')}>
+        <Button aria-label={t('查看报告', 'View report')} icon={<IconPlayOutlineRegular size={15} />} onClick={() => { void openReport() }} />
+      </Tooltip>
+      <Tooltip title={t('刷新', 'Refresh')}>
+        <Button aria-label={t('刷新', 'Refresh')} icon={<IconRefreshOutlineRegular size={15} />} onClick={() => { void refresh() }} />
+      </Tooltip>
     </div>
   </header>
 
+  const detailBot = bots.find(bot => bot.id === detailBotId)
+  const leadBot = bots.find(bot => bot.lead === true)
+  const roomMembers = activeRoom === undefined ? [] : bots.filter(bot => activeRoom.memberIds.includes(bot.id))
+
   return shell(<>
     {toolbar}
-    <div className={css.columns}>
-      <section className={css.roster} aria-label={t('Bot 名册', 'Bot roster')}>
-        <h2>{t('Bot 名册', 'Bot roster')}</h2>
-        {bots.length === 0
-          ? <Empty className={css.empty} description={t('还没有 bot。用「初始化团队」或「新建 bot」创建。', 'No bots yet. Initialize the team or create one manually.')} />
-          : <div className={css.rosterList}>
-            {bots.map(bot => <BotCard key={bot.id} bot={bot} expanded={expandedBotId === bot.id}
-              now={Date.now()}
-              onToggle={() => { setExpandedBotId(current => current === bot.id ? undefined : bot.id) }}
-              onEdit={() => { setEditingBot(bot) }} t={t} />)}
-          </div>}
-      </section>
-      <section className={css.roomPane} aria-label={t('群聊', 'Rooms')}>
-        <h2>{t('群聊', 'Rooms')}</h2>
-        {rooms.length === 0
-          ? <Empty className={css.empty} description={t('还没有群聊。用「新建群聊」把 bot 拉进一个房间。', 'No rooms yet. Create one to bring bots together.')} />
-          : <>
-            <Tabs activeKey={activeRoomId} onChange={setActiveRoomId} className={css.roomTabs}
-              items={rooms.map(room => ({ key: room.id, label: room.name }))} />
-            {roomError !== '' && <Alert className={css.notice} type="error" showIcon message={roomError} />}
-            <div className={css.stream}>
-              {roomEntries.length === 0
-                ? <Empty className={css.empty} description={t('还没有消息。@ 一个 bot 开始对话。', 'No messages yet. @ a bot to start.')} />
-                : roomEntries.map(entry => <MessageRow key={entry.id} entry={entry} roster={rosterNames} />)}
+    <div className={css.board} data-detail={detailBot !== undefined || undefined}>
+      <aside className={css.roster} aria-label={t('Bot 与群聊', 'Bots and rooms')}>
+        <div className={css.rosterHead}>
+          <span className={css.rosterTitle}>{t('Bots', 'Bots')}</span>
+          <span className={css.rosterCount}>{bots.length}</span>
+          <span className={css.spacer} />
+          <button type="button" className={css.iconButton} onClick={() => { setCreateBotOpen(true) }}
+            aria-label={t('新建 bot', 'New bot')}><IconPlusOutlineRegular size={13} /></button>
+        </div>
+        <div className={css.rosterScroll}>
+          {leadBot !== undefined && <button type="button" className={css.leadCard}
+            style={tintVars(leadBot.id, leadBot.avatarShape, leadBot.avatarColor, dark)}
+            data-active={detailBotId === leadBot.id || undefined}
+            onClick={() => { setDetailBotId(current => current === leadBot.id ? undefined : leadBot.id) }}>
+            <span className={css.leadAvatarWrap}>
+              <BotAvatar id={leadBot.id} name={leadBot.name} shape={leadBot.avatarShape} color={leadBot.avatarColor}
+                image={leadBot.avatarImage} size="xl" state={avatarStateOf(leadBot)} follow />
+              <span className={css.leadBadge} aria-hidden><IconPinFillRegular size={12} /></span>
+            </span>
+            <span className={css.leadName}>{leadBot.name}</span>
+            <span className={css.leadModule}>{leadBot.module}</span>
+          </button>}
+          {bots.length === 0
+            ? <p className={css.sideEmpty}>{t('还没有 bot。用「初始化团队」或「新建 bot」创建。', 'No bots yet. Initialize the team or create one.')}</p>
+            : groups.map(([group, members]) => <div key={group} className={css.group}>
+              <div className={css.groupHead}><span>{group}</span><span className={css.groupCount}>{members.length}</span></div>
+              {members.map(bot => <button key={bot.id} type="button" className={css.botRow}
+                data-active={detailBotId === bot.id || undefined}
+                onClick={() => { setDetailBotId(current => current === bot.id ? undefined : bot.id) }}>
+                <BotAvatar id={bot.id} name={bot.name} shape={bot.avatarShape} color={bot.avatarColor} image={bot.avatarImage}
+                  size="lg" state={avatarStateOf(bot)} follow />
+                <span className={css.rowBody}>
+                  <span className={css.rowTitle}><b>{bot.name}</b>{bot.lead === true && <IconPinFillRegular size={11} className={css.leadStar} />}</span>
+                  <span className={css.rowPreview}>{bot.description === '' ? t('暂无描述', 'No description') : bot.description}</span>
+                </span>
+                <span className={css.rowMeta}>
+                  <span className={css.moduleChip}>{bot.module}</span>
+                  <span className={css.statusDot} data-tone={bot.status} title={statusTone(bot.status).label} />
+                </span>
+              </button>)}
+            </div>)}
+          <div className={css.group}>
+            <div className={css.groupHead}>
+              <span>{t('群聊', 'Rooms')}</span>
+              <span className={css.groupCount}>{rooms.length}</span>
+              <span className={css.spacer} />
+              <button type="button" className={css.iconButton} onClick={() => { setCreateRoomOpen(true) }}
+                aria-label={t('新建群聊', 'New room')}><IconPlusOutlineRegular size={12} /></button>
             </div>
-            <div className={css.composer}>
-              <Mentions className={css.composerInput} rows={2} value={draft} placeholder={t('@ 一个 bot 或 all，然后回车发送', '@ a bot or all, press Enter to send')}
-                onChange={setDraft} onPressEnter={() => { void send() }}
-                options={[...bots.map(bot => ({ value: bot.name })), { value: 'all' }]} />
-              <Button type="primary" loading={posting} disabled={draft.trim() === ''} onClick={() => { void send() }}>{t('发送', 'Send')}</Button>
+            {rooms.length === 0
+              ? <p className={css.sideEmpty}>{t('还没有群聊。', 'No rooms yet.')}</p>
+              : rooms.map(room => <button key={room.id} type="button" className={css.roomRow}
+                data-active={activeRoomId === room.id || undefined}
+                onClick={() => { setActiveRoomId(room.id) }}>
+                <BotAvatarStack size="md" members={bots.filter(bot => room.memberIds.includes(bot.id))} />
+                <span className={css.rowBody}>
+                  <span className={css.rowTitle}><b>{room.name}</b></span>
+                  <span className={css.rowPreview}>
+                    {room.memberIds.map(id => bots.find(bot => bot.id === id)?.name ?? id).join(' · ')}
+                  </span>
+                </span>
+                <span className={css.roomCount}>{room.memberIds.length}</span>
+              </button>)}
+          </div>
+        </div>
+      </aside>
+      <section className={css.chat} aria-label={t('群聊', 'Rooms')}>
+        {activeRoom === undefined
+          ? <div className={css.roomEmpty}>
+            <div className={css.emptyAvatars}><BotAvatar id="room-empty" name="team" size="xl" state="idle" follow /></div>
+            <h2 className={css.emptyTitle}>{t('把 bot 拉进一个房间', 'Bring bots into a room')}</h2>
+            <p className={css.emptyText}>{t('群聊让多个 bot 围绕同一话题协作。新建一个房间，@ 它们开始。', 'Rooms let bots collaborate on one topic. Create a room and @ them to start.')}</p>
+            <Button type="primary" icon={<IconUsersOutlineRegular size={14} />} onClick={() => { setCreateRoomOpen(true) }}>{t('新建群聊', 'New room')}</Button>
+          </div>
+          : <>
+            <div className={css.chatChrome}>
+              <BotAvatarStack size="md" members={roomMembers} />
+              <div className={css.chatTitle}>
+                <span className={css.chatName}>{activeRoom.name} · {roomMembers.length} {t('位成员', 'members')}</span>
+                <span className={css.chatSub}>{roomMembers.map(bot => bot.name).join(' · ') || t('共享群聊', 'Shared room')}</span>
+              </div>
+              <span className={css.spacer} />
+              <div className={css.facepile}>
+                {roomMembers.slice(0, 6).map(bot => <BotAvatar key={bot.id} id={bot.id} name={bot.name}
+                  shape={bot.avatarShape} color={bot.avatarColor} image={bot.avatarImage} size="xs" animated={false} />)}
+              </div>
+            </div>
+            {roomError !== '' && <Alert className={css.notice} type="error" showIcon message={roomError} />}
+            <div className={css.stream} ref={streamRef}
+              onScroll={() => {
+                const node = streamRef.current
+                if (node !== null && node.scrollHeight - node.scrollTop - node.clientHeight < 48) setUnread(0)
+              }}>
+              {roomEntries.length === 0
+                ? <div className={css.roomEmpty}>
+                  <div className={css.emptyAvatars}>
+                    {(roomMembers.length > 0 ? roomMembers : bots).slice(0, 5).map(bot => <BotAvatar key={bot.id} id={bot.id} name={bot.name}
+                      shape={bot.avatarShape} color={bot.avatarColor} image={bot.avatarImage} size="xl" state={avatarStateOf(bot)} follow />)}
+                  </div>
+                  <h2 className={css.emptyTitle}>{t('和团队打个招呼', 'Say hello to the team')}</h2>
+                  <p className={css.emptyText}>{t('@ 一个 bot 开始对话，或试试下面的开场白。', '@ a bot to start, or try an opener below.')}</p>
+                  <div className={css.emptySuggestions}>
+                    {(roomMembers.length > 0 ? [
+                      `@${roomMembers[0]!.name} ${t('介绍一下你负责的模块', 'introduce the module you own')}`,
+                      t('大家各自说说当前进度', 'Everyone share your current progress'),
+                      `@${roomMembers[0]!.name} ${t('最近有什么需要注意的？', 'anything to watch out for lately?')}`,
+                    ] : []).map(opener => <button key={opener} type="button" className={css.suggestionChip} onClick={() => { setDraft(opener) }}>
+                      <IconSparkleRegular size={13} />{opener}
+                    </button>)}
+                  </div>
+                </div>
+                : roomEntries.map(entry => <MessageRow key={entry.id} entry={entry} roster={rosterNames} bots={bots} dark={dark} t={t} />)}
+            </div>
+            {unread > 0 && <button type="button" className={css.newMessages} onClick={() => {
+              const node = streamRef.current
+              if (node !== null) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+              setUnread(0)
+            }}>
+              {unread} {t('条新消息', 'new messages')} ↓
+            </button>}
+            <div className={css.composerBar}>
+              <div className={css.composer}>
+                <button type="button" className={css.mentionButton} aria-label={t('插入提及', 'Insert mention')}
+                  onClick={insertMention}><IconPlusOutlineRegular size={16} /></button>
+                <Mentions className={css.composerInput} rows={1} value={draft}
+                  placeholder={t(`给 ${activeRoom.name} 发消息`, `Message ${activeRoom.name}`)}
+                  onChange={setDraft} onPressEnter={() => { void send() }}
+                  options={[...bots.map(bot => ({ value: bot.name })), { value: 'all' }]} />
+              </div>
+              <Button type="primary" className={css.sendButton} loading={posting}
+                disabled={draft.trim() === ''} onClick={() => { void send() }}
+                icon={<IconSendOutlineRegular size={16} />} aria-label={t('发送', 'Send')} />
             </div>
           </>}
       </section>
+      {detailBot !== undefined && <aside className={css.detailPane} aria-label={t('Bot 详情', 'Bot details')}>
+        <div className={css.detailTop}>
+          <span className={css.spacer} />
+          <button type="button" className={css.iconButton} onClick={() => { setDetailBotId(undefined) }}
+            aria-label={t('关闭', 'Close')}><IconCloseOutlineRegular size={14} /></button>
+        </div>
+        <BotDetail bot={detailBot} dark={dark} onEdit={() => { setEditingBot(detailBot) }}
+          onSetLead={lead => { void setLead(detailBot, lead) }} t={t} />
+      </aside>}
     </div>
-    <CreateBotModal open={createBotOpen} t={t} onClose={() => { setCreateBotOpen(false) }}
+    <CreateBotModal open={createBotOpen} bots={bots} t={t} onClose={() => { setCreateBotOpen(false) }}
       onCreated={() => { setCreateBotOpen(false); void refresh() }} />
     <CreateRoomModal open={createRoomOpen} bots={bots} t={t} onClose={() => { setCreateRoomOpen(false) }}
       onCreated={() => { setCreateRoomOpen(false); void refresh() }} />
@@ -309,20 +508,31 @@ function BotsInner({ onOpenConversation }: {
       onSaved={() => { setEditingBot(undefined); void refresh() }} />
     <Drawer open={reportOpen} onClose={() => { setReportOpen(false) }} title={t('看门狗报告', 'Watchdog report')}
       rootClassName={css.reportDrawer}>
-      {shownReport === undefined
-        ? <Empty className={css.empty} description={t('还没有看门狗报告。运行一次看门狗生成。', 'No watchdog report yet. Run the watchdog once.')} />
-        : <div className={css.report}>
-          <div className={css.reportMeta}>{relativeTime(shownReport.runAt)} · {t('检查了', 'Checked')} {shownReport.entries.length} {t('个 bot', 'bots')}</div>
-          {shownReport.entries.map(entry => <div key={entry.botId} className={css.reportRow}>
-            <div className={css.reportHead}>
-              <strong>{entry.botName}</strong>
-              <Tag color={knowledgeHealthTone(entry.health).color}>{knowledgeHealthTone(entry.health).label}</Tag>
-            </div>
-            <p className={css.reportDetail}>{entry.detail}</p>
-            {entry.suggestion !== undefined && entry.suggestion !== '' && <p className={css.reportSuggestion}>{t('建议', 'Suggestion')}：{entry.suggestion}</p>}
-            <code className={css.reportPath}>{entry.knowledgePath}</code>
-          </div>)}
-        </div>}
+      <div className={css.report}>
+        <div className={css.reportSettings}>
+          <span className={css.reportSettingsLabel}><IconSettingsOutlineRegular size={14} />{t('看门狗间隔', 'Watchdog interval')}</span>
+          <InputNumber size="small" min={0} step={10_000} value={intervalDraft}
+            onChange={value => { intervalTouched.current = true; setIntervalDraft(value) }}
+            onBlur={() => { void saveInterval() }}
+            aria-label={t('看门狗间隔毫秒', 'Watchdog interval in ms')} />
+          <span className={css.reportSettingsHint}>{t('毫秒，0 = 关闭', 'ms, 0 = off')}</span>
+        </div>
+        {shownReport === undefined
+          ? <Empty className={css.empty} description={t('还没有看门狗报告。运行一次看门狗生成。', 'No watchdog report yet. Run the watchdog once.')} />
+          : <>
+            <div className={css.reportMeta}><IconClockOutlineRegular size={13} />{relativeTime(shownReport.runAt)} · {t('检查了', 'Checked')} {shownReport.entries.length} {t('个 bot', 'bots')}</div>
+            {shownReport.entries.map(entry => <div key={entry.botId} className={css.reportRow}
+              style={{ '--report-accent': HEALTH_CARD_TONE[entry.health] } as CSSProperties}>
+              <div className={css.reportHead}>
+                <strong>{entry.botName}</strong>
+                <Tag color={knowledgeHealthTone(entry.health).color}>{knowledgeHealthTone(entry.health).label}</Tag>
+              </div>
+              <p className={css.reportDetail}>{entry.detail}</p>
+              {entry.suggestion !== undefined && entry.suggestion !== '' && <p className={css.reportSuggestion}>{t('建议', 'Suggestion')}：{entry.suggestion}</p>}
+              <code className={css.reportPath}>{entry.knowledgePath}</code>
+            </div>)}
+          </>}
+      </div>
     </Drawer>
   </>)
 }
@@ -335,64 +545,169 @@ const HEALTH_CARD_TONE: Record<BotRecord['knowledgeHealth'], string> = {
   unknown: 'var(--dsw-alias-label-tertiary, #999)',
 }
 
-function BotCard({ bot, expanded, now, onToggle, onEdit, t }: {
+function avatarStateOf(bot: BotRecord): BotAvatarState {
+  if (bot.status === 'busy') return 'working'
+  if (bot.status === 'error') return 'failed'
+  if (bot.compliance === 'stalled') return 'waiting'
+  return 'idle'
+}
+
+/** Detail pane for one bot: identity, health and the knowledge library, as a pinned side panel. */
+function BotDetail({ bot, dark, onEdit, onSetLead, t }: {
   bot: BotRecord
-  expanded: boolean
-  now: number
-  onToggle: () => void
+  dark: boolean
   onEdit: () => void
+  onSetLead: (lead: boolean) => void
   t: (zh: string, en: string) => string
 }) {
   const status = statusTone(bot.status)
   const health = knowledgeHealthTone(bot.knowledgeHealth)
   const compliance = complianceTone(bot.compliance)
-  return <article className={css.botCard} data-expanded={expanded || undefined}>
-    <button type="button" className={css.botHead} aria-expanded={expanded} onClick={onToggle}>
-      <span className={css.statusDot} data-tone={bot.status} title={status.label} />
-      <span className={css.botName}>{bot.name}</span>
-      <Tag>{bot.module}</Tag>
-      <span className={css.spacer} />
-      <span className={css.healthChip} data-health={bot.knowledgeHealth} style={bot.knowledgeHealth === 'unknown' ? { background: HEALTH_CARD_TONE.unknown } : undefined}>
-        {health.label}
+  const [tab, setTab] = useState<'detail' | 'library'>('detail')
+  const [knowledge, setKnowledge] = useState<string>()
+  const [knowledgeError, setKnowledgeError] = useState('')
+  useEffect(() => {
+    if (tab !== 'library') return
+    let active = true
+    setKnowledgeError('')
+    api.getBotKnowledge(bot.id).then(result => {
+      if (active) setKnowledge(result.body)
+    }).catch((cause: unknown) => {
+      if (active) setKnowledgeError(cause instanceof Error ? cause.message : String(cause))
+    })
+    return () => { active = false }
+  }, [tab, bot.id])
+  return <div className={css.detail}>
+    <div className={css.detailHero} style={tintVars(bot.id, bot.avatarShape, bot.avatarColor, dark)}>
+      <span className={css.heroAvatar}>
+        <BotAvatar id={bot.id} name={bot.name} shape={bot.avatarShape} color={bot.avatarColor} image={bot.avatarImage}
+          size="xl" state={avatarStateOf(bot)} follow />
       </span>
-      <span className={css.complianceChip}>{compliance.label}</span>
-    </button>
-    <div className={css.botMeta}>
-      <span className={css.botGlobs}>{globsSummary(bot.globs)}</span>
-      <span className={css.spacer} />
-      <span className={css.time}>{bot.lastActiveAt === undefined ? t('从未活动', 'Never active') : relativeTime(bot.lastActiveAt, now)}</span>
+      <div className={css.detailNames}>
+        <strong>{bot.name}{bot.lead === true && <IconPinFillRegular size={14} className={css.leadStar} />}</strong>
+        <span className={css.detailRole}>{bot.module}</span>
+        <span className={css.detailTime}>
+          <IconClockOutlineRegular size={12} />
+          {bot.lastActiveAt === undefined ? t('从未活动', 'Never active') : relativeTime(bot.lastActiveAt)}
+        </span>
+      </div>
     </div>
-    {expanded && <div className={css.botDetail}>
-      <p className={css.botDescription}>{bot.description === '' ? '—' : bot.description}</p>
-      <dl className={css.botFacts}>
-        <div><dt>{t('知识路径', 'Knowledge doc')}</dt><dd><code>{bot.knowledgePath}</code></dd></div>
-        <div><dt>{t('Glob 模式', 'Globs')}</dt><dd><code>{bot.globs.join(', ') || '—'}</code></dd></div>
-        {bot.model !== undefined && <div><dt>{t('模型', 'Model')}</dt><dd>{bot.model}</dd></div>}
-      </dl>
-      <Button size="small" onClick={onEdit}>{t('编辑', 'Edit')}</Button>
-    </div>}
-  </article>
-}
-
-function MessageRow({ entry, roster }: {
-  entry: RoomEntry
-  roster: ReadonlySet<string>
-}) {
-  const hue = entry.sender.kind === 'bot' ? botHue(entry.sender.name ?? '') : 0
-  if (entry.sender.kind === 'system') {
-    return <div className={css.systemRow}><span className={css.systemText} data-system>{entry.text}</span></div>
-  }
-  const mine = entry.sender.kind === 'user'
-  return <div className={`${css.msgRow} ${mine ? css.msgUser : css.msgBot}`} data-side={mine ? 'user' : 'bot'}>
-    {!mine && <span className={css.nameChip} data-name-chip style={{ backgroundColor: `hsl(${hue} 55% 42%)` }}>{entry.sender.name}</span>}
-    <span className={css.msgBody}>{splitMentions(entry.text, roster).map((segment, index) => segment.kind === 'mention'
-      ? <span key={index} className={css.mentionChip} data-mention>@{segment.value}</span>
-      : <span key={index}>{segment.value}</span>)}</span>
+    <div className={css.detailTabs} role="tablist">
+      <button type="button" role="tab" className={css.detailTab} data-active={tab === 'detail' || undefined}
+        onClick={() => { setTab('detail') }}>{t('详情', 'Details')}</button>
+      <button type="button" role="tab" className={css.detailTab} data-active={tab === 'library' || undefined}
+        onClick={() => { setTab('library') }}>{t('资料库', 'Library')}</button>
+    </div>
+    {tab === 'detail'
+      ? <>
+        <div className={css.detailChips}>
+          <span className={css.healthChip} data-health={bot.knowledgeHealth}
+            style={bot.knowledgeHealth === 'unknown' ? { background: HEALTH_CARD_TONE.unknown } : undefined}>
+            {health.label}
+          </span>
+          <span className={css.complianceChip}>{compliance.label}</span>
+          <span className={css.statusChip} data-tone={bot.status}>{status.label}</span>
+        </div>
+        <p className={css.botDescription}>{bot.description === '' ? '—' : bot.description}</p>
+        <dl className={css.botFacts}>
+          <div><dt>{t('知识路径', 'Knowledge doc')}</dt><dd><code>{bot.knowledgePath}</code></dd></div>
+          <div><dt>{t('Glob 模式', 'Globs')}</dt><dd><code>{bot.globs.join(', ') || '—'}</code></dd></div>
+          {bot.model !== undefined && <div><dt>{t('模型', 'Model')}</dt><dd>{bot.model}</dd></div>}
+        </dl>
+        <div className={css.detailActions}>
+          <Button size="small" icon={<IconEditOutlineRegular size={13} />} onClick={onEdit}>{t('编辑', 'Edit')}</Button>
+          <Button size="small" type="text" icon={<IconPinOutlineRegular size={13} />} onClick={() => { onSetLead(bot.lead !== true) }}>
+            {bot.lead === true ? t('取消主 bot', 'Unpin lead') : t('设为主 bot', 'Make lead')}
+          </Button>
+        </div>
+      </>
+      : <div className={css.library}>
+        <p className={css.detailTime}>{bot.knowledgePath}</p>
+        {knowledgeError !== ''
+          ? <Alert type="error" showIcon message={knowledgeError} />
+          : knowledge === undefined
+            ? <Skeleton active paragraph={{ rows: 6 }} title={false} />
+            : <div className={css.libraryBody}><AnswerMarkdown text={knowledge} labels={markdownLabels(t)} t={t} /></div>}
+      </div>}
   </div>
 }
 
-function CreateBotModal({ open, onClose, onCreated, t }: {
+function MessageRow({ entry, roster, bots, dark, t }: {
+  entry: RoomEntry
+  roster: ReadonlySet<string>
+  bots: readonly BotRecord[]
+  dark: boolean
+  t: (zh: string, en: string) => string
+}) {
+  if (entry.sender.kind === 'system') {
+    return <div className={css.systemRow}><span className={css.systemText} data-system>{entry.text}</span></div>
+  }
+  if (entry.sender.kind === 'user') {
+    // The host delivers a post to exactly the roster names its text mentions, so the receipt
+    // line can be rebuilt from the frame instead of persisted separately.
+    const delivered = new Set<string>()
+    for (const match of entry.text.matchAll(/@([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)/gu)) {
+      if (roster.has(match[1]!)) delivered.add(match[1]!)
+    }
+    const recipients = bots.filter(bot => delivered.has(bot.id))
+    return <>
+      <div className={css.msgUser} data-side="user">
+        <span className={css.userBubble}>{splitMentions(entry.text, roster).map((segment, index) => segment.kind === 'mention'
+          ? <span key={index} className={css.mentionChip} data-mention>@{segment.value}</span>
+          : <span key={index}>{segment.value}</span>)}</span>
+      </div>
+      {recipients.length > 0 && <div className={css.receipt}>
+        <span className={css.receiptLabel}>{t('已发消息给', 'Sent to')}</span>
+        {recipients.map(bot => <span key={bot.id} className={css.receiptChip}>
+          <BotAvatar id={bot.id} name={bot.name} shape={bot.avatarShape} color={bot.avatarColor} image={bot.avatarImage}
+            size="xs" animated={false} />
+          {bot.name}<span className={css.rowRole}> · {bot.module}</span>
+        </span>)}
+      </div>}
+    </>
+  }
+  const sender = entry.sender.name ?? ''
+  const bot = bots.find(candidate => candidate.id === sender)
+  return <div className={css.msgBot} data-side="bot">
+    <BotAvatar id={sender} name={sender} size="md" state="idle" follow
+      shape={bot?.avatarShape} color={bot?.avatarColor} image={bot?.avatarImage} />
+    <div className={css.msgMain}>
+      <div className={css.msgName} style={{ color: identityText(sender, bot?.avatarShape, bot?.avatarColor, dark) }}>
+        {sender}{bot === undefined ? null : <span className={css.msgModule}> · {bot.module}</span>}
+      </div>
+      <div className={css.msgBubble}>
+        <div className={css.msgMarkdown}>
+          <AnswerMarkdown text={entry.text} labels={markdownLabels(t)} t={t} />
+        </div>
+      </div>
+    </div>
+  </div>
+}
+
+function AvatarFields({ form, t }: {
+  form: FormInstance
+  t: (zh: string, en: string) => string
+}) {
+  const shape = Form.useWatch('avatarShape', form) as string | undefined
+  const color = Form.useWatch('avatarColor', form) as string | undefined
+  return <div className={css.avatarFields}>
+    <BotAvatar id="preview" shape={shape} color={color} size="xl" />
+    <div className={css.avatarSelects}>
+      <Form.Item name="avatarShape" label={t('头像形状', 'Avatar shape')}>
+        <Select allowClear placeholder={t('按名字自动分配', 'Auto from name')}
+          options={BOT_SHAPE_POOL.map(shapeName => ({ value: shapeName, label: shapeName }))} />
+      </Form.Item>
+      <Form.Item name="avatarColor" label={t('头像颜色', 'Avatar color')}>
+        <Select allowClear placeholder={t('按名字自动分配', 'Auto from name')}
+          options={BOT_COLOR_POOL.map(colorName => ({ value: colorName, label: colorName }))} />
+      </Form.Item>
+    </div>
+  </div>
+}
+
+function CreateBotModal({ open, bots, onClose, onCreated, t }: {
   open: boolean
+  bots: readonly BotRecord[]
   onClose: () => void
   onCreated: () => void
   t: (zh: string, en: string) => string
@@ -400,6 +715,12 @@ function CreateBotModal({ open, onClose, onCreated, t }: {
   const { message } = AntdApp.useApp()
   const [form] = Form.useForm()
   const [busy, setBusy] = useState(false)
+  // Grok Bot opens the dialog with a name already in place; the pool keeps that name short
+  // and person-like, and skips names the roster already took.
+  useEffect(() => {
+    if (!open) return
+    form.setFieldsValue({ name: suggestBotName(bots.map(bot => bot.name)) })
+  }, [open, bots, form])
   const submit = async (): Promise<void> => {
     const values = await form.validateFields()
     const input: CreateBotInput = {
@@ -408,6 +729,8 @@ function CreateBotModal({ open, onClose, onCreated, t }: {
       globs: String(values.globs ?? '').split(',').map(item => item.trim()).filter(item => item !== ''),
       description: values.description ?? '',
       ...(values.model === undefined || values.model === '' ? {} : { model: values.model }),
+      ...(values.avatarShape === undefined || values.avatarShape === '' ? {} : { avatarShape: values.avatarShape }),
+      ...(values.avatarColor === undefined || values.avatarColor === '' ? {} : { avatarColor: values.avatarColor }),
     }
     setBusy(true)
     try {
@@ -421,6 +744,7 @@ function CreateBotModal({ open, onClose, onCreated, t }: {
     title={t('新建 bot', 'New bot')} okText={t('创建', 'Create')} cancelText={t('取消', 'Cancel')}>
     <Form form={form} layout="vertical">
       <Form.Item name="name" label={t('名称', 'Name')} rules={[{ required: true }]}><Input /></Form.Item>
+      <AvatarFields form={form} t={t} />
       <Form.Item name="module" label={t('模块', 'Module')} rules={[{ required: true }]}><Input /></Form.Item>
       <Form.Item name="globs" label={t('Glob 模式（逗号分隔）', 'Globs (comma separated)')}><Input /></Form.Item>
       <Form.Item name="description" label={t('描述', 'Description')}><Input.TextArea rows={3} /></Form.Item>
@@ -438,6 +762,7 @@ function EditBotModal({ bot, onClose, onSaved, t }: {
   const { message } = AntdApp.useApp()
   const [form] = Form.useForm()
   const [busy, setBusy] = useState(false)
+  const [avatarOpen, setAvatarOpen] = useState(false)
   useEffect(() => {
     if (bot === undefined) return
     form.setFieldsValue({
@@ -460,15 +785,24 @@ function EditBotModal({ bot, onClose, onSaved, t }: {
     } catch (cause) { message.error(t('保存 bot 失败', 'Could not save the bot') + `：${messageOf(cause)}`) }
     finally { setBusy(false) }
   }
-  return <Modal open={bot !== undefined} onCancel={onClose} onOk={() => { void submit() }} okButtonProps={{ loading: busy }}
-    title={`${t('编辑', 'Edit')} ${bot?.name ?? ''}`} okText={t('保存', 'Save')} cancelText={t('取消', 'Cancel')}>
-    <Form form={form} layout="vertical">
-      <Form.Item name="module" label={t('模块', 'Module')} rules={[{ required: true }]}><Input /></Form.Item>
-      <Form.Item name="globs" label={t('Glob 模式（逗号分隔）', 'Globs (comma separated)')}><Input /></Form.Item>
-      <Form.Item name="description" label={t('描述', 'Description')}><Input.TextArea rows={3} /></Form.Item>
-      <Form.Item name="model" label={t('模型', 'Model')}><Input /></Form.Item>
-    </Form>
-  </Modal>
+  return <>
+    <Modal open={bot !== undefined} onCancel={onClose} onOk={() => { void submit() }} okButtonProps={{ loading: busy }}
+      title={`${t('编辑', 'Edit')} ${bot?.name ?? ''}`} okText={t('保存', 'Save')} cancelText={t('取消', 'Cancel')}>
+      <div className={css.avatarFields}>
+        <BotAvatar id={bot?.id ?? 'preview'} name={bot?.name} shape={bot?.avatarShape} color={bot?.avatarColor}
+          image={bot?.avatarImage} size="xl" animated={false} />
+        <Button size="small" onClick={() => { setAvatarOpen(true) }}>{t('编辑头像', 'Edit avatar')}</Button>
+      </div>
+      <Form form={form} layout="vertical">
+        <Form.Item name="module" label={t('模块', 'Module')} rules={[{ required: true }]}><Input /></Form.Item>
+        <Form.Item name="globs" label={t('Glob 模式（逗号分隔）', 'Globs (comma separated)')}><Input /></Form.Item>
+        <Form.Item name="description" label={t('描述', 'Description')}><Input.TextArea rows={3} /></Form.Item>
+        <Form.Item name="model" label={t('模型', 'Model')}><Input /></Form.Item>
+      </Form>
+    </Modal>
+    <BotAvatarEditorModal bot={bot} open={avatarOpen} onClose={() => { setAvatarOpen(false) }}
+      onSaved={() => { setAvatarOpen(false); onSaved() }} />
+  </>
 }
 
 function CreateRoomModal({ open, bots, onClose, onCreated, t }: {

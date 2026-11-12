@@ -1,0 +1,24 @@
+.editor { display: flex; gap: 20px; align-items: flex-start; }
+.stage { display: grid; width: 216px; height: 216px; flex: none; place-items: center; border-radius: 18px; background: var(--dsw-alias-bg-layer-2); }
+.crop { position: relative; width: 216px; height: 216px; overflow: hidden; border-radius: 18px; cursor: grab; touch-action: none; }
+.crop:active { cursor: grabbing; }
+.crop img { position: absolute; max-width: none; user-select: none; pointer-events: none; }
+/* The ring punches the square preview into the circle the roster will render. */
+.cropRing { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 999px rgba(0, 0, 0, .45); }
+
+.controls { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 12px; }
+.row { display: flex; flex-direction: column; gap: 6px; }
+.label { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 4px; max-height: 132px; overflow-y: auto; padding: 2px; }
+.shapeButton { display: grid; place-items: center; border: 1px solid transparent; border-radius: 8px; padding: 2px; background: none; cursor: pointer; }
+.shapeButton:hover { background: var(--dsw-alias-bg-layer-2); }
+.shapeButton[data-active] { border-color: var(--dsw-alias-label-primary); }
+.colors { display: flex; flex-wrap: wrap; gap: 7px; }
+.colorButton { width: 20px; height: 20px; border: 0; border-radius: 50%; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .12); }
+.colorButton[data-active] { box-shadow: 0 0 0 2px var(--dsw-alias-bg-base), 0 0 0 3.5px var(--dsw-alias-label-primary); }
+.photoRow { display: flex; align-items: center; gap: 8px; }
+.zoomRow { display: flex; align-items: center; gap: 8px; }
+.zoomSlider { flex: 1; min-width: 0; margin: 0 6px; }
+.hint { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 17px; }
+
+@media (max-width: 640px) { .editor { flex-direction: column; } .stage { align-self: center; } }

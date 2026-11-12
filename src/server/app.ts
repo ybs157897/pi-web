@@ -177,13 +177,16 @@ const interactionAnswerSchema = z.object({  answers: z.array(z.object({
   }).strict()).min(1).max(8),
 }).strict()
 
-const botNameSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u)
+const botNameSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u)
 const createBotSchema = z.object({
   name: botNameSchema,
   module: z.string().trim().min(1).max(120),
   globs: z.array(z.string().trim().min(1).max(200)).min(1).max(50),
   description: z.string().trim().min(1).max(500),
   model: z.string().trim().max(200).optional(),
+  avatarShape: z.string().trim().min(1).max(40).optional(),
+  avatarColor: z.string().trim().min(1).max(40).optional(),
+  lead: z.boolean().optional(),
 }).strict()
 const updateBotSchema = createBotSchema.omit({ name: true }).partial()
   .refine(value => Object.keys(value).length > 0, { message: 'update needs a field' })
@@ -194,6 +197,8 @@ const createBotRoomSchema = z.object({
   memberIds: z.array(botNameSchema).min(1).max(64),
 }).strict()
 const botRoomPostSchema = z.object({ text: z.string().trim().min(1).max(20_000) }).strict()
+/** A cropped 256×256 PNG from the avatar editor; byte size is enforced again in the service. */
+const botAvatarSchema = z.object({ dataUrl: z.string().min(1).max(1_000_000) }).strict()
 const botWatchdogRunSchema = z.object({ refreshStale: z.boolean().optional() }).strict()
 
 class ApiFault extends Error {
@@ -902,6 +907,19 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.post('/api/bots/watchdog/run', async c => c.json(await runtime.runBotWatchdog(await readJson(c.req.raw, botWatchdogRunSchema))))
   app.get('/api/bots/watchdog/report', async c => c.json(await runtime.botWatchdogReport()))
   app.patch('/api/bots/:botId', async c => c.json(await runtime.updateBot(pathId(c.req.param('botId')), await readJson(c.req.raw, updateBotSchema))))
+  app.post('/api/bots/:botId/avatar', async c => c.json(await runtime.setBotAvatarImage(
+    pathId(c.req.param('botId')), (await readJson(c.req.raw, botAvatarSchema)).dataUrl)))
+  app.delete('/api/bots/:botId/avatar', async c => c.json(await runtime.clearBotAvatarImage(pathId(c.req.param('botId')))))
+  app.get('/api/bots/:botId/avatar', async c => {
+    const bytes = await runtime.botAvatarImageBytes(pathId(c.req.param('botId')))
+    if (bytes === undefined) return c.notFound()
+    return c.body(new Uint8Array(bytes), 200, {
+      'content-type': 'image/png',
+      // The record's `avatarImage` carries a `?v=` stamp, so the bytes behind one URL never change.
+      'cache-control': 'private, max-age=31536000, immutable',
+    })
+  })
+  app.get('/api/bots/:botId/knowledge', async c => c.json(await runtime.botKnowledge(pathId(c.req.param('botId')))))
   app.post('/api/bots/rooms', async c => c.json(await runtime.createBotRoom(await readJson(c.req.raw, createBotRoomSchema)), 201))
   app.post('/api/bots/rooms/:roomId/posts', async c => c.json(await runtime.postBotRoom(pathId(c.req.param('roomId')), await readJson(c.req.raw, botRoomPostSchema)), 202))
   // Room frames are passive entries, so they never appear in the conversation
