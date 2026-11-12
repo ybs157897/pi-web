@@ -76,10 +76,10 @@ export const META = defineDoc<ConversationMetadata>({
 export const BOT_CONVERSATION_KINDS = ['bot', 'botRoom', 'watchdog', 'botInit'] as const
 export type BotConversationKind = (typeof BOT_CONVERSATION_KINDS)[number]
 export function isHiddenConversationKind(kind: string | undefined): boolean {
-  return kind !== undefined && (BOT_CONVERSATION_KINDS as readonly string[]).includes(kind)
+  return kind !== undefined && ((BOT_CONVERSATION_KINDS as readonly string[]).includes(kind) || kind === 'docKeeper')
 }
 
-export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' | BotConversationKind }>({
+export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' | BotConversationKind | 'docKeeper' }>({
   kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false, initial: () => ({}),
 })
 

@@ -37,6 +37,8 @@ import { createSubagentTools, type ChildModelList, SUBAGENT_MODEL_LIST_LIMIT } f
 import { createTeamTools } from '../tools/team.ts'
 import { createBotsExtension, BOTS_EXTENSION_NAME } from '../bots/extension.ts'
 import { createBotsService } from '../bots/service.ts'
+import { createDocKeeperService } from '../knowledge/service.ts'
+import { DOC_KEEPER_EXTENSION_NAME } from '../knowledge/extension.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
 import { SkillStore } from '../skills/store.ts'
 import { piWebHome } from '../state/home.ts'
@@ -195,6 +197,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   botsService.attachExtension(botsExtension)
   AGENT_EXCLUDED_EXTENSIONS.add(BOTS_EXTENSION_NAME)
 
+  // doc-keeper: the standalone knowledge-document maintenance agent (A2A-exposed). Like bots, its
+  // extension is excluded from the standard agent composition so prompt snapshots stay untouched;
+  // a doc-keeper conversation opts in explicitly when the service builds it.
+  const docKeeperService = createDocKeeperService({
+    harness: () => harness,
+    assertOpen,
+    buildAgentChange,
+    selectedWorkspace,
+    conversationError: id => conversationsService.detail(id).then(d => d.error).catch(() => undefined),
+  })
+  AGENT_EXCLUDED_EXTENSIONS.add(DOC_KEEPER_EXTENSION_NAME)
+
   /**
    * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
    * MCP is a read-only import of the global `mcp.json`; a missing file, a bad
@@ -310,6 +324,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // The module-bot extension sits with the other tool extensions; the execution policy
   // (installed last) still captures its tools so plan mode keeps filtering them.
   registry.install(botsExtension)
+  registry.install(docKeeperService.extension)
   // Tool-free: it only appends a per-request reminder from the live plugin projection.
   registry.install(createPluginReferenceExtension({
     capabilities: () => pluginReferenceCapabilities(pluginStore.overview()),
@@ -753,6 +768,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     botRoomLog: (roomId) => botsService.roomLog(roomId),
     runBotWatchdog: input => botsService.runWatchdog(input).then(report => ({ report })),
     botWatchdogReport: async () => botsService.lastWatchdogRun(),
+    runDocKeeperMaintenance: input => docKeeperService.runMaintenance(input),
     async close() {
       if (!closePromise) {
         runtimeClosed = true

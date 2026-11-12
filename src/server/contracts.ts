@@ -2,6 +2,7 @@ import type { GoalUpdateRequest } from '../shared/types.ts'
 import type { MutableModels } from '@earendil-works/pi-ai'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
+import type { DocKeeperRunInput, DocKeeperRunResult } from './knowledge/service.ts'
 import type {
   AddWorkspaceInput,
   AccessMode,
@@ -208,6 +209,8 @@ export interface Runtime {
   botRoomLog(roomId: string): Promise<BotRoomFrame[]>
   runBotWatchdog(input: { refreshStale?: boolean }): Promise<{ report: BotWatchdogReport }>
   botWatchdogReport(): Promise<{ lastRunAt?: string; report?: BotWatchdogReport }>
+  /** Run one doc-keeper knowledge-document maintenance task (check is model-free; refresh drives the agent). */
+  runDocKeeperMaintenance(input: DocKeeperRunInput): Promise<DocKeeperRunResult>
   close(): Promise<void>
 }
 /** `workspace` is an explicit opt-in (`PI_WEB_WORKSPACE`); without it the app starts with no workspaces at all. */

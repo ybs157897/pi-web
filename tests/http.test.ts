@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem, ConversationDetail, ConversationSummary, CreateConversationInput, ModelCatalog, ProviderInput, SubmitInput, UpdateConversationInput } from '../src/shared/types.ts'
 import type { Runtime } from '../src/server/contracts.ts'
+import type { DocKeeperRunInput, DocKeeperRunResult } from '../src/server/knowledge/service.ts'
 import type { GoalUpdateRequest } from '../src/shared/types.ts'
 import type * as Protocol from '../src/shared/types.ts'
 import { createApp } from '../src/server/app.ts'
@@ -482,6 +483,9 @@ class FakeRuntime implements Runtime {
   }
   async botWatchdogReport(): Promise<{ lastRunAt?: string; report?: Protocol.BotWatchdogReport }> {
     return {}
+  }
+  async runDocKeeperMaintenance(input: DocKeeperRunInput): Promise<DocKeeperRunResult> {
+    return { mode: input.mode, health: 'fresh', detail: 'stub', changedFiles: [], commitCount: 0, updated: false, knowledgePath: input.knowledgePath }
   }
 
   async close(): Promise<void> {
