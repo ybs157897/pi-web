@@ -1,7 +1,7 @@
 # subagent-general
 
 sections (8218 chars): runtime-core 2955, project-instructions 302, work-policy 722, wetrack-analysis 611, skills-policy 2407, codemode 824, instructions 397
-tools (19; descriptions 9452 chars; parameters 5845 chars): read, write, edit, bash, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate, codemode
+tools (19; descriptions 9549 chars; parameters 5845 chars): read, write, edit, bash, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate, codemode
 
 ## section runtime-core
 

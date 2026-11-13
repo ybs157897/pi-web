@@ -18,6 +18,7 @@ import type { Conversation, ConversationId, EntryId, Harness, ModelRef, Submissi
 import type { AccessMode, ThinkingLevel } from '../../shared/types.ts'
 import { estimateMessagesTokens } from '../conversation/compaction.ts'
 import { captureSideCall } from '../conversation/trajectory.ts'
+import { applySupersedes, gateWrite, memoryDedupMessage, readGovernanceLedger, recordDelete } from './governance.ts'
 import { memoryInstructions } from './policy.ts'
 import {
   argumentPath,
@@ -167,24 +168,34 @@ export interface MemoryManifestEntry {
   modifiedAt: number
 }
 
-function frontmatterFields(content: string): { type?: string; description?: string } {
+function frontmatterFields(content: string): { type?: string; description?: string; textHash?: string } {
   const match = /^(\uFEFF?)---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u.exec(content)
   if (match === null) return {}
   const document = parseDocument(match[2] ?? '')
   if (document.errors.length > 0) return {}
-  const result: { type?: string; description?: string } = {}
+  const result: { type?: string; description?: string; textHash?: string } = {}
   const description = document.get('description')
   if (typeof description === 'string' && description.trim() !== '') result.description = description.trim()
   const metadata = document.get('metadata')
   if (isMap(metadata)) {
     const type = metadata.get('type')
     if (typeof type === 'string' && type.trim() !== '') result.type = type.trim()
+    const textHash = metadata.get('textHash')
+    if (typeof textHash === 'string' && textHash.trim() !== '') result.textHash = textHash.trim()
   }
   return result
 }
 
-/** Scan the memory root for fact files, newest first, reading only each file's frontmatter. */
+/**
+ * Scan the memory root for fact files, newest first, reading only each file's frontmatter.
+ * Superseded and tombstoned files are excluded, so extraction is never fed knowledge that was
+ * corrected or deleted; a tombstoned body hash is excluded even under a different file name.
+ */
 export async function scanMemoryManifest(root: string, limit = MEMORY_MANIFEST_LIMIT): Promise<MemoryManifestEntry[]> {
+  const ledger = await readGovernanceLedger(root)
+  const superseded = new Set(ledger.superseded.map(entry => entry.file))
+  const tombstonedFiles = new Set(ledger.tombstones.map(entry => entry.file))
+  const tombstonedHashes = new Set(ledger.tombstones.map(entry => entry.hash))
   const entries: MemoryManifestEntry[] = []
   const walk = async (directory: string): Promise<void> => {
     if (entries.length >= limit) return
@@ -212,13 +223,12 @@ export async function scanMemoryManifest(root: string, limit = MEMORY_MANIFEST_L
       }
       const record = await readMemoryFile(path)
       if (record.status !== 'loaded') continue
+      const file = relative(root, path).split(sep).join('/')
+      if (superseded.has(file) || tombstonedFiles.has(file)) continue
       const preview = record.content.split(/\r?\n/u).slice(0, MANIFEST_PREVIEW_LINES).join('\n')
-      const fields = frontmatterFields(preview)
-      entries.push({
-        file: relative(root, path).split(sep).join('/'),
-        modifiedAt,
-        ...fields,
-      })
+      const { textHash, ...fields } = frontmatterFields(preview)
+      if (textHash !== undefined && tombstonedHashes.has(textHash)) continue
+      entries.push({ file, modifiedAt, ...fields })
     }
   }
   await walk(root)
@@ -439,8 +449,12 @@ export async function executeExtractionTool(call: ToolCall, options: ExtractionE
     const path = resolveSafeMemoryPath(isAbsolute(raw) ? raw : resolve(options.cwd, raw), options.root)
     if (path === undefined) return { content: MEMORY_EXTRACTION_POLICY_MESSAGE(options.root), isError: true }
     await ensureMemoryDirectory(options.root)
-    const stamped = stampOriginSessionId(content, path, options.root, String(options.conversationId))
+    const gate = await gateWrite(options.root, path, content).catch(() => undefined)
+    if (gate?.action === 'reject') return { content: gate.reason, isError: true }
+    if (gate?.action === 'dedup') return { content: memoryDedupMessage(gate.file), isError: false }
+    const stamped = stampOriginSessionId(gate?.action === 'allow' ? gate.content : content, path, options.root, String(options.conversationId))
     await writeMemoryText(path, stamped)
+    if (gate?.action === 'allow') await applySupersedes(options.root, path, stamped).catch(() => undefined)
     return { content: `Successfully wrote to ${raw}`, isError: false }
   }
 
@@ -468,8 +482,12 @@ export async function executeExtractionTool(call: ToolCall, options: ExtractionE
       }
       content = content.slice(0, first) + edit.newText + content.slice(first + edit.oldText.length)
     }
-    const stamped = stampOriginSessionId(content, path, options.root, String(options.conversationId))
+    const gate = await gateWrite(options.root, path, content).catch(() => undefined)
+    if (gate?.action === 'reject') return { content: gate.reason, isError: true }
+    if (gate?.action === 'dedup') return { content: memoryDedupMessage(gate.file), isError: false }
+    const stamped = stampOriginSessionId(gate?.action === 'allow' ? gate.content : content, path, options.root, String(options.conversationId))
     await writeMemoryText(path, stamped)
+    if (gate?.action === 'allow') await applySupersedes(options.root, path, stamped).catch(() => undefined)
     return { content: `Successfully edited ${raw}`, isError: false }
   }
 
@@ -482,6 +500,8 @@ export async function executeExtractionTool(call: ToolCall, options: ExtractionE
     }
     const record = await readMemoryFile(path)
     if (record.status === 'missing') return { content: `File not found: ${raw}`, isError: true }
+    // Tombstone the body hash before the hard delete so extraction cannot silently relearn it.
+    await recordDelete(options.root, path, String(options.conversationId)).catch(() => undefined)
     await rm(path)
     return { content: `Successfully deleted ${raw}`, isError: false }
   }

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Extension, ToolRegistration } from '@earendil-works/pi-durable'
+import { MEMORY_GOVERNANCE_FILENAME, memoryTextHash, readGovernanceLedger, recordDelete } from '../src/server/memory/governance.ts'
 import { createMemoryExtension, memoryInstructions, MEMORY_EXTENSION_NAME } from '../src/server/memory/policy.ts'
 import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 
@@ -31,7 +32,7 @@ async function fixture(options: { enabled?: boolean; planActive?: boolean; tools
     if (item === undefined) throw new Error(`missing section ${key}`)
     return await item.render(input as never, {} as never)
   }
-  const wrap = (name: 'write' | 'edit') => {
+  const wrap = (name: 'write' | 'edit' | 'delete') => {
     const entry = extension.wraps?.find(item => 'tool' in item && item.tool === name) as
       | { tool: string; wrap(tool: ToolRegistration): ToolRegistration }
       | undefined
@@ -48,7 +49,7 @@ describe('memory extension identity', () => {
 
     expect(extension.name).toBe(MEMORY_EXTENSION_NAME)
     expect(extension.sections?.map(section => section.key)).toEqual(['memory', 'memory-index'])
-    expect(extension.wraps?.map(item => ('tool' in item ? item.tool : item.section))).toEqual(['write', 'edit'])
+    expect(extension.wraps?.map(item => ('tool' in item ? item.tool : item.section))).toEqual(['write', 'edit', 'delete'])
     expect(extension.tools).toBeUndefined()
   })
 })
@@ -65,6 +66,8 @@ describe('memory instructions section', () => {
     expect(rendered).toContain('MEMORY.md')
     expect(rendered).toContain('修改 `MEMORY.md` 前先 read 它')
     expect(rendered).toContain('不要保存仓库本身已记录的内容')
+    expect(rendered).toContain('supersedes: <旧 name>')
+    expect(rendered).toContain('删除的记忆不要重新保存')
   })
 
   it('omits the section when memory is disabled or no workspace is bound', async () => {
@@ -199,5 +202,223 @@ describe('memory stamp wraps', () => {
     const failedWrap = f.wrap('edit')(editTool(async () => ({ isError: true })))
     await failedWrap.execute({ path: failing, edits: [] } as never, api(f), {} as never)
     expect(await readFile(failing, 'utf8')).not.toContain('originSessionId')
+  })
+})
+
+describe('memory governance wraps', () => {
+  const FACT = '---\nname: fact\ndescription: a fact\nmetadata:\n  type: project\n---\nThe body.\n'
+
+  function writeTool(execute: (args: { path: string; content: string }) => Promise<{ isError?: boolean }>): ToolRegistration {
+    return {
+      name: 'write',
+      description: 'write',
+      parameters: { type: 'object', properties: {}, required: [] },
+      execute: async (args: never) => execute(args as never),
+    } as unknown as ToolRegistration
+  }
+
+  function editTool(execute: (args: { path: string; edits: Array<{ oldText: string; newText: string }> }) => Promise<{ isError?: boolean }>): ToolRegistration {
+    return {
+      name: 'edit',
+      description: 'edit',
+      parameters: { type: 'object', properties: {}, required: [] },
+      execute: async (args: never) => execute(args as never),
+    } as unknown as ToolRegistration
+  }
+
+  function deleteTool(execute: (args: { path: string }) => Promise<{ isError?: boolean }>): ToolRegistration {
+    return {
+      name: 'delete',
+      description: 'delete',
+      parameters: { type: 'object', properties: {}, required: [] },
+      execute: async (args: never) => execute(args as never),
+    } as unknown as ToolRegistration
+  }
+
+  function api(f: Awaited<ReturnType<typeof fixture>>) {
+    return { env: { cwd: f.workspace }, conversationId: 7 } as never
+  }
+
+  function textOf(result: { output?: ReadonlyArray<{ type: string; text?: string }> }): string {
+    return (result.output ?? []).flatMap(part => (part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])).join('\n')
+  }
+
+  it('rejects a write whose body was tombstoned, echoing who deleted it and why, without calling the native tool', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    await recordDelete(f.memoryRoot, source, 'session-42', '用户要求遗忘')
+
+    let called = false
+    const wrapped = f.wrap('write')(writeTool(async () => {
+      called = true
+      return {}
+    }))
+    const result = await wrapped.execute({ path: join(f.memoryRoot, 'relearned.md'), content: FACT } as never, api(f), {} as never)
+
+    expect(called).toBe(false)
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('session-42')
+    expect(textOf(result)).toContain('用户要求遗忘')
+    expect(textOf(result)).toContain('不再重新保存')
+  })
+
+  it('dedups a write whose body already lives in another active file, without calling the native tool', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const existing = join(f.memoryRoot, 'fact.md')
+    const wrapped = f.wrap('write')(writeTool(async args => {
+      await writeFile(args.path, args.content, 'utf8')
+      return {}
+    }))
+    await wrapped.execute({ path: existing, content: FACT } as never, api(f), {} as never)
+
+    let called = false
+    const duplicate = f.wrap('write')(writeTool(async () => {
+      called = true
+      return {}
+    }))
+    const result = await duplicate.execute({ path: join(f.memoryRoot, 'copy.md'), content: FACT } as never, api(f), {} as never)
+
+    expect(called).toBe(false)
+    expect(result.isError).not.toBe(true)
+    expect(textOf(result)).toContain('fact.md')
+    await expect(readFile(join(f.memoryRoot, 'copy.md'), 'utf8')).rejects.toThrow()
+  })
+
+  it('injects metadata.textHash on an allowed write and keeps in-place rewrites possible', async () => {
+    const f = await fixture()
+    let received: { path: string; content: string } | undefined
+    const wrapped = f.wrap('write')(writeTool(async args => {
+      received = args
+      await mkdir(f.memoryRoot, { recursive: true })
+      await writeFile(args.path, args.content, 'utf8')
+      return {}
+    }))
+    const target = join(f.memoryRoot, 'fact.md')
+    await wrapped.execute({ path: target, content: FACT } as never, api(f), {} as never)
+    expect(received?.content).toContain(`textHash: ${memoryTextHash(FACT)}`)
+    expect(received?.content).toContain('originSessionId: "7"')
+
+    // Same target, same body: the file itself is exempt from dedup so updates stay possible.
+    let second: { content: string } | undefined
+    const again = f.wrap('write')(writeTool(async args => {
+      second = args
+      return {}
+    }))
+    const result = await again.execute({ path: target, content: FACT } as never, api(f), {} as never)
+    expect(result.isError).not.toBe(true)
+    expect(second?.content).toContain('textHash:')
+  })
+
+  it('fails open to the native write when the ledger is corrupt', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    await writeFile(join(f.memoryRoot, MEMORY_GOVERNANCE_FILENAME), '{corrupt', 'utf8')
+    let received: { content: string } | undefined
+    const wrapped = f.wrap('write')(writeTool(async args => {
+      received = args
+      return {}
+    }))
+    const result = await wrapped.execute({ path: join(f.memoryRoot, 'fact.md'), content: FACT } as never, api(f), {} as never)
+    expect(result.isError).not.toBe(true)
+    expect(received?.content).toContain('node_type: memory')
+  })
+
+  it('rejects an edit replaying into a tombstoned body before the native tool runs', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const deleted = join(f.memoryRoot, 'deleted.md')
+    await writeFile(deleted, FACT, 'utf8')
+    await recordDelete(f.memoryRoot, deleted, 'session-42')
+    await rm(deleted)
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, '---\nname: fact\n---\nOld body.\n', 'utf8')
+
+    let called = false
+    const wrapped = f.wrap('edit')(editTool(async () => {
+      called = true
+      return {}
+    }))
+    const result = await wrapped.execute({
+      path: source,
+      edits: [{ oldText: 'Old body.', newText: 'The body.' }],
+    } as never, api(f), {} as never)
+
+    expect(called).toBe(false)
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('session-42')
+    expect(await readFile(source, 'utf8')).toContain('Old body.')
+  })
+
+  it('restamps textHash after a successful edit that changes the body', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    const wrapped = f.wrap('edit')(editTool(async args => {
+      const current = await readFile(args.path, 'utf8')
+      await writeFile(args.path, current.replace('The body.', 'The new body.'), 'utf8')
+      return {}
+    }))
+    await wrapped.execute({ path: source, edits: [{ oldText: 'The body.', newText: 'The new body.' }] } as never, api(f), {} as never)
+
+    const stamped = await readFile(source, 'utf8')
+    expect(stamped).toContain('originSessionId: "7"')
+    expect(stamped).toContain(`textHash: ${memoryTextHash(stamped)}`)
+    expect(stamped).not.toBe(FACT)
+  })
+
+  it('tombstones the body before a native delete inside the memory root and never throws', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    let deletedPath: string | undefined
+    const wrapped = f.wrap('delete')(deleteTool(async args => {
+      deletedPath = args.path
+      await rm(args.path)
+      return {}
+    }))
+    const result = await wrapped.execute({ path: source } as never, api(f), {} as never)
+
+    expect(result.isError).not.toBe(true)
+    expect(deletedPath).toBe(source)
+    const ledger = await readGovernanceLedger(f.memoryRoot)
+    expect(ledger.tombstones).toHaveLength(1)
+    expect(ledger.tombstones[0]).toMatchObject({
+      hash: memoryTextHash(FACT),
+      file: 'fact.md',
+      disabledBy: '7',
+      disabledReason: '用户/提取删除',
+    })
+
+    // A delete outside the root passes through without a tombstone.
+    const outside = join(f.workspace, 'notes.md')
+    await writeFile(outside, FACT, 'utf8')
+    let outsideCalled = false
+    const outsideWrap = f.wrap('delete')(deleteTool(async () => {
+      outsideCalled = true
+      return {}
+    }))
+    await outsideWrap.execute({ path: outside } as never, api(f), {} as never)
+    expect(outsideCalled).toBe(true)
+    expect((await readGovernanceLedger(f.memoryRoot)).tombstones).toHaveLength(1)
+  })
+
+  it('records a supersedes chain when a write names an existing fact', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    await writeFile(join(f.memoryRoot, 'old.md'), FACT, 'utf8')
+    const wrapped = f.wrap('write')(writeTool(async args => {
+      await writeFile(args.path, args.content, 'utf8')
+      return {}
+    }))
+    const corrected = '---\nname: fact-v2\ndescription: corrected\nmetadata:\n  type: project\n  supersedes: fact\n---\nThe corrected body.\n'
+    await wrapped.execute({ path: join(f.memoryRoot, 'new.md'), content: corrected } as never, api(f), {} as never)
+
+    const ledger = await readGovernanceLedger(f.memoryRoot)
+    expect(ledger.superseded).toEqual([{ file: 'old.md', supersededBy: 'new.md' }])
   })
 })

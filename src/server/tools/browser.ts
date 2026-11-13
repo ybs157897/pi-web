@@ -213,6 +213,25 @@ interface BrowserState {
 let state: BrowserState | undefined
 let launching: Promise<BrowserState> | undefined
 
+// A running headless Chrome is registered with LaunchServices as com.google.chrome,
+// so while it lives macOS delivers every http(s) link (Cursor/ZCode login jumps, `open`)
+// to this invisible instance and the click looks dead. Reap it when the tool goes quiet
+// instead of holding it for the whole pi-web process lifetime.
+const IDLE_SHUTDOWN_MS = 5 * 60_000
+let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+function clearIdleTimer(): void {
+  if (idleTimer === undefined) return
+  clearTimeout(idleTimer)
+  idleTimer = undefined
+}
+
+function armIdleTimer(): void {
+  clearIdleTimer()
+  idleTimer = setTimeout(killBrowser, IDLE_SHUTDOWN_MS)
+  idleTimer.unref()
+}
+
 function profileDirPath(): string {
   return join(tmpdir(), 'pi-web-browser-profile')
 }
@@ -264,11 +283,15 @@ async function launchBrowser(freshProfile: boolean): Promise<BrowserState> {
 }
 
 async function ensureBrowser(freshProfile: boolean): Promise<BrowserState> {
-  if (state?.cdp.alive === true && state.chrome.exitCode === null) return state
+  if (state?.cdp.alive === true && state.chrome.exitCode === null) {
+    armIdleTimer()
+    return state
+  }
   if (launching === undefined) {
     launching = launchBrowser(freshProfile)
       .then(async fresh => {
         state = fresh
+        armIdleTimer()
         return fresh
       })
       .finally(() => {
@@ -279,6 +302,7 @@ async function ensureBrowser(freshProfile: boolean): Promise<BrowserState> {
 }
 
 function killBrowser(): void {
+  clearIdleTimer()
   const current = state
   state = undefined
   if (current === undefined) return
@@ -364,7 +388,7 @@ async function screenshotInPage(session: BrowserState, fullPage: boolean): Promi
 
 const browserTool = defineTool({
   name: BROWSER_TOOL_NAME,
-  description: `Drive a headless Chromium browser over the Chrome DevTools Protocol — for UI verification and page checks that shell tools cannot do (rendering bugs, web consoles, visual smoke checks). Actions: "open" navigates (url required) and returns title/URL/page text; "evaluate" runs a JS expression in the page (expression required); "click" clicks the first CSS-selector match (selector required); "fill" sets an input/textarea value and fires input/change events (selector + value required); "screenshot" returns a PNG as an image block (fullPage optional); "close" shuts the browser down. The browser launches once per pi-web process with an isolated profile and tabs are reused across calls; pass freshProfile to wipe the profile on launch. Screenshots are expensive — prefer evaluate/text assertions when they suffice.`,
+  description: `Drive a headless Chromium browser over the Chrome DevTools Protocol — for UI verification and page checks that shell tools cannot do (rendering bugs, web consoles, visual smoke checks). Actions: "open" navigates (url required) and returns title/URL/page text; "evaluate" runs a JS expression in the page (expression required); "click" clicks the first CSS-selector match (selector required); "fill" sets an input/textarea value and fires input/change events (selector + value required); "screenshot" returns a PNG as an image block (fullPage optional); "close" shuts the browser down. The browser launches once per pi-web process with an isolated profile and tabs are reused across calls, then shuts itself down after 5 minutes idle (a live headless Chrome hijacks macOS link opening); pass freshProfile to wipe the profile on launch. Screenshots are expensive — prefer evaluate/text assertions when they suffice.`,
   parameters: Type.Object({
     action: Type.Union([
       Type.Literal('open'),

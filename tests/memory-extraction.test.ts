@@ -14,6 +14,7 @@ import {
   runExtractionLoop,
   scanMemoryManifest,
 } from '../src/server/memory/extraction.ts'
+import { MEMORY_GOVERNANCE_FILENAME, memoryTextHash, readGovernanceLedger } from '../src/server/memory/governance.ts'
 import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 
 const cleanups: Array<() => Promise<void>> = []
@@ -387,5 +388,111 @@ describe('memory manifest', () => {
 
     const withoutManifest = extractionPrompt('/data/root', 3, [])
     expect(withoutManifest).not.toContain('## 已有记忆文件')
+  })
+})
+
+describe('extraction governance', () => {
+  const FACT = '---\nname: fact\ndescription: a fact\nmetadata:\n  type: project\n---\nThe body.\n'
+
+  function options(f: Awaited<ReturnType<typeof fixture>>, conversationId = 9) {
+    return { root: f.memoryRoot, cwd: f.workspace, conversationId: conversationId as never, signal: new AbortController().signal }
+  }
+
+  it('rejects re-saving a deleted body with who/why, on both write and edit', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    const removed = await executeExtractionTool(toolCall('delete', { path: source }), options(f, 42))
+    expect(removed.isError).toBe(false)
+
+    const relearn = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'relearned.md'), content: FACT }, 'call-2'), options(f))
+    expect(relearn.isError).toBe(true)
+    expect(relearn.content).toContain('42')
+    expect(relearn.content).toContain('用户/提取删除')
+    expect(relearn.content).toContain('不再重新保存')
+    await expect(readFile(join(f.memoryRoot, 'relearned.md'), 'utf8')).rejects.toThrow()
+
+    // Editing another file into the deleted body is rejected too.
+    const other = join(f.memoryRoot, 'other.md')
+    await writeFile(other, '---\nname: other\n---\nOld body.\n', 'utf8')
+    const edited = await executeExtractionTool(toolCall('edit', {
+      path: other,
+      edits: [{ oldText: 'Old body.', newText: 'The body.' }],
+    }, 'call-3'), options(f))
+    expect(edited.isError).toBe(true)
+    expect(edited.content).toContain('不再重新保存')
+    expect(await readFile(other, 'utf8')).toContain('Old body.')
+  })
+
+  it('dedups identical bodies across files and stamps textHash on the first write', async () => {
+    const f = await fixture()
+    const first = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'fact.md'), content: FACT }), options(f))
+    expect(first.isError).toBe(false)
+    const written = await readFile(join(f.memoryRoot, 'fact.md'), 'utf8')
+    expect(written).toContain(`textHash: ${memoryTextHash(FACT)}`)
+
+    const duplicate = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'copy.md'), content: FACT }, 'call-2'), options(f))
+    expect(duplicate.isError).toBe(false)
+    expect(duplicate.content).toContain('fact.md')
+    expect(duplicate.content).toContain('不重复写入')
+    await expect(readFile(join(f.memoryRoot, 'copy.md'), 'utf8')).rejects.toThrow()
+
+    // Whitespace/case variants of the same body hit the same identity.
+    const variant = FACT.replace('The body.', 'the   BODY.')
+    const variantResult = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'variant.md'), content: variant }, 'call-3'), options(f))
+    expect(variantResult.isError).toBe(false)
+    expect(variantResult.content).toContain('不重复写入')
+  })
+
+  it('tombstones the deleted hash in the sidecar ledger', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    await executeExtractionTool(toolCall('delete', { path: source }), options(f, 42))
+
+    const ledger = await readGovernanceLedger(f.memoryRoot)
+    expect(ledger.tombstones).toHaveLength(1)
+    expect(ledger.tombstones[0]).toMatchObject({ hash: memoryTextHash(FACT), file: 'fact.md', disabledBy: '42' })
+    expect(typeof ledger.tombstones[0]?.disabledAt).toBe('string')
+  })
+
+  it('fails open when the ledger is corrupt', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    await writeFile(join(f.memoryRoot, MEMORY_GOVERNANCE_FILENAME), 'not json at all', 'utf8')
+    const result = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'fact.md'), content: FACT }), options(f))
+    expect(result.isError).toBe(false)
+    expect(await readFile(join(f.memoryRoot, 'fact.md'), 'utf8')).toContain('node_type: memory')
+  })
+
+  it('retires a superseded fact from the manifest when the correction is written', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    await writeFile(join(f.memoryRoot, 'old.md'), FACT, 'utf8')
+    const corrected = '---\nname: fact-v2\ndescription: corrected fact\nmetadata:\n  type: project\n  supersedes: fact\n---\nThe corrected body.\n'
+    const written = await executeExtractionTool(toolCall('write', { path: join(f.memoryRoot, 'new.md'), content: corrected }), options(f))
+    expect(written.isError).toBe(false)
+
+    const ledger = await readGovernanceLedger(f.memoryRoot)
+    expect(ledger.superseded).toEqual([{ file: 'old.md', supersededBy: 'new.md' }])
+    const manifest = await scanMemoryManifest(f.memoryRoot)
+    expect(manifest.map(entry => entry.file)).toEqual(['new.md'])
+  })
+
+  it('excludes tombstoned bodies from the manifest even under a different file name', async () => {
+    const f = await fixture()
+    await mkdir(f.memoryRoot, { recursive: true })
+    const source = join(f.memoryRoot, 'fact.md')
+    await writeFile(source, FACT, 'utf8')
+    await executeExtractionTool(toolCall('delete', { path: source }), options(f))
+    // A file with the tombstoned body reappears under a new name (e.g. restored externally).
+    const restored = join(f.memoryRoot, 'restored.md')
+    const hash = memoryTextHash(FACT)
+    await writeFile(restored, FACT.replace('metadata:\n  type: project', `metadata:\n  type: project\n  textHash: ${hash}`), 'utf8')
+
+    const manifest = await scanMemoryManifest(f.memoryRoot)
+    expect(manifest.map(entry => entry.file)).toEqual([])
   })
 })
