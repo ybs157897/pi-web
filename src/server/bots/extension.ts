@@ -116,7 +116,7 @@ export function createBotsExtension(options: BotsExtensionOptions): Extension {
         ? '已静默（pass）：未写入群聊，也不会投递给其他成员。'
         : result.depthLimited
           ? `已写入群聊「${args.roomId}」。已达投递深度上限（bot 之间的转提及最多一跳），本次提及不再投递。`
-          : `已写入群聊「${args.roomId}」${result.mentioned.length > 0 ? `；已投递给：${result.mentioned.join('、')}` : '；正文没有 @提及，未投递给其他成员'}。`
+          : `已写入群聊「${args.roomId}」${result.mentioned.length > 0 ? `；提及的成员（${result.mentioned.join('、')}）将在本轮结束后收到唤醒` : '；正文没有 @提及，未投递给其他成员'}。`
       return { output: [{ type: 'text' as const, text }], details: { posted: !result.silent, mentioned: result.mentioned } }
     },
   })
@@ -134,7 +134,7 @@ export function createBotsExtension(options: BotsExtensionOptions): Extension {
       const result = await options.directMessage(bot, args.toBotName, args.text)
       const text = result.depthLimited
         ? `已达投递深度上限（bot 之间的转提及最多一跳），消息没有投递给「${result.to}」。`
-        : `已定向投递给「${result.to}」。`
+        : `已记录定向消息；「${result.to}」将在本轮结束后收到唤醒。`
       return { output: [{ type: 'text' as const, text }], details: { to: result.to } }
     },
   })

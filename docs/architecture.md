@@ -128,6 +128,7 @@ The server runs on macOS, Linux and Windows. The platform-sensitive surface is d
 - goal 的创建约束与自动续跑 → [goal](subsystems/goal.md)
 - 子智能体委派、内置档案与结算 → [subagent](subsystems/subagent.md)
 - team 会话与子会话目录 → [team](subsystems/team.md)
+- 内置 doc-keeper 智能体与进程内 A2A → [doc-keeper](subsystems/doc-keeper.md)
 - 上下文压缩三层策略 → [compaction](subsystems/compaction.md)
 - 请求轨迹与旁路调用采集 → [trajectory](subsystems/trajectory.md)
 - 前端消息渲染与状态机 → [rendering](subsystems/rendering.md)

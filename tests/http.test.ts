@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem, ConversationDetail, ConversationSummary, CreateConversationInput, ModelCatalog, ProviderInput, SubmitInput, UpdateConversationInput } from '../src/shared/types.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import type { DocKeeperRunInput, DocKeeperRunResult } from '../src/server/knowledge/service.ts'
+import { createDocKeeperAgent } from '../src/server/doc-keeper/a2a.ts'
 import type { GoalUpdateRequest } from '../src/shared/types.ts'
 import type * as Protocol from '../src/shared/types.ts'
 import { createApp } from '../src/server/app.ts'
@@ -47,6 +48,9 @@ class FakeRuntime implements Runtime {
   closeCount = 0
   lastProvider: ProviderInput | undefined
   lastFeedback: { text: string; userAgent?: string } | undefined
+  readonly docKeeper = createDocKeeperAgent({
+    runMaintenance: async input => ({ mode: input.mode, health: 'fresh', detail: 'stub', changedFiles: [], commitCount: 0, updated: false, knowledgePath: input.knowledgePath }),
+  })
 
   async list(): Promise<ConversationSummary[]> {
     this.calls.push('list')

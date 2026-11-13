@@ -1,4 +1,4 @@
-// Live acceptance for doc-keeper: check（无模型）+ refresh（真实模型）闭环 + A2A 任务流。
+// Live acceptance for doc-keeper: check（无模型）+ refresh（真实模型）闭环 + 进程内 A2A 任务流。
 // Requires real model credentials; a failure here means "not verified", never "passed".
 //
 // 用法（隔离数据目录 + CommandCode 示例）：
@@ -10,14 +10,12 @@
 // 不碰用户真实数据。PI_WEB_DOC_KEEPER_MODEL 按第一个 '/' 拆分 provider/modelId
 // （modelId 本身可含 '/'，如 deepseek/deepseek-v4.1-flash）。
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import type { Server } from 'node:http'
 import { createRuntime } from '../src/server/runtime/index.ts'
-import { createDocKeeperApp } from '../src/server/doc-keeper/server.ts'
+import { createDocKeeperAgent } from '../src/server/doc-keeper/a2a.ts'
 import { parseFrontmatter } from '../src/server/bots/docs.ts'
 import { piWebHome } from '../src/server/state/home.ts'
 
@@ -66,7 +64,6 @@ await writeFile(join(dir, knowledgePath), `---\nbotId: server\nmodule: server\ng
 
 const piDir = process.env.PI_WEB_PI_DIR ?? process.env.PI_WEB_DATA_DIR ?? piWebHome()
 const runtime = await createRuntime({ dataDir: join(dir, 'data'), workspace: dir, piDir })
-let a2aServer: Server | undefined
 try {
   const catalog = await runtime.catalog()
   const override = process.env.PI_WEB_DOC_KEEPER_MODEL
@@ -112,34 +109,13 @@ try {
   if (check2.health !== 'fresh' || check2.commitCount !== 0) throw new Error(`S3 期望 fresh/0，实际 ${check2.health}/${check2.commitCount}`)
   log('S3 re-check ok: fresh, 0 commits')
 
-  // S4 — A2A 表面：Agent Card 公开 + 鉴权 + SendMessage 任务流（原生 v1 方法 + A2A-Version 头）。
-  const apiKey = randomUUID()
-  const app = createDocKeeperApp({ runMaintenance: runtime.runDocKeeperMaintenance, url: 'http://127.0.0.1:0/', apiKey })
-  a2aServer = await new Promise<Server>((resolve, reject) => {
-    const listener = app.listen(0, '127.0.0.1')
-    listener.once('error', reject)
-    listener.once('listening', () => resolve(listener))
-  })
-  const address = a2aServer.address()
-  if (address === null || typeof address === 'string') throw new Error('A2A server did not bind a TCP port')
-  const origin = `http://127.0.0.1:${address.port}`
-  const cardResponse = await fetch(`${origin}/.well-known/agent-card.json`)
-  if (cardResponse.status !== 200) throw new Error(`S4 Agent Card 状态 ${cardResponse.status}`)
-  const card = await cardResponse.json() as { name?: string; skills?: Array<{ id?: string }> }
+  // S4 — 进程内 A2A 端点：Agent Card + sendMaintenance 任务流（内置智能体，无 HTTP 监听）。
+  const agent = createDocKeeperAgent({ runMaintenance: runtime.runDocKeeperMaintenance })
+  const card = await agent.requestHandler.getAgentCard()
   if (card.name !== 'doc-keeper' || card.skills?.[0]?.id !== 'knowledge_doc_maintenance') throw new Error(`S4 Agent Card 内容异常：${JSON.stringify(card)}`)
-  const rpcBody = JSON.stringify({
-    jsonrpc: '2.0', id: 1, method: 'SendMessage',
-    params: { message: { role: 'ROLE_USER', messageId: randomUUID(), parts: [{ data: { globs, knowledgePath, mode: 'check' } }] } },
-  })
-  const unauthorized = await fetch(`${origin}/`, { method: 'POST', headers: { 'content-type': 'application/json', 'A2A-Version': '1.0' }, body: rpcBody })
-  if (unauthorized.status !== 401) throw new Error(`S4 无凭证应 401，实际 ${unauthorized.status}`)
-  const rpcResponse = await fetch(`${origin}/`, { method: 'POST', headers: { 'content-type': 'application/json', 'A2A-Version': '1.0', authorization: `Bearer ${apiKey}` }, body: rpcBody })
-  const envelope = await rpcResponse.json() as { result?: { task?: { status?: { state?: string }; artifacts?: Array<{ parts?: Array<{ text?: string }> }> } }; error?: unknown }
-  const task = envelope.result?.task
-  if (task?.status?.state !== 'TASK_STATE_COMPLETED') throw new Error(`S4 任务未完成：${JSON.stringify(envelope)}`)
-  const artifact = JSON.parse(task.artifacts?.[0]?.parts?.[0]?.text ?? '{}') as { health?: string }
-  if (artifact.health !== 'fresh') throw new Error(`S4 artifact 异常：${JSON.stringify(artifact)}`)
-  log('S4 a2a ok: card public, 401 without key, SendMessage completed')
+  const a2aResult = await withTimeout(agent.sendMaintenance({ globs, knowledgePath, mode: 'check' }), 30_000, 'S4 a2a check')
+  if (a2aResult.health !== 'fresh') throw new Error(`S4 artifact 异常：${JSON.stringify(a2aResult)}`)
+  log('S4 in-process a2a ok: card discovered, sendMaintenance completed')
 
   const evidence = {
     verifiedAt: new Date().toISOString(),
@@ -147,14 +123,13 @@ try {
     check1: { health: check1.health, commitCount: check1.commitCount, changedFiles: check1.changedFiles },
     refresh: { health: refresh.health, updated: refresh.updated, hash: refresh.hash, report: (refresh.report ?? '').slice(0, 600) },
     check2: { health: check2.health, commitCount: check2.commitCount },
-    a2a: { origin, cardName: card.name, taskState: task.status.state, artifactHealth: artifact.health },
+    a2a: { url: card.supportedInterfaces[0]?.url, cardName: card.name, artifactHealth: a2aResult.health },
     result: 'passed',
   }
   await mkdir('artifacts', { recursive: true })
   await writeFile('artifacts/live-doc-keeper.json', JSON.stringify(evidence, null, 2) + '\n')
   console.log(JSON.stringify({ verifiedAt: evidence.verifiedAt, result: evidence.result, model, refreshUpdated: refresh.updated }))
 } finally {
-  if (a2aServer !== undefined) await new Promise<void>(resolve => { a2aServer?.close(() => resolve()) })
   await runtime.close()
   await rm(dir, { recursive: true, force: true })
 }

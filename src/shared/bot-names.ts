@@ -18,7 +18,7 @@ export function suggestBotName(taken: Iterable<string>): string {
     if (!used.has(name.toLowerCase())) return name
   }
   for (let index = 2; ; index += 1) {
-    const candidate = `${BOT_NAME_POOL[0]} ${index}`
+    const candidate = `${BOT_NAME_POOL[0]}-${index}`
     if (!used.has(candidate.toLowerCase())) return candidate
   }
 }

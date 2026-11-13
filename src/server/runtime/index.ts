@@ -39,6 +39,7 @@ import { createBotsExtension, BOTS_EXTENSION_NAME } from '../bots/extension.ts'
 import { createBotsService } from '../bots/service.ts'
 import { createDocKeeperService } from '../knowledge/service.ts'
 import { DOC_KEEPER_EXTENSION_NAME } from '../knowledge/extension.ts'
+import { createDocKeeperAgent } from '../doc-keeper/a2a.ts'
 import { MCP_EXTENSION_NAME, McpRegistry } from '../mcp/registry.ts'
 import { SkillStore } from '../skills/store.ts'
 import { piWebHome } from '../state/home.ts'
@@ -180,6 +181,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     selectedWorkspace,
     // Late-bound: conversationsService is assembled further down.
     conversationError: id => conversationsService.detail(id).then(d => d.error).catch(() => undefined),
+    // Late-bound: the built-in doc-keeper agent (assembled below) refreshes stale docs over in-process A2A.
+    maintainKnowledge: input => docKeeperAgent.sendMaintenance({ ...input, mode: 'refresh' }),
   })
   // The bots extension is registered but never part of the standard agent composition: bot and
   // bot-init conversations opt in through an explicit `extensions add`, so ordinary tool
@@ -197,9 +200,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   botsService.attachExtension(botsExtension)
   AGENT_EXCLUDED_EXTENSIONS.add(BOTS_EXTENSION_NAME)
 
-  // doc-keeper: the standalone knowledge-document maintenance agent (A2A-exposed). Like bots, its
-  // extension is excluded from the standard agent composition so prompt snapshots stay untouched;
-  // a doc-keeper conversation opts in explicitly when the service builds it.
+  // doc-keeper: the built-in knowledge-document maintenance agent, exposed over in-process A2A
+  // (no standalone HTTP service). Like bots, its extension is excluded from the standard agent
+  // composition so prompt snapshots stay untouched; a doc-keeper conversation opts in explicitly
+  // when the service builds it.
   const docKeeperService = createDocKeeperService({
     harness: () => harness,
     assertOpen,
@@ -208,6 +212,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     conversationError: id => conversationsService.detail(id).then(d => d.error).catch(() => undefined),
   })
   AGENT_EXCLUDED_EXTENSIONS.add(DOC_KEEPER_EXTENSION_NAME)
+  // The in-process A2A endpoint other built-in agents (the bots watchdog) delegate maintenance to.
+  const docKeeperAgent = createDocKeeperAgent({ runMaintenance: input => docKeeperService.runMaintenance(input) })
 
   /**
    * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
@@ -769,6 +775,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     runBotWatchdog: input => botsService.runWatchdog(input).then(report => ({ report })),
     botWatchdogReport: async () => botsService.lastWatchdogRun(),
     runDocKeeperMaintenance: input => docKeeperService.runMaintenance(input),
+    docKeeper: docKeeperAgent,
     async close() {
       if (!closePromise) {
         runtimeClosed = true
@@ -786,6 +793,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
             try {
               await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
               await subagentSettlement.drain()
+              // Watchdog refreshes delegate to doc-keeper fire-and-forget; drain in-flight
+              // maintenance before the harness closes so a background run cannot race shutdown.
+              await docKeeperService.drain(30_000)
               // Capture writes are fire-and-forget appends; drain them before close so a
               // test's temp-dir removal cannot race a still-queued trajectory line.
               await drainTrajectoryCapture()

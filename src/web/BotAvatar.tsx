@@ -80,18 +80,25 @@ export function BotAvatar({ id, name, shape, color, image, size = 'md', state = 
   const eyeTop = centerY - eyeHeight / 2
   const px = SIZE_PX[size]
   if (image !== undefined && image !== '') {
-    return <img
-      className={`${css.photo} ${className ?? ''}`}
-      src={image}
-      width={px}
-      height={px}
-      alt={name === undefined ? '' : `${name} avatar`}
-      aria-hidden={name === undefined ? true : undefined}
+    return <span
+      className={`${css.photoWrap} ${className ?? ''}`}
       data-bot-avatar={resolved.shape}
       data-bot-avatar-color={resolved.color}
       data-bot-avatar-photo=""
-      draggable={false}
-    />
+      data-bot-avatar-state={state}
+      data-bot-avatar-animated={animated ? '' : undefined}
+      style={{ width: px, height: px }}
+    >
+      <img
+        className={css.photo}
+        src={image}
+        width={px}
+        height={px}
+        alt={name === undefined ? '' : `${name} avatar`}
+        aria-hidden={name === undefined ? true : undefined}
+        draggable={false}
+      />
+    </span>
   }
   // Pointer tracking writes CSS variables straight onto the SVG: no re-render per move, and the
   // same mechanism works inside any song list, chat row or dialog.

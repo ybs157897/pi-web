@@ -1,16 +1,18 @@
 import type { BotKnowledgeHealth, BotRoomFrame, BotStatus, BotCompliance } from '../shared/types.ts'
+import { MENTION_PATTERN } from '../shared/mentions.ts'
 
-const FRAME_HEADER = /^\[(USER|BOT:([^\]]+)|SYSTEM)\][ \t]?(?:\r?\n)?/
+const FRAME_HEADER = /^\[(USER(?:·owner)?|BOT:([^\]]+?)(?:·member)?|SYSTEM)\][ \t]?(?:\r?\n)?/
 
 /**
  * Split one room log entry into its sender frame and body text. Entries without a frame
- * header are not part of the bot-room protocol, so the caller skips them.
+ * header are not part of the bot-room protocol, so the caller skips them. Both the plain
+ * headers and the trust-envelope headers (`[USER·owner]`, `[BOT:name·member]`) parse.
  */
 export function parseBotRoomFrame(text: string): BotRoomFrame | null {
   const match = FRAME_HEADER.exec(text)
   if (match === null) return null
   const header = match[1] ?? ''
-  const sender = header === 'USER' ? { kind: 'user' as const }
+  const sender = header.startsWith('USER') ? { kind: 'user' as const }
     : header === 'SYSTEM' ? { kind: 'system' as const }
       : { kind: 'bot' as const, name: match[2] ?? '' }
   return { sender, text: text.slice(match[0].length) }
@@ -73,18 +75,19 @@ export type MentionSegment = { kind: 'text' | 'mention'; value: string }
 
 /**
  * Split body text into plain segments and @mention chips. A token only counts as a
- * mention when it matches a name on the current roster.
+ * mention when it matches a name on the current roster (case-insensitive) or is `@all`.
  */
 export function splitMentions(text: string, roster: ReadonlySet<string>): MentionSegment[] {
   const segments: MentionSegment[] = []
-  const pattern = /@(\S+)/gu
+  const byLower = new Map([...roster].map(name => [name.toLowerCase(), name]))
   let cursor = 0
-  for (const match of text.matchAll(pattern)) {
-    const name = match[1] ?? ''
-    if (!roster.has(name)) continue
+  for (const match of text.matchAll(MENTION_PATTERN)) {
+    const token = match[1] ?? ''
+    const canonical = token.toLowerCase() === 'all' ? 'all' : byLower.get(token.toLowerCase())
+    if (canonical === undefined) continue
     const start = match.index ?? 0
     if (start > cursor) segments.push({ kind: 'text', value: text.slice(cursor, start) })
-    segments.push({ kind: 'mention', value: name })
+    segments.push({ kind: 'mention', value: canonical })
     cursor = start + match[0].length
   }
   if (cursor < text.length) segments.push({ kind: 'text', value: text.slice(cursor) })

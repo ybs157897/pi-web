@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react'
 import {
   Button, IconApiOutlineRegular, IconChevronDownOutlineRegular, IconCloseOutlineRegular,
   IconSkillOutlineRegular, IconPluginPinwheelOutlineRegular,
-  IconSettingsOutlineRegular, IconDatabaseOutlineRegular, IconPersonalizationOutlineRegular,
+  IconAgentPresetOutlineRegular, IconSettingsOutlineRegular, IconDatabaseOutlineRegular, IconPersonalizationOutlineRegular,
   IconDarkOutlineRegular, IconFollowsystemOutlineRegular, IconLightOutlineRegular,
   IconChevronLeftOutlineRegular, Menu, Modal, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -12,13 +12,14 @@ import { api } from './api.ts'
 import { normalizeFontFamily } from '../shared/fonts.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
+import { BotModelSettings } from './BotModelSettings.tsx'
 import { ModelsPanel } from './ModelSettings.tsx'
 import PersonalizationPanel from './PersonalizationPanel.tsx'
 import SkillsPanel from './SkillsPanel.tsx'
 import PluginsPanel from './PluginsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
-export type SettingsTab = 'general' | 'personalization' | 'models' | 'mcp' | 'skills' | 'plugins'
+export type SettingsTab = 'general' | 'personalization' | 'models' | 'bot-models' | 'mcp' | 'skills' | 'plugins'
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
@@ -72,6 +73,11 @@ export default function SettingsDialog(props: SettingsDialogProps) {
       id: 'models', label: t('模型设置', 'Models'), group: t('模型与能力', 'Models'),
       description: t('管理模型提供商、API 密钥与每个模型的参数。', 'Manage model providers, API keys, and each model’s parameters.'),
       icon: <IconDatabaseOutlineRegular size={16} />,
+    },
+    {
+      id: 'bot-models', label: t('Bot 模型', 'Bot models'), group: t('模型与能力', 'Models'),
+      description: t('为每个 Bot 选择运行时使用的模型；未设置的 Bot 跟随项目默认模型。', 'Choose the model each bot runs; unset bots follow the project default.'),
+      icon: <IconAgentPresetOutlineRegular size={16} aria-hidden="true" />,
     },
     {
       id: 'plugins', label: t('插件市场', 'Plugins'), group: t('扩展', 'Extensions'),
@@ -201,6 +207,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
           </div>}
           {tab === 'personalization' && <PersonalizationPanel />}
           {tab === 'models' && <ModelsPanel catalog={catalog} saving={saving} onSave={onSave} onRefresh={onRefreshCatalog} />}
+          {tab === 'bot-models' && <BotModelSettings catalog={catalog} />}
           {tab === 'plugins' && <PluginsPanel onCreatePlugin={props.onCreatePlugin} />}
           {tab === 'mcp' && <div className={css.mcp}>
             <div className={css.mcpHead}>

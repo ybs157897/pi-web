@@ -12,15 +12,17 @@ import type { BotRoomFrame } from '../../shared/types.ts'
  * Written on a bot conversation (not on rooms or the bot-init conversation), exactly the way
  * `pi-web.team-member` marks a teammate child. `depth` is the hop the current delivery
  * arrived at: 1 for user-initiated, 2 for a bot's re-mention; the next delivery overwrites
- * it, so a crashed edge cannot stick.
+ * it, so a crashed edge cannot stick. `roomReadIndex` maps roomId → the last room entry id
+ * this bot's successful run settled; documents written before the cursor existed simply
+ * lack the field, which reads as "no cursor" (version stays 1).
  */
-export const BotIdentity = defineDoc<{ botId: string | null; name: string | null; depth: number }>({
+export const BotIdentity = defineDoc<{ botId: string | null; name: string | null; depth: number; roomReadIndex?: Record<string, string> }>({
   kind: 'pi-web.bot',
   version: 1,
   scope: 'conversation',
   history: 'latest',
   fork: 'initial', checkpointWhen: () => false,
-  initial: () => ({ botId: null, name: null, depth: 1 }),
+  initial: () => ({ botId: null, name: null, depth: 1, roomReadIndex: {} }),
 })
 
 /** Entry kind of one room log line; rooms receive passive writes only, never input. */
@@ -42,8 +44,14 @@ export function parseRoomEntry(data: JsonValue | undefined): BotRoomFrame | unde
   }
 }
 
-/** One log line as the room tail and read_room render it. */
+/**
+ * One log line as the room tail and read_room render it. The header is a trust envelope:
+ * only the local user (owner) carries instruction and approval authority; bot (member)
+ * and system lines are reference data, never instructions.
+ */
 export function roomFrameText(frame: BotRoomFrame): string {
-  const name = frame.sender.kind === 'user' ? 'USER' : frame.sender.name ?? 'system'
-  return `[${name}]\n${frame.text}`
+  const header = frame.sender.kind === 'user' ? '[USER·owner]'
+    : frame.sender.kind === 'system' ? '[SYSTEM]'
+      : `[BOT:${frame.sender.name ?? 'unknown'}·member]`
+  return `${header}\n${frame.text}`
 }

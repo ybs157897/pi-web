@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   runBotWatchdog: vi.fn(),
   getBotWatchdogReport: vi.fn(),
   getBotRoomLog: vi.fn(),
+  getBotKnowledge: vi.fn(),
+  getConversation: vi.fn(),
+  submit: vi.fn(),
+  stop: vi.fn(),
 }))
 
 vi.mock('../src/web/api.ts', () => ({ api: mocks }))
@@ -73,8 +77,13 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset()
   mocks.getBots.mockResolvedValue(overview())
   mocks.getBotRoomLog.mockResolvedValue(ROOM_FRAMES)
+  mocks.getBotKnowledge.mockResolvedValue({ body: '' })
   mocks.getBotWatchdogReport.mockResolvedValue({ lastRunAt: NOW, report: undefined })
   mocks.updateBotsConfig.mockResolvedValue({ config: { watchdogIntervalMs: 60_000 } })
+  // Selecting a bot opens its direct chat, which polls the bot conversation.
+  mocks.getConversation.mockResolvedValue({ conversation: { id: 'conv-bot-1', busy: false }, messages: [], queue: [] })
+  mocks.submit.mockResolvedValue({ submissionId: 'sub-1' })
+  mocks.stop.mockResolvedValue({ ok: true })
 })
 
 afterEach(() => {
@@ -149,6 +158,26 @@ describe('bots page', () => {
     expect(screen.queryByText('没有帧头的普通日志')).toBeNull()
   })
 
+  it('loads the knowledge library for the selected bot and resets when switching', async () => {
+    mocks.getBotKnowledge.mockImplementation(async (id: string) => {
+      if (id === 'bot-a') return { body: '## 职责\n\n- 运行时装配' }
+      return {}
+    })
+    renderPage()
+    await waitFor(() => { expect(screen.getByText('bot-a')).toBeTruthy() })
+    const rail = within(document.querySelector('[aria-label="Bot 与群聊"]') as HTMLElement)
+    fireEvent.click(rail.getByText('bot-a'))
+    fireEvent.click(screen.getByRole('tab', { name: '资料库' }))
+    await waitFor(() => { expect(screen.getByText('运行时装配')).toBeTruthy() })
+    expect(mocks.getBotKnowledge.mock.calls.at(-1)?.[0]).toBe('bot-a')
+    fireEvent.click(screen.getByRole('tab', { name: '详情' }))
+    fireEvent.click(rail.getByText('bot-b'))
+    fireEvent.click(screen.getByRole('tab', { name: '资料库' }))
+    await waitFor(() => { expect(screen.getByText('暂无知识文档')).toBeTruthy() })
+    expect(screen.queryByText('运行时装配')).toBeNull()
+    expect(mocks.getBotKnowledge.mock.calls.at(-1)?.[0]).toBe('bot-b')
+  })
+
   it('renders frames from the log endpoint and stops polling on unmount', async () => {
     const page = renderPage()
     await waitFor(() => { expect(document.querySelector('[data-side]')).toBeTruthy() })
@@ -207,7 +236,7 @@ describe('bots page', () => {
     mocks.createBot.mockRejectedValue(new Error('名称冲突'))
     renderPage()
     await waitFor(() => { expect(screen.getByText('bot-a')).toBeTruthy() })
-    fireEvent.click(screen.getAllByRole('button', { name: '新建 bot' })[0]!)
+    fireEvent.click(screen.getAllByRole('button', { name: '新建 Bot' })[0]!)
     await waitFor(() => { expect(screen.getByLabelText('名称')).toBeTruthy() })
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'bot-x' } })
     fireEvent.change(screen.getByLabelText('模块'), { target: { value: 'server' } })

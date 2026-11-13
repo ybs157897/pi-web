@@ -133,6 +133,7 @@ const botRoomRecordSchema = z.object({
   conversationId: z.string().min(1).max(64),
   memberIds: z.array(z.string().min(1).max(64)).max(64),
   createdAt: z.string().min(1).max(40),
+  agentTurnsSinceHuman: z.number().int().min(0).optional(),
 }).strict()
 const botWatchdogEntrySchema = z.object({
   botId: z.string().min(1).max(64),

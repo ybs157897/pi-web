@@ -817,6 +817,7 @@ export type BotRecord = {
   description: string
   /** Workspace-relative markdown path, e.g. docs/bots/<id>.md. */
   knowledgePath: string
+  /** `provider/modelId` this bot runs; omitted to follow the project default model. */
   model?: string
   /** Grok-Bot avatar silhouette + palette; both fall back to an id hash on render. */
   avatarShape?: string
@@ -840,6 +841,8 @@ export type BotRoomRecord = {
   conversationId: string
   memberIds: string[]
   createdAt: string
+  /** Bot→bot wakes consumed since the last user post; the room pauses at the agent-turn budget. */
+  agentTurnsSinceHuman?: number
 }
 
 export type BotWatchdogEntry = {
@@ -869,6 +872,7 @@ export type CreateBotInput = {
   module: string
   globs: string[]
   description: string
+  /** `provider/modelId`; omitted to follow the project default model. */
   model?: string
   avatarShape?: string
   avatarColor?: string
@@ -888,5 +892,10 @@ export type BotInitInput = {
 }
 
 /** Room log entries carry a sender frame header as the first line of the entry text. */
-export type BotRoomFrame = { sender: { kind: 'user' | 'bot' | 'system'; name?: string }; text: string }
+export type BotRoomFrame = {
+  sender: { kind: 'user' | 'bot' | 'system'; name?: string }
+  text: string
+  /** The room conversation's entry id; per-bot read cursors point at these. */
+  id?: string
+}
 

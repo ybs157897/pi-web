@@ -1,201 +1,149 @@
-// doc-keeper A2A 任务流集成测试：createDocKeeperApp + 原生 JSON-RPC。
-// 注意：@a2a-js/sdk v1.3.0 原生方法名是 PascalCase（SendMessage/GetTask/SendStreamingMessage）；
-// `message/send` 属 v0.3 兼容层，本服务未启用 legacyCompat，故不可用。
-// state 的 JSON 序列化是枚举名字符串（如 "TASK_STATE_COMPLETED"），part 的 JSON 是扁平 {text}/{data}。
-// 请求必须带 `A2A-Version: 1.0` 头：缺省时 SDK 按 0.3 校验并拒绝（VERSION_NOT_SUPPORTED）。
+// doc-keeper 进程内 A2A 任务流集成测试：createDocKeeperAgent + 传输无关的 DefaultRequestHandler。
+// doc-keeper 是内置智能体，经进程内 A2A（Message → Task → artifact）委派，不独立监听 HTTP 端口。
+// 协议核心仍是 @a2a-js/sdk：sendMessage/getTask/sendMessageStream 直接在进程内驱动 executor。
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { Server } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
+import { type Message, type SendMessageRequest, type Task, Role, TaskState } from '@a2a-js/sdk'
+import { ServerCallContext, UnauthenticatedUser } from '@a2a-js/sdk/server'
 import type { DocKeeperRunInput, DocKeeperRunResult } from '../src/server/knowledge/service.ts'
+import type { DocKeeperAgent } from '../src/server/doc-keeper/a2a.ts'
 import {
-  DOC_PATH, cleanupKeeperFixtures, keeperFixture, registerKeeperCleanup, textTurn, toolTurn,
+  DOC_PATH, cleanupKeeperFixtures, keeperFixture, textTurn, toolTurn,
   type ProviderScript,
 } from './keeper-fixtures.ts'
 
-const { createDocKeeperApp } = await import('../src/server/doc-keeper/server.ts')
+const { createDocKeeperAgent } = await import('../src/server/doc-keeper/a2a.ts')
 const { DOC_KEEPER_SKILL_ID } = await import('../src/server/doc-keeper/agent-card.ts')
 
 afterEach(cleanupKeeperFixtures)
 
-type RpcEnvelope = {
-  jsonrpc: '2.0'
-  id: number
-  result?: Record<string, unknown>
-  error?: { code: number; message: string }
+const callContext = () => new ServerCallContext({ user: new UnauthenticatedUser(), requestedVersion: '1.0' })
+
+function messageOf(payload: unknown, via: 'data' | 'text' = 'data'): Message {
+  const part = via === 'data'
+    ? { content: { $case: 'data' as const, value: payload }, metadata: undefined, filename: '', mediaType: 'application/json' }
+    : { content: { $case: 'text' as const, value: JSON.stringify(payload) }, metadata: undefined, filename: '', mediaType: 'text/plain' }
+  return { messageId: randomUUID(), contextId: '', taskId: '', role: Role.ROLE_USER, parts: [part], metadata: undefined, extensions: [], referenceTaskIds: [] }
 }
 
-async function rpc(origin: string, method: string, params: unknown, apiKey?: string): Promise<{ status: number; body: RpcEnvelope }> {
-  const response = await fetch(`${origin}/`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'A2A-Version': '1.0', ...(apiKey === undefined ? {} : { authorization: `Bearer ${apiKey}` }) },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  })
-  return { status: response.status, body: await response.json() as RpcEnvelope }
-}
-
-function messageParams(payload: unknown, via: 'data' | 'text' = 'data') {
-  return {
-    message: {
-      role: 'ROLE_USER',
-      messageId: randomUUID(),
-      parts: [via === 'data' ? { data: payload } : { text: JSON.stringify(payload) }],
-    },
-  }
-}
+const requestOf = (payload: unknown, via: 'data' | 'text' = 'data'): SendMessageRequest =>
+  ({ tenant: '', message: messageOf(payload, via), configuration: undefined, metadata: undefined })
 
 const stubResult: DocKeeperRunResult = {
   mode: 'check', health: 'fresh', detail: 'stub ok', changedFiles: [], commitCount: 0, updated: false, knowledgePath: DOC_PATH,
 }
 
-/** 起一个 stub runMaintenance 的 A2A 服务，记录收到的输入。url 为构造时配置的公开地址。 */
-async function stubApp(options: { apiKey?: string; result?: DocKeeperRunResult } = {}): Promise<{ origin: string; url: string; calls: DocKeeperRunInput[] }> {
+/** 起一个 stub runMaintenance 的进程内 A2A 端点，记录收到的输入。 */
+function stubAgent(options: { result?: DocKeeperRunResult } = {}): { agent: DocKeeperAgent; calls: DocKeeperRunInput[] } {
   const calls: DocKeeperRunInput[] = []
-  const url = 'http://127.0.0.1:41250/'
-  const app = createDocKeeperApp({
+  const agent = createDocKeeperAgent({
     runMaintenance: async input => {
       calls.push(input)
       return options.result ?? stubResult
     },
-    url,
-    ...(options.apiKey === undefined ? {} : { apiKey: options.apiKey }),
   })
-  const server: Server = await new Promise((resolve, reject) => {
-    const listener = app.listen(0, '127.0.0.1')
-    listener.once('error', reject)
-    listener.once('listening', () => resolve(listener))
-  })
-  const address = server.address()
-  if (address === null || typeof address === 'string') throw new Error('A2A stub server did not bind a TCP port')
-  registerKeeperCleanup(() => new Promise<void>(resolve => { server.close(() => resolve()) }))
-  return { origin: `http://127.0.0.1:${address.port}`, url, calls }
+  return { agent, calls }
 }
 
-function taskOf(body: RpcEnvelope): Record<string, any> {
-  const task = (body.result as { task?: Record<string, any> } | undefined)?.task
-  if (task === undefined) throw new Error(`响应里没有 task：${JSON.stringify(body)}`)
-  return task
+function taskOf(result: Message | Task): Task {
+  if (!('artifacts' in result)) throw new Error(`响应不是 task：${JSON.stringify(result)}`)
+  return result
 }
 
-describe('A2A 表面：Agent Card 与鉴权', () => {
-  it('Agent Card 公开可发现，含维护技能与接口地址', async () => {
-    const { origin, url } = await stubApp({ apiKey: 'secret-key' })
-    const response = await fetch(`${origin}/.well-known/agent-card.json`)
-    expect(response.status).toBe(200)
-    const card = await response.json() as Record<string, any>
+function artifactText(task: Task): string {
+  const part = task.artifacts[0]?.parts.find(candidate => candidate.content?.$case === 'text')
+  return part?.content?.$case === 'text' ? part.content.value : ''
+}
+
+describe('进程内 A2A 端点：Agent Card', () => {
+  it('Agent Card 描述内置维护技能与进程内接口', async () => {
+    const { agent } = stubAgent()
+    const card = await agent.requestHandler.getAgentCard()
     expect(card.name).toBe('doc-keeper')
     expect(card.skills[0].id).toBe(DOC_KEEPER_SKILL_ID)
-    expect(card.supportedInterfaces[0].url).toBe(url)
-    expect(card.supportedInterfaces[0].protocolBinding).toBe('JSONRPC')
-  })
-
-  it('设置 apiKey 后：无凭证/错误凭证 401，正确凭证放行', async () => {
-    const { origin } = await stubApp({ apiKey: 'secret-key' })
-    const params = messageParams({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' })
-    expect((await rpc(origin, 'SendMessage', params)).status).toBe(401)
-    expect((await rpc(origin, 'SendMessage', params, 'wrong')).status).toBe(401)
-    const ok = await rpc(origin, 'SendMessage', params, 'secret-key')
-    expect(ok.status).toBe(200)
-    expect(taskOf(ok.body).status.state).toBe('TASK_STATE_COMPLETED')
-  })
-
-  it('未设置 apiKey 时端点开放（仅限回环使用）', async () => {
-    const { origin } = await stubApp()
-    const ok = await rpc(origin, 'SendMessage', messageParams({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' }))
-    expect(ok.status).toBe(200)
-    expect(taskOf(ok.body).status.state).toBe('TASK_STATE_COMPLETED')
+    expect(card.supportedInterfaces[0].url).toBe('in-process://doc-keeper')
+    expect(agent.agentCard).toEqual(card)
   })
 })
 
-describe('A2A 任务流：SendMessage / GetTask', () => {
+describe('进程内 A2A 任务流：sendMessage / getTask', () => {
   it('data part 输入被完整解析，任务完成并产出结果 artifact', async () => {
-    const { origin, calls } = await stubApp({ apiKey: 'k' })
+    const { agent, calls } = stubAgent()
     const payload = { repo: '/tmp/some-repo', globs: ['src/**', 'lib/**'], knowledgePath: DOC_PATH, mode: 'refresh', model: { provider: 'p', modelId: 'm' } }
-    const sent = await rpc(origin, 'SendMessage', messageParams(payload), 'k')
-    expect(sent.status).toBe(200)
+    const task = taskOf(await agent.requestHandler.sendMessage(requestOf(payload), callContext()))
     expect(calls).toEqual([payload])
-    const task = taskOf(sent.body)
-    expect(task.status.state).toBe('TASK_STATE_COMPLETED')
+    expect(task.status?.state).toBe(TaskState.TASK_STATE_COMPLETED)
     expect(task.artifacts).toHaveLength(1)
     expect(task.artifacts[0].name).toBe('maintenance-result')
-    const artifactText = task.artifacts[0].parts[0].text as string
-    expect(JSON.parse(artifactText)).toEqual(stubResult)
+    expect(JSON.parse(artifactText(task))).toEqual(stubResult)
     expect(task.history[0].messageId).toBeTruthy()
 
-    // GetTask 能按 id 取回同一终态任务。
-    const fetched = await rpc(origin, 'GetTask', { id: task.id }, 'k')
-    expect(fetched.status).toBe(200)
-    const fetchedTask = fetched.body.result as Record<string, any>
-    expect(fetchedTask.id).toBe(task.id)
-    expect(fetchedTask.status.state).toBe('TASK_STATE_COMPLETED')
+    // getTask 能按 id 取回同一终态任务。
+    const fetched = await agent.requestHandler.getTask({ tenant: '', id: task.id }, callContext())
+    expect(fetched.id).toBe(task.id)
+    expect(fetched.status?.state).toBe(TaskState.TASK_STATE_COMPLETED)
+  })
+
+  it('sendMaintenance 客户端等价于 data part sendMessage', async () => {
+    const { agent, calls } = stubAgent()
+    const payload: DocKeeperRunInput = { globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' }
+    expect(await agent.sendMaintenance(payload)).toEqual(stubResult)
+    expect(calls).toEqual([payload])
   })
 
   it('JSON 文本 part 与 data part 等价', async () => {
-    const { origin, calls } = await stubApp()
+    const { agent, calls } = stubAgent()
     const payload = { globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' }
-    const sent = await rpc(origin, 'SendMessage', messageParams(payload, 'text'))
-    expect(sent.status).toBe(200)
+    const task = taskOf(await agent.requestHandler.sendMessage(requestOf(payload, 'text'), callContext()))
     expect(calls).toEqual([payload])
-    expect(taskOf(sent.body).status.state).toBe('TASK_STATE_COMPLETED')
+    expect(task.status?.state).toBe(TaskState.TASK_STATE_COMPLETED)
   })
 
-  it('缺必填字段 → 任务 FAILED 并带错误消息', async () => {
-    const { origin, calls } = await stubApp()
-    const sent = await rpc(origin, 'SendMessage', messageParams({ knowledgePath: DOC_PATH, mode: 'check' }))
-    expect(sent.status).toBe(200)
-    const task = taskOf(sent.body)
-    expect(task.status.state).toBe('TASK_STATE_FAILED')
-    expect(task.status.message.parts[0].text).toContain('globs')
+  it('缺必填字段 → 任务 FAILED，sendMaintenance 抛错', async () => {
+    const { agent, calls } = stubAgent()
+    const task = taskOf(await agent.requestHandler.sendMessage(requestOf({ knowledgePath: DOC_PATH, mode: 'check' }), callContext()))
+    expect(task.status?.state).toBe(TaskState.TASK_STATE_FAILED)
+    expect(task.status?.message?.parts[0].content?.$case === 'text' && task.status.message.parts[0].content.value).toContain('globs')
     expect(calls).toEqual([])
+    await expect(agent.sendMaintenance({ knowledgePath: DOC_PATH, mode: 'check' } as DocKeeperRunInput)).rejects.toThrow()
   })
 
   it('非 JSON 文本 → 任务 FAILED', async () => {
-    const { origin } = await stubApp()
-    const sent = await rpc(origin, 'SendMessage', {
-      message: { role: 'ROLE_USER', messageId: randomUUID(), parts: [{ text: '请维护一下文档' }] },
-    })
-    expect(taskOf(sent.body).status.state).toBe('TASK_STATE_FAILED')
+    const { agent } = stubAgent()
+    const message: Message = { ...messageOf({}), parts: [{ content: { $case: 'text', value: '请维护一下文档' }, metadata: undefined, filename: '', mediaType: 'text/plain' }] }
+    const task = taskOf(await agent.requestHandler.sendMessage({ tenant: '', message, configuration: undefined, metadata: undefined }, callContext()))
+    expect(task.status?.state).toBe(TaskState.TASK_STATE_FAILED)
   })
 
-  it('维护结果带 error → 任务 FAILED', async () => {
-    const { origin } = await stubApp({ result: { ...stubResult, error: '模型不可用' } })
-    const sent = await rpc(origin, 'SendMessage', messageParams({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'refresh' }))
-    const task = taskOf(sent.body)
-    expect(task.status.state).toBe('TASK_STATE_FAILED')
-    expect(task.status.message.parts[0].text).toContain('模型不可用')
+  it('维护结果带 error → 任务 FAILED 但仍产出 artifact', async () => {
+    const { agent } = stubAgent({ result: { ...stubResult, error: '模型不可用' } })
+    const task = taskOf(await agent.requestHandler.sendMessage(requestOf({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'refresh' }), callContext()))
+    expect(task.status?.state).toBe(TaskState.TASK_STATE_FAILED)
+    expect(task.artifacts).toHaveLength(1)
+    expect(task.status?.message?.parts[0].content?.$case === 'text' && task.status.message.parts[0].content.value).toContain('模型不可用')
   })
 
-  it('SendStreamingMessage 生命周期：task → working → artifact → completed', async () => {
-    const { origin } = await stubApp()
-    const response = await fetch(`${origin}/`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'A2A-Version': '1.0' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendStreamingMessage', params: messageParams({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' }) }),
-    })
-    expect(response.status).toBe(200)
-    const text = await response.text()
-    const events = text.split('\n')
-      .filter(line => line.startsWith('data: '))
-      .map(line => JSON.parse(line.slice('data: '.length)) as { result?: Record<string, unknown> })
-      .map(envelope => envelope.result ?? {})
-    const kinds = events.map(event => Object.keys(event)[0])
+  it('sendMessageStream 生命周期：task → working → artifact → completed', async () => {
+    const { agent } = stubAgent()
+    const kinds: string[] = []
+    const states: TaskState[] = []
+    for await (const response of agent.requestHandler.sendMessageStream(requestOf({ globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'check' }), callContext())) {
+      const payload = response.payload
+      if (payload?.$case === 'task') kinds.push('task')
+      else if (payload?.$case === 'statusUpdate') { kinds.push('statusUpdate'); if (payload.value.status !== undefined) states.push(payload.value.status.state) }
+      else if (payload?.$case === 'artifactUpdate') kinds.push('artifactUpdate')
+    }
     expect(kinds[0]).toBe('task')
-    expect(kinds).toContain('statusUpdate')
     expect(kinds).toContain('artifactUpdate')
-    const states = events.flatMap(event => {
-      const update = event.statusUpdate as { status?: { state?: string } } | undefined
-      return update?.status?.state === undefined ? [] : [update.status.state]
-    })
-    expect(states).toEqual(['TASK_STATE_WORKING', 'TASK_STATE_COMPLETED'])
-    const firstTask = events[0].task as { status: { state: string } }
-    expect(firstTask.status.state).toBe('TASK_STATE_SUBMITTED')
+    expect(states).toEqual([TaskState.TASK_STATE_WORKING, TaskState.TASK_STATE_COMPLETED])
   })
 })
 
-describe('A2A 全链路：真实 runtime + 脚本模型驱动 refresh', () => {
-  it('SendMessage refresh 经五工具写回知识文档', async () => {
-    const newBody = '## 职责\n\n- 负责 server 模块。\n\n## 关键文件\n\n- `src/a.ts`：入口，导出 a=2。\n\n## 已知坑\n\n- 暂无。\n\n## changelog\n\n- 2026-11-12 A2A 增量刷新；1 条提交。\n'
+describe('进程内 A2A 全链路：真实 runtime + 脚本模型驱动 refresh', () => {
+  it('sendMaintenance refresh 经五工具写回知识文档', async () => {
+    const newBody = '## 职责\n\n- 负责 server 模块。\n\n## 关键文件\n\n- `src/a.ts`：入口，导出 a=2。\n\n## 已知坑\n\n- 暂无。\n\n## changelog\n\n- 2026-11-12 进程内 A2A 增量刷新；1 条提交。\n'
     const script: ProviderScript = {
       turn: (_userText, toolCount) => {
         switch (toolCount) {
@@ -209,28 +157,10 @@ describe('A2A 全链路：真实 runtime + 脚本模型驱动 refresh', () => {
       },
     }
     const { runtime, workspace } = await keeperFixture(script)
-    const app = createDocKeeperApp({
-      runMaintenance: runtime.runDocKeeperMaintenance,
-      url: 'http://127.0.0.1:0/',
-      apiKey: 'full-stack-key',
-    })
-    const server: Server = await new Promise((resolve, reject) => {
-      const listener = app.listen(0, '127.0.0.1')
-      listener.once('error', reject)
-      listener.once('listening', () => resolve(listener))
-    })
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('A2A server did not bind a TCP port')
-    registerKeeperCleanup(() => new Promise<void>(resolve => { server.close(() => resolve()) }))
-    const origin = `http://127.0.0.1:${address.port}`
-
-    const sent = await rpc(origin, 'SendMessage', messageParams({
+    const agent = createDocKeeperAgent({ runMaintenance: runtime.runDocKeeperMaintenance })
+    const result = await agent.sendMaintenance({
       globs: ['src/**'], knowledgePath: DOC_PATH, mode: 'refresh', model: { provider: 'repro', modelId: 'repro-model' },
-    }), 'full-stack-key')
-    expect(sent.status).toBe(200)
-    const task = taskOf(sent.body)
-    expect(task.status.state).toBe('TASK_STATE_COMPLETED')
-    const result = JSON.parse(task.artifacts[0].parts[0].text as string) as DocKeeperRunResult
+    })
     expect(result.updated).toBe(true)
     expect(result.health).toBe('fresh')
     expect(result.report).toContain('A2A 刷新完成')

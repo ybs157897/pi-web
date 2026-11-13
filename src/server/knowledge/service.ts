@@ -79,6 +79,7 @@ function lastAssistantText(items: ReadonlyArray<{ model?: ReadonlyArray<{ role: 
 
 export function createDocKeeperService(deps: DocKeeperServiceDeps) {
   const extension = createDocKeeperExtension()
+  const inflight = new Set<Promise<DocKeeperRunResult>>()
 
   const runMaintenance = async (input: DocKeeperRunInput): Promise<DocKeeperRunResult> => {
     deps.assertOpen()
@@ -164,5 +165,22 @@ export function createDocKeeperService(deps: DocKeeperServiceDeps) {
     }
   }
 
-  return { runMaintenance, extension }
+  /** Track in-flight maintenance so runtime.close() can drain it before the harness closes. */
+  const track = (input: DocKeeperRunInput): Promise<DocKeeperRunResult> => {
+    const promise = runMaintenance(input)
+    inflight.add(promise)
+    promise.then(() => inflight.delete(promise), () => inflight.delete(promise))
+    return promise
+  }
+
+  /** Await in-flight maintenance, bounded so a stuck conversation cannot hang shutdown. */
+  const drain = async (timeoutMs: number): Promise<void> => {
+    if (inflight.size === 0) return
+    await Promise.race([
+      Promise.allSettled([...inflight]),
+      new Promise<void>(resolve => { setTimeout(resolve, timeoutMs).unref() }),
+    ])
+  }
+
+  return { runMaintenance: track, extension, drain }
 }
