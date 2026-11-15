@@ -125,3 +125,8 @@ macOS 侧已核实本报告并入库 `4fb8387`（fix(shell): stream session poll
 
 pwsh `1..6 × 3s`（模型自选 `yieldTimeMs: 2000` 的极端短 yield，额外覆盖）：2s promote（前台含 post-1）→ `shell_session` 增量一次性返回 `post-2..post-6` + 诊断 `(exit code: 0)` → 模型原样引用增量与退出码 ✓。A–E harness 复跑：26 PASS + 1 已知 harness 断言错位（E2.5，终止标记按设计只进 spill 文件，已单独验证）——与合并前一致，无回归。
 
+
+### 6.4 后续处理（f5a733e 之后同日追加）
+
+- 6.2 发现的 `gen-section-catalog` 隐性平台依赖已按**最小争议方案**处理：给该脚本补上与 `gen-tool-catalog` 同款的 win32 显式守卫（声明「win32 不可用，产物以 posix 为准」，exit 1，在启动重型 runtime 之前退出）。这只把仓库既有意图显式化并消除「stale 误报」，不改变任何门的语义；macOS 行为零变化。
+- 「win32 --check 是否改为 skip（exit 0）以让 `npm run check` 在 Windows 全绿」仍是政策决策，未动；两个可选路径已记录：A. 对齐 prompt-snapshot 先例做声明式跳过（生成模式仍拒绝，防覆写正典）；B. 平台中立计数（把 `work-policy.ts:93` 平台文案换占位符后再统计，catalog 变全平台一致产物，届时可撤掉 skip）。B 做了之后 A 可撤。

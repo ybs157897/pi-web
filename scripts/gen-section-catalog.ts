@@ -91,6 +91,13 @@ function sectionsOf(messages: Parameters<typeof getCurrentSystemMessage>[0]): Re
 }
 
 async function main(): Promise<void> {
+  // Section bodies embed the platform line from work-policy (shell interpreter text), so the
+  // catalog documents the posix surface exactly like gen-tool-catalog: a win32 run can neither
+  // validate it against --check nor regenerate it without baking in win32-specific counts.
+  if (process.platform === 'win32') {
+    console.error('gen-section-catalog 在 win32 上不可用：section 字符数含平台相关文案，产物以 posix 为准（同 gen-tool-catalog）。')
+    process.exit(1)
+  }
   // Same layout as the test's beforeAll, including the 23-char temp prefix: raw section lengths
   // (the snapshot convention) embed the workspace path, so the prefix length must not drift.
   const rawRoot = await mkdtemp(join(tmpdir(), 'pi-web-section-catalog-'))
