@@ -4,6 +4,7 @@ import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
 import css from './ProcessRow.module.css'
 
+/** ProcessRow 的属性定义：控制行头图标/标题/摘要、展开行为与挂载动画。 */
 interface ProcessRowProps {
   icon: ReactNode
   showIcon?: boolean
@@ -11,7 +12,7 @@ interface ProcessRowProps {
   open: boolean
   expandable: boolean
   onToggle: () => void
-  /** A row that is an action, not a disclosure (ZCode's Agent summary row). */
+  /** 该行是动作行而非折叠行（对应 ZCode 的 Agent 摘要行），点击触发 onActivate。 */
   onActivate?: () => void
   running?: boolean
   summary?: ReactNode
@@ -22,7 +23,18 @@ interface ProcessRowProps {
   toggleLabel?: string
 }
 
-/** Compact ZCode-style work row with delayed unmount for a complete close animation. */
+/**
+ * 功能：ZCode 风格的紧凑工作行，用于流程/工具条目列表（含可折叠详情区）；
+ * 折叠收起时详情延迟卸载 300ms，保证完整播放关闭动画。
+ * @param props icon/showIcon 行头图标及是否显示；title 行标题；open 是否展开；
+ *              expandable 是否可折叠；onToggle 切换展开回调；onActivate 动作行点击回调；
+ *              running 是否运行中（影响标题样式）；summary 摘要内容；accessory 行尾附加控件；
+ *              interactiveSummary 摘要与标题分开两个点击区；keepSummaryWhenOpen 展开后仍保留摘要；
+ *              toggleLabel 无障碍标签。
+ * 内部逻辑：mounted 状态延迟收起子内容——open 变 false 后启动 300ms 定时器再卸载，
+ * 期间 details 区域以 inert + aria-hidden 隐藏；头部按 onActivate / expandable /
+ * interactiveSummary 组合渲染为动作按钮、分离式折叠按钮或静态文本。
+ */
 export function ProcessRow({ icon, showIcon = true, title, open, expandable, onToggle, onActivate, running = false, summary, accessory, children, interactiveSummary = false, keepSummaryWhenOpen = false, toggleLabel }: ProcessRowProps) {
   const id = useId()
   const [mounted, setMounted] = useState(open)

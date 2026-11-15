@@ -8,18 +8,24 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './GitBranchSwitcher.module.css'
 
+/** GitBranchSwitcher 的属性定义：目标工作区、触发按钮紧凑模式与菜单弹出方向。 */
 interface GitBranchSwitcherProps {
   workspaceId: string | undefined
-  /** Tighter trigger used inside the composer toolbar. */
+  /** 输入框工具栏里使用的更紧凑触发按钮。 */
   compact?: boolean
-  /** Menus open upward from the composer and downward from the status card. */
+  /** 从 composer 弹出时朝上，从状态卡弹出时朝下。 */
   side?: 'top' | 'bottom'
 }
 
 /**
- * Local branch picker mirroring ZCode's `GitBranchSwitcher`: every open re-reads the branch list,
- * the current branch is pinned first, and the footer creates a branch at HEAD and switches to it.
- * Switching stays Git-native — blocked switches keep the menu open with ZCode's structured issues.
+ * 功能：本地分支切换器（对应 ZCode 的 `GitBranchSwitcher`）：触发按钮显示当前分支，
+ * 打开后为搜索 + 分支列表 + 底部「创建并检出新分支」表单。出现在 composer 工具栏
+ * 与状态卡中。切换保持 Git 原生语义——被阻塞的切换保持菜单打开并展示结构化问题。
+ * @param props workspaceId 目标工作区；compact 是否紧凑触发按钮；side 菜单弹出方向。
+ * 内部逻辑：每次打开都重新拉取分支列表（避免其他终端的切换被过期列表掩盖），
+ * 请求票据（request.current）丢弃过期响应；workspaceId 变化时清空快照重新加载；
+ * switchTo 失败时 issues/problem 展示结构化原因（如文件将被覆盖）并保持菜单；
+ * createAndSwitch 失败保留表单并内联显示原因；branches 按 query 过滤。
  */
 export default function GitBranchSwitcher({ workspaceId, compact = false, side = 'top' }: GitBranchSwitcherProps) {
   const { t } = useUiPreferences()
@@ -47,18 +53,19 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
     return () => { live = false }
   }, [workspaceId])
 
-  /** ZCode reloads on every open so a switch made in another terminal is not hidden by a stale list. */
+  /** 每次打开菜单都重新加载分支列表（与 ZCode 一致），确保其他终端的切换不会藏在过期列表里。 */
   const load = async (): Promise<void> => {
     if (!workspaceId) return
     const ticket = ++request.current
     try {
       const value = await api.getGitBranches(workspaceId)
       if (request.current === ticket) setSnapshot(value)
-    } catch {
-      // Keep the last good snapshot; the trigger still shows the branch it knew.
+      } catch {
+      // 保留上一个有效快照；触发按钮仍显示已知的当前分支。
     }
   }
 
+  /** 打开/关闭菜单：打开时清空问题与创建表单并重新加载分支列表。 */
   const toggle = (): void => {
     if (open) {
       setOpen(false)
@@ -73,6 +80,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
     void load()
   }
 
+  /** 应用分支变更结果：成功则更新快照并关闭菜单；失败则记录结构化 issues 并保持打开。 */
   const apply = (result: GitBranchMutation): boolean => {
     setSnapshot(result.snapshot)
     if (!result.ok) {
@@ -88,6 +96,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
     return true
   }
 
+  /** 切换到指定分支：pending 期间防重入，失败时展示 problem 或结构化 issues。 */
   const switchTo = async (name: string): Promise<void> => {
     if (!workspaceId || pending) return
     setPending(true)
@@ -102,6 +111,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
     }
   }
 
+  /** 创建分支并切换：名为空时提示；创建失败（重名/非法名）保留表单并内联报错。 */
   const createAndSwitch = async (): Promise<void> => {
     if (!workspaceId || pending) return
     const name = newName.trim()
@@ -125,8 +135,8 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
         setOpen(false)
         return
       }
-      // Creation failures are name-level (invalid, duplicate): keep the form open and show the
-      // reason inline instead of stacking a second error card behind it.
+      // 创建失败属于名称层面（非法/重复）：保持表单打开并内联显示原因，
+      // 而不是在其后再叠一张错误卡。
       setIssues([])
       setCreateError(result.issues[0]?.detail?.trim() || result.issues[0]?.message || t('创建分支失败', 'Could not create the branch'))
       setCreating(true)
@@ -137,6 +147,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
     }
   }
 
+  /** 按搜索词过滤分支列表（大小写不敏感的包含匹配）。 */
   const branches = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
     const list = snapshot?.branches ?? []
@@ -147,6 +158,7 @@ export default function GitBranchSwitcher({ workspaceId, compact = false, side =
   const label = snapshot.headRefType === 'detached'
     ? t('游离 HEAD', 'Detached HEAD')
     : snapshot.currentBranchName ?? t('分支', 'Branch')
+  /** 把结构化 Git 问题映射为面向用户的中文文案；未知代码回退到 detail/message。 */
   const issueText = (issue: GitBranchIssue): string => {
     switch (issue.code) {
       case 'tracked-changes-would-be-overwritten': return t('你对以下文件的更改将被检出操作覆盖：', 'Your changes to these files would be overwritten by the switch:')

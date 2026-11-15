@@ -7,6 +7,7 @@ import { loadProjectInstructions, renderProjectInstructions } from '../workspace
 import { readPersonalization, renderPersonalization } from '../state/personalization.ts'
 import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
 
+/** 默认行为政策扩展的注册名（runtime-policy），供装配与测试引用。 */
 export const WORK_POLICY_EXTENSION_NAME = 'runtime-policy'
 
 /**
@@ -198,15 +199,15 @@ function personalInstructionsSection(dataDir: string, chineseReasoning: () => bo
   })
 }
 
-// Re-read on every request so edits to the workspace's root instructions take effect immediately.
+// 每次请求重读，使工作区根指令的编辑即时生效。
 /**
  * project-instructions section：每请求重读工作区根 AGENTS.md 并渲染其内容。
  * 内部逻辑：Explore 子会话不注入项目指令（对齐 ZCode 的 injectAgents.md: false）；
  * 与个性化文件同理每请求重读，编辑即时生效、无需重启。
  */
 const projectInstructionsSection = section('project-instructions', async (input, context) => {
-  // Explore subagents are read-only retrieval agents (ZCode's injectAgentsMd: false): the project's
-  // AGENTS.md stays out of their requests while every other conversation keeps it.
+  // Explore 子会话是只读检索智能体（对齐 ZCode 的 injectAgentsMd: false）：它们的请求不注入
+  // 项目 AGENTS.md，其余会话照常携带。
   const identity = await input.read.snapshot(Subagents, input.conversationId, context)
   if (identity?.record?.profile === 'Explore') return undefined
   return renderProjectInstructions(await loadProjectInstructions(input.env?.cwd))

@@ -46,7 +46,7 @@ import { buildSideChatPrompt } from './selection-quote.ts'
 import WorkspaceDialog from './WorkspaceDialog.tsx'
 import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
-/** antd is only needed by this page, so it loads as its own chunk on first visit. */
+/** antd 仅本页面需要，首次访问时按独立 chunk 懒加载。 */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
@@ -56,34 +56,43 @@ type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
 type MainPage = 'chat' | 'defects' | 'automations'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
-/** One attachment as the limits see it: an image flag and its byte size. */
+/** 限额视角下的一个附件：是否图片 + 字节大小。 */
 interface AttachmentSize { image: boolean; size: number }
 type AttachmentLimit = 'images' | 'files' | 'empty' | 'imageBytes' | 'fileBytes' | 'total'
 interface PendingSubmission extends PendingMessage { conversationId: string }
 interface ToastMessage { id: number; text: string; success?: boolean }
-/** The last failed submission attempt; a retry of the same content reuses its requestId. */
+/** 最近一次失败的提交记录；对相同内容的重试复用其 requestId。 */
 interface FailedSubmission { requestId: string; fingerprint: string }
 
+/** localStorage 中记录上次选中会话的键。 */
 const SELECTED_KEY = 'pi-durable-web:selected-conversation'
+/** 各会话输入草稿在 localStorage 中的键前缀。 */
 const DRAFT_PREFIX = 'pi-durable-web:draft:'
+/** 受支持的图片附件 MIME 类型集合。 */
 const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
-/** Dropped files can arrive without a MIME type, so the extension stands in for it. */
+/** 拖放的文件可能没有 MIME 类型，此时以扩展名代替判断。 */
 const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif',
 }
-/** Draft scopes without attachments share this, so the composer prop keeps a stable identity. */
+/** 无附件的草稿作用域共享此空数组，保证 composer prop 身份稳定。 */
 const NO_IMAGES: readonly DraftImage[] = []
-/** Scopes without plugin context share this, for the same reason. */
+/** 无插件上下文的作用域共享此空数组，理由同上。 */
 const NO_PLUGIN_CONTEXTS: readonly PluginContextEntry[] = []
+/** 附件限额：单条消息图片数、文件数、单图/单文件与总大小上限。 */
 const MAX_IMAGE_COUNT = 4
 const MAX_FILE_COUNT = 8
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
+/** 思考档位的全局递进顺序（clampThinkingLevel 的折算依据）。 */
 const THINKING_ORDER: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
-/** Project the level the runtime will actually store: nearest supported level above, then below. */
+/**
+ * 折算运行时会真正存储的思考等级：先向上找最近的支持档位，再向下回退。
+ * @param level 请求的档位；supported 运行时支持的档位列表。
+ * @returns 支持的档位；无列表或请求档位不受支持时按 THINKING_ORDER 就近折算。
+ */
 export function clampThinkingLevel(level: ThinkingLevel, supported: readonly ThinkingLevel[] | undefined): ThinkingLevel {
   if (supported === undefined || supported.length === 0 || supported.includes(level)) return level
   const requested = THINKING_ORDER.indexOf(level)
@@ -98,10 +107,11 @@ export function clampThinkingLevel(level: ThinkingLevel, supported: readonly Thi
 }
 
 /**
- * The first attachment limit the batch breaks, or null when every attachment fits.
- * Batches still being read are part of the batch, so two additions queued in one tick
- * cannot pass the same check against the same stale picture.
- * Exported so the limits stay verifiable without a browser.
+ * 计算本批附件最先触犯的限额，全部合规时返回 null。
+ * 仍在读取中的批次也计入批次，因此同一 tick 内排队的两次添加不会
+ * 针对同一份过期快照通过两次检查。
+ * 导出以便脱离浏览器验证限额逻辑。
+ * @param committed 已入库的附件；reading 读取中的批次；selected 新选中的批次。
  */
 export function attachmentLimitError(committed: readonly DraftImage[], reading: readonly AttachmentSize[], selected: readonly AttachmentSize[]): AttachmentLimit | null {
   const all: AttachmentSize[] = [
@@ -120,7 +130,7 @@ export function attachmentLimitError(committed: readonly DraftImage[], reading: 
   return null
 }
 
-/** The localized notice for one broken attachment limit. */
+/** 某一附件限额被触犯时的本地化提示文案。 */
 function attachmentLimitText(limit: AttachmentLimit, t: (chinese: string, english: string) => string): string {
   switch (limit) {
     case 'images': return t('一条消息最多添加 4 张图片', 'A message can include up to 4 images')
@@ -132,7 +142,14 @@ function attachmentLimitText(limit: AttachmentLimit, t: (chinese: string, englis
   }
 }
 
-/** Load shared UI preferences before rendering the complete application shell. */
+/**
+ * 功能：应用入口——先加载共享 UI 偏好（主题/语言/字号等），就绪后渲染完整
+ * 的应用外壳 AppShell，未就绪时显示加载页。
+ * @param props 无 props。
+ * 内部逻辑：挂载时经 api.getSettings 拉取设置（active 标记防卸载后 setState）；
+ * updateSettings 调 api.updateSettings 保存并以 ApiFailure 抛出失败；
+ * 包一层 UiPreferencesProvider 让全局读取偏好。
+ */
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_UI_SETTINGS)
   const [settingsError, setSettingsError] = useState('')
@@ -162,7 +179,17 @@ export default function App() {
   </UiPreferencesProvider>
 }
 
-/** Workspace sidebar, conversation surface, and Pi management entry pages. */
+/**
+ * 功能：应用外壳——左侧工作区/会话侧栏（搜索、排序、归档、置顶、重命名、分叉、
+ * 下载日志），中间会话流 + Composer + Todo/目标/交互卡，右侧 Inspector 面板；
+ * 并承载缺陷清单（WeTrackPage）与自动化任务（AutomationsPage）两个入口页、
+ * 设置对话框、工作区增删改对话框与全局 Toast/快捷键。
+ * @param props settings 已加载的 UI 设置；settingsError 设置读取错误；onSettingsChange 保存补丁回调。
+ * 内部逻辑：会话列表/目录/工作区/能力各自独立拉取与轮询（SSE watch 驱动会话详情）；
+ * 草稿/附件/插件上下文按会话作用域（scope）隔离存储；Inspector 标签按工作区记忆
+ * （pane 桶），插件页宿主由会话流卡片移交；发送流程含乐观条目、附件限额、
+ * 失败重试指纹与排队/插入两种繁忙模式；选择引文经 buildSideChatPrompt 走侧聊。
+ */
 function AppShell({ settings, settingsError, onSettingsChange }: {
   settings: AppSettings
   settingsError: string
@@ -241,7 +268,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [reconnectToken, setReconnectToken] = useState(0)
   const [pending, setPending] = useState<PendingSubmission[]>([])
   const [draftState, setDraftState] = useState<ScopedDraft>({ scope: '__new__', text: loadDraft('__new__') })
-  // Attachments live per scope, so switching conversations keeps what was already added.
+  // 附件按会话作用域存放，切换会话不会丢掉已添加的附件。
   const [imageStore, setImageStore] = useState<Record<string, DraftImage[]>>({})
   const [newModel, setNewModel] = useState<{ provider: string; modelId: string } | undefined>(undefined)
   const [newThinking, setNewThinking] = useState<ThinkingLevel>(settings.defaultThinkingLevel)
@@ -290,11 +317,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   translateRef.current = t
   const toastSequence = useRef(0)
   /** Keeps the auto-follow ref and the jump-button visibility in one place. */
+  /** 同步会话视口的滚动位置记录（用于判断是否贴底）。 */
   const syncViewportScroll = useCallback((element: HTMLDivElement): void => {
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight
     wasAtBottom.current = distance < 88
     setJumpToBottomVisible(distance > 48)
   }, [])
+  /** 把会话视口滚动到底部并更新贴底标记。 */
   const jumpToBottom = useCallback((): void => {
     const viewport = messagesViewport.current
     if (viewport === null) return
@@ -313,9 +342,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const requestedModelOption = requestedModel === undefined ? undefined
     : catalog?.models.find(model => model.provider === requestedModel.provider && model.modelId === requestedModel.modelId
       && (activeConversation !== null || model.available))
-  // A new conversation must never display a stale default: the server catalog
-  // already resolved it against the live directory, so use that when the
-  // stored/default reference is missing or not selectable.
+  // 新会话绝不能展示过期的默认模型：服务端目录已对照实时目录解析过，
+  // 当存储/默认引用缺失或不可选时以目录结果为准。
   const defaultModelOption = catalog?.defaultModel === undefined ? undefined
     : catalog.models.find(model => model.provider === catalog.defaultModel!.provider && model.modelId === catalog.defaultModel!.modelId)
   const fallbackModelOption = defaultModelOption?.available === true
@@ -341,17 +369,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const paneRef = useRef(pane)
   paneRef.current = pane
   /** Every pane mutation goes through here so the workspace memory bucket stays in sync. */
+  /** 提交一次 Inspector 标签状态变更：更新 React 状态并写入工作区记忆桶。 */
   const commitPane = useCallback((next: PaneState): void => {
     setPaneState(next)
     const workspaceId = currentWorkspaceIdRef.current
     if (workspaceId !== undefined) writePaneMemory(workspaceId, next)
   }, [])
   /** Open one tab (ZCode's open semantics: an active launcher tab is consumed in place). */
+  /** 在 Inspector 打开一个标签（已存在则激活），并展开面板。 */
   const openPaneTab = useCallback((tab: InspectorTab): void => {
     commitPane(openFromLauncher(paneRef.current, tab))
     setInspectorOpen(true)
   }, [commitPane])
   /** Close tabs; an emptied pane collapses, like ZCode's commitSidePaneState. */
+  /** 关闭指定标签；关闭当前激活标签时自动落到最后一个剩余标签。 */
   const closePaneTabs = useCallback((ids: readonly string[]): void => {
     const { state } = closeTabs(paneRef.current, ids)
     commitPane(state)
@@ -360,19 +391,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       setInspectorFullView(false)
     }
   }, [commitPane])
+  /** 关闭除指定标签外的全部标签。 */
   const closeOtherPaneTabs = useCallback((id: string): void => {
     commitPane(closeOtherTabs(paneRef.current, id))
   }, [commitPane])
+  /** 关闭全部标签并收起面板。 */
   const closeAllPaneTabs = useCallback((): void => {
     commitPane(closeAllTabs(paneRef.current))
     setInspectorOpen(false)
     setInspectorFullView(false)
   }, [commitPane])
+  /** 激活指定标签并展开面板。 */
   const selectPaneTab = useCallback((id: string): void => {
     commitPane(activateTab(paneRef.current, id))
   }, [commitPane])
-  // Switching to a workspace expands it once; afterwards its own chevron may
-  // collapse it, including while it is the selected/current workspace.
+  // 切换到某个工作区时先展开一次；之后其自身的箭头可以收起它，
+  // 包括它仍是选中/当前工作区的情况。
   useLayoutEffect(() => {
     if (currentWorkspaceId === undefined) return
     setExpandedWorkspaces(current => {
@@ -385,14 +419,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const accessMode = activeConversation?.conversation.accessMode ?? newAccessMode ?? settings.defaultAccessMode
   const selectedPending = pending.filter(item => item.conversationId === selectedId)
 
+  /** 弹出全局 Toast 提示（success 标记成功态）。 */
   const announce = useCallback((text: string, success = false): void => {
     toastSequence.current += 1
     setToast({ id: toastSequence.current, text, success })
   }, [])
 
+  /** 用最新数据更新侧栏会话摘要；子智能体会话不进侧栏，仅更新详情。 */
   const updateConversation = useCallback((value: ConversationDetail | ConversationSummary): void => {
     const summary = 'conversation' in value ? value.conversation : value
-    // A subagent session is reached through its parent's catalog, so it never enters the sidebar list.
+    // 子智能体会话经其父会话的目录进入，因此从不进入侧栏列表。
     if (summary.origin !== 'subagent') {
       setConversations(existing => [summary, ...existing.filter(item => item.id !== summary.id)]
         .sort(compareConversations))
@@ -400,6 +436,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if ('conversation' in value) setDetail(current => current?.conversation.id === summary.id ? value : current)
   }, [])
 
+  /** 拉取会话列表并复位列表错误/加载态。 */
   const refreshList = useCallback(async (): Promise<void> => {
     try {
       const items = await api.listConversations()
@@ -420,6 +457,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [t])
 
+  /** 拉取模型目录并复位目录错误态。 */
   const refreshCatalog = useCallback(async (): Promise<void> => {
     try {
       const value = await api.getModels()
@@ -430,6 +468,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [t])
 
+  /** 拉取工作区列表并复位加载/错误态。 */
   const refreshWorkspaces = useCallback(async (): Promise<void> => {
     setWorkspaceLoading(true)
     try {
@@ -440,6 +479,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     finally { setWorkspaceLoading(false) }
   }, [t])
 
+  /** 拉取服务端能力（版本/账号/可选权限模式）。 */
   const refreshCapabilities = useCallback(async (): Promise<void> => {
     try {
       const result = await api.getCapabilities()
@@ -458,8 +498,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     api.health().then(value => { setAppVersion(value.version); setAccountName(value.user) }).catch(() => undefined)
   }, [refreshCapabilities, refreshCatalog, refreshList, refreshWorkspaces])
 
-  // Runs keep finishing in conversations this tab is not streaming, so the unread dots only refresh
-  // when the reader comes back to the window. One list read per return, never a poll.
+  // 运行可能在不被本标签流式订阅的会话里结束，因此未读圆点只在读者回到窗口时
+  // 刷新。每次返回读一次列表，绝不轮询。
   useEffect(() => {
     const refreshWhenVisible = (): void => {
       if (document.visibilityState === 'visible') void refreshList()
@@ -472,9 +512,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [refreshList])
 
-  // DSH re-reads its model directory when the host reports a settings or
-  // adapter change. The server pushes the same signal for saves made here,
-  // another instance's writes, and hand-edited provider files.
+  // DSH 在宿主上报设置或适配器变化时重读模型目录。服务端对本地保存、
+  // 其他实例的写入以及手工编辑的供应商文件推送同一信号。
   useEffect(() => {
     const source = api.watchModels(() => { void refreshCatalog() })
     return () => { source.close() }
@@ -493,7 +532,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewModel(undefined)
     const preferences = settingsRef.current
     setNewThinking(preferences.defaultThinkingLevel)
-    // A per-workspace "new session" action carries its choice across this reset.
+    // 每工作区的「新建会话」动作会带着它的选择跨越这次重置。
     setNewWorkspaceId(pendingWorkspaceId.current ?? preferences.defaultWorkspaceId)
     pendingWorkspaceId.current = null
     setNewAccessMode(preferences.defaultAccessMode)
@@ -553,8 +592,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       if (follow && viewport !== null) requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight })
     }, state => {
       if (!live) return
-      // `open` also fires on an ordinary attach (conversation switch, reconnect token bump), so only a stream
-      // that actually dropped may report itself as recovered — otherwise every send flashes 连接已恢复.
+      // `open` 也会在普通连接（切换会话、重连令牌更新）时触发，因此只有真正掉线的流
+      // 才能上报「已恢复」——否则每次发送都会闪现「连接已恢复」。
       if (state === 'error') {
         connectionLost.current = true
         setConnection('disconnected')
@@ -584,9 +623,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     const keep = new Set<string>()
     for (const items of Object.values(imageStore)) for (const image of items) keep.add(image.preview)
     for (const item of pending) for (const image of item.images) keep.add(image.preview)
-    // Draft previews removed from the composer are released immediately — including attachments that were
-    // still being read, which now live in the store like every other item — accepted previews stay alive until
-    // SSE echoes them, and previews parked on another scope stay alive until it is opened again.
+    // 从 composer 移除的草稿预览立即释放——包括仍在读取中的附件（它们和其他条目一样
+    // 已入库）——已接受的预览存活到 SSE 回声确认，停在另一个作用域的预览存活到再次打开它。
     for (const url of objectUrls.current) {
       if (!keep.has(url)) {
         URL.revokeObjectURL(url)
@@ -658,6 +696,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [mobile, sidebarOpen])
 
+  /** 选中某个会话：清空待发送乐观条目并切换 selectedId。 */
   const selectConversation = useCallback((id: string): void => {
     blankIntent.current = false
     setPage('chat')
@@ -673,6 +712,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     })
   }, [mobile, selectedId])
 
+  /** 创建新会话：写标题，刷新列表并返回会话详情。 */
   const createConversation = useCallback(async (title = t('新对话', 'New conversation')): Promise<ConversationDetail> => {
     blankIntent.current = false
     const model = selectedModel
@@ -685,7 +725,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       ...(workspaceId === undefined ? {} : { workspaceId }),
       accessMode: newAccessMode ?? preferences.defaultAccessMode,
     })
-    // Plan mode is conversation-scoped, so the hero-time request is applied once the session exists.
+    // 计划模式按会话作用域生效，因此 hero 时刻的请求在会话创建后立即应用。
     const detail = newPlan ? await api.setPlan(created.conversation.id, true) : created
     setNewPlan(false)
     setConversations(existing => [detail.conversation, ...existing.filter(item => item.id !== detail.conversation.id)]
@@ -698,6 +738,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return detail
   }, [newAccessMode, newPlan, newWorkspaceId, selectedModel, thinkingLevel, t, workspaces])
 
+  /** 写入当前作用域的输入草稿并持久化到 localStorage。 */
   const setDraft = useCallback((value: string): void => {
     setDraftState({ scope: activeScope, text: value })
   }, [activeScope])
@@ -706,6 +747,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * `ui/update-model-context` writes one chip for the active scope. The same plugin call
    * overwrites its previous entry, which is the documented "keep the last one" rule.
    */
+  /** 追加一条插件上下文芯片（按会话作用域存储）。 */
   const addPluginContext = useCallback((entry: PluginContextEntry): void => {
     const scope = activeScope
     const key = `${entry.pluginId}:${entry.toolCallId ?? ''}`
@@ -719,6 +761,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     })
   }, [activeScope])
 
+  /** 按 key 移除一条插件上下文芯片。 */
   const removePluginContext = useCallback((key: string): void => {
     setPluginContextsByScope(current => {
       const entries = current[activeScope]
@@ -730,12 +773,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [activeScope])
 
   /** Write one scope's attachments and mirror them synchronously, so the next batch validates against them. */
+  /** 整体写入某作用域的附件列表（含对象 URL 管理）。 */
   const writeImages = useCallback((scope: string, items: DraftImage[]): void => {
     imageStoreRef.current = { ...imageStoreRef.current, [scope]: items }
     setImageStore(imageStoreRef.current)
   }, [])
 
   /** Patch one attachment in place; a read that finishes after the item was removed is a no-op. */
+  /** 按 id 补丁更新某作用域内的单个附件。 */
   const patchImage = useCallback((scope: string, id: string, patch: (image: DraftImage) => DraftImage): void => {
     const current = imageStoreRef.current[scope]
     if (current === undefined || !current.some(image => image.id === id)) return
@@ -743,6 +788,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [writeImages])
 
   /** Read one accepted attachment and land the result on the entry that is already in the list. */
+  /** 读取一个附件文件：图片走 base64，其他文件仅登记元信息。 */
   const readAttachment = useCallback((scope: string, item: { id: string; file: File }): void => {
     void fileData(item.file, t).then(data => {
       patchImage(scope, item.id, image => ({ ...image, data, status: 'ready' }))
@@ -754,22 +800,23 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     })
   }, [patchImage, t])
 
+  /** 添加附件批次：先做限额检查，再入列表并行读取。 */
   const addImages = useCallback((files: FileList | File[]): void => {
     const scope = activeScope
     const selected = Array.from(files).map(file => {
       const type = imageFileType(file)
       return { file, image: type !== '', mimeType: type === '' ? file.type || 'application/octet-stream' : type }
     })
-    // Limits read the live store, which already holds earlier batches that are still being read, so a second
-    // batch queued before the first one finished cannot pass the same check twice.
+    // 限额读取实时库存，其中已包含先前仍在读取中的批次，因此第一批未完成前排队的
+    // 第二批不可能对同一份快照重复通过检查。
     const committed = imageStoreRef.current[scope] ?? []
     const limit = attachmentLimitError(committed, [], selected.map(item => ({ image: item.image, size: item.file.size })))
     if (limit !== null) {
       announce(attachmentLimitText(limit, t))
       return
     }
-    // The batch joins the list before it is read: the composer shows it immediately, and a read that fails
-    // only marks its own entry instead of dropping the whole batch.
+    // 批次在读取前就进入列表：composer 立即展示它，读取失败只标记自己的条目，
+    // 不会丢掉整批。
     const batch: DraftImage[] = selected.map(item => ({
       id: crypto.randomUUID(), file: item.file, preview: URL.createObjectURL(item.file),
       mimeType: item.mimeType, data: '', status: 'reading',
@@ -780,6 +827,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [activeScope, announce, readAttachment, t, writeImages])
 
   /** Re-read one failed attachment, wherever the scope that owns it has moved on to. */
+  /** 重试一个读取失败的附件。 */
   const retryImage = useCallback((id: string): void => {
     for (const [scope, items] of Object.entries(imageStoreRef.current)) {
       const item = items.find(image => image.id === id)
@@ -790,6 +838,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [patchImage, readAttachment])
 
+  /** 移除一个附件（同时释放其对象 URL）。 */
   const removeImage = useCallback((id: string): void => {
     const scope = activeScope
     const current = imageStoreRef.current[scope] ?? []
@@ -801,6 +850,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     writeImages(scope, current.filter(image => image.id !== id))
   }, [activeScope, writeImages])
 
+  /** 发送消息主流程：附件校验 → 目标会话（按需新建）→ 乐观条目 → api 调用 → 清理草稿与芯片。 */
   const send = useCallback(async (requestedMode?: BusySendMode): Promise<void> => {
     const text = draftState.scope === activeScope ? draftState.text : ''
     const attachments = imageStoreRef.current[activeScope] ?? []
@@ -814,15 +864,15 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       return
     }
     const ready = attachments.filter(image => image.status === 'ready')
-    // `ui/update-model-context` entries ride along with the message, but the pending row,
-    // the title and the retry fingerprint all keep reading the operator's own text.
+    // `ui/update-model-context` 条目随消息一起发送，但待发送行、标题与重试指纹
+    // 都继续读取操作者自己的文本。
     const contextBlock = pluginContextBlock(pluginContextsByScope[activeScope] ?? NO_PLUGIN_CONTEXTS)
     const submittedText = contextBlock === '' ? text : text === '' ? contextBlock : `${text}\n\n${contextBlock}`
     submitLock.current = true
     setSending(true)
     let targetId = selectedId
     let target = detail?.conversation.id === selectedId ? detail : null
-    // The requestId is only known once the target exists (see below); the optimistic entry carries it from then on.
+    // requestId 只有在目标会话存在后才知道（见下）；此后由乐观条目携带它。
     const pendingId = `pending:${crypto.randomUUID()}`
     const firstPending: PendingSubmission = {
       id: pendingId,
@@ -845,8 +895,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         setPending(existing => existing.map(item => item.id === pendingId ? { ...item, conversationId: targetId as string } : item))
       }
       if (targetId === null) throw new Error(t('未能创建会话', 'Could not create conversation'))
-      // Retrying the exact same failed submission reuses its requestId, so a message the server already
-      // accepted is not sent twice when only the response was lost. Any change in content earns a fresh id.
+      // 重试内容完全相同的失败提交会复用其 requestId：即使只是响应丢失，服务端已接受的
+      // 消息也不会被发送两次。内容有任何变化都会获得新 id。
       const fingerprint = submissionFingerprint(targetId, text, ready)
       const remembered = lastFailedSubmit.current
       const requestId = remembered !== null && remembered.fingerprint === fingerprint ? remembered.requestId : crypto.randomUUID()
@@ -862,8 +912,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         ...(fileAttachments.length === 0 ? {} : { files: fileAttachments.map(file => ({ name: file.file.name, mimeType: file.mimeType, data: file.data })) }),
       })
       lastFailedSubmit.current = null
-      // The server accepted the message, so this scope's chips are consumed. A scope that
-      // gained another entry while the request was in flight keeps nothing stale either.
+      // 服务端已接受消息，因此该作用域的上下文芯片随之消耗。请求在途期间又新增
+      // 条目的作用域同样不会残留过期内容。
       setPluginContextsByScope(current => {
         if (current[activeScope] === undefined) return current
         const next = { ...current }
@@ -908,6 +958,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [activeScope, announce, createConversation, detail, draftState, pluginContextsByScope, selectedId, sendMode, t, writeImages])
 
   /** `ui/message` from a plugin page submits straight to the open conversation, leaving the draft alone. */
+  /** 把插件页发来的消息作为用户消息发送到当前会话。 */
   const sendPluginMessage = useCallback(async (text: string): Promise<void> => {
     if (selectedId === null) {
       announce(t('请先开始一个会话', 'Start a conversation first'))
@@ -927,6 +978,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, selectedId, t])
 
   /** `ui/open-link` may only reach an https destination, even when a caller skips the bridge check. */
+  /** 打开插件页面请求的外链：http(s) 在浏览器标签中打开。 */
   const openPluginLink = useCallback((url: string): void => {
     try {
       if (new URL(url).protocol !== 'https:') return
@@ -936,6 +988,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     window.open(url, '_blank', 'noopener,noreferrer')
   }, [])
 
+  /** 停止当前会话正在进行的回答。 */
   const stop = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -944,6 +997,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('停止失败', 'Could not stop'))) }
   }, [announce, selectedId, t])
 
+  /** 目标栏动作：暂停/恢复/编辑/清除，经 api 更新会话目标。 */
   const updateGoal = useCallback(async (action: 'pause' | 'resume' | 'edit' | 'clear', payload?: { objective?: string }): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -953,6 +1007,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法更新目标', 'Could not update the goal'))) }
   }, [announce, selectedId, t])
 
+  /** 触发当前会话的上下文压缩。 */
   const compact = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
     if (detailRef.current?.compaction?.running === true) return
@@ -961,6 +1016,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法压缩上下文', 'Could not compact the context'))) }
   }, [announce, selectedId, t])
 
+  /** 进入或退出计划模式；会话未创建时记住意图，创建后应用。 */
   const setPlan = useCallback(async (active: boolean): Promise<void> => {
     if (selectedId === null || !conversationReady) {
       setNewPlan(active)
@@ -981,10 +1037,12 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, conversationReady, selectedId, t, updateConversation])
 
   /** Hand focus back to the composer, which is what dismissing the plan review does. */
+  /** 把输入焦点交回 composer 文本框。 */
   const focusComposer = useCallback((): void => {
     document.querySelector<HTMLTextAreaElement>('[data-composer-input]')?.focus()
   }, [])
 
+  /** 移除一条排队中的消息。 */
   const removeQueue = useCallback(async (submissionId: string): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -998,6 +1056,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * conversation (or a newly opened browser window) starts there. The default
    * model is also the settings fallback, so this is the same global value.
    */
+  /** 记住最近一次手动选择的模型/思考等级（按会话持久化）。 */
   const rememberModelSelection = useCallback((level: ThinkingLevel, model?: { provider: string; modelId: string }): void => {
     const patch: UpdateAppSettingsInput = {
       defaultThinkingLevel: level,
@@ -1008,11 +1067,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     })
   }, [announce, onSettingsChange, t])
 
+  /** 切换当前会话的模型；不支持的思考等级折算到最近可用档位。 */
   const chooseModel = useCallback(async (model: ModelOption): Promise<void> => {
     const selection = { provider: model.provider, modelId: model.modelId }
     const requested = model.reasoning ? activeConversation?.conversation.thinkingLevel ?? newThinking : 'off'
-    // Switching to a model that does not offer the current level stores the
-    // nearest one it does offer, the same value the runtime would clamp to.
+    // 切换到不提供当前档位的模型时，存储其提供的最近档位——与运行时折算的值一致。
     const level = clampThinkingLevel(requested, model.thinkingLevels)
     if (selectedId === null || !conversationReady) {
       setNewModel(selection)
@@ -1029,6 +1088,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('切换模型失败', 'Could not change model'))) }
   }, [activeConversation, announce, conversationReady, newThinking, rememberModelSelection, selectedId, t, updateConversation])
 
+  /** 切换当前会话的思考等级（按模型支持列表折算）。 */
   const chooseThinking = useCallback(async (level: ThinkingLevel): Promise<void> => {
     if (selectedId === null || !conversationReady) {
       setNewThinking(level)
@@ -1044,6 +1104,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('更改思考等级失败', 'Could not change reasoning level'))) }
   }, [announce, conversationReady, rememberModelSelection, selectedId, selectedModel, t, updateConversation])
 
+  /** 更新会话属性（重命名/归档/置顶等）并同步侧栏。 */
   const patchConversation = useCallback(async (id: string, patch: {
     title?: string; pinned?: boolean; archived?: boolean;
   }): Promise<void> => {
@@ -1060,6 +1121,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('会话更新失败', 'Could not update conversation'))) }
   }, [announce, selectedId, showArchived, t, updateConversation])
 
+  /** 从某条消息分叉出新会话并跳转。 */
   const forkFrom = useCallback(async (entryId: string): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -1073,6 +1135,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('创建分支失败', 'Could not fork conversation'))) }
   }, [announce, selectedId, t])
 
+  /** 保存模型供应商配置并刷新目录（设置对话框用）。 */
   const saveProvider = useCallback(async (input: ProviderInput): Promise<void> => {
     setSavingProvider(true)
     try {
@@ -1084,6 +1147,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } finally { setSavingProvider(false) }
   }, [announce, refreshCatalog, t])
 
+  /** 切换当前工作区（经 api 绑定），成功后刷新列表。 */
   const selectWorkspace = useCallback(async (workspaceId: string): Promise<void> => {
     if (conversationReady && selectedId !== null) {
       try {
@@ -1100,6 +1164,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     catch (cause) { announce(errorText(cause, t('无法保存默认工作区', 'Could not save the default workspace'))) }
   }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
 
+  /** 切换当前会话的权限模式。 */
   const selectAccessMode = useCallback(async (mode: AccessMode): Promise<void> => {
     if (conversationReady && selectedId !== null) {
       try {
@@ -1115,6 +1180,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     catch (cause) { announce(errorText(cause, t('无法保存默认访问级别', 'Could not save the default access mode'))) }
   }, [announce, conversationReady, onSettingsChange, selectedId, t, updateConversation])
 
+  /** 注册一个本地目录为新工作区并刷新列表。 */
   const addWorkspace = useCallback(async (input: { path: string; name?: string }): Promise<WorkspaceSummary> => {
     const result = await api.createWorkspace(input)
     setWorkspaces(current => [result.workspace, ...current.filter(workspace => workspace.id !== result.workspace.id)])
@@ -1123,6 +1189,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return result.workspace
   }, [announce, t])
 
+  /** 保存工作区显示名称。 */
   const saveWorkspaceName = useCallback(async (workspace: WorkspaceSummary, name: string): Promise<void> => {
     try {
       const result = await api.renameWorkspace(workspace.id, { name })
@@ -1131,12 +1198,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法重命名工作区', 'Could not rename workspace'))) }
   }, [announce, t])
 
+  /** 切换主页面（chat/defects/automations）。 */
   const navigate = useCallback((next: MainPage): void => {
     setPage(next)
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
   }, [mobile])
 
+  /** 打开某个会话（供子页面回跳）。 */
   const openConversation = useCallback(async (id: string): Promise<void> => {
     setPage('chat')
     setSidebarOpen(false)
@@ -1144,6 +1213,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setSelectedId(id)
   }, [conversations, refreshList])
 
+  /** 在 Inspector 打开某工作区的文件浏览器标签。 */
   const openWorkspaceBrowser = useCallback((workspaceId: string, path = ''): void => {
     inspectorRequestId.current += 1
     const workspace = workspaces.find(item => item.id === workspaceId)
@@ -1153,6 +1223,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setSidebarOpen(false)
   }, [openPaneTab, workspaces, t])
 
+  /** 在 Inspector 打开工作区文件（加载内容与资源地址，支持定位行）。 */
   const openWorkspaceFile = useCallback(async (path: string, workspaceId = currentWorkspaceId, line?: number): Promise<void> => {
     if (workspaceId === undefined) {
       announce(t('请先选择工作区', 'Choose a workspace first'))
@@ -1189,6 +1260,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, currentWorkspaceId, openPaneTab, openWorkspaceBrowser, t])
 
   /** One diff document per workspace+path; repeated opens focus and refresh the same tab. */
+  /** 在 Inspector 打开一个差异视图（数据已备好直接入标签）。 */
   const inspectDiff = useCallback((diff: InspectorDiff): void => {
     inspectorRequestId.current += 1
     const workspaceId = currentWorkspaceIdRef.current
@@ -1203,6 +1275,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorLoading(false)
   }, [openPaneTab])
 
+  /** 「@」触发时搜索当前工作区文件，供 composer 建议面板。 */
   const searchWorkspaceFiles = useCallback(async (needle: string): Promise<WorkspaceFileEntry[]> => {    const workspaceId = currentWorkspaceId
     if (workspaceId === undefined) return []
     const result = await api.searchWorkspaceFiles(workspaceId, needle)
@@ -1210,6 +1283,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [currentWorkspaceId])
 
   /** `$` uses the same workspace catalog as Settings → Skills, so plugin skills are included. */
+  /** 「$」触发时搜索可用技能（插件技能包含在内）。 */
   const searchSkills = useCallback(async (query: string) => {
     const workspaceId = currentWorkspaceId
     if (workspaceId === undefined) return []
@@ -1220,6 +1294,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       `${skill.name} ${skill.description} ${skill.id}`.toLocaleLowerCase().includes(needle))
   }, [currentWorkspaceId])
 
+  /** 提交某条回答的点赞/点踩反馈。 */
   const submitFeedback = useCallback(async (entryId: string, rating: 'up' | 'down' | null): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -1234,6 +1309,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, selectedId, t])
 
   /** CP-5: free-form product feedback from the account menu, sent to the standalone feedback endpoint. */
+  /** 发送用户填写的产品反馈文本。 */
   const sendUserFeedback = useCallback(async (): Promise<void> => {
     const text = feedbackText.trim()
     if (text === '' || text.length > 2000 || feedbackSending) return
@@ -1249,6 +1325,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } finally { setFeedbackSending(false) }
   }, [announce, feedbackSending, feedbackText, t])
 
+  /** 重试某条失败的工具/回答条目。 */
   const retryEntry = useCallback(async (entryId: string): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -1257,6 +1334,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('重新运行失败', 'Could not retry this response'))) }
   }, [announce, openConversation, selectedId, t])
 
+  /** 更新排队消息（文本/模式/图片），供 composer 队列编辑。 */
   const updateQueue = useCallback(async (submissionId: string, input: Parameters<typeof api.updateQueued>[2]): Promise<void> => {
     if (selectedId === null) return
     try {
@@ -1265,6 +1343,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { throw new ApiFailure(errorText(cause, t('无法更新排队消息', 'Could not update queued message')), cause instanceof ApiFailure ? cause.code : undefined) }
   }, [announce, selectedId, t])
 
+  /** 复制会话 id 到剪贴板并提示。 */
   const copySessionId = useCallback(async (item: ConversationSummary): Promise<void> => {
     try {
       await navigator.clipboard.writeText(item.id)
@@ -1272,6 +1351,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法复制 Session ID', 'Could not copy the Session ID'))) }
   }, [announce, t])
 
+  /** 从侧栏对会话执行分叉并跳转到新会话。 */
   const forkConversation = useCallback(async (item: ConversationSummary): Promise<void> => {
     try {
       const source = detailRef.current?.conversation.id === item.id ? detailRef.current : await api.getConversation(item.id)
@@ -1292,6 +1372,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [announce, t])
 
   /** DSH's session-log export: one JSON object per line, taken from the durable conversation. */
+  /** 下载会话日志（NDJSON），经临时锚点触发浏览器下载。 */
   const downloadSessionLog = useCallback(async (item?: ConversationSummary): Promise<void> => {
     const id = item?.id ?? selectedId
     if (id === null) return
@@ -1304,7 +1385,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.download = `${detail.conversation.title.replace(/[\\/:*?"<>|]+/gu, '-').trim() || 'session'}.jsonl`
-      // The anchor has to be in the document for the browser to start the download.
+      // 锚点必须已在文档中，浏览器才会开始下载。
       document.body.append(anchor)
       anchor.click()
       anchor.remove()
@@ -1313,6 +1394,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法下载 Session 日志', 'Could not download the session log'))) }
   }, [announce, selectedId, t])
 
+  /** 打开添加工作区流程：有原生面板用路径，否则打开应用内目录浏览器。 */
   const addWorkspaceFromPicker = useCallback(async (): Promise<void> => {
     try {
       const picked = await api.pickWorkspaceDirectory()
@@ -1323,19 +1405,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       announce(t(`已添加工作区 ${added.name}`, `Added workspace ${added.name}`), true)
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : ''
-      // No native panel on this host (Windows today): DSH gives such hosts the
-      // in-app browser, so open that instead of a typed path.
+      // 该宿主没有原生目录面板（目前是 Windows）：DSH 为这类宿主提供应用内
+      // 浏览器，改为打开它而不是输入路径。
       if (message.includes('原生目录选择器')) { setDirectoryBrowserOpen(true); return }
       announce(errorText(cause, t('无法添加工作区', 'Could not add the workspace')))
     }
   }, [addWorkspace, announce, refreshWorkspaces, t])
 
+  /** 确认删除工作区：服务端重绑其会话后刷新列表与工作区。 */
   const confirmDeleteWorkspace = useCallback(async (workspace: WorkspaceSummary): Promise<void> => {
     setDeleteWorkspace(undefined)
     try {
       await api.deleteWorkspace(workspace.id)
       announce(t(`已删除工作区 ${workspace.name}`, `Deleted workspace ${workspace.name}`), true)
-      // The server rebound this workspace's sessions and its default; reload both views.
+      // 服务端已重新绑定该工作区的会话与默认工作区；两个视图都要重新加载。
       await refreshWorkspaces()
       await refreshList()
       if (browseTab?.workspaceId === workspace.id) {
@@ -1345,17 +1428,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法删除工作区', 'Could not delete the workspace'))) }
   }, [announce, browseTab?.workspaceId, closePaneTabs, refreshList, refreshWorkspaces, t])
 
+  /** 按搜索词过滤会话列表（标题/摘要）。 */
   const filteredConversations = useMemo(() => conversations
     .filter(item => settings.showAnalysisConversations || item.kind !== 'defectAnalysis')
     .filter(item => item.archived === showArchived)
     .filter(item => `${item.title}\n${item.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
     .sort(compareConversations), [conversations, query, settings.showAnalysisConversations, showArchived])
+  /** 按最近使用或名称排序工作区。 */
   const sortedWorkspaces = useMemo(() => [...workspaces].sort((a, b) => workspaceSort === 'name'
     ? a.name.localeCompare(b.name) : b.updatedAt - a.updatedAt), [workspaces, workspaceSort])
   const workspaceNeedle = query.trim().toLocaleLowerCase()
   const filteredWorkspaces = sortedWorkspaces.filter(workspace => workspaceNeedle === ''
     || `${workspace.name}\n${workspace.path}`.toLocaleLowerCase().includes(workspaceNeedle)
     || filteredConversations.some(item => item.workspaceId === workspace.id || item.workspaceId === undefined && item.cwd === workspace.path))
+  /** 已知工作区 id 集合（判定记忆桶归属）。 */
   const knownWorkspaceIds = useMemo(() => new Set(workspaces.map(workspace => workspace.id)), [workspaces])
   const ungrouped = filteredConversations.filter(item => item.workspaceId === undefined || !knownWorkspaceIds.has(item.workspaceId))
   const busy = activeConversation?.conversation.busy === true
@@ -1363,13 +1449,15 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  // Every pane open path ensures a tab exists, so the open flag alone decides visibility.
+  // 每条面板打开路径都保证先有标签页，因此仅凭 open 标志即可决定可见性。
   const showInspector = inspectorOpen
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
+  /** 当前会话最近一次提交的计划（供 Inspector 缺省展示）。 */
   const conversationPlan = useMemo(() => activeDetail === null
     ? undefined
     : latestPlan(activeDetail.interactions, activeDetail.messages), [activeDetail])
   /** Every plan in the transcript, newest first: the status card's plan directory. */
+  /** 当前会话的全部已提交计划（最新在前）。 */
   const conversationPlans = useMemo(() => activeDetail === null
     ? []
     : sessionPlans(activeDetail.interactions, activeDetail.messages), [activeDetail])
@@ -1404,6 +1492,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (title !== '') void patchConversation(id, { title })
     setEditingId(null)
   }
+  /** 新建会话：保存当前面板草稿、复位作用域并回到聊天页 hero。 */
   const startNewConversation = useCallback((): void => {
     blankIntent.current = true
     setPage('chat')
@@ -1414,8 +1503,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setNewThinking(settings.defaultThinkingLevel)
     setNewWorkspaceId(settings.defaultWorkspaceId)
     setNewAccessMode(settings.defaultAccessMode)
-    // ZCode's draft scope: conversation-owned tabs go, workspace documents stay in the bucket,
-    // and the empty draft starts with the pane collapsed.
+    // ZCode 的草稿作用域：会话自有标签页离开，工作区文档留在桶里，空草稿以面板收起起步。
     const scoped = stripConversationScoped(paneRef.current)
     commitPane(scoped)
     setInspectorPlan(undefined)
@@ -1432,6 +1520,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
   /** The plugin creator is a new task with the bundled Skill already in the draft. */
+  /** 以「插件创建技能」预载开启新会话。 */
   const startPluginCreation = useCallback((): void => {
     const text = '$plugin-creator '
     writeStorage(`${DRAFT_PREFIX}__new__`, text)
@@ -1442,6 +1531,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }, [focusComposer, startNewConversation])
 
   /** DSH's workspace row action: start a session that already belongs to that workspace. */
+  /** 在指定工作区新建会话（侧栏工作区行的入口）。 */
   const startNewConversationIn = useCallback((workspaceId: string): void => {
     if (selectedId === null) { setNewWorkspaceId(workspaceId); return }
     pendingWorkspaceId.current = workspaceId
@@ -1472,7 +1562,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         if (mobile) setSidebarOpen(value => !value)
         else setSidebarCollapsed(value => !value)
       } else if (matchesShortcut(event, shortcuts.rename) || matchesShortcut(event, shortcuts.fork) || matchesShortcut(event, shortcuts.archive)) {
-        // DSH binds these to the session row the reader is on; pi-web applies them to the open one.
+        // DSH 把这些操作绑定到读者所在的会话行；pi-web 应用到当前打开的会话。
         const current = conversationsRef.current.find(item => item.id === selectedIdRef.current)
         if (current === undefined) return
         event.preventDefault()
@@ -1523,7 +1613,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       { id: 'browse', label: t('浏览文件', 'Browse files'), icon: <IconFolderOpenOutlineRegular size={14} /> },
       { id: 'rename', label: t('重命名', 'Rename'), icon: <IconEditOutlineRegular size={14} /> },
     ]
-    // DSH only offers removal while another workspace can take the rebound sessions.
+    // 仅当还有其他工作区可以接管被重绑的会话时，DSH 才提供移除入口。
     if (workspaces.length > 1) entries.push({ id: 'delete', label: t('删除工作区', 'Delete workspace'), icon: <IconTrashOutlineRegular size={14} /> })
     return entries
   }
@@ -1541,9 +1631,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   }
 
   /** Close one plugin tab: drop the page and its inline-card host, then let the model pick the fallback. */
+  /** 关闭一个插件页：释放其宿主并从挂载列表移除。 */
   const closePluginPage = useCallback((id: string): void => {
     setPluginPages(current => current.filter(page => page.id !== id))
-    // The tab no longer owns the host; its inline card appends it back on the next render.
+    // 标签页不再持有宿主；其内联卡会在下一次渲染时把它接回去。
     setPluginPageHosts(current => {
       if (current[id] === undefined) return current
       const hosts = { ...current }
@@ -1556,8 +1647,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * Open or focus one plugin page tab; the id keeps one page per plugin call site. An inline card
    * passes its host, so the inspector moves the mounted page instead of opening a second iframe.
    */
+  /** 打开插件页：内联卡移交宿主则复用同一 iframe，否则新建页面数据。 */
   const openPluginPage = useCallback((input: PluginUiPage | Omit<PluginUiPage, 'id'>, host?: HTMLElement): void => {
-    // A card names its own page; the `+` menu has no page yet, so its id comes from the conversation.
+    // 内联卡自带页面 id；「+」菜单还没有页面，因此其 id 取自会话。
     const id = 'id' in input ? input.id : `${selectedId ?? 'new'}:${input.pluginId}:${input.toolCallId ?? input.resourceUri}`
     const stored: PluginUiPage = { ...input, id, ...(selectedId === null ? {} : { conversationId: selectedId }) }
     setPluginPages(current => current.some(item => item.id === id)
@@ -1575,6 +1667,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * a file or plugin document does. The title comes from the parent's projected child list, so a
    * chip or panel row that only knows the id still lands on the delegation label.
    */
+  /** 打开子智能体只读会话标签（去重激活）。 */
   const openSubagentTab = useCallback((childId: string, title?: string): void => {
     const row = activeDetail?.subagents?.find(item => item.id === childId)
     const label = row?.label !== undefined && row.label !== ''
@@ -1592,20 +1685,25 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * The status card's 「已结束的智能体」 footer opens ZCode's directory page: every child of the
    * parent in one tab, each row opening the read-only session beside it.
    */
+  /** 打开子智能体目录标签。 */
   const openSubagentDirectory = useCallback((): void => {
     openPaneTab({ id: 'subagents', type: 'subagents', title: t('子智能体目录', 'Subagents'), openedAt: Date.now() })
     setSidebarOpen(false)
   }, [openPaneTab, t])
 
   /** Page ids whose host the inspector owns; an inline card shows a placeholder for those. */
+  /** 当前由 Inspector 托管的插件页 id 集合（宿主已移交）。 */
   const sidePageIds = useMemo(() => new Set(Object.keys(pluginPageHosts)), [pluginPageHosts])
   const pluginPageHolding = useRef<HTMLDivElement>(null)
+  /** 把腾出的插件页宿主存入应用的暂存节点，避免 iframe 脱离文档而重载。 */
   const holdPluginPageHost = useCallback((host: HTMLElement): void => {
     pluginPageHolding.current?.appendChild(host)
   }, [])
+  /** 传给插件页池的上下文：托管集合、打开与暂存回调。 */
   const pluginPagePool = useMemo(() => ({ sidePageIds, openSide: openPluginPage, hold: holdPluginPageHost }), [holdPluginPageHost, openPluginPage, sidePageIds])
 
   /** The `+` menu reads the surfaces the server enables for this workspace and conversation. */
+  /** 刷新当前工作区/会话可用的插件 surface 列表。 */
   const refreshPluginSurfaces = useCallback(async (): Promise<void> => {
     try {
       const surfaces = await api.pluginUiSurfaces(currentWorkspaceId, selectedId ?? undefined)
@@ -1616,6 +1714,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [announce, currentWorkspaceId, selectedId, t])
 
+  /** 打开一个插件 surface：无页面数据时先向服务端索取。 */
   const openPluginSurface = useCallback((surface: PluginUiSurfaceView): void => {
     openPluginPage({
       pluginId: surface.pluginId,
@@ -1631,19 +1730,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       return
     }
     setInspectorOpen(true)
-    // ZCode's collapsed expansion: a pane with no tabs lands on the launcher page.
+    // ZCode 的收起展开：没有标签的面板落在启动页上。
     if (paneRef.current.tabs.length === 0) {
       openPaneTab({ id: 'new-tab', type: 'new-tab', title: t('新标签页', 'New tab'), openedAt: Date.now() })
     }
   }
 
   // —— ZCode launcher entries: review, browser, trajectory, new-tab, selection side chat. ——
+  /** 打开 Git 审查标签（无则新建）。 */
   const openReviewPane = useCallback((): void => {
     openPaneTab({ id: 'git', type: 'git', title: t('审查', 'Review'), openedAt: Date.now() })
   }, [openPaneTab, t])
+  /** 打开内置浏览器标签（无则新建）。 */
   const openBrowserPane = useCallback((): void => {
     openPaneTab({ id: `browser:${crypto.randomUUID()}`, type: 'browser', title: t('浏览器', 'Browser'), openedAt: Date.now(), url: '' })
   }, [openPaneTab, t])
+  /** 打开模型调用轨迹标签（无则新建）。 */
   const openTrajectoryPane = useCallback((): void => {
     if (selectedId === null) {
       announce(t('先打开一个会话再查看模型轨迹', 'Open a conversation to view its model trajectory'))
@@ -1654,9 +1756,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       : t('模型调用轨迹', 'Model trajectory')
     openPaneTab({ id: `trajectory:${selectedId}`, type: 'trajectory', conversationId: selectedId, title, openedAt: Date.now() })
   }, [announce, openPaneTab, selectedId, selectedSummary, t])
+  /** 打开「新标签页」启动页。 */
   const openNewTabPane = useCallback((): void => {
     openPaneTab({ id: 'new-tab', type: 'new-tab', title: t('新标签页', 'New tab'), openedAt: Date.now() })
   }, [openPaneTab, t])
+  /** 把浏览器标签的导航补丁（url/地址草稿/标题）回写到标签状态。 */
   const patchBrowserTab = useCallback((tabId: string, patch: { url?: string; addressDraft?: string; title?: string }): void => {
     const current = paneRef.current
     const tabs = current.tabs.map(tab => tab.id === tabId
@@ -1664,9 +1768,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       : tab)
     commitPane(normalizePaneState({ tabs, activeTabId: current.activeTabId }) ?? { tabs, activeTabId: current.activeTabId })
   }, [commitPane])
+  /** 切换 Inspector 完整视图（覆盖整个主行）。 */
   const toggleInspectorFullView = useCallback((): void => {
     if (!showInspector) {
-      // ZCode enters the full view by expanding the pane first when it was closed.
+      // ZCode 进入完整视图的方式：面板原本收起时先展开它。
       toggleInspector()
       setInspectorFullView(true)
       return
@@ -1676,6 +1781,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   /** Create (or reuse) a side chat conversation for a transcript selection and open its tab. */
   const sideChatOpening = useRef(false)
+  /** 打开（或聚焦）一个侧聊标签；携带引文时存入待发送引用。 */
   const openSelectionChat = useCallback(async (quote?: string): Promise<void> => {
     const workspaceId = currentWorkspaceIdRef.current
     if (workspaceId === undefined) {
@@ -1698,6 +1804,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
   }, [announce, openPaneTab, selectedModel, thinkingLevel, t])
   /** The side chat's first send folds the pending quote into the prompt, ZCode reference semantics. */
+  /** 发送一条侧聊消息：组装含引文的提示词并经 api 旁路请求，流式回填。 */
   const sendSideChatMessage = useCallback((conversationId: string, text: string): void => {
     const quote = sideQuotes[conversationId]
     const prompt = quote === undefined || text.trim() === '' ? text : buildSideChatPrompt(quote, text)
@@ -1713,7 +1820,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       .catch(cause => { announce(errorText(cause, t('无法发送消息', 'Could not send the message'))) })
   }, [announce, sideQuotes, t])
 
-  // ZCode's side pane chords live with the entries they drive, which are declared above.
+  // ZCode 的侧栏组合键与它们驱动的入口同处声明（入口已在上方定义）。
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
@@ -1744,7 +1851,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const moveInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const start = inspectorResize.current
     if (start === null) return
-    // The divider sits on the inspector's left edge, so dragging left widens it.
+    // 分隔条位于 Inspector 左缘，向左拖动即加宽它。
     setInspectorWidth(clampInspectorWidth(start.startWidth + (start.startX - event.clientX)))
   }
   const endInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
@@ -1754,7 +1861,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const nudgeInspector = (delta: number): void => {
     setInspectorWidth(value => clampInspectorWidth(value + delta))
   }
-  // A window narrowed after a wide drag must not squeeze the primary column.
+  // 宽度拖宽后窗口变窄时，不允许挤压主栏。
   useEffect(() => {
     const onResize = (): void => {
       setInspectorWidth(value => Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7)))
@@ -1766,6 +1873,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * DSH's `openPlan` (`ui-plan/src/client/PlanCard.tsx:48-57`): focus the exact submitted plan in
    * the right sidebar. `auto` is the one automatic open per conversation (`PlanCard.tsx:72-80`).
    */
+  /** 打开计划：显式打开的计划存入 inspectorPlan，待审计划在会话切换时自动打开一次。 */
   const openPlan = useCallback((plan: PlanDocument, auto = false): void => {
     if (auto) {
       if (selectedId === null || planAutoOpenedFor.current === selectedId) return
@@ -1778,16 +1886,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorLoading(false)
   }, [openPaneTab, selectedId, t])
 
-  // DSH opens each pending review once, automatically, and stops after the reader closes it
-  // (`PlanCard.tsx:63-80` + `review-store.ts:12-22`). Pi keys the memory to the conversation,
-  // so switching sessions resets it; a plan that is no longer pending never auto-opens.
+  // DSH 对每个待审计划自动打开一次，读者关闭后不再自动打开
+  // （`PlanCard.tsx:63-80` + `review-store.ts:12-22`）。Pi 以会话为记忆键，
+  // 切换会话即重置；不再处于待审状态的计划绝不自动打开。
   useEffect(() => {
     planAutoOpenedFor.current = null
   }, [selectedId])
 
-  // Plugin pages belong to the conversation that opened them (`plugin-marketplace-design.md` §8.2),
-  // so a session switch destroys both the mounted pages and the surface list for the old session.
-  // Child tabs, trajectory and side chats go with them: each belongs to its parent conversation.
+  // 插件页面属于打开它们的会话（`plugin-marketplace-design.md` §8.2），因此切换会话
+  // 会连同销毁旧会话的已挂载页面与 surface 列表。子会话标签、轨迹与侧聊一并如此：
+  // 各自属于其父会话。
   useEffect(() => {
     setPluginPages([])
     setPluginPageHosts({})
@@ -1797,8 +1905,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     commitPane(stripConversationScoped(paneRef.current))
   }, [commitPane, selectedId])
 
-  // Tabs are remembered per workspace (ZCode's taskSidePaneMemory); moving between workspaces
-  // swaps the bucket, and an unknown workspace starts empty. An empty scope collapses the pane
+  // 标签按工作区记忆（ZCode 的 taskSidePaneMemory）；在工作区之间移动即切换桶，
+  // 未知工作区从空桶开始。空作用域会收起面板
   // (ZCode's resolveSidePaneScopeState), so switching to a fresh workspace never shows a bare shell.
   useEffect(() => {
     if (currentWorkspaceId === undefined) {
@@ -2295,8 +2403,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 }
 
 /**
- * Polls one side chat's conversation and pumps its feed into the app state the inspector reads.
- * Mounted per selection-chat tab; rendering nothing keeps the pane's DOM contract untouched.
+ * 轮询一个侧聊会话并把消息流推送进 Inspector 读取的应用状态。
+ * 每个侧聊标签挂载一个实例；不渲染任何 DOM，保持面板结构不受影响。
+ * @param props conversationId 侧聊目标会话；active 是否处于激活标签（控制轮询）；onFeed 推送回调。
  */
 function SideConversationPump({ conversationId, active, onFeed }: {
   conversationId: string
@@ -2308,6 +2417,16 @@ function SideConversationPump({ conversationId, active, onFeed }: {
   return null
 }
 
+/**
+ * 功能：侧栏中的单个会话行——标题、相对时间、置顶标记、行尾操作菜单与悬浮卡
+ * （标题/相对时间/运行状态）；编辑态就地重命名（Enter 保存、Escape 取消）。
+ * @param props item 会话摘要；selected 是否选中；editing/editTitle 编辑态与草稿；
+ *              menuOpen 菜单开合；actions 行尾菜单项；onSelect 选中、onEditTitle/
+ *              onSaveTitle/onCancelTitle 重命名流、onToggleMenu/onMenuClose 菜单、
+ *              onAction 分发菜单动作。
+ * 内部逻辑：前置单元格按状态渲染——运行中转圈、有未读回复亮蓝点、空闲为空；
+ * 置顶徽标常驻行内，其余动作收进尾随菜单；悬浮时时间格切换为操作条（DSH 行为）。
+ */
 function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onSelect, onEditTitle, onSaveTitle,
   onCancelTitle, onToggleMenu, onMenuClose, onAction }: {
   item: ConversationSummary
@@ -2326,7 +2445,7 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
 }) {
   const { t, settings } = useUiPreferences()
   return (
-    // DSH's hover card: the dark menu material beside the row with its title, relative time and state.
+    // DSH 的悬浮卡：行旁的深色菜单材质，展示标题、相对时间与状态。
     <HoverCard grouped openDelayMs={500} disabled={editing || menuOpen}
       content={<div className={css.sessionHoverCard}>
         <span className={css.sessionHoverTitle}>{item.title || t('新对话', 'New conversation')}</span>
@@ -2350,8 +2469,8 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
             </div>
             : <>
               <button type="button" className={css.sessionSelect} onClick={onSelect} aria-current={selected ? 'page' : undefined}>
-                {/* ZCode's leading cell: a spinning loader while the turn runs, a blue dot for a
-                    finished reply the reader has not opened, nothing when idle. */}
+                {/* ZCode 的前置单元格：回合运行中转圈，已完成的回复读者未打开时亮蓝点，
+                    空闲时不渲染。 */}
                 <span className={css.sessionSlot}>{item.busy ? (
                   <span className={css.sessionSpinner} role="img" aria-label={t('正在运行', 'Running')}>
                     <Loader size={16} aria-hidden="true" />
@@ -2362,9 +2481,9 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
               </button>
               <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
-              {/* The pin state stays on the row itself; every other action lives in the trailing menu. */}
+              {/* 置顶状态保留在行本身；其余动作都收在尾随菜单里。 */}
               {item.pinned && <span className={css.sessionPin} role="img" aria-label={t('已置顶', 'Pinned')} title={t('已置顶', 'Pinned')}><IconPinFillRegular size={14} /></span>}
-              {/* DSH swaps the trailing time cell for the row's action strip while the row is hovered. */}
+              {/* 悬浮行时 DSH 把尾随时间格切换为该行的操作条。 */}
               <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
                 <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
                   onSelect={id => { onAction(id) }}
@@ -2379,14 +2498,18 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
 }
 
 /**
- * DSH's breadcrumb lineage for a subagent session (`SubagentHeaderLineage.tsx:785-822`):
- * the parent title navigates back, and the current child title is a sibling switcher whose
- * menu highlights the session on screen with DSH's 「当前会话」 tag (`:238,340`). The switcher's
- * accessible name is DSH's `switcher.aria` (`locales.ts:40`).
+ * 功能：DSH 的子智能体会话面包屑层级（对应 `SubagentHeaderLineage.tsx:785-822`）：
+ * 父标题可点击返回，当前子标题是兄弟会话切换器——菜单中以 DSH 的「当前会话」
+ * 标签（`:238,340`）高亮屏幕上的会话；切换器的无障碍名称沿用 DSH 的 `switcher.aria`
+ * （`locales.ts:40`）。
+ * @param props conversation 当前子会话摘要；parentTitle 侧栏已知时的父标题；
+ *              onOpen 跳转会话回调；t 翻译函数。
+ * 内部逻辑：parentId 变化时重置菜单、解析父标题（侧栏未知时经 api.getConversation）
+ * 并拉取兄弟会话列表；父标题未解析前回退显示 parentId。
  */
 function SubagentBreadcrumb({ conversation, parentTitle, onOpen, t }: {
   conversation: ConversationSummary
-  /** The parent's title when the sidebar list already knows it. */
+  /** 侧栏列表已知时的父标题。 */
   parentTitle?: string
   onOpen: (id: string) => void
   t: (chinese: string, english: string) => string
@@ -2399,7 +2522,7 @@ function SubagentBreadcrumb({ conversation, parentTitle, onOpen, t }: {
     if (parentId === undefined) return
     let active = true
     setOpen(false)
-    // A subagent of a subagent is not in the sidebar list, so the parent title falls back to the route.
+    // 子智能体的子会话不在侧栏列表中，父标题回退为路由信息。
     if (parentTitle === undefined) {
       api.getConversation(parentId).then(value => { if (active) setResolvedParent(value.conversation.title) }).catch(() => undefined)
     } else {
@@ -2431,28 +2554,31 @@ function SubagentBreadcrumb({ conversation, parentTitle, onOpen, t }: {
   )
 }
 
+/** 会话列表加载骨架（三条占位条）。 */
 function SessionSkeleton() {  const { t } = useUiPreferences()
   return <div className={css.skeleton} aria-label={t('正在加载会话', 'Loading conversations')}>
     <span /><span /><span />
   </div>
 }
 
+/** 会话详情加载中的整页占位（转圈 + 文案）。 */
 function LoadingConversation() {
   const { t } = useUiPreferences()
   return <div className={css.loadingState} role="status"><span className={css.spinner} />{t('正在载入会话', 'Loading conversation')}</div>
 }
 
+/** 会话排序：置顶优先，其余按更新时间倒序。 */
 function compareConversations(a: ConversationSummary, b: ConversationSummary): number {
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
 }
 
-/** Initial-letter avatar for the local account row, standing in for DSH's account image. */
+/** 本地账号行的首字母头像，代替 DSH 的账号图片。 */
 function accountInitial(name: string): string {
   const first = [...name.trim()][0]
   return first === undefined ? 'π' : first.toLocaleUpperCase()
 }
 
-/** Session row trailing label in DSH's relative buckets, so two surfaces naming the same row agree. */
+/** 会话行尾随时间标签，按 DSH 的相对时间分桶，保证两处展示同一行时文案一致。 */
 function formatUpdated(value: number, locale: 'zh' | 'en'): string {
   const { unit, n } = relativeTime(value, Date.now())
   switch (unit) {
@@ -2465,7 +2591,7 @@ function formatUpdated(value: number, locale: 'zh' | 'en'): string {
   }
 }
 
-/** DSH's hover-card time line: the same buckets as the row, read as "23天前" instead of a cell label. */
+/** DSH 悬浮卡的时间行：与行尾同分桶，但读作「23天前」而非单元格标签。 */
 function hoverTime(value: number, locale: 'zh' | 'en'): string {
   const { unit, n } = relativeTime(value, Date.now())
   switch (unit) {
@@ -2478,52 +2604,60 @@ function hoverTime(value: number, locale: 'zh' | 'en'): string {
   }
 }
 
+/** 判断待发送条目是否已被服务端确认：消息流出现同 requestId，或已进入排队列表。 */
 function isAcknowledged(detail: ConversationDetail, pendingItem: PendingSubmission): boolean {
   return detail.messages.some(message => message.requestId === pendingItem.requestId)
     || pendingItem.submissionId !== undefined && detail.queue.some(item => item.id === pendingItem.submissionId)
 }
 
 /**
- * Identity of one submission attempt: the target conversation, the exact text, and the attachment ids.
- * A retry that matches it is the same logical submission and keeps the requestId the server deduplicates on.
+ * 一次提交尝试的身份：目标会话、精确文本与附件 id 组合。
+ * 与之匹配的重试属于同一次逻辑提交，保留服务端用于去重的 requestId。
  */
 function submissionFingerprint(conversationId: string, text: string, images: readonly DraftImage[]): string {
   return `${conversationId}\u0000${text}\u0000${images.map(image => image.id).join('\u0000')}`
 }
 
+/** 提取错误的 message 文本；非 Error 时回退到兜底文案。 */
 function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback
 }
 
+/** 读取某作用域的输入草稿；无存档返回空串。 */
 function loadDraft(scope: string): string {
   return readStorage(`${DRAFT_PREFIX}${scope}`) ?? ''
 }
 
+/** 安全读取 localStorage；不可用时返回 null。 */
 function readStorage(key: string): string | null {
   try { return window.localStorage.getItem(key) }
   catch { return null }
 }
 
+/** 写入 localStorage；存储满或被禁用时静默失败（内存中的草稿仍然可用）。 */
 function writeStorage(key: string, value: string): void {
   try { window.localStorage.setItem(key, value) }
-  catch { /* The in-memory draft remains available when browser storage is full or disabled. */ }
+  catch { /* 浏览器存储满或被禁用时，内存中的草稿仍然可用。 */ }
 }
 
+/** 移除 localStorage 条目；不可用时静默失败（页面可继续运行）。 */
 function removeStorage(key: string): void {
   try { window.localStorage.removeItem(key) }
-  catch { /* The page can continue without browser storage. */ }
+  catch { /* 没有浏览器存储页面也能继续。 */ }
 }
 
+/** 设置或移除元素的 inert 属性（禁用交互与无障碍树）。 */
 function setElementInert(element: HTMLElement, inert: boolean): void {
   if (inert) element.setAttribute('inert', '')
   else element.removeAttribute('inert')
 }
 
+/** 判断 MIME 类型是否为受支持的图片类型。 */
 function isImageType(mimeType: string): boolean {
   return IMAGE_MIME_TYPES.has(mimeType.toLocaleLowerCase())
 }
 
-/** The attachment's image MIME type, read from the file name when the browser reports none. */
+/** 附件的图片 MIME 类型：浏览器未报告时从文件名扩展名推断。 */
 function imageFileType(file: File): string {
   const declared = file.type.toLocaleLowerCase()
   if (declared !== '') return isImageType(declared) ? declared : ''
@@ -2531,6 +2665,7 @@ function imageFileType(file: File): string {
   return IMAGE_EXTENSIONS[extension] ?? ''
 }
 
+/** 把附件文件读取为 base64 数据（data URL 去掉前缀）；失败以本地化错误拒绝。 */
 function fileData(file: File, t: (chinese: string, english: string) => string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -2547,4 +2682,5 @@ function fileData(file: File, t: (chinese: string, english: string) => string): 
   })
 }
 
+/** 已创建的附件预览对象 URL 登记（卸载/移除时统一 revoke）。 */
 const objectUrls = { current: new Set<string>() }

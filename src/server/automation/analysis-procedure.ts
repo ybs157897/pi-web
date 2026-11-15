@@ -1,19 +1,16 @@
 /**
- * The procedure every agent follows when it owns a defect's analysis.
+ * 智能体负责一个缺陷分析时遵循的固定流程。
  *
- * Two roles use it. The single-defect flow hands the agent the whole defect and
- * lets it delegate the two evidence chains to `Explore` subagents; the nightly
- * automation's workers each own one defect outright and must do the work
- * themselves. The parts that decide how fast and how well the analysis runs —
- * the search budget, the grep discipline, the evidence format — are the same in
- * both roles, so they live here instead of being restated per prompt.
+ * 两种角色共用它：单缺陷流程把整个缺陷交给主 Agent，允许把两条证据链委托给
+ * `Explore` 子 Agent；夜间自动化的 worker 则完全独自负责一个缺陷、必须自己完成。
+ * 决定分析速度与质量的部分——检索预算、grep 纪律、证据格式——在两种角色下完全
+ * 相同，因此集中在此，而不是在各提示词里重复。
  *
- * Measured on DTS006763701: the discipline cut a single analysis from a
- * 284s median to 115s. Workers that never saw it ran 35 to 153 rounds on the
- * same kind of defect.
+ * 实测（DTS006763701）：该纪律把单次分析的中位耗时从 284s 降到 115s；没见过
+ * 它的 worker 在同类缺陷上要跑 35 到 153 轮。
  */
 
-/** Who the agent may delegate the evidence gathering to. */
+/** 智能体可以以哪种方式完成证据收集：`delegate` 委托子 Agent，`own` 自己完成。 */
 export type AnalysisVariant = 'delegate' | 'own'
 
 const SEARCH_BUDGET = '你的工具检索轮次最多 3 轮（第 1 轮计入）'
@@ -34,10 +31,10 @@ const EVIDENCE_RULES = [
 const SAVE_RULES = '完成后必须调用 `wetrack_analysis_save`，将最终分析正文放入 markdown，给出 title、简短 summary，expectedRevision 使用本次 `wetrack_analysis_get` 返回的 revision。结论可靠时 status 使用 analyzed；预算耗尽或遇到权限等阻碍仍无法定论时使用 blocked，blockedReason 分别使用 budget-exhausted、access 等，并说明已核对范围和缺失信息。不要猜测根因或只记录工具调用过程。若版本冲突，重新读取记录并报告冲突，不盲目重试覆盖。'
 
 /**
- * The shared procedure, as numbered rules.
- *
- * `delegate` adds the subagent hand-off; `own` replaces it with the same two
- * evidence chains the agent has to close by itself, under the same budget.
+ * 功能：按编号规则生成共享分析流程文本。
+ * @param variant 角色变体：`delegate` 追加子 Agent 委派规则（第 3–6 条）；`own` 换成自己独立闭环两条证据链的规则。
+ * @returns 以空行分隔的多条规则拼接成的完整流程字符串，直接注入提示词。
+ * 内部逻辑：前两条规则两种变体共用（第 2 条按变体微调是否预留派发轮次）；中间按变体插入委派或自查规则；末尾统一追加证据规则与保存规则。
  */
 export function analysisProcedure(variant: AnalysisVariant): string {
   const rules: string[] = [

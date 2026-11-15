@@ -1,14 +1,13 @@
 /**
- * Pi MCP servers imported into a pi-web conversation.
+ * 导入 pi-web 会话的 Pi MCP servers。
  *
- * `McpRegistry.open()` reads the user-level `mcp.json`, merges the MCP servers declared by enabled
- * plugins, connects every server concurrently, lists its tools, and turns them into a synthetic
- * `mcp` extension plus code-mode namespaces. The registry is the single owner of the live
- * `McpClient` connections and can reload them in place when plugins are installed, disabled, or
- * removed.
+ * `McpRegistry.open()` 读取用户级 `mcp.json`，合并已启用插件声明的 MCP servers，
+ * 并发连接所有 server、列出其工具，把它们变成一个合成的 `mcp` 扩展加 code-mode
+ * 命名空间。注册表是存活 `McpClient` 连接的唯一持有者，可在插件安装、停用或
+ * 移除时原地重载。
  *
- * One server failing never fails startup: it is recorded as `status: 'error'` in `view()` and the
- * other servers keep working.
+ * 单个 server 失败绝不让启动失败：在 `view()` 里记为 `status: 'error'`，其余
+ * server 继续工作。
  */
 import { createHash } from 'node:crypto'
 import {
@@ -34,63 +33,64 @@ import type { PluginMcpServerConfig } from '../plugins/types.ts'
 
 export type { McpServerConfig, McpToolExposureRule } from './config.ts'
 
-/** Extension name registered with the Pi Harness. */
+/** 注册到 Pi Harness 的扩展名。 */
 export const MCP_EXTENSION_NAME = 'mcp'
 
 const CLIENT_NAME = 'pi-web'
 const CLIENT_VERSION: string = packageJson.version
 const MAX_OUTPUT_BYTES = 100_000
-/** Plugin servers get a longer request budget: their package runners start on first call. */
+/** 插件 server 请求预算更长：其包运行器在首次调用时才启动。 */
 const PLUGIN_REQUEST_TIMEOUT_MS = 60_000
 /**
- * Old clients stay open briefly after a reload so an in-flight tool call can finish on the
- * connection it started with. `close()` forces them shut immediately.
+ * 重载后旧客户端短暂保持打开，让在途的工具调用能在它出发的那条连接上收尾。
+ * `close()` 会立即强制关闭。
  */
 const RELOAD_CLOSE_GRACE_MS = 10_000
 
 export interface McpRegistryOptions {
   configPath: string
-  /** Live projection of enabled plugin servers; `reload()` reads it again. */
+  /** 已启用插件 server 的实时投影；reload() 会再读一次。 */
   pluginServers?: () => readonly PluginMcpServerConfig[]
-  /** Test injection: build the transport for one server instead of spawning a process or opening HTTP. */
+  /** 测试注入：为单个 server 构造 transport，而不是 spawn 进程或开 HTTP。 */
   transportFactory?: (server: McpServerConfig) => McpTransport
 }
 
 type ServerStatus = 'connected' | 'error' | 'disabled'
 
-/** One configured server plus its live connection, if it got one. */
+/** 一个已配置 server 加上它的存活连接（如果有）。 */
 interface ServerState {
   readonly config: McpServerConfig
   readonly status: ServerStatus
-  /** Tools the server listed; empty unless connected. */
+  /** server 列出的工具；仅 connected 时非空。 */
   readonly tools: readonly McpTool[]
   readonly client?: McpClient
   readonly error?: string
-  /** The initialize result's `instructions`, kept for the code-mode namespace description. */
+  /** initialize 结果里的 `instructions`，保留给 code-mode 命名空间描述。 */
   readonly instructions?: string
-  /** Set for plugin-declared servers. */
+  /** 插件声明的 server 才有。 */
   readonly pluginId?: string
 }
 
-/** `details` a tool result carries for the browser: which server/tool ran and how long it took. */
+/** 工具结果带给浏览器的 `details`：哪个 server/tool 跑了、耗时多少。 */
 type McpToolDetails = {
   server: string
   tool: string
   isError: boolean
   durationMs: number
   structuredContent?: JsonValue
-  /** Validated MCP Apps descriptor; plugin servers only, and never arbitrary `_meta`. */
+  /** 校验过的 MCP Apps 描述符；仅插件 server，绝无任意 `_meta`。 */
   ui?: PluginUiDescriptor
 }
 
+/** 已退役等待关闭的客户端及其宽限计时器。 */
 interface RetiredClient {
   readonly client: McpClient
   readonly timer: NodeJS.Timeout
 }
 
 /**
- * Owns the imported MCP catalog. `view()`, `extension()`, and `namespaces()` are synchronous once
- * `open()` or `reload()` resolves: everything the Harness needs is resolved up front.
+ * 持有导入的 MCP 目录。`open()` 或 `reload()` 完成后 `view()`、`extension()`、
+ * `namespaces()` 都是同步的：Harness 需要的一切都提前解析好。
  */
 export class McpRegistry {
   private servers: readonly ServerState[]
@@ -111,29 +111,31 @@ export class McpRegistry {
     this.namespaceList = namespaces
   }
 
+  /** 打开注册表：读配置 + 合并插件 server + 并发连接并列工具。 */
   static async open(options: McpRegistryOptions): Promise<McpRegistry> {
     const { loaded, servers } = await connectAll(options)
     return new McpRegistry(options, loaded, servers)
   }
 
-  /** The browser-facing catalog: connection state and tool exposure, never credentials. */
+  /** 面向浏览器的目录：连接状态与工具 exposure，绝无机密。 */
   view(): McpView {
     return this.viewValue
   }
 
-  /** The `mcp` extension; `undefined` when no listed tool is registered with the model or scripts. */
+  /** `mcp` 扩展；没有可注册给模型或脚本的工具时为 undefined。 */
   extension(): Extension | undefined {
     return this.extensionValue
   }
 
-  /** Code-mode namespaces: one per connected server that exposed at least one callable tool. */
+  /** code-mode 命名空间：每个至少暴露一个可调用工具的已连接 server 一个。 */
   namespaces(): readonly CodemodeNamespace[] {
     return this.namespaceList
   }
 
   /**
-   * Re-read `mcp.json` and the plugin projection, connect the new server set, and publish it. Old
-   * connections stay open for a short grace period so calls already in flight can finish.
+   * 功能：重读 mcp.json 与插件投影，连接新 server 集合并发布。
+   * 内部逻辑：经 reloadTail 串行；旧连接进入 retire 宽限期（RELOAD_CLOSE_GRACE_MS）
+   * 让在途调用收尾，之后自动关闭。
    */
   reload(): Promise<void> {
     if (this.closed) return Promise.resolve()
@@ -142,6 +144,7 @@ export class McpRegistry {
     return run
   }
 
+  /** 实际重载：connectAll → 若已关闭则直接收尾 → 否则发布新集合并退役旧连接。 */
   private async reloadNow(): Promise<void> {
     if (this.closed) return
     const { loaded, servers } = await connectAll(this.options)
@@ -158,6 +161,7 @@ export class McpRegistry {
     this.retire(previous)
   }
 
+  /** 把旧连接放入宽限队列：计时器到点自动 close 并自清理；close() 会提前清空。 */
   private retire(states: readonly ServerState[]): void {
     for (const state of states) {
       if (state.client === undefined) continue
@@ -175,21 +179,22 @@ export class McpRegistry {
     }
   }
 
-  /** Resources of one connected server, for the plugin UI host (P2). */
+  /** 列出一个已连接 server 的资源，供插件 UI 宿主（P2）使用。 */
   async listResources(serverName: string): Promise<Resource[]> {
     return await this.requireClient(serverName).listResources()
   }
 
-  /** One MCP resource of a connected server, for the plugin UI host (P2). */
+  /** 读一个已连接 server 的 MCP 资源，供插件 UI 宿主（P2）使用。 */
   async readResource(serverName: string, uri: string): Promise<ReadResourceResult> {
     return await this.requireClient(serverName).readResource(uri)
   }
 
-  /** A direct MCP call outside the model tool path; the caller applies Plan/read-only policy. */
+  /** 模型工具路径之外的直接 MCP 调用；调用方负责套用 Plan/只读策略。 */
   async callTool(serverName: string, tool: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
     return await this.requireClient(serverName).callTool(tool, toolArguments(args), signal ? { signal } : undefined)
   }
 
+  /** 按 server 名取客户端；未配置或未连接时抛带状态的错误。 */
   private requireClient(serverName: string): McpClient {
     const state = this.servers.find(candidate => candidate.config.name === serverName)
     if (state === undefined) throw new Error(`MCP server "${serverName}" is not configured`)
@@ -199,7 +204,7 @@ export class McpRegistry {
     return state.client
   }
 
-  /** Close every connection. Idempotent; failures on one server do not block the others. */
+  /** 关闭全部连接（含退役队列）。幂等；单 server 失败不阻塞其他。 */
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
@@ -223,7 +228,7 @@ async function connectAll(options: McpRegistryOptions): Promise<{ loaded: Loaded
   return { loaded: { ...loaded, servers: configured.map(server => server.config) }, servers }
 }
 
-/** Config servers plus plugin servers; a plugin name that collides with a config name gets a suffix. */
+/** 配置 server 加插件 server；插件名与配置名冲突时追加哈希后缀。 */
 function effectiveServers(
   loaded: LoadedMcpConfig,
   pluginServers: readonly PluginMcpServerConfig[],
@@ -257,7 +262,7 @@ function effectiveServers(
   return result
 }
 
-/** Connect one enabled server and list its tools; any failure becomes a recorded error state. */
+/** 连接一个已启用 server 并列出工具；任何失败都变成记录在案的 error 状态。 */
 async function connectServer(
   config: McpServerConfig,
   transportFactory: ((server: McpServerConfig) => McpTransport) | undefined,
@@ -289,10 +294,12 @@ async function connectServer(
   }
 }
 
+/** 关闭一组 server 状态的客户端（allSettled，互不阻塞）。 */
 async function closeStates(states: readonly ServerState[]): Promise<void> {
   await Promise.allSettled(states.map(state => state.client ? state.client.close() : Promise.resolve()))
 }
 
+/** 按配置构造 transport：stdio 走子进程（命令/参数/env/cwd），否则走 Streamable HTTP（url/headers）。 */
 function createTransport(config: McpServerConfig): McpTransport {
   if (config.transport === 'stdio') {
     return new StdioTransport({
@@ -321,7 +328,7 @@ function buildPublished(loaded: LoadedMcpConfig, servers: readonly ServerState[]
   }
 }
 
-/** Build the `mcp` extension's tools and the code-mode namespaces, resolving names and exposure once. */
+/** 构建 `mcp` 扩展的工具与 code-mode 命名空间，名称与 exposure 一次解析到位。 */
 function buildRegistrations(servers: readonly ServerState[]): {
   registrations: ToolRegistration[]
   namespaces: CodemodeNamespace[]
@@ -356,7 +363,7 @@ function buildRegistrations(servers: readonly ServerState[]): {
   return { registrations, namespaces }
 }
 
-/** Wrap one MCP tool as a Pi tool registration. Hidden tools are filtered out before this runs. */
+/** 把一个 MCP 工具包装成 Pi 工具注册项；hidden 工具在此之前已被过滤。 */
 function createRegistration(
   server: McpServerConfig,
   client: McpClient,
@@ -368,15 +375,15 @@ function createRegistration(
   const registration: ToolRegistration = {
     name: registeredName,
     description: tool.description ?? tool.title ?? tool.name,
-    // Providers require an object schema, and some reject one without `properties`.
+    // provider 要求 object schema，有些还拒绝没有 `properties` 的。
     parameters: Type.Unsafe({
       ...tool.inputSchema,
       type: 'object',
       properties: isPlainObject(tool.inputSchema.properties) ? tool.inputSchema.properties : {},
     }) as TSchema,
     outputLimits: { maxBytes: MAX_OUTPUT_BYTES },
-    // Code mode's tools are deferred: scripts can call them, and `tool_search` can hand them to the
-    // model. `direct` tools are registered normally; `hidden` never reaches here.
+    // code mode 的工具是 deferred：脚本可以调用，`tool_search` 可以交给模型。
+    // `direct` 工具正常注册；`hidden` 根本到不了这里。
     ...(exposure === 'codemode' || exposure === 'deferred' ? { deferred: true as const } : {}),
     async execute(args, _api, context) {
       return executeMcpTool(server, client, tool, args, context.abortSignal, pluginId)
@@ -385,7 +392,7 @@ function createRegistration(
   return registration
 }
 
-/** Call one MCP tool and map the result onto Pi's output/details channels without throwing. */
+/** 调用一个 MCP 工具，把结果映射到 Pi 的 output/details 通道，绝不抛出。 */
 async function executeMcpTool(
   server: McpServerConfig,
   client: McpClient,
@@ -397,10 +404,10 @@ async function executeMcpTool(
   const startedAt = Date.now()
   try {
     const result = await client.callTool(tool.name, toolArguments(args), signal ? { signal } : undefined)
-    // MCP reports tool failures in the result instead of as a protocol error.
+    // MCP 把工具失败报告在结果里，而不是作为协议错误。
     const isError = result.isError === true
     const structuredContent = result.structuredContent === undefined ? undefined : result.structuredContent as JsonValue
-    // MCP Apps metadata reaches the transcript only through this validated descriptor.
+    // MCP Apps 元数据只经这个校验过的描述符进入会话记录。
     const ui = pluginUiDescriptorFromMeta(result._meta, { pluginId, serverName: server.name })
     return {
       output: toLlmContent(result),
@@ -415,7 +422,7 @@ async function executeMcpTool(
       }),
     }
   } catch (error) {
-    // A protocol error, timeout, abort, or transport drop: keep the call visible as an error result.
+    // 协议错误、超时、中止或 transport 断开：调用仍以错误结果的形式可见。
     return {
       output: [{ type: 'text', text: `MCP tool "${server.name}/${tool.name}" failed: ${describeError(error)}` }],
       isError: true,
@@ -429,10 +436,12 @@ async function executeMcpTool(
   }
 }
 
+/** details 透传为 JsonValue。 */
 function toolDetails(details: McpToolDetails): JsonValue {
   return details as unknown as JsonValue
 }
 
+/** 组装浏览器可见的视图：每个 server 的状态、工具与其 exposure（无机密）。 */
 function buildView(loaded: LoadedMcpConfig, servers: readonly ServerState[]): McpView {
   const serverViews: McpServerView[] = servers.map(state => {
     const tools: McpToolView[] = state.status !== 'connected'
@@ -464,8 +473,8 @@ function buildView(loaded: LoadedMcpConfig, servers: readonly ServerState[]): Mc
 }
 
 /**
- * Resolve how one tool reaches the model: an exact `toolExposure` name wins over every pattern, then
- * the first `*` pattern in config order matches, then the server's own `exposure`.
+ * 解析一个工具以何种方式到达模型：精确 `toolExposure` 名优先于一切模式，其次按
+ * 配置顺序匹配第一个 `*` 模式，最后落到 server 自身的 `exposure`。
  */
 function resolveToolExposure(server: McpServerConfig, toolName: string): McpExposure {
   for (const rule of server.toolExposure) {
@@ -477,23 +486,27 @@ function resolveToolExposure(server: McpServerConfig, toolName: string): McpExpo
   return server.exposure
 }
 
+/** `*` 通配符匹配：把模式转成正则后全串匹配。 */
 function wildcardMatches(pattern: string, value: string): boolean {
   const expression = pattern.split('*').map(escapeRegExp).join('.*')
   return new RegExp(`^${expression}$`).test(value)
 }
 
+/** 正则元字符转义（wildcardMatches 用）。 */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Keep `[A-Za-z0-9_]`, map everything else to `_`: the character set providers accept in tool names. */
+/** 保留 `[A-Za-z0-9_]`，其余映射为 `_`：provider 在工具名里接受的字符集。 */
 function sanitizeName(value: string): string {
   return value.replace(/[^A-Za-z0-9_]/g, '_')
 }
 
 /**
- * Names stay stable across restarts. When two raw names sanitize to the same tool name, the second
- * one gets a short hash of its raw server/tool identity; the suffix grows only if that also collides.
+ * 功能：生成不冲突且跨重启稳定的注册工具名。
+ * 内部逻辑：基础名（`mcp__<server>__<tool>`）未占用即用；两个原始名净化后相同
+ * 时，后者追加其原始 server/tool 身份的短哈希；仍冲突则哈希逐步加长，最后退化为
+ * 递增数字后缀。
  */
 function uniqueToolName(base: string, identity: string, used: Set<string>): string {
   if (!used.has(base)) {
@@ -517,22 +530,25 @@ function uniqueToolName(base: string, identity: string, used: Set<string>): stri
   }
 }
 
+/** 参数收敛为普通对象（非对象按空参数处理），浅拷贝防上游改动。 */
 function toolArguments(args: unknown): Record<string, unknown> {
   if (!isPlainObject(args)) return {}
   return { ...args }
 }
 
+/** 判断值是否为普通对象（非 null、非数组）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** First non-empty line of the server's instructions. */
+/** server instructions 的首个非空行。 */
 function firstLine(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   const line = value.split(/\r?\n/).map(part => part.trim()).find(part => part.length > 0)
   return line
 }
 
+/** 取错误的 message 文本。 */
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

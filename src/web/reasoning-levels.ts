@@ -1,20 +1,21 @@
 import type { ProviderModelInput } from '../shared/types.ts'
 
-/** One editable reasoning row: the level and the wire value sent for it. */
+/** 编辑器里一行思考档位：档位名与它对应的线上取值。 */
 export interface ReasoningEntry {
   level: string
-  /** Wire value; null is the Off row, which sends nothing. */
+  /** 线上值；null 表示 Off 行（不发送任何参数）。 */
   value: string | null
 }
 
-/** Every level the API accepts, in escalation order. */
+/** API 接受的全部档位，按强度升序。 */
 export const REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /**
- * The rows the editor shows for one model: the levels that actually declare a
- * wire value, plus Off when the map can stop thinking. A null-pinned level is
- * an absence, not a row — rendering it made a deleted level reappear after
- * every save.
+ * 功能：为单个模型推导编辑器要显示的思考档位行：实际声明了线上值的档位，加上
+ * 「可关闭思考」时的 Off 行。
+ * @param model 模型输入（含 thinkingLevelMap）
+ * @returns 档位行数组；模型未声明 thinkingLevelMap 时 undefined（编辑器不显示该区）
+ * 内部逻辑：值为 null 的档位是「不存在」而非一行——把它渲染成行会让删掉的档位在每次保存后复活；off 缺席表示「支持、不发参数」，补一行 Off；off 显式为 null 表示模型无法停止思考，不给 Off 行。
  */
 export function draftReasoningLevels(model: ProviderModelInput): ReasoningEntry[] | undefined {
   const map = model.thinkingLevelMap
@@ -22,8 +23,7 @@ export function draftReasoningLevels(model: ProviderModelInput): ReasoningEntry[
   const entries: ReasoningEntry[] = Object.entries(map)
     .filter(([, value]) => typeof value === 'string' && value !== '')
     .map(([level, value]) => ({ level, value: value as string }))
-  // `off` absent means "supported, send nothing"; an explicit null means the
-  // model cannot stop thinking, so there is no Off row to edit.
+  // off 缺席 = 支持、不发送任何东西；显式 null = 模型无法停止思考，没有 Off 行可编辑。
   if (map.off !== null && !entries.some(entry => entry.level === 'off')) {
     entries.unshift({ level: 'off', value: null })
   }
@@ -31,10 +31,11 @@ export function draftReasoningLevels(model: ProviderModelInput): ReasoningEntry[
 }
 
 /**
- * Pin undeclared levels to null, matching DSH's `reasoningEfforts` adapter:
- * a level the user did not configure is not offered, instead of pi-ai
- * defaulting the five base levels to "supported". An Off row with no value
- * stays absent so turning thinking off sends no parameter.
+ * 功能：把编辑器行固化成 thinkingLevelMap：未声明的档位钉为 null（对齐 DSH 的
+ * `reasoningEfforts` 适配器——用户没配置的档位不提供，而不是由 pi-ai 默认五个基础
+ * 档位为「支持」）。无值的 Off 行保持缺席，这样关闭思考就不发送任何参数。
+ * @param entries 编辑器当前档位行
+ * @returns 档位名 → 线上值（或 null）的映射
  */
 export function pinReasoningLevels(entries: readonly ReasoningEntry[]): Record<string, string | null> {
   const map: Record<string, string | null> = Object.fromEntries(

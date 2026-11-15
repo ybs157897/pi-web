@@ -5,38 +5,48 @@ import { markdownLabels, type Translate } from './render-labels.ts'
 import css from './QuestionComposer.module.css'
 
 /**
- * ZCode's plan card (`ToolCallBlocks/renderers/switch-mode.tsx`): a "计划" header with a copy
- * action, the markdown clipped to a fading excerpt, and a centered "查看完整计划" pill that
- * opens the full plan. The whole card is clickable like ZCode's, with real child controls
- * excluded from the activation. Both the composer-adjacent review card and the transcript's
- * `exit_plan_mode` row render this component.
+ * 功能：ZCode 风格的计划卡片（对应 `ToolCallBlocks/renderers/switch-mode.tsx`）：
+ * 「计划」标题 + 复制按钮、被渐隐裁切的计划 Markdown 摘要，以及居中的
+ * 「查看完整计划」胶囊按钮。整卡可点击打开完整计划，但点击真正的子控件时不触发。
+ * 输入框旁的评审卡片与会话记录里的 `exit_plan_mode` 行都复用本组件。
+ * @param props markdown 计划全文；onOpen 打开完整计划的回调（缺省时卡片不可激活）；
+ *              t 双语翻译函数；ariaLabel 卡片无障碍标签；className 外层 section 类名
+ *              （评审卡传 composer 卡片类，会话行传自己的类）；dataStatus 附加状态标记；
+ *              children 渲染在标题与摘要之间（评审卡的反馈输入行）。
+ * 内部逻辑：copied 状态记录复制成功 1.5 秒后复位；onChildControl 用 closest 判断
+ * 事件目标是否落在真实子控件（button/a/input…）上，是则不触发卡片激活；
+ * onCardClick/onCardKeyDown 分别处理鼠标与 Enter/空格激活；copyPlan 写剪贴板并切图标反馈。
  */
 export function PlanExcerptCard({ markdown, onOpen, t, ariaLabel, className, dataStatus, children }: {
   markdown: string
   onOpen?: () => void
   t: Translate
   ariaLabel: string
-  /** The section class; the review card passes its composer card, the transcript row its own. */
+  /** 外层 section 的类名；评审卡传 composer 卡片类，会话行传自己的类。 */
   className: string
   dataStatus?: string
-  /** Rendered between the header and the excerpt (the review card's feedback line). */
+  /** 渲染在标题与摘要之间（评审卡的反馈行）。 */
   children?: ReactNode
 }) {
   const [copied, setCopied] = useState(false)
 
+  /** 判断事件是否来自卡片内的真实子控件（而非卡片本身），用于排除激活误触。 */
   const onChildControl = (event: ReactMouseEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>): boolean =>
     event.target instanceof Element
     && event.target.closest('button, a, input, textarea, select, [role="button"]') !== event.currentTarget
+  /** 卡片点击激活：命中子控件时跳过，否则回调 onOpen。 */
   const onCardClick = (event: ReactMouseEvent<HTMLElement>): void => {
     if (onChildControl(event)) return
     onOpen?.()
   }
+  /** 键盘激活：Enter/空格触发 onOpen，其余按键忽略；同样排除子控件。 */
   const onCardKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     if (onChildControl(event)) return
     event.preventDefault()
     onOpen?.()
   }
+  /** 复制计划全文到剪贴板，成功后置 copied 为 true，1.5 秒后自动复位。 */
   const copyPlan = (): void => {
     navigator.clipboard?.writeText(markdown).then(() => {
       setCopied(true)

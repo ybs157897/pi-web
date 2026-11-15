@@ -9,12 +9,13 @@ import type { ModelOption, ThinkingLevel } from '../shared/types.ts'
 import type { Translate } from './render-labels.ts'
 import css from './ModelSelect.module.css'
 
-/** Which pane the dropdown shows: the two-row root or one drilled-in list. */
+/** 下拉当前显示的面板：根菜单（两行入口）或钻入后的某个列表。 */
 type Pane = 'root' | 'model' | 'effort'
 
-/** Unplaced portal card: hidden but laid out at a fixed origin so offsetWidth/offsetHeight are real. */
+/** 未定位时的 portal 卡片样式：隐藏但按固定原点布局，让 offsetWidth/offsetHeight 真实可测。 */
 const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
 
+/** ModelSelect 的属性定义：模型列表、当前模型/等级及各级选择与命令回调。 */
 export interface ModelSelectProps {
   models: readonly ModelOption[]
   providerName: (provider: string) => string
@@ -31,17 +32,25 @@ export interface ModelSelectProps {
   onManageProviders: () => void
 }
 
+/** 按提供商分组的模型组。 */
 interface ModelGroup {
   readonly id: string
   readonly models: readonly ModelOption[]
 }
 
 /**
- * DSH's two-level model seat: the root menu is the Model / Effort row pair, each
- * drilling into its own list, and both panes are one portaled card placed from the
- * trigger's rect. Keys mirror the composer: arrows walk the shown pane with
- * wrapping, Tab settles like Enter, Escape and Shift+Tab leave a drilled pane
- * first, and every pane switch names where the keyboard lands.
+ * 功能：DSH 的两级模型选择座（位于 composer）：根菜单为「模型/推理等级」两行入口，
+ * 各自钻入自己的列表；两级面板同属一张 portal 卡片，按触发按钮矩形定位。
+ * 键盘行为与 composer 一致：方向键在当前面板内循环移动、Tab 如 Enter 确认、
+ * Escape 与 Shift+Tab 先退出钻入面板；每次面板切换都明确指定键盘落点。
+ * @param props models 模型选项；providerName 提供商显示名；current 当前模型；
+ *              level/levels 当前与可选推理等级；levelName 等级显示名；disabled/busy
+ *              禁用与忙碌态；onSelectModel/onSelectLevel 选择回调；onSearch 打开模型搜索；
+ *              onManageProviders 打开提供商管理。
+ * 内部逻辑：groups 按 provider 分组；未选模型时直接钻入 model 面板；paneFocus 记录
+ * 面板切换的键盘意图并在 effect 中落焦；卡片位置经 useLayoutEffect 度量（隐藏布局）
+ * 后贴触发按钮上方、右对齐并夹取在视口内，滚动/缩放/面板切换时重新放置；
+ * mousedown preventDefault 防 WebKit 点前失焦；blur 到子树外即关闭。
  */
 export default function ModelSelect({
   models, providerName, current, level, levels, levelName, disabled = false, busy = false, t,
@@ -73,17 +82,20 @@ export default function ModelSelect({
   const triggerAria = current === undefined
     ? t('选择模型', 'Select a model')
     : t(`选择模型，当前 ${modelLabel}，推理等级 ${levelName(level)}`, `Select a model: ${modelLabel}, reasoning effort ${levelName(level)}`)
+  /** 打开菜单：聚焦触发按钮；未选模型时直接钻入模型列表面板。 */
   const show = (): void => {
     triggerRef.current?.focus()
     if (current === undefined) paneFocus.current = 'drill'
     setPane(current === undefined ? 'model' : 'root')
     setOpen(true)
   }
+  /** 关闭菜单并复位到根面板；restoreFocus 为 true 时异步还焦点给触发按钮。 */
   const close = (restoreFocus = false): void => {
     setOpen(false)
     setPane('root')
     if (restoreFocus) queueMicrotask(() => { triggerRef.current?.focus() })
   }
+  /** 钻入指定面板，键盘落点为该面板当前选中（或首个可用）项。 */
   const drill = (next: Pane): void => {
     paneFocus.current = 'drill'
     setPane(next)
@@ -93,12 +105,14 @@ export default function ModelSelect({
     paneFocus.current = from
     setPane('root')
   }
+  /** 选中模型：与当前相同时仅关闭，否则回调 onSelectModel 并关闭还焦。 */
   const choose = (model: ModelOption): void => {
     if (current?.provider === model.provider && current.modelId === model.modelId) { close(true); return }
     triggerRef.current?.focus()
     onSelectModel(model)
     close(true)
   }
+  /** 选中推理等级：与当前相同时仅关闭，否则回调 onSelectLevel 并关闭还焦。 */
   const chooseLevel = (next: ThinkingLevel): void => {
     if (level === next) { close(true); return }
     triggerRef.current?.focus()
@@ -161,16 +175,17 @@ export default function ModelSelect({
     }
   }, [open, pane, groups])
 
+  /** 在当前面板的可聚焦项间移动焦点，循环回绕。 */
   const moveFocus = (offset: number): void => {
     const items = itemRefs.current.filter(item => item !== null)
     if (items.length === 0) return
     const active = items.findIndex(item => item === document.activeElement)
-    // Focus outside the rows (the trigger keeps it while the menu opens) enters
-    // at the end the step comes from: the first row forward, the last backward.
+    // 焦点不在行内（菜单打开时触发按钮仍持有焦点）时，按步进方向入场：向前从第一行、向后从最后一行。
     const next = active === -1 ? (offset > 0 ? 0 : items.length - 1) : (active + offset + items.length) % items.length
     items[next]?.focus()
   }
 
+  /** 根容器的键盘处理：Escape/Shift+Tab 逐级退出，Tab 确认焦点行，方向键移动焦点。 */
   const onRootKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape' && open) {
       event.preventDefault()
@@ -179,8 +194,8 @@ export default function ModelSelect({
       return
     }
     if (!open) return
-    // Tab settles like Enter and Shift+Tab leaves like Escape; both are consumed
-    // so the browser's traversal stays out of the open card.
+    // Tab 像 Enter 一样确认、Shift+Tab 像 Escape 一样退出；两者都被消费，
+    // 避免浏览器默认遍历进入打开中的卡片。
     if (event.key === 'Tab') {
       if (event.shiftKey) {
         event.preventDefault()
@@ -207,6 +222,7 @@ export default function ModelSelect({
     }
   }
 
+  /** 焦点离开根容器与 portal 卡片子树时关闭菜单。 */
   const onBlur = (event: FocusEvent<HTMLDivElement>): void => {
     if (event.relatedTarget instanceof Node && (
       rootRef.current?.contains(event.relatedTarget) === true
@@ -217,6 +233,7 @@ export default function ModelSelect({
 
   itemRefs.current = []
   let itemIndex = 0
+  /** 收集当前渲染面板内各可聚焦项的 ref，供键盘导航使用（每次渲染按顺序重排）。 */
   const itemRef = () => {
     const at = itemIndex++
     return (node: HTMLButtonElement | null) => { itemRefs.current[at] = node }

@@ -6,6 +6,16 @@ import { CodeViewer } from './CodeViewer.tsx'
 import { useCopyFeedback } from './hooks.ts'
 import css from './CodeBlock.module.css'
 
+/**
+ * 消息正文里的代码块卡片：与 Markdown fenced code 渲染对应，带语言图标标题、自动换行开关与复制按钮。
+ *
+ * @param code 代码文本（由 Markdown 渲染管线传入）
+ * @param language fenced 标注的语言名；空白时回落 `text`
+ * @param streaming 流式生成中：置灰高亮（交给 CodeViewer 处理）
+ * @param lineNumbers 是否显示行号
+ * @param t 双语标签函数（zh/en 两参，按 UI 语言取一）
+ * 内部逻辑：wrapped 是本地 UI 状态；复制反馈（已复制/失败提示）来自 useCopyFeedback；memo 包裹避免流式重渲染整棵树。
+ */
 export const MessageCodeBlock = memo(function MessageCodeBlock({ code, language = 'text', streaming = false, lineNumbers = false, t }: {
   code: string; language?: string; streaming?: boolean; lineNumbers?: boolean; t: Translate
 }) {

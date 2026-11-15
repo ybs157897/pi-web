@@ -23,21 +23,32 @@ import {
   YIELD_TIME_MS,
 } from './runner.ts'
 
+/** 覆盖旧编码探测结果的环境变量名（值须为 iconv-lite 支持的编码名）。 */
 const LEGACY_ENCODING_ENV = 'PI_WEB_WINDOWS_OUTPUT_ENCODING'
 
+/** Pi 内置 PowerShell 工具的原始定义，非本地环境时委托执行用。 */
 const basePwsh = createPowerShellTool()
 
+/** pwsh/powershell 可执行路径缓存（null 表示探测过且回落到 PATH 名称）。 */
 let cachedPowerShell: string | null | undefined
+/** Windows 输出旧编码缓存（null 表示无遗留编码）。 */
 let cachedLegacyEncoding: string | null | undefined
 
+/**
+ * 功能：清空 pwsh 路径与旧编码的模块级缓存，供测试隔离环境差异。
+ */
 export function resetWindowsShellCachesForTests(): void {
   cachedPowerShell = undefined
   cachedLegacyEncoding = undefined
 }
 
 /**
- * A recursive enumeration piped into Select-String is the slow path this tool exists to avoid:
- * it walks generated trees and materializes a MatchInfo per hit. The grep tool runs ripgrep.
+ * 功能：拦截"递归枚举管道进 Select-String"这一本工具要规避的慢路径：它会遍历生成目录
+ * 并为每个命中物化一个 MatchInfo；grep 工具走的是原生 ripgrep。
+ * 内部逻辑：先匹配递归 Get-ChildItem/gci/ls/dir -Recurse/-r，再要求 Select-String/sls
+ * 出现在管道符 `|` 之后。
+ * @param command 完整命令文本。
+ * @returns 命中拦截规则时 true。
  */
 export function isBlockedRecursiveSearch(command: string): boolean {
   if (!/\b(?:Get-ChildItem|gci|ls|dir)\b[^\n;]*?\s-(?:Recurse|r)\b/i.test(command)) return false
@@ -47,6 +58,14 @@ export function isBlockedRecursiveSearch(command: string): boolean {
   return pipe !== -1 && select.index > pipe
 }
 
+/**
+ * 功能：把用户命令包进一段 PowerShell 包装脚本再执行。
+ * 内部逻辑：错误偏好 Continue（不让非终止错误中断管道）；把控制台/管道输出编码设为
+ * UTF-8 并尝试 chcp 65001；`$LASTEXITCODE` 初始化为 0，命令结束后若为非 0 则以它作为
+ * 进程退出码，让退出码语义可被 runner 捕获。
+ * @param command 用户要执行的 PowerShell 命令。
+ * @returns 完整包装脚本文本。
+ */
 export function buildPowerShellScript(command: string): string {
   return [
     "$ErrorActionPreference='Continue'",
@@ -59,6 +78,13 @@ export function buildPowerShellScript(command: string): string {
   ].join('\n')
 }
 
+/**
+ * 功能：解析 PowerShell 可执行路径（带模块级缓存）。
+ * 内部逻辑：优先 `PI_WEB_PWSH_PATH` 环境变量；否则用 `where.exe pwsh.exe` 探测（2 秒
+ * 超时，非 Windows 或 where.exe 缺失时静默跳过）；最后回落 System32 下的 Windows
+ * PowerShell（存在时用绝对路径，否则直接 `powershell.exe` 交给 PATH）。
+ * @returns PowerShell 可执行路径。
+ */
 export function resolvePowerShell(): string {
   if (cachedPowerShell !== null && cachedPowerShell !== undefined) return cachedPowerShell
   const configured = process.env.PI_WEB_PWSH_PATH?.trim()
@@ -81,6 +107,14 @@ export function resolvePowerShell(): string {
   return cachedPowerShell
 }
 
+/**
+ * 功能：探测 Windows 控制台输出的旧编码（带模块级缓存）。
+ * 内部逻辑：优先读 PI_WEB_WINDOWS_OUTPUT_ENCODING 覆盖（须为 iconv 支持的编码）；否则
+ * 用 `chcp` 取代码页——非 65001 且 iconv 支持对应 `cpNNN` 时采用；代码页探测失败或为
+ * UTF-8 时按 locale 启发式回落（中文 gb18030、日文 cp932、韩文 cp949、俄文 cp866，
+ * 其余 cp437）；结果须被 iconv 支持，否则返回 null。
+ * @returns 旧编码名（iconv-lite 可用）或 null 表示无回退。
+ */
 export function resolveLegacyEncoding(): string | null {
   if (cachedLegacyEncoding !== undefined) return cachedLegacyEncoding
   const override = process.env[LEGACY_ENCODING_ENV]?.trim()
@@ -98,7 +132,7 @@ export function resolveLegacyEncoding(): string | null {
     })
     codePage = result.stdout?.match(/(\d{3,5})/)?.[1]
   } catch {
-    // Fall through to the locale heuristic.
+    // 失败则继续走 locale 启发式判断。
   }
   if (codePage !== undefined && codePage !== '65001') {
     const candidate = `cp${codePage}`
@@ -123,6 +157,12 @@ export function resolveLegacyEncoding(): string | null {
   return cachedLegacyEncoding
 }
 
+/**
+ * 功能：终止 PowerShell 命令的整个进程树。
+ * 内部逻辑：Windows 上用 `taskkill /F /T` 强制杀整棵树（启动失败静默忽略，进程可能
+ * 已退出）；非 Windows（测试环境）直接对子进程发 SIGKILL。
+ * @param child 由 runner 启动的子进程，可能为 undefined。
+ */
 function killProcessTree(child: ChildProcess | undefined): void {
   const pid = child?.pid
   if (pid === undefined) return
@@ -131,17 +171,26 @@ function killProcessTree(child: ChildProcess | undefined): void {
       const killer = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true })
       killer.on('error', () => undefined)
     } catch {
-      // The process may already be gone.
+      // 进程可能已经退出。
     }
     return
   }
   try {
     child?.kill('SIGKILL')
   } catch {
-    // The process may already be gone.
+    // 进程可能已经退出。
   }
 }
 
+/**
+ * 功能：创建 Windows 专用 `pwsh` 工具，优先 pwsh、回退 Windows PowerShell。
+ * 输入校验：拦截"递归 Get-ChildItem | Select-String"（FORBIDDEN）；会话无工作区抛
+ * UNSUPPORTED；timeout 必须为正数（INVALID_INPUT）。
+ * 边界：workdir 经 resolveWorkdir 限制在工作区内；长输出受 outputLimits（字节/行数上限，
+ * 保留尾部）约束；让渡超时后转 shell_session。非本地环境委托 Pi 平台 PowerShell 工具
+ * （必要时拼 Set-Location 前缀）；本地环境用 buildPowerShellScript 包装脚本执行。
+ * @returns 可注册的 `pwsh` 工具定义。
+ */
 export function createWindowsPowerShellTool(): ToolRegistration {
   return defineTool({
     name: 'pwsh',
@@ -155,6 +204,13 @@ export function createWindowsPowerShellTool(): ToolRegistration {
     }),
     structuredOutputSchema: SHELL_OUTPUT_SCHEMA,
     outputLimits: { maxBytes: MAX_OUTPUT_BYTES, maxLines: MAX_OUTPUT_LINES, retain: 'tail' },
+    /**
+     * 功能：执行 PowerShell 命令。
+     * 输入校验：先拦截递归 Select-String 管道，再校验工作区存在与 timeout 为正。
+     * 内部逻辑：workdir 限制在工作区内；非本地环境委托平台工具；本地环境以
+     * `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command` 运行包装脚本，
+     * 交给 runShellCommand（含旧编码回退、让渡超时、进程树终止）。
+     */
     execute: async (args, api, context) => {
       if (isBlockedRecursiveSearch(args.command)) {
         throw new RuntimeError(
@@ -175,7 +231,7 @@ export function createWindowsPowerShellTool(): ToolRegistration {
       const root = await realpath(cwd).catch(() => resolve(cwd))
       const workdir = await resolveWorkdir(root, args.workdir)
 
-      // A remote or otherwise non-local environment keeps the platform tool's execution model.
+      // 远程或其他非本地环境沿用平台工具自身的执行模型。
       if (api.env === undefined || api.env.id !== 'node:local') {
         const command = workdir === root
           ? args.command

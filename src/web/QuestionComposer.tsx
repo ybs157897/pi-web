@@ -6,29 +6,36 @@ import { planTitle as planHeadingOf } from './plan-preview.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './QuestionComposer.module.css'
 
-/** DSH's "(Recommended)" / "（推荐）" suffix renders as a badge instead of part of the label. */
+/** DSH 的「(Recommended)」/「（推荐）」后缀渲染为徽标而非标签的一部分。 */
 const RECOMMENDED_SUFFIX = /\s*[（(]\s*(?:recommended|推荐)\s*[)）]\s*$/iu
-/** Answer id the plan-review card submits; the route only inspects the selected labels. */
+/** 计划审阅卡提交的 answer id；路由只检查所选标签。 */
 const PLAN_REVIEW_ANSWER_ID = 'plan-review'
-/** The approve option the decision card shows, matching ZCode's plan-approval elicitation. */
+/** 决策卡展示的批准选项，对应 ZCode 的计划审批交互。 */
 const PLAN_APPROVE_OPTION = '批准'
 
+/** 单个问题的本地草稿：已选标签 + 自定义答案。 */
 type DraftAnswer = { selected: string[]; custom: string }
+/** 本地记录「已提交回答」，用于立刻隐藏卡片、等待 SSE 定案。 */
 type AnsweredLocally = { answers: AskUserQuestionAnswerItem[] }
+/** 本地记录计划决定（已批准/未批准）。 */
 type PlanDecisionLocally = { approved: boolean }
 
+/** 为每个问题初始化空白草稿。 */
 function initialDrafts(questions: readonly AskUserQuestionItem[]): Record<string, DraftAnswer> {
   return Object.fromEntries(questions.map(question => [question.id, { selected: [], custom: '' }]))
 }
 
+/** 判断是否为可渲染的问答请求（kind=question 且至少一个问题）。 */
 function questionInteraction(interaction: InteractionRequest | undefined): interaction is InteractionRequest & { questions: AskUserQuestionItem[] } {
   return interaction !== undefined && interaction.kind === 'question' && (interaction.questions?.length ?? 0) > 0
 }
 
+/** 判断是否为可渲染的计划审阅请求（kind=plan-review 且计划正文非空）。 */
 function planReviewInteraction(interaction: InteractionRequest | undefined): interaction is InteractionRequest & { detail: string } {
   return interaction !== undefined && interaction.kind === 'plan-review' && (interaction.detail ?? '').trim() !== ''
 }
 
+/** 该请求是否可渲染为交互卡（问答或计划审阅）。 */
 function renderable(interaction: InteractionRequest): boolean {
   return questionInteraction(interaction) || planReviewInteraction(interaction)
 }
@@ -39,17 +46,24 @@ function newest(interactions: readonly InteractionRequest[] | undefined): Intera
     .sort((left, right) => right.createdAt - left.createdAt)[0]
 }
 
+/** 拆出选项标签末尾的「（推荐）」后缀：返回剥离后的文本与是否推荐。 */
 function splitRecommended(label: string): { text: string; recommended: boolean } {
   const match = RECOMMENDED_SUFFIX.exec(label)
   return match ? { text: label.slice(0, match.index).trimEnd(), recommended: true } : { text: label, recommended: false }
 }
 
 /**
- * DSH's interaction card above the composer: the newest pending question or plan review, one at a
- * time. Questions keep per-question navigation and option/custom answers; a plan review renders the
- * submitted plan and offers "request changes" (dismiss and hand focus back to the composer) or the
- * server-provided approve label. A settled interaction leaves the card for good — the transcript's
- * tool row keeps the read-only record.
+ * 功能：composer 上方的 DSH 交互卡：每次只展示最新一条待处理的问题或计划审阅。
+ * 问答卡支持逐题导航、选项（单选/多选）与自定义答案；计划审阅渲染已提交计划
+ * 并提供「要求修改」（忽略并把焦点交回 composer）或批准选项。已定案的交互
+ * 永久离开 composer——会话记录的工具行保留只读存档。
+ * @param props conversationId 目标会话；interactions 交互请求列表；
+ *              onAnswered 回答/取消完成后的回调；onDismiss 计划审阅要求修改时回调；
+ *              onOpenPlan 在 Inspector 打开完整计划（DSH 的「查看全文」）。
+ * 内部逻辑：newest() 取创建时间最新的 pending 请求；interactionId 是身份——
+ * 新问题集重置整卡状态；回答提交成功先置 answeredLocally 让卡片立即消失；
+ * 可收起为一条「问题待回答」横条；Enter 推进下一题、Escape 收起；
+ * 计划审阅整体转发给 PlanReviewCard。
  */
 export default function QuestionComposer({ conversationId, interactions, onAnswered, onDismiss, onOpenPlan }: {
   conversationId: string
@@ -90,16 +104,17 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
   }
   if (!interaction || questions.length === 0) return null
 
-  // A submitted answer hides the card immediately; the SSE snapshot settles the record in
-  // the transcript's tool row.
+  // 已提交的回答立即隐藏卡片；SSE 快照会在会话记录的工具行里定案存档。
   const readOnly = answeredLocally !== null
   const question = questions[Math.min(index, questions.length - 1)]!
   const draft = drafts[question.id] ?? { selected: [], custom: '' }
 
+  /** 合并更新某个问题的草稿（已选标签与/或自定义答案）。 */
   const updateDraft = (id: string, update: Partial<DraftAnswer>): void => {
     setDrafts(current => ({ ...current, [id]: { selected: update.selected ?? current[id]?.selected ?? [], custom: update.custom ?? current[id]?.custom ?? '' } }))
   }
 
+  /** 切换某个选项的选中态：多选做集合增删，单选直接替换。 */
   const toggleOption = (label: string): void => {
     if (readOnly) return
     if (question.multiSelect) {
@@ -110,12 +125,14 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
     }
   }
 
+  /** 从草稿收集全部问题的答案：自定义答案 trim 后非空才携带。 */
   const collectAnswers = (source: Record<string, DraftAnswer>): AskUserQuestionAnswerItem[] => questions.map(item => {
     const value = source[item.id] ?? { selected: [], custom: '' }
     const custom = value.custom.trim()
     return { id: item.id, selected: [...value.selected], ...(custom ? { custom } : {}) }
   })
 
+  /** 提交全部答案：成功置 answeredLocally 让卡片立即消失并回调 onAnswered。 */
   const submit = async (source: Record<string, DraftAnswer> = drafts): Promise<void> => {
     if (readOnly || submitting) return
     const answers = collectAnswers(source)
@@ -132,6 +149,7 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
     }
   }
 
+  /** 前进到下一题；已是最后一题时提交整组答案。 */
   const advance = (): void => {
     if (index < questions.length - 1) setIndex(index + 1)
     else void submit()
@@ -156,6 +174,7 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
     }
   }
 
+  /** 跳过当前题：清空其草稿后前进；最后一题时以跳过后的草稿提交。 */
   const skipCurrent = (): void => {
     const next = { ...drafts, [question.id]: { selected: [], custom: '' } }
     setDrafts(next)
@@ -249,11 +268,16 @@ export default function QuestionComposer({ conversationId, interactions, onAnswe
 }
 
 /**
- * ZCode's plan review pair (`switch-mode.tsx` card + `ElicitationDialog`): a "计划" header with a
- * copy action, the plan markdown clipped to a fading excerpt with a centered "查看完整计划" pill,
- * and below it the permission card that carries the decision — "需要权限 · 实施计划" with the
- * numbered approve option, a free-form answer line, and 忽略/提交. Both cards are clickable like
- * ZCode's, with real child controls excluded from the activation.
+ * 计划审阅卡对（对应 ZCode 的 `switch-mode.tsx` 卡 + `ElicitationDialog`）：上方是
+ * 带复制按钮的「计划」标题卡——计划 Markdown 被渐隐裁切，居中「查看完整计划」胶囊；
+ * 下方是承载决定的权限卡——「需要权限 · 实施计划」，含编号的批准选项、自由回答行
+ * 与忽略/提交。两张卡都像 ZCode 一样整卡可点，真实子控件不触发激活。
+ * @param props conversationId 目标会话；review 计划审阅请求（含计划正文 detail）；
+ *              onAnswered 提交/忽略完成回调；onOpenPlan 打开完整计划回调。
+ * 内部逻辑：decided/approveSelected/feedbackText 驱动决策卡；readOnly（已定案或
+ * 非 pending）时不渲染；submitDecision 按 ZCode 的 continueOrSubmit 语义——选中
+ * 批准或整卡留空（计划审批时留空即明确批准）都提交「批准」，仅输入文字则作为
+ * 要求修改回传；ignore 取消整个交互；上下键在批准行与回答行间移动焦点。
  */
 function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
   conversationId: string
@@ -273,18 +297,17 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
   const readOnly = status !== 'pending'
   const planOnlyApproval = review.approveLabel === '确认方案'
   const heading = planHeadingOf(review.detail)
+  /** 打开完整计划：携带标题（可从计划 Markdown 推导）回调 onOpenPlan。 */
   const openPlan = (): void => {
     onOpenPlan?.({ markdown: review.detail, ...(heading === undefined ? {} : { title: heading }) })
   }
 
-  // A decided plan leaves the composer like an answered question; the transcript's
-  // plan tool row keeps the record.
+  // 已决定的计划像已回答的问题一样离开 composer；会话记录的计划工具行保留存档。
   if (readOnly) return null
 
   /**
-   * ZCode's `continueOrSubmit`: selecting the approve option (or leaving everything empty — an
-   * empty answer on a plan approval is an explicit approval, never a skip) approves the plan;
-   * typed text alone travels back as the requested changes.
+   * ZCode 的 `continueOrSubmit`：选中批准选项（或全部留空——计划审批中留空答案是
+   * 明确批准而非跳过）即批准计划；仅输入文字时作为要求修改回传。
    */
   const submitDecision = async (): Promise<void> => {
     if (readOnly || submitting) return
@@ -305,6 +328,7 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
     }
   }
 
+  /** 「忽略」：取消整个计划审阅交互（用户要求修改，由 onAnswered 通知路由）。 */
   const ignore = async (): Promise<void> => {
     if (readOnly || dismissing) return
     setDismissing(true)
@@ -319,7 +343,7 @@ function PlanReviewCard({ conversationId, review, onAnswered, onOpenPlan }: {
     }
   }
 
-  // 上下键在批准选项与回答输入行之间移动（ZCode 的 keyboardHint 所指的行为）。
+  /** 上下键在批准选项与回答输入行之间移动焦点（ZCode 的 keyboardHint 所指的行为）。 */
   const moveDecisionFocus = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     const rows = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-decision-row]')]

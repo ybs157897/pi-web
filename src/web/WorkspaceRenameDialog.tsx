@@ -4,7 +4,14 @@ import type { WorkspaceSummary } from '../shared/types.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './WorkspaceDialog.module.css'
 
-/** Rename the visible label while keeping a workspace's registered path stable. */
+/**
+ * 功能：工作区重命名对话框——以 Modal 形式浮层出现，只修改工作区的显示名称，
+ * 不改变其已注册的磁盘路径。
+ * @param props workspace 为待重命名的工作区（null 时对话框关闭）；onClose 关闭对话框回调；
+ *              onSave 提交保存（携带工作区与修剪后的新名称）。
+ * 内部逻辑：name 状态保存输入框文本；workspace 变化时用 useEffect 同步重置为当前名称；
+ * 保存按钮在名称为空或 workspace 为 null 时禁用，点击后以 trim 后的名称回调 onSave。
+ */
 export default function WorkspaceRenameDialog({ workspace, onClose, onSave }: {
   workspace: WorkspaceSummary | null
   onClose: () => void

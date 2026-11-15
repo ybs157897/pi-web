@@ -1,18 +1,16 @@
 /**
- * Automation recurrence: a bounded RFC 5545 subset on top of `rrule`.
+ * 自动化重复规则：基于 `rrule` 的一个有界 RFC 5545 子集。
  *
- * The engine works on wall-clock time, not UTC, so a rule written for 09:00
- * keeps 09:00 across daylight-saving changes. `rrule` itself only understands
- * UTC-anchored dates, so a rule is iterated as a "pseudo-UTC" clock (the local
- * wall clock labelled as UTC) and every candidate is converted back to a real
- * instant here. Generated local times that do not exist are skipped; one that
- * happens twice resolves to the earlier instant.
+ * 引擎按墙钟时间（wall clock）而非 UTC 对齐，因此"每天 09:00"的规则在夏令时
+ * 切换后仍是当地 09:00。`rrule` 本身只认锚定 UTC 的日期，所以规则被当作
+ * "伪 UTC"时钟迭代（把本地墙钟标注成 UTC），每个候选时刻再在此处换算回真实
+ * 瞬间（instant）。生成的当地时刻若不存在（春令时跳变）则跳过；若因回拨出现
+ * 两次（秋令时重叠）则取较早的瞬间。
  *
- * The accepted subset mirrors what the editor can produce plus reasonable
- * hand-authored rules: one DTSTART line, one RRULE line, an explicit IANA zone,
- * no SECONDLY, at most one BYSECOND value, COUNT ≤ 1000, no BY parts on
- * MINUTELY/HOURLY, BYMONTHDAY or ordinal BYDAY only on MONTHLY/YEARLY,
- * BYYEARDAY/BYWEEKNO only on YEARLY, and UNTIL as a UTC instant.
+ * 接受的子集覆盖编辑器可产出的规则加合理的手写规则：一行 DTSTART、一行 RRULE、
+ * 显式 IANA 时区、不支持 SECONDLY、BYSECOND 至多一个值、COUNT ≤ 1000、
+ * MINUTELY/HOURLY 不带 BY 部分、BYMONTHDAY 与带序数的 BYDAY 仅限 MONTHLY/YEARLY、
+ * BYYEARDAY/BYWEEKNO 仅限 YEARLY、UNTIL 必须是 UTC 瞬间。
  */
 import rruleModule from 'rrule'
 import { isValidTimeZone, splitRule, wallClockOf } from '../../shared/automation-timing.ts'
@@ -23,16 +21,17 @@ const FREQUENCIES = new Set(['SECONDLY', 'MINUTELY', 'HOURLY', 'DAILY', 'WEEKLY'
 const BY_PARTS = ['BYSECOND', 'BYMINUTE', 'BYHOUR', 'BYDAY', 'BYMONTHDAY', 'BYYEARDAY', 'BYWEEKNO', 'BYMONTH', 'BYSETPOS']
 const BYDAY_ORDINAL = /[+-]?\d/u
 
-/** A rule that failed validation; the message is model-facing. */
+/** 规则校验失败时抛出的错误；message 直接面向模型展示。 */
 export class RuleError extends Error {}
 
+/** 已解析并编译好的重复规则。 */
 export interface ParsedRule {
-  /** The two-line text, whitespace-normalized. */
+  /** 两行规则原文（DTSTART + RRULE），仅做空白归一化。 */
   text: string
   timeZone: string
-  /** The first occurrence the rule declares, as a real UTC instant. */
+  /** 规则声明的首次发生时刻，换算为真实 UTC 瞬间（毫秒时间戳）。 */
   startsAt: number
-  /** Internal iteration state. */
+  /** 内部迭代状态，供 nextOccurrence 复用，勿手改。 */
   compiled: CompiledRule
 }
 
@@ -41,28 +40,36 @@ interface CompiledRule {
   rule: InstanceType<typeof RRule>
 }
 
+/** 数字补零到指定宽度（默认 2 位），用于拼 iCalendar 时间戳。 */
 function pad(value: number, width = 2): string {
   return String(value).padStart(width, '0')
 }
 
+/** 把伪 UTC 墙钟毫秒（Date.UTC 标注的本地时间）格式化为 iCalendar 的 YYYYMMDDTHHMMSS 形式。 */
 function stampOf(wallMs: number): string {
   const date = new Date(wallMs)
   return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}T`
     + `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
 }
 
+/** 把真实瞬间换算成该时区的墙钟，再以伪 UTC 毫秒表示（供 rrule 迭代用）。 */
 function wallOfInstant(instant: number, timeZone: string): number {
   if (timeZone === 'UTC') return Math.floor(instant / 1000) * 1000
   const clock = wallClockOf(instant, timeZone)
   return Date.UTC(clock.year, clock.month - 1, clock.day, clock.hour, clock.minute, clock.second)
 }
 
+/** 该时区在指定瞬间对 UTC 的偏移毫秒数（伪 UTC 墙钟减真实瞬间）。 */
 function zoneOffsetMs(timeZone: string, instant: number): number {
   if (timeZone === 'UTC') return 0
   return wallOfInstant(instant, timeZone) - Math.floor(instant / 1000) * 1000
 }
 
-/** The instant a wall clock names in the zone; `undefined` when that local time does not exist. */
+/**
+ * 功能：把伪 UTC 墙钟换算回该时区下的真实瞬间；当地时刻不存在时返回 `undefined`。
+ * 内部逻辑：两次迭代收敛时区偏移得到候选瞬间，逐个验证其墙钟是否等于目标；
+ * 回拨导致的歧义墙钟（出现两次）取较早的瞬间；全部候选无效说明该墙钟不存在（春令时跳变）。
+ */
 function wallToInstant(wallMs: number, timeZone: string): number | undefined {
   if (timeZone === 'UTC') return wallMs
   const first = wallMs - zoneOffsetMs(timeZone, wallMs)
@@ -73,6 +80,7 @@ function wallToInstant(wallMs: number, timeZone: string): number | undefined {
   return Math.min(...candidates)
 }
 
+/** 把 DTSTART 的日期（YYYY-MM-DD）与时间（HH:MM）拼成伪 UTC 墙钟毫秒，秒固定为 0。 */
 function wallOfDateTime(date: string, time: string): number {
   const year = Number(date.slice(0, 4))
   const month = Number(date.slice(5, 7))
@@ -82,6 +90,7 @@ function wallOfDateTime(date: string, time: string): number {
   return Date.UTC(year, month - 1, day, hour, minute, 0)
 }
 
+/** 把 RRULE 参数串按 `;` 拆成 键→值 的 Map；键值均转大写，无 `=` 或键为空的片段跳过。 */
 function ruleParts(rule: string): Map<string, string> {
   const parts = new Map<string, string>()
   for (const piece of rule.split(';')) {
@@ -92,7 +101,7 @@ function ruleParts(rule: string): Map<string, string> {
   return parts
 }
 
-/** Rewrite a UTC UNTIL into the pseudo-UTC clock the rule iterates on. */
+/** 把 UNTIL 的 UTC 瞬间改写为规则迭代所用的伪 UTC 墙钟；时区为 UTC 或无 UNTIL 时原样返回。 */
 function pseudoRule(rule: string, timeZone: string): string {
   return rule.replace(/UNTIL=(\d{8}T\d{6})Z/iu, (whole, value: string) => {
     if (timeZone === 'UTC') return whole
@@ -104,6 +113,13 @@ function pseudoRule(rule: string, timeZone: string): string {
   })
 }
 
+/**
+ * 功能：校验 RRULE 是否落在受支持的有界子集内，越界即抛 `RuleError`。
+ * 内部逻辑（校验顺序）：FREQ 必填且禁止 SECONDLY → BYSECOND 至多一个值 →
+ * COUNT 为正整数且 ≤ 1000（更长用 UNTIL）→ UNTIL 必须以 Z 结尾的 UTC 瞬间 →
+ * MINUTELY/HOURLY 禁带任何 BY 部分 → 带序数的 BYDAY 仅限 MONTHLY/YEARLY 且不得
+ * 与 BYWEEKNO 同用 → BYMONTHDAY 仅限 MONTHLY/YEARLY → BYYEARDAY/BYWEEKNO 仅限 YEARLY。
+ */
 function assertSubset(rule: string): void {
   const parts = ruleParts(rule)
   const frequency = parts.get('FREQ')
@@ -135,7 +151,14 @@ function assertSubset(rule: string): void {
   if (parts.has('BYWEEKNO') && frequency !== 'YEARLY') throw new RuleError('BYWEEKNO requires YEARLY.')
 }
 
-/** Validate and compile a two-line rule. Throws `RuleError` with a model-facing message. */
+/**
+ * 功能：校验并编译两行规则（DTSTART + RRULE），供后续 nextOccurrence 反复求值。
+ * @param text 规则文本，格式为「DTSTART:YYYYMMDDTHHMMSS / RRULE:... / TZ=时区」
+ * @returns ParsedRule，含归一化原文、时区、首发生瞬间与编译好的 rrule 实例
+ * 内部逻辑：先经 splitRule 拆行并校验时区与日期时间格式；DTSTART 墙钟必须在该
+ * 时区真实存在（否则 RuleError）；再经 assertSubset 限制 RRULE 子集；DTSTART 墙钟
+ * 与改写过的 UNTIL 都标注为伪 UTC 后交给 RRule.fromString 编译。
+ */
 export function parseRule(text: string): ParsedRule {
   const parsed = splitRule(text)
   if (parsed === undefined) throw new RuleError('A rule is one DTSTART line followed by one RRULE line.')
@@ -151,24 +174,32 @@ export function parseRule(text: string): ParsedRule {
   return { text, timeZone: parsed.zone, startsAt, compiled: { timeZone: parsed.zone, rule } }
 }
 
-/** True when the rule still has an occurrence strictly after `from`. */
+/**
+ * 功能：求规则在 `from` 之后（严格大于）的下一次发生时刻，供调度器推进游标。
+ * @param parsed 已编译规则（parseRule 的返回值）
+ * @param from 当前游标：真实 UTC 瞬间（毫秒），从此刻之后找下一次发生
+ * @returns 下一次发生的真实瞬间毫秒数；规则已穷尽或找不到有效时刻时返回 undefined
+ * 内部逻辑：游标从 `from`（而非 DTSTART）起算，避免老规则回放大量历史发生点；
+ * rrule 产出候选后逐个换算回真实瞬间——墙钟不存在的候选（春令时跳变）跳过，
+ * 换算后不晚于 `from` 的候选继续向后走；至多试探 64 个候选防死循环。
+ */
 export function nextOccurrence(parsed: ParsedRule, from: number): number | undefined {
   const { timeZone, rule } = parsed.compiled
-  // Start from `from`, not from DTSTART: a rule anchored long ago has more past
-  // occurrences than the loop below will ever need to walk.
+  // 从 `from` 而非 DTSTART 起算：锚定在很久以前的规则，其历史发生点远多于
+  // 下面循环需要遍历的数量。
   let cursor = new Date(wallOfInstant(from, timeZone) - 1000)
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const candidate = rule.after(cursor, false)
     if (candidate === null) return undefined
     const instant = wallToInstant(candidate.getTime(), timeZone)
     if (instant !== undefined && instant > from) return instant
-    // A generated local time that does not exist is skipped rather than delivered early.
+    // 生成的当地时刻若不存在（春令时跳变）则跳过，而不是提前投递。
     cursor = candidate
   }
   return undefined
 }
 
-/** Convenience: validate and compute in one call. Throws `RuleError` on a bad rule. */
+/** 便捷入口：一步完成解析与下一次发生计算；规则非法时抛 `RuleError`。 */
 export function nextRunOf(text: string, from: number): number | undefined {
   return nextOccurrence(parseRule(text), from)
 }

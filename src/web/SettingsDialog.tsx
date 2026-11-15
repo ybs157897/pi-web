@@ -18,26 +18,38 @@ import SkillsPanel from './SkillsPanel.tsx'
 import PluginsPanel from './PluginsPanel.tsx'
 import css from './SettingsDialog.module.css'
 
+/** 设置对话框的页签：常规 / 个性化 / 模型 / MCP / 技能 / 插件。 */
 export type SettingsTab = 'general' | 'personalization' | 'models' | 'mcp' | 'skills' | 'plugins'
+/** SettingsDialog 的属性定义：对话框状态、模型目录、设置读写回调与各页签上下文。 */
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
   onSave: (input: ProviderInput) => Promise<void>
   settings?: AppSettings; onSettingsChange?: (patch: UpdateAppSettingsInput) => Promise<unknown>
   initialTab?: SettingsTab
   onRefreshCatalog?: () => Promise<void>; accessModes?: AccessMode[]
-  /** Provider of the model in use right now, shown as DSH's 正在使用 badge. */
+  /** 当前正在使用的模型提供商，按 DSH 的「正在使用」徽标展示。 */
   activeProvider?: string
-  /** Current project workspace, used to preselect the Skills catalog. */
+  /** 当前项目工作区，用于预选技能目录。 */
   workspaceId?: string
-  /** Start a new task with the plugin-creator Skill preloaded. */
+  /** 以插件创建技能预载开启一个新任务。 */
   onCreatePlugin?: () => void
 }
+/** 提供商 API 协议候选（模型设置页使用）。 */
 const API_OPTIONS = [
   { id: 'openai-completions', label: 'OpenAI Chat Completions' }, { id: 'openai-responses', label: 'OpenAI Responses' },
   { id: 'anthropic-messages', label: 'Anthropic Messages' }, { id: 'google-generative-ai', label: 'Google Generative AI' },
 ]
 
-/** DSH's two-column settings shell; every control updates the project configuration. */
+/**
+ * 功能：DSH 双栏设置外壳（Modal 大窗）：左侧分组导航（基础设置/模型与能力/扩展），
+ * 右侧为当前页签内容；「常规」页内全部控件直接更新项目配置。子页签复用
+ * PersonalizationPanel/ModelsPanel/PluginsPanel/SkillsPanel 与内置 MCP 只读视图。
+ * @param props 见 SettingsDialogProps。
+ * 内部逻辑：打开时重置到 initialTab；update() 以 pending 防重入并回写设置；
+ * MCP 快照仅在进入 mcp 页签时拉取（只读视图，从不改写 mcp.json）；
+ * 「打开配置文件」经系统默认程序打开，失败以长驻 Toast 提示；快捷键子弹窗支持
+ * 录制新组合键（重复占用会报错），恢复默认一键重置。
+ */
 export default function SettingsDialog(props: SettingsDialogProps) {
   const { open, catalog, saving, onClose, onSave, initialTab = 'general', onRefreshCatalog } = props
   const { t, settings: contextSettings } = useUiPreferences()
@@ -51,7 +63,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   const configToastSequence = useRef(0)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [recording, setRecording] = useState<string | null>(null)
-  // The MCP tab owns its read-only snapshot: it is fetched when the tab opens, not with settings.
+  // MCP 页签持有自己的只读快照：进入页签时才拉取，不随设置一起读取。
   const [mcp, setMcp] = useState<McpView | null>(null)
   const [mcpLoading, setMcpLoading] = useState(false)
   const [mcpError, setMcpError] = useState('')
@@ -97,7 +109,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     try { await props.onSettingsChange(patch) } catch (cause) { setError(cause instanceof Error ? cause.message : t('保存设置失败', 'Could not save settings')) }
     finally { setPending(false) }
   }
-  /** DSH's own top-right action: hand the configuration file to the system's default program. */
+  /** DSH 自带的右上角操作：把配置文件交给系统默认程序打开。 */
   const openConfig = async () => {
     if (openingConfig) return
     setOpeningConfig(true)
@@ -108,7 +120,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     }
     finally { setOpeningConfig(false) }
   }
-  /** Read the imported Pi MCP catalog; the MCP tab is a read-only view and never rewrites it. */
+  /** 读取 Pi 导入的 MCP 目录；MCP 页签为只读视图，从不改写。 */
   const loadMcp = async () => {
     if (mcpLoading) return
     setMcpLoading(true); setMcpError('')
@@ -116,7 +128,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
     catch (cause) { setMcpError(cause instanceof Error ? cause.message : t('无法读取 MCP 配置', 'Could not read the MCP configuration')) }
     finally { setMcpLoading(false) }
   }
-  // Opening the tab is the only trigger: the dialog does not read the file until it is shown.
+  // 进入页签是唯一触发点：对话框在被展示前不会读取该文件。
   useEffect(() => { if (open && tab === 'mcp') void loadMcp() }, [open, tab])
   const accessName = (value: AccessMode) => value === 'readOnly' ? t('仅可查看', 'Read only') : value === 'workspaceWrite' ? t('工作区内修改', 'Workspace write') : t('完全权限', 'Full access')
   const themes = [
@@ -243,28 +255,31 @@ export default function SettingsDialog(props: SettingsDialogProps) {
       }}>{recording === id ? t('按下组合键…', 'Press a shortcut…') : displayShortcut(resolveShortcuts(settings.shortcuts)[id])}</button></div>)}
       <Button variant="ghost" size="sm" disabled={pending} onClick={() => void update({ shortcuts: { ...DEFAULT_SHORTCUTS } })}>{t('恢复默认快捷键', 'Restore default shortcuts')}</Button>
     </Modal>
-    {/* A failed open has to say what broke, so it holds longer than the default banner. */}
+    {/* 打开配置文件失败时必须说明原因，因此比默认横幅驻留更久。 */}
     {configToast !== null && <Toast key={configToast.id} text={configToast.text} holdMs={6000}
       onDone={() => { setConfigToast(current => current?.id === configToast.id ? null : current) }} />}
   </>
 }
 
-/** One settings row; `stacked` puts the control on its own full-width line, as DSH's appearance cards do. */
+/** 单行设置项；`stacked` 让控件独占整行（如 DSH 的外观卡片）。 */
 function SettingRow({ title, description, stacked = false, children }: { title: string; description?: string; stacked?: boolean; children: ReactNode }) {
   return <div className={css.settingRow} data-stacked={stacked || undefined}><div className={css.settingLabel}><span>{title}</span>{description && <p>{description}</p>}</div><div className={css.settingControl}>{children}</div></div>
 }
 
+/** 下拉选择控件：Menu portal 实现的选项按钮，选中项高亮。 */
 function Choice({ label, value, options, disabled, onChange }: { label: string; value: string; options: Array<{ value: string; label: string }>; disabled?: boolean; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false)
   return <Menu open={open} onClose={() => setOpen(false)} portal align="end" selectedId={value} items={options.map(option => ({ id: option.value, label: option.label }))} onSelect={id => { onChange(id); setOpen(false) }} anchor={<button className={css.choice} type="button" aria-label={label} disabled={disabled} onClick={() => setOpen(value => !value)}>{options.find(option => option.value === value)?.label ?? value}<IconChevronDownOutlineRegular size={11} /></button>} />
 }
+/** 开关控件：role=switch 的按钮，aria-checked 表达状态。 */
 function Toggle({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (value: boolean) => void }) {
   return <button type="button" role="switch" aria-label={label} aria-checked={checked} disabled={disabled} onClick={() => onChange(!checked)} className={css.toggle}><span /></button>
 }
 
 /**
- * One MCP server row: DSH's connection dot with its wording, the transport and
- * exposure tags, and the native tool catalog behind a disclosure.
+ * 单个 MCP 服务器卡片：DSH 的连接状态点及其文字说明、transport/exposure/启用
+ * 标签，并以 details 折叠展示该服务器的原生工具目录。
+ * @param props server MCP 服务器视图数据；t 双语翻译函数。
  */
 function McpServerCard({ server, t }: { server: McpServerView; t: (chinese: string, english: string) => string }) {
   const dot = server.status === 'connected' ? 'done' : server.status === 'error' ? 'error' : 'idle'
@@ -293,7 +308,7 @@ function McpServerCard({ server, t }: { server: McpServerView; t: (chinese: stri
   </section>
 }
 
-/** DSH's MCP connection states in words: the dot alone is not enough for a screen reader. */
+/** 用文字表达 DSH 的 MCP 连接状态：仅凭状态点对读屏器不够。 */
 function mcpStatusName(status: McpServerView['status'], t: (chinese: string, english: string) => string): string {
   switch (status) {
     case 'connected': return t('已连接', 'Connected')
@@ -302,9 +317,9 @@ function mcpStatusName(status: McpServerView['status'], t: (chinese: string, eng
   }
 }
 /**
- * DSH's font-family field: comma-separated installed family names, committed
- * on blur or Enter and normalized by the shared rules; an empty value restores
- * the built-in stack.
+ * DSH 的字体族输入框：逗号分隔的已安装字体名，失焦或回车提交并按共享规则
+ * 归一化；空值恢复内置字体栈。
+ * @param props value 当前值；label 无障碍标签；disabled 禁用态；onCommit 提交回调。
  */
 function FontFamilyInput({ value, label, disabled, onCommit }: { value: string; label: string; disabled?: boolean; onCommit: (value: string) => void }) {
   const { t } = useUiPreferences()
@@ -330,7 +345,7 @@ function FontFamilyInput({ value, label, disabled, onCommit }: { value: string; 
   />
 }
 
-/** DSH's font-size control: a filled value box, the unit, then the menu chevron. */
+/** DSH 的字号选择控件：实底数值框 + 单位 + 菜单箭头，从 min 到 max 逐 px 选择。 */
 function SizeSelect({ value, min, max, label, disabled, onChange }: { value: number; min: number; max: number; label: string; disabled?: boolean; onChange: (value: number) => void }) {
   const [open, setOpen] = useState(false)
   const sizes = useMemo(() => Array.from({ length: max - min + 1 }, (_item, index) => min + index), [min, max])

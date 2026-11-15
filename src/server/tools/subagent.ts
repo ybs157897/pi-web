@@ -17,39 +17,42 @@ import {
   type ChildModelResolver,
 } from '../agents/builtins.ts'
 
-/** Model-facing tool name; also the read-only whitelist entry and the tool row's label. */
+/** 面向模型的工具名；同时也是只读白名单条目与工具行展示的 label。 */
 export const SUBAGENT_TOOL = 'subagent'
 
 /**
- * Built-in delegation profiles (ZCode parity: `general-purpose` and `Explore`). `general-purpose`
- * inherits the parent's working tools under the child policy; `Explore` narrows them to read-only search.
+ * 内置委派档案（与 ZCode 对齐：`general-purpose` 与 `Explore`）。`general-purpose`
+ * 在子代理策略下继承父会话的工作工具；`Explore` 收窄为只读检索。
  */
 export { Subagents } from '../conversation/subagent-policy.ts'
 export type { SubagentProfile, SubagentIdentity, SubagentDelegation } from '../conversation/subagent-policy.ts'
 
+/** subagent task 的最大字符数。 */
 export const MAX_SUBAGENT_TASK_CHARS = 20_000
+/** subagent label 的最大字符数。 */
 export const MAX_SUBAGENT_LABEL_CHARS = 60
 
-/** How many model picks the delegation section lists before it truncates to 「等 N 个」. */
+/** 委派 section 在截断为「等 N 个」之前列出的模型选取数。 */
 export const SUBAGENT_MODEL_LIST_LIMIT = 12
 
 /**
- * Details the UI reads off the tool call, so a subagent row can attach to its child conversation
- * while the call is still running (DSH returns an activation the same way).
+ * UI 从工具调用读取的详情：调用仍在运行时子代理行就能挂到子会话上（DSH 同样返回
+ * 一个 activation）。
  */
 export type SubagentToolDetails = {
   conversationId: string
   status: 'running' | 'completed' | 'failed'
   label: string
-  /** Set while a background delegation is still running; its result arrives as a settlement message. */
+  /** 后台委派仍在运行时设置；其结果以结算消息送达。 */
   background?: boolean
 }
 
-/** One delegation's terminal state, as `subagent()` reports it back to the model. */
+/** 一次委派的终态，即 `subagent()` 向模型回报的两种结果。 */
 type DelegationOutcome =
   | { kind: 'answered'; text: string }
   | { kind: 'failed'; reason: string }
 
+/** 校验 task：非空且不超过 MAX_SUBAGENT_TASK_CHARS，返回 trim 后文本。 */
 function normalizeTask(value: unknown): string {
   const task = typeof value === 'string' ? value.trim() : ''
   if (task === '') throw new Error('The subagent task must be a non-empty string.')
@@ -59,14 +62,19 @@ function normalizeTask(value: unknown): string {
   return task
 }
 
-/** DSH requires a short display description; here it is optional and falls back to the task's first line. */
+/** 清洗展示 label：DSH 要求简短展示描述，这里可省略并回落为任务首行；超长截断加省略号。 */
 function normalizeLabel(value: unknown, task: string): string {
   const explicit = typeof value === 'string' ? value.trim() : ''
   const label = explicit === '' ? (task.split('\n').find(line => line.trim() !== '') ?? task).trim() : explicit
   return label.length > MAX_SUBAGENT_LABEL_CHARS ? `${label.slice(0, MAX_SUBAGENT_LABEL_CHARS - 1)}…` : label
 }
 
-/** The child's final assistant text: its last non-empty assistant message, as DSH's `SubagentResult.output`. */
+/**
+ * 功能：提取子会话的最终答复文本——最后一条非空 assistant 消息，对应 DSH 的
+ * `SubagentResult.output`。
+ * @param messages 子会话的消息序列。
+ * @returns 答复文本；没有任何 assistant 文本时返回空串。
+ */
 export function answerText(messages: readonly Message[] | undefined): string {
   for (const message of [...messages ?? []].reverse()) {
     if (message.role !== 'assistant') continue
@@ -76,61 +84,64 @@ export function answerText(messages: readonly Message[] | undefined): string {
   return ''
 }
 
-/** Why one settled submission carried no answer: the harness reason plus any recorded detail. */
+/**
+ * 功能：说明一次已结算的提交为何没有答复——骨架（harness）原因加上已记录的详情。
+ * @param settled 已结算的提交记录。
+ * @returns 人类可读的原因描述。
+ */
 export function unansweredReason(settled: SettledSubmissionRecord): string {
   const detail = settled.status === 'unanswered' && settled.detail !== undefined ? ` (${JSON.stringify(settled.detail)})` : ''
   return settled.status === 'unanswered' ? `${settled.reason}${detail}` : 'the run left no answer entry'
 }
 
 /**
- * Everything the runtime's settlement channel needs to report one background delegation. The
- * settlement escapes this tool call's lifetime (the call already returned its activation), so it
- * runs on the runtime's background context and never touches this call's `api.*` again — handles
- * derived from `api` stay bound to the invocation and die with it, so the settlement re-resolves
- * everything from the runtime by id.
+ * runtime 结算通道上报一次后台委派所需的全部信息。结算逃出本次工具调用的生命周期
+ * （调用已返回 activation），因此它在 runtime 的后台上下文运行，绝不再碰本次调用的
+ * `api.*`——由 `api` 派生的句柄绑定在本次调用上随调用消亡，结算只能按 id 从 runtime
+ * 重新解析一切。
  */
 export type SubagentSettlementInput = {
-  /** The conversation that delegated the work and receives the settlement message. */
+  /** 委派工作并接收结算消息的父会话。 */
   parent: ConversationId
-  /** The child conversation whose answer settles. */
+  /** 答复待结算的子会话。 */
   child: ConversationId
   label: string
-  /** The request id the settlement message is injected under (`subagent-settle:<toolTaskId>`). */
+  /** 结算消息注入所用的请求 id（`subagent-settle:<toolTaskId>`）。 */
   settleRequestId: string
 }
 
 /**
- * The delegation section's model line: up to `SUBAGENT_MODEL_LIST_LIMIT` picks plus the total the
- * allowlist and configured credentials actually cover, so a long list can end with 「等 N 个」.
+ * 委派 section 的模型行数据：最多 `SUBAGENT_MODEL_LIST_LIMIT` 个选取，加上允许列表与
+ * 已配置凭据实际覆盖的总数，长列表以「等 N 个」收尾。
  */
 export type ChildModelList = { models: ChildModelRef[]; total: number }
 
 /**
- * Register DSH's `subagent` tool as a foreground delegation. One call creates one task-owned child
- * conversation, waits for its answer, and returns that answer on the `output` channel; a failure
- * travels on the diagnostic channel so the answer body stays clean (DSH keeps `output` and
- * `diagnostic` separate in `SubagentResult` for the same reason).
+ * 把 DSH 的 `subagent` 工具注册为前台委派：一次调用创建一个任务归属的子会话，等待其
+ * 答复并把答复经 `output` 通道返回；失败走 diagnostic 通道，保持答复正文干净（DSH 在
+ * `SubagentResult` 中把 output 与 diagnostic 分开也是同样的理由）。
  *
- * `prepareChild` lets the runtime stamp the child's conversation metadata (title, workspace, access
- * mode) inside the creation commit, where only document access is available. `resolveChildModel`
- * validates an explicit model pick; `availableChildModels` feeds the delegation section's model line.
- * `settleWhenAnswered` is the runtime's background settlement channel: a background delegation hands
- * its child submission to it instead of waiting.
+ * `prepareChild` 让 runtime 在创建事务内写入子会话元数据（标题、工作区、访问模式），
+ * 那里只有文档访问可用。`resolveChildModel` 校验显式模型选取；`availableChildModels`
+ * 供给委派 section 的模型行。`settleWhenAnswered` 是 runtime 的后台结算通道：后台委派
+ * 把子提交交给它而不是原地等待。
  */
 export type SubagentToolOptions = {
   prepareChild: (tx: Tx, childId: ConversationId, parentId: ConversationId, label: string) => Promise<void>
-  /** Validate and clamp an explicit child model pick against the catalog and the allowlist. */
+  /** 对显式选取的子模型按目录与允许列表校验并夹取。 */
   resolveChildModel?: ChildModelResolver
-  /** Allowlisted catalog models whose provider holds credentials, for the delegation section's model line. */
+  /** 允许列表中 provider 带凭据的目录模型，供委派 section 的模型行使用。 */
   availableChildModels?: () => ChildModelList | Promise<ChildModelList>
-  /** Deliver one background delegation's result to its parent once the child's submission settles. */
+  /** 子提交结算后，把一次后台委派的结果送达父会话。 */
   settleWhenAnswered?: (input: SubagentSettlementInput) => void
 }
 
 /**
- * The agent change one new child applies on top of the copied parent composition: the profile's
- * instructions always, the read-only tool intersection for `Explore`, and the validated model pick.
- * A replayed call reuses its child, so it never rebuilds or reapplies this change.
+ * 功能：计算新建子会话在复制父组合之上追加的 agent 变更：总是包含档案的系统提示词，
+ * `Explore` 加只读工具交集，显式选取的模型经校验后带上。
+ * 内部逻辑：读取父 agent 以解析工具路由；codemode-only 下直接提供的工具不含嵌套启用
+ * 的工具，故交集里额外保留 `codemode`；Explore 缺 read 工具时抛错。重放的调用复用其
+ * 子会话，不会重建或重放该变更。
  */
 async function childAgentChange(
   profileName: string | undefined,
@@ -144,7 +155,7 @@ async function childAgentChange(
   const resolve = model !== undefined && options.resolveChildModel !== undefined ? options.resolveChildModel : undefined
   const parent = readonlyTools !== undefined || resolve !== undefined ? await api.agent(context) : undefined
   const readRoute = parent === undefined ? 'unavailable' : resolveToolRoute(parent, 'read')
-  // In codemode-only the directly offered tools do not include the enabled nested tools.
+  // codemode-only 下直接提供的工具不含嵌套启用的工具。
   const tools = readonlyTools !== undefined && parent !== undefined
     ? [...new Map([...parent.tools, ...parent.callable, ...parent.deferred]
       .filter(tool => readonlyTools.includes(tool.name) || (readRoute === 'codemode' && tool.name === 'codemode'))
@@ -166,8 +177,16 @@ async function childAgentChange(
   }
 }
 
+/**
+ * 功能：装配 subagent 工具扩展，贡献 1 个工具（`subagent`）与 1 个 section
+ * （delegation-policy 委派指南：何时委派、选哪种内置档案、选哪个模型）。
+ * 内部逻辑：section 按当前 agent 的工具路由动态生成（subagent/spawn_teammate 均不可用
+ * 时不注入）；可选注入可用模型行与委派示例。
+ * @param options runtime 注入的子会话创建/模型/结算依赖。
+ * @returns 名为 `subagent` 的扩展。
+ */
 export function createSubagentTools(options: SubagentToolOptions): Extension {
-  /** ZCode's delegation guidance: when to delegate, which built-in type, and which model. */
+  /** ZCode 的委派指南：何时委派、选哪种内置类型、选哪个模型。 */
   const delegationSection = section('delegation-policy', async (input) => {
     const routes = {
       subagent: resolveToolRoute(input.agent, SUBAGENT_TOOL),
@@ -244,28 +263,37 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           })),
           run_in_background: Type.Optional(Type.Boolean()),
         }),
-        // A rerun after a crash must reuse the child it already created instead of delegating twice.
+        // 崩溃后的重跑必须复用已创建的子会话，而不是重复委派。
         replay: 'safe',
+        /**
+         * 功能：执行子代理委派（前台等待或后台启动）。
+         * 输入校验：task/label 经 normalize；子会话按 taskId 查找已存在者以幂等复用。
+         * 内部逻辑：扫描与创建分两次 commit（创建事务内读表会抛 ReadAfterWrite）；
+         * agent 变更在创建 commit 之前构建（需要读父 agent）；创建时经 configure 应用
+         * 变更并写入 Subagents 记录；随后继承计划模式约束。后台模式提交后即返回 activation，
+         * 结算交由 runtime 后台通道；前台模式以稳定 request id 提交（崩溃后重提幂等）并
+         * 等待结算，答复文本为空或无答复时走 fail（错误进 diagnostic 通道）。
+         */
         execute: async (args, api, context): Promise<ToolExecutionResult<SubagentToolDetails>> => {
           const task = normalizeTask(args.task)
           const label = normalizeLabel(args.label, task)
           const parentId = api.conversationId
           const background = args.run_in_background === true
-          // The scan and the creation are separate commits: a table read inside the creating commit
-          // throws ReadAfterWrite (docs/history/families.md A6).
+          // 扫描与创建是分开的两个 commit：创建 commit 内读表会抛 ReadAfterWrite
+          // （docs/history/families.md A6）。
           const existing = await api.commit(async (tx) => {
             const page = await tx.scanConversations({ ownerTaskId: api.taskId }, 1)
             return page.items[0]?.id
           }, context)
-          // Built before the creating commit: the agent change reads the parent's resolved agent,
-          // which is a table read the commit cannot host. A replay reuses its child unchanged.
+          // 在创建 commit 之前构建：agent 变更要读父 agent 的解析结果，commit 无法承载
+          // 这种表读取。重放时原样复用其子会话。
           const agent = existing === undefined
             ? await childAgentChange(args.agent_type, args.model, options, api, context)
             : undefined
           const childId = existing ?? await api.commit(async (tx) => {
             const record = await tx.createConversation({ ownership: { kind: 'task', taskId: api.taskId } })
-            // `tx.createConversation` takes no agent options; `configure` applies the same
-            // `AgentChange` to the copied `pi.agent` document inside this commit.
+            // `tx.createConversation` 不接受 agent 选项；`configure` 在本 commit 内对复制的
+            // `pi.agent` 文档应用同一个 `AgentChange`。
             if (agent !== undefined) await configure(tx, record.id, agent)
             await options.prepareChild(tx, record.id, parentId, label)
             const doc = await tx.doc(Subagents, record.id)
@@ -283,7 +311,7 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           if (child === undefined) {
             return fail(api, context, `child conversation ${String(childId)} is no longer available`, { conversationId: String(childId), status: 'failed', label })
           }
-          // The stable settle request id makes the settlement injection after a crash or restart idempotent.
+          // 稳定的结算请求 id 让崩溃或重启后的结算注入保持幂等。
           const settleRequestId = `subagent-settle:${String(api.taskId)}`
           await api.commit(async (tx) => {
             await inheritPlanConstraint(tx, childId, parentId)
@@ -294,9 +322,8 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           }, context)
           if (background) {
             try {
-              // Distinct from the foreground request id: a call replayed under the other mode must
-              // not ride on the other mode's submission. The returned handle is invocation-bound and
-              // dies with this call, so the settlement watches the child from the runtime instead.
+              // 与前台请求 id 区分开：另一种模式下重放的调用不能搭乘对方的提交。返回的
+              // 句柄绑定本次调用并随调用消亡，因此结算改由 runtime 在后台观察子会话。
               await child.submit({
                 type: 'input',
                 content: task,
@@ -304,12 +331,12 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
                 whenBusy: 'followUp',
               }, context)
             } catch (error) {
-              // A cancelled parent ends this call as cancelled, not as a failed launch.
+              // 已取消的父调用以 cancelled 结束，而不是以"启动失败"结束。
               if (context.abortSignal?.aborted === true) throw error
               return fail(api, context, `the subagent run could not be started: ${describe(error)}`, { conversationId: String(childId), status: 'failed', label })
             }
-            // The call ends here: the settlement lives on the runtime's background context and reports
-            // back as a follow-up message, so it must not touch this call's `api.*` again.
+            // 调用到此结束：结算活在 runtime 的后台上下文里并以跟进消息回报，因此绝不
+            // 能再碰本次调用的 `api.*`。
             options.settleWhenAnswered?.({ parent: parentId, child: childId, label, settleRequestId })
             return {
               output: [{
@@ -324,7 +351,7 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
           }
           let settled: SettledSubmissionRecord
           try {
-            // The stable request ID makes the resubmission after a crash idempotent.
+            // 稳定的请求 ID 让崩溃后的重提保持幂等。
             const submission = await child.submit({
               type: 'input',
               content: task,
@@ -333,7 +360,7 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
             }, context)
             settled = await submission.wait(context)
           } catch (error) {
-            // A cancelled parent ends this call as cancelled, not as an answered delegation.
+            // 已取消的父调用以 cancelled 结束，而不是以"已答复的委派"结束。
             if (context.abortSignal?.aborted === true) throw error
             return fail(api, context, `the subagent run could not be followed: ${describe(error)}`, { conversationId: String(childId), status: 'failed', label })
           }
@@ -358,9 +385,11 @@ export function createSubagentTools(options: SubagentToolOptions): Extension {
 }
 
 /**
- * Report a delegation failure. The model still needs a tool result it can act on, while the reason
- * belongs on the diagnostic channel: DSH keeps `SubagentResult.output` and `diagnostic` apart so a
- * presentation never mixes the child's answer with the account of why it has none.
+ * 功能：上报一次委派失败。模型仍需要一个可行动的工具结果，而失败原因应走 diagnostic
+ * 通道：DSH 把 `SubagentResult.output` 与 `diagnostic` 分开，正是为了让展示永远不把
+ * 子会话的答复与"为什么没有答复"混在一起。
+ * 内部逻辑：先写 error 级诊断，再更新 details（status: failed），最后返回 isError 的
+ * 结果（output 为固定提示文本）。
  */
 async function fail(
   api: ToolExecutionApi<SubagentToolDetails>,
@@ -373,6 +402,7 @@ async function fail(
   return { output: [{ type: 'text', text: 'The subagent did not return an answer.' }], isError: true, details }
 }
 
+/** 把任意错误压成一行描述：取 message、折叠空白、截断 300 字符；空则报 unknown error。 */
 function describe(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   return text.replace(/\s+/g, ' ').trim().slice(0, 300) || 'unknown error'

@@ -1,37 +1,35 @@
 /**
- * The built-in WeTrack issue analysis task.
+ * 内置的 WeTrack 问题分析任务。
  *
- * The operator asked for the issue list to be analysed every night, with each defect
- * handed to its own agent and the main conversation acting only as a coordinator. This
- * module owns the task's identity, its schedule and the coordinator prompt; the
- * automations service owns the scheduling and the run history.
+ * 运营者要求每晚分析一次问题清单：每个缺陷交给独立的智能体，主会话只做协调。
+ * 本模块持有任务的标识、日程与协调提示词；调度与运行历史归 automations 服务。
  *
- * The task is provisioned once: a marker file in the data directory records that it was
- * created, so an operator who deletes it does not get it back on the next restart.
+ * 任务只开通一次：数据目录里的标记文件记录「已创建过」，运营者删除后重启
+ * 也不会自动恢复。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { systemTimeZone } from '../../shared/automation-timing.ts'
 import { analysisProcedure } from './analysis-procedure.ts'
 
-/** Marks the task in the automations list. */
+/** 在自动化列表中标识该任务的 key。 */
 export const WETRACK_DAILY_AUTOMATION_KEY = 'wetrack-analysis-daily'
 /**
- * Every night at midnight, in the machine's zone. DTSTART is a fixed past anchor so
- * the rule text never changes across days: only the zone can, and a `FREQ=DAILY`
- * occurrence set always starts from the first midnight after `now`.
+ * 每天午夜一次，按机器所在时区。DTSTART 固定锚在过去的 2000-01-01，规则文本
+ * 因此跨天不变（只有时区可能变）；`FREQ=DAILY` 的发生序列总是从 now 之后的
+ * 第一个午夜起算。
  */
 export const WETRACK_DAILY_RRULE = `DTSTART;TZID=${systemTimeZone()}:20000101T000000\nRRULE:FREQ=DAILY`
-/** Where the "the operator created this once" marker lives. */
+/** 「运营者已创建过该任务」标记文件的存放路径（相对数据目录）。 */
 export const WETRACK_DAILY_MARKER = 'wetrack/daily-automation.json'
 
 /**
- * The coordinator prompt.
+ * 功能：生成协调会话提示词。
  *
- * The main conversation reads the list, delegates every defect to a subagent and only
- * reports what came back — it never reads the code itself. The wording matters: an
- * earlier prompt asked for "a few directed searches" before delegating, and the model
- * spent twenty rounds searching on its own before it ever dispatched anything.
+ * 主会话只读清单、把每个缺陷委派给子 Agent、汇报返回结果——自己不读代码。
+ * 措辞有讲究：早期版本让模型「委派前先做几次定向检索」，结果模型自己搜了
+ * 二十轮才派发。现在明确「只做调度与监控」。
+ * @returns 多行拼接的协调提示词，内嵌 analysisProcedure('own') 规程要求子 Agent 原样执行
  */
 export function wetrackDailyCoordinatorPrompt(): string {
   return [
@@ -50,7 +48,10 @@ export function wetrackDailyCoordinatorPrompt(): string {
   ].join('\n')
 }
 
-/** Whether the operator has already had this task provisioned once. */
+/**
+ * 功能：检查任务是否已开通过。
+ * @returns 标记文件存在且 provisioned === true 时为 true；文件缺失或损坏视为未开通
+ */
 export async function wetrackDailyProvisioned(dataDir: string): Promise<boolean> {
   try {
     const raw = JSON.parse(await readFile(join(dataDir, WETRACK_DAILY_MARKER), 'utf8')) as { provisioned?: unknown }
@@ -60,7 +61,7 @@ export async function wetrackDailyProvisioned(dataDir: string): Promise<boolean>
   }
 }
 
-/** Records that the task was provisioned, so a deletion is not undone by a restart. */
+/** 写入「已开通」标记，确保运营者删除任务后重启不会自动恢复。 */
 export async function markWetrackDailyProvisioned(dataDir: string): Promise<void> {
   const target = join(dataDir, WETRACK_DAILY_MARKER)
   await mkdir(join(dataDir, 'wetrack'), { recursive: true, mode: 0o700 })

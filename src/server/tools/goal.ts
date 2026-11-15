@@ -17,43 +17,50 @@ import {
 import { Type } from '@earendil-works/pi-ai'
 import { resolveToolRoute, toolRouteInstruction, type ToolCatalog, type ToolRoute } from '../conversation/tool-routing.ts'
 
-/** DSH phases of one goal; `complete` is terminal and the UI hides the bar for it. */
+/** DSH 目标的阶段；`complete` 是终态，UI 对它隐藏目标条。 */
 export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete'
 
-/** One goal as the conversation document stores it. Type alias, not interface: Pi's JsonObject constraint. */
+/** 会话文档中存储的一个目标。用 type alias 而非 interface：受 Pi 的 JsonObject 约束。 */
 export type GoalState = {
   id: string
-  /** CAS token: every accepted content mutation bumps it; automatic goal rounds do not. */
+  /** CAS 令牌：每次被接受的内容变更都会加一；自动续跑轮不加。 */
   revision: number
   objective: string
   phase: GoalPhase
-  /** Automatic continuation rounds this goal may start; the first human turn does not count. */
+  /** 该目标可启动的自动续跑轮数；第一轮人工回合不计入。 */
   maxGoalRounds: number
-  /** Continuation rounds already started; only `applyGoalRound` moves it, and only forward. */
+  /** 已启动的续跑轮数；只有 `applyGoalRound` 会移动它，且只增不减。 */
   roundsStarted: number
   blockedReason?: string
   createdAt: number
   updatedAt: number
 }
 
+/** Goals 文档的值形状：当前目标或 null。 */
 export type GoalDocValue = { goal: GoalState | null }
 
+/** 自动续跑轮数的默认值。 */
 export const DEFAULT_MAX_GOAL_ROUNDS = 10
+/** 自动续跑轮数的上限。 */
 export const MAX_GOAL_ROUNDS_LIMIT = 50
+/** 目标描述文本的最大字符数。 */
 const MAX_OBJECTIVE_LENGTH = 2000
 
+/** 三个目标工具名。 */
 export const GOAL_TOOL_NAMES = ['get_goal', 'create_goal', 'update_goal'] as const
 
+/** 目标扩展的可选授权门：创建与续跑分别检查。 */
 export type GoalToolOptions = {
   canCreate?: (id: ConversationId, context: Context) => Promise<boolean>
   canContinue?: (id: ConversationId, context: Context) => Promise<boolean>
 }
 
+/** 计划模式开启时创建目标的报错文案。 */
 const PLAN_MODE_ERROR = 'Goal creation is unavailable while plan mode is active.'
 
 /**
- * Conversation-scoped goal snapshot. `projectConversation` reads it into `ConversationDetail.goal`;
- * the `onYield` hook continues the run from it; `update_goal`/`create_goal` mutate it under CAS.
+ * 会话作用域的目标快照。`projectConversation` 把它读进 `ConversationDetail.goal`；
+ * `onYield` 钩子依据它续跑；`update_goal`/`create_goal` 在 CAS 保护下修改它。
  */
 export const Goals = defineDoc<GoalDocValue>({
   kind: 'pi-web.goal',
@@ -64,15 +71,16 @@ export const Goals = defineDoc<GoalDocValue>({
   initial: () => ({ goal: null }),
 })
 
-/** Who asks for an update: the human (UI route) may edit/pause/resume; the model may only complete/report-blocked. */
+/** 更新请求的发起方：人类（UI 路由）可编辑/暂停/恢复；模型只能报告完成或受阻。 */
 export type GoalActor = 'human' | 'model'
 
-/** Actions the goal routes and tools accept; `clear` removes the goal and is human-only. */
+/** 目标路由与工具接受的动作；`clear` 移除目标且仅限人类。 */
 export type GoalAction = 'edit' | 'pause' | 'resume' | 'complete' | 'blocked' | 'clear'
 
-/** This host handles pause/resume/edit through user controls; the model reports completion or blockers. */
+/** 本宿主用用户控件处理暂停/恢复/编辑；模型报告完成或阻塞。 */
 const MODEL_ACTIONS: readonly GoalAction[] = ['complete', 'blocked']
 
+/** 一次目标更新的输入：目标 id、CAS revision、动作与可选字段。 */
 export type GoalUpdateInput = {
   goalId: string
   revision: number
@@ -82,37 +90,49 @@ export type GoalUpdateInput = {
   maxGoalRounds?: number
 }
 
+/** 目标更新结果：成功带新目标，失败带错误信息。 */
 export type GoalUpdateOutcome =
   | { ok: true; goal: GoalState | null }
   | { ok: false; error: string }
 
-/** Normalize an objective: trimmed, non-empty, bounded. `undefined` means invalid. */
+/**
+ * 功能：规范化目标描述：trim、非空、限长。
+ * @param value 原始目标描述。
+ * @returns 规范化后的描述；无效（空或超长）时 undefined。
+ */
 export function cleanObjective(value: string | undefined): string | undefined {
   const objective = (value ?? '').trim()
   if (objective === '' || objective.length > MAX_OBJECTIVE_LENGTH) return undefined
   return objective
 }
 
-/** Normalize `maxGoalRounds`: a positive integer up to {@link MAX_GOAL_ROUNDS_LIMIT}. */
+/** 功能：规范化 `maxGoalRounds`：1 到 {@link MAX_GOAL_ROUNDS_LIMIT} 的正整数，无效时 undefined。 */
 export function cleanMaxGoalRounds(value: number | undefined): number | undefined {
   if (value === undefined) return undefined
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_GOAL_ROUNDS_LIMIT) return undefined
   return value
 }
 
+/** 创建目标的输入；id 预先生成以保持纯函数确定性，工具侧传 `randomUUID()`。 */
 export type GoalCreateInput = {
-  /** Pre-generated so the pure helper stays deterministic; the tool passes `randomUUID()`. */
   id: string
   objective: string
   maxGoalRounds?: number
 }
 
+/** 目标创建结果：成功带新目标，失败带错误信息。 */
 export type GoalCreateOutcome =
   | { ok: true; goal: GoalState }
   | { ok: false; error: string }
 
 /**
- * Create a goal. Refused while an unfinished goal exists so an objective cannot be silently replaced mid-flight.
+ * 功能：创建目标。存在未完成目标时拒绝，避免目标在推进途中被悄悄替换。
+ * 输入校验：objective 经 cleanObjective；maxGoalRounds 经 cleanMaxGoalRounds（缺省用
+ * 默认值）；新目标 revision 为 1、phase 为 active。
+ * @param current 当前目标（可为 null/undefined）。
+ * @param input 创建输入。
+ * @param now 当前时间戳。
+ * @returns 创建结果。
  */
 export function applyGoalCreate(current: GoalState | null | undefined, input: GoalCreateInput, now: number): GoalCreateOutcome {
   if (current && current.phase !== 'complete') {
@@ -143,9 +163,15 @@ export function applyGoalCreate(current: GoalState | null | undefined, input: Go
 }
 
 /**
- * Apply one update against the committed goal. Every accepted mutation bumps `revision` (the CAS
- * token the model must echo); `clear` removes the goal. Permission split: `edit`, `pause`, `resume`
- * and `clear` are human requests, `complete` and `blocked` are the model's own reports.
+ * 功能：对已提交的目标应用一次更新。每次被接受的变更都会加 `revision`（模型必须回
+ * 传的 CAS 令牌）；`clear` 移除目标。权限划分：`edit`/`pause`/`resume`/`clear` 属于
+ * 人类请求，`complete`/`blocked` 是模型自己的报告。
+ * 输入校验：无目标、goalId 不匹配、revision 过期、模型越权动作分别拒绝；各动作还有
+ * 独立的阶段约束（完成的目标不可编辑/暂停/恢复/报阻塞）。
+ * @param current 当前目标。
+ * @param input 更新输入。
+ * @param options actor（human/model）与时间戳。
+ * @returns 更新结果。
  */
 export function applyGoalUpdate(
   current: GoalState | null | undefined,
@@ -170,7 +196,7 @@ export function applyGoalUpdate(
   }
   const mutate = (patch: Partial<GoalState>): { ok: true; goal: GoalState } => {
     const next: GoalState = { ...current, ...patch, revision: current.revision + 1, updatedAt: options.now }
-    // Cleared reasons leave no key behind; the document stays strict JSON.
+    // 清空的原因字段不留键；文档保持严格 JSON。
     if (next.blockedReason === undefined) delete next.blockedReason
     return { ok: true, goal: next }
   }
@@ -208,10 +234,12 @@ export function applyGoalUpdate(
 }
 
 /**
- * Start one automatic goal round: increments `roundsStarted` by one and refreshes `updatedAt`.
- * `revision` deliberately stays put — round counting is not a content mutation, so a model's
- * just-read CAS token keeps matching across continuations. Not `active`, or a doc without a goal:
- * the input is returned unchanged.
+ * 功能：启动一次自动续跑轮：roundsStarted 加一并刷新 updatedAt。
+ * 内部逻辑：`revision` 有意保持不动——轮数计数不是内容变更，模型刚读的 CAS 令牌在
+ * 续跑间持续匹配。目标不存在或不是 active 时原样返回输入。
+ * @param docValue Goals 文档值。
+ * @param now 当前时间戳。
+ * @returns 计数后的文档值。
  */
 export function applyGoalRound(docValue: GoalDocValue | undefined, now: number): GoalDocValue {
   const goal = docValue?.goal
@@ -220,10 +248,12 @@ export function applyGoalRound(docValue: GoalDocValue | undefined, now: number):
 }
 
 /**
- * The continuation prompt for the `onYield` hook, or `undefined` when the run must end.
- * Continues only while the goal is `active` and fewer than `maxGoalRounds` rounds have started;
- * `roundsStartedSoFar` is read from the committed document (memos do not cross generations).
- * The text carries the round number so the transcript stays legible without extra state.
+ * 功能：生成 `onYield` 钩子的续跑提示；必须结束运行时返回 undefined。
+ * 内部逻辑：仅在目标 active 且已启动轮数小于 maxGoalRounds 时继续；roundsStartedSoFar
+ * 从已提交文档读取（memo 不跨代传递）。文本带轮次编号，让会话记录无需额外状态即可读。
+ * @param docValue Goals 文档值。
+ * @param roundsStartedSoFar 已提交文档中的已启动轮数。
+ * @returns 续跑提示或 undefined。
  */
 export function goalContinuation(docValue: GoalDocValue | undefined, roundsStartedSoFar: number): { continue: string } | undefined {
   const goal = docValue?.goal
@@ -241,12 +271,13 @@ export function goalContinuation(docValue: GoalDocValue | undefined, roundsStart
   }
 }
 
-/** A question or plan review still waiting for the user, in the shared interactions table. */
+/** 功能：判断共享 interactions 表里是否仍有待用户处理的提问或计划审阅。 */
 export function awaitingUser(table: Record<string, unknown> | undefined): boolean {
   return Object.values(table ?? {}).some(record =>
     typeof record === 'object' && record !== null && (record as { status?: unknown }).status === 'pending')
 }
 
+/** 解析三个目标工具在当前 agent 下的路由（direct/codemode/unavailable）。 */
 function goalToolRoutes(agent: ToolCatalog): Record<(typeof GOAL_TOOL_NAMES)[number], ToolRoute> {
   return Object.fromEntries(GOAL_TOOL_NAMES.map(name => [
     name,
@@ -254,10 +285,18 @@ function goalToolRoutes(agent: ToolCatalog): Record<(typeof GOAL_TOOL_NAMES)[num
   ])) as Record<(typeof GOAL_TOOL_NAMES)[number], ToolRoute>
 }
 
+/** 生成单个目标工具的路由调用说明；不可调用时 undefined。 */
 function goalToolInstruction(name: (typeof GOAL_TOOL_NAMES)[number], route: ToolRoute): string | undefined {
   return toolRouteInstruction(name, route)
 }
 
+/**
+ * 功能：运行授权检查回调；未配置视为允许，回调抛错视为拒绝。
+ * @param check 可选的检查回调。
+ * @param id 会话 id。
+ * @param context 执行上下文。
+ * @returns 是否允许。
+ */
 async function allowed(
   check: GoalToolOptions['canCreate'] | GoalToolOptions['canContinue'] | undefined,
   id: ConversationId,
@@ -271,7 +310,12 @@ async function allowed(
   }
 }
 
-/** Render goal guidance for every request, limited to the routes currently exposed to the model. */
+/**
+ * 功能：创建 goal-policy section：按当前路由与权限渲染目标使用指引。
+ * 内部逻辑：计划模式开启时只输出规划约束；按目标存在与否/阶段分别给出创建、推进、
+ * 更新或等待恢复的指引；create/update 工具不可用或未获授权时明确告知模型不得声称
+ * 已设置/更改目标。
+ */
 function createGoalSection(options: Required<GoalToolOptions>) {
   return section('goal-policy', async (input, context) => {
     const [doc, plan] = await Promise.all([
@@ -336,29 +380,32 @@ function createGoalSection(options: Required<GoalToolOptions>) {
 }
 
 /**
- * The hook runtime actually hands `commit` to hooks (the generation task passes its own runtime),
- * while the declared `HookApi` surface only promises committed reads and memos. The goal hook needs
- * the atomic write to keep the round count exact, so it narrow-casts to this shape.
+ * runtime 实际把 `commit` 交给钩子（generation task 传自己的 runtime），而声明的
+ * `HookApi` 面只承诺已提交读取与 memo。目标钩子需要原子写来保持轮数精确，因此窄化
+ * 成本类型。
  */
 type CommittingHookApi = HookApi & {
   commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>
 }
 
 /**
- * DSH's goal-round driver as Pi's `onYield` hook: after a final answer, while the goal is active and
- * under `maxGoalRounds`, append one continuation user message and keep the run going. The round is
- * bumped inside the same commit that decides to continue, so two generations can never double-count;
- * a pause/clear that landed since the snapshot wins and stops the continuation.
+ * 功能：创建目标续跑钩子（DSH 的 goal-round 驱动，作为 Pi 的 `onYield`）：最终答复之后，
+ * 目标 active 且未达 maxGoalRounds 时，追加一条续跑用户消息让运行继续。
+ * 边界/权限：轮数自增与"决定续跑"在同一个 commit 内，两代进程不可能重复计数；
+ * 计划模式或快照后落下的暂停/清除以已提交文档为准并终止续跑；有等待用户的提问/审阅
+ * 时不再推进（续跑会在答复后重新评估）。
+ * @param canContinue 续跑授权检查。
+ * @returns 挂在 GenerationTask 上的 hook。
  */
 function createGoalHook(canContinue: GoalToolOptions['canContinue']) {
   return hook(GenerationTask, {
     onYield: async (_answer, api, context) => {
       const plan = await api.snapshot(Plans, api.conversationId, context)
       if (plan?.active === true || !await allowed(canContinue, api.conversationId, context)) return undefined
-      // DSH's ask_user_question blocks, so its driver never sees an idle agent with an open question.
-      // Here the question ends the turn instead; continuing now would push past the user's answer.
+      // DSH 的 ask_user_question 会阻塞，其驱动不会看到"有空闲 agent + 未决问题"的状态。
+      // 这里问题直接结束本轮；此刻续跑会越过用户的答复。
       if (awaitingUser(await api.snapshot(Interactions, api.conversationId, context))) return undefined
-      // Cheap committed read first: most final answers end the run and never commit.
+      // 先做一次廉价的已提交读取：大多数最终答复就此结束运行，根本不会走到 commit。
       const snapshot = await api.snapshot(Goals, api.conversationId, context)
       if (goalContinuation(snapshot, snapshot?.goal?.roundsStarted ?? 0) === undefined) return undefined
       let continuation: string | undefined
@@ -377,17 +424,19 @@ function createGoalHook(canContinue: GoalToolOptions['canContinue']) {
   })
 }
 
-/** Backwards-compatible default hook; the runtime factory supplies its own authorization gate. */
+/** 向后兼容的默认钩子；runtime 工厂提供自己的授权门。 */
 export const goalHook = createGoalHook(undefined)
 
+/** 生成工具 details：目标的浅拷贝或 null。 */
 const goalDetails = (goal: GoalState | null) => ({ goal: goal ? { ...goal } : null })
 
+/** 目标的一行摘要：id、阶段（含阻塞原因）、轮数与 revision。 */
 function goalSummary(goal: GoalState): string {
   const blocked = goal.phase === 'blocked' && goal.blockedReason ? ` (blocked: ${goal.blockedReason})` : ''
   return `id ${goal.id}, ${goal.phase}${blocked}; rounds ${goal.roundsStarted}/${goal.maxGoalRounds}; revision ${goal.revision}`
 }
 
-/** DSH's `get_goal` as a Pi tool: read the conversation document and report the current state. */
+/** DSH 的 `get_goal` 以 Pi 工具呈现：读取会话文档并报告当前状态。 */
 const getGoalTool = defineTool({
   name: 'get_goal',
   description: [
@@ -396,6 +445,7 @@ const getGoalTool = defineTool({
     '没有设置目标时，按当前任务和可用的目标规则继续。',
   ].join(' '),
   parameters: Type.Object({}),
+  /** 功能：读取当前目标快照；无目标时给出提示文本。 */
   execute: async (_args, api, context) => {
     const doc = await api.snapshot(Goals, api.conversationId, context)
     const goal = doc?.goal ?? null
@@ -406,7 +456,7 @@ const getGoalTool = defineTool({
   },
 })
 
-/** DSH's `create_goal` as a Pi tool: one unfinished goal per conversation, stored in the document. */
+/** DSH 的 `create_goal` 以 Pi 工具呈现：每会话一个未完成目标，存于文档。 */
 function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
   return defineTool({
     name: 'create_goal',
@@ -419,6 +469,11 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
       objective: Type.String(),
       max_goal_rounds: Type.Optional(Type.Number()),
     }),
+    /**
+     * 功能：创建目标。
+     * 输入校验/权限：先过 canCreate 授权门；计划模式开启（快照与事务内各查一次）拒绝；
+     * 参数先经 applyGoalCreate 纯校验再开写事务，事务内二次应用以真实文档状态裁决。
+     */
     execute: async (args, api, context) => {
       if (!await allowed(canCreate, api.conversationId, context)) {
         throw new Error('Goal creation is unavailable for this conversation.')
@@ -430,7 +485,7 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
         objective: args.objective,
         ...(args.max_goal_rounds === undefined ? {} : { maxGoalRounds: args.max_goal_rounds }),
       }
-      // Reject invalid arguments before opening a write transaction.
+      // 在打开写事务之前拒绝非法参数。
       const validated = applyGoalCreate(null, input, Date.now())
       if (!validated.ok) throw new Error(validated.error)
       const goal = await api.commit(async (tx) => {
@@ -450,7 +505,7 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
   })
 }
 
-/** DSH's `update_goal` as a Pi tool: CAS on revision, phase changes, model limited to complete/blocked. */
+/** DSH 的 `update_goal` 以 Pi 工具呈现：revision 做 CAS、阶段变更，模型仅限 complete/blocked。 */
 const updateGoalTool = defineTool({
   name: 'update_goal',
   description: [
@@ -463,6 +518,11 @@ const updateGoalTool = defineTool({
     action: Type.Union([Type.Literal('complete'), Type.Literal('blocked')]),
     blocked_reason: Type.Optional(Type.String()),
   }),
+  /**
+   * 功能：报告目标完成或受阻（模型专用动作）。
+   * 输入校验：事务内经 applyGoalUpdate 以 actor=model 裁决——goalId/revision 不匹配、
+   * blocked 缺 reason、越权动作都会被拒绝。
+   */
   execute: async (args, api, context) => {
     const goal = await api.commit(async (tx) => {
       const doc = await tx.doc(Goals, api.conversationId)
@@ -483,7 +543,13 @@ const updateGoalTool = defineTool({
   },
 })
 
-/** DSH's goal tools, policy section and continuation hook with runtime-owned authorization gates. */
+/**
+ * 功能：装配 goal 扩展（DSH 目标），贡献 3 个工具（get_goal / create_goal /
+ * update_goal）、1 个 section（goal-policy 目标使用指引）与 1 个 hook
+ * （onYield 自动续跑驱动），授权门由 runtime 注入。
+ * @param options 可选的 canCreate / canContinue 授权回调。
+ * @returns 名为 `goal` 的扩展。
+ */
 export function createGoalExtension(options: GoalToolOptions = {}): Extension {
   const activeOptions: Required<GoalToolOptions> = {
     canCreate: options.canCreate ?? (async () => true),
@@ -498,7 +564,7 @@ export function createGoalExtension(options: GoalToolOptions = {}): Extension {
   })
 }
 
-/** Existing standalone default; runtime integrations should use `createGoalExtension`. */
+/** 既有的独立默认实例；runtime 集成应改用 `createGoalExtension`。 */
 export const GoalExtension: Extension = createGoalExtension()
 
 export default GoalExtension

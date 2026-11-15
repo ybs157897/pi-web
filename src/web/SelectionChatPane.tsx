@@ -6,27 +6,35 @@ import { markdownLabels } from './render-labels.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './SelectionChatPane.module.css'
 
+/** 侧聊中的一条消息：role 区分用户气泡与助手 Markdown 回复。 */
 export interface SideChatMessage { role: 'user' | 'assistant'; text: string }
 
+/** SelectionChatPane 的属性定义：会话标识、消息流、发送回调与引用芯片状态。 */
 export interface SelectionChatPaneProps {
-  /** The lightweight conversation this tab renders; read by the shell's tab identity. */
+  /** 本标签页渲染的轻量会话 id；外壳以它作为标签页身份。 */
   conversationId: string
-  /** The tab's label, e.g. 「辅助对话 1」. */
+  /** 标签页标题，如「辅助对话 1」。 */
   title: string
   messages: readonly SideChatMessage[]
-  /** True while the side conversation is answering; sending is blocked and a busy row shows. */
+  /** 侧聊正在回答时为 true：禁止发送并显示忙碌行。 */
   busy: boolean
   onSend: (text: string) => void
-  /** A transcript selection waiting to ride the next send; shown as a removable reference chip. */
+  /** 等待随下一条消息一起发送的正文选区，以可移除的引用芯片展示。 */
   quotedText?: string
-  /** Clears the pending quote chip. */
+  /** 清除待发送的引用芯片。 */
   onDismissQuote?: () => void
 }
 
 /**
- * One lightweight quoted-selection conversation, rendered as an inspector tab: a title bar,
- * a chat feed (user bubbles, assistant markdown) and a small composer below. The feed itself
- * is supplied by `useSideConversation`; this component stays a pure presenter.
+ * 功能：一个轻量的「选中文本问答」侧聊会话，作为 Inspector 标签页渲染：
+ * 顶部标题栏、中部消息流（用户气泡 + 助手 Markdown）与底部小型输入区。
+ * 消息流数据由 `useSideConversation` 提供，本组件保持纯展示。
+ * @param props conversationId/title 会话标识与标签页标题；messages 消息列表；
+ *              busy 是否正在回复（禁发 + 忙碌提示行）；onSend 发送文本回调；
+ *              quotedText/onDismissQuote 待发送引用芯片及其清除回调。
+ * 内部逻辑：draft 驱动输入框，高度随内容自适应（38–100px，约四行）；
+ * messages/busy 变化时把消息流滚动到底部保持最新轮次可见；submit 校验非空且非
+ * busy 后回调 onSend 并清空草稿；Enter（无 Shift、非输入法组合态）发送。
  */
 export default function SelectionChatPane({ conversationId, title, messages, busy, onSend, quotedText, onDismissQuote }: SelectionChatPaneProps) {
   const { t } = useUiPreferences()
@@ -34,25 +42,27 @@ export default function SelectionChatPane({ conversationId, title, messages, bus
   const feed = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLTextAreaElement>(null)
   const canSend = draft.trim() !== '' && !busy
-  // The composer grows with its draft up to four lines, like the main composer.
+  // 输入框随草稿内容增高，最多约四行，与主输入框行为一致。
   useEffect(() => {
     const element = input.current
     if (element === null) return
     element.style.height = 'auto'
     element.style.height = `${Math.min(Math.max(element.scrollHeight, 38), 100)}px`
   }, [draft])
-  // Keep the newest turn in view while answers stream in.
+  // 回答流式输出期间保持最新一轮在可视范围内。
   useEffect(() => {
     const element = feed.current
     if (element === null) return
     element.scrollTop = element.scrollHeight
   }, [messages, busy])
+  /** 提交当前草稿：非空且非 busy 时回调 onSend 并清空输入框。 */
   const submit = (): void => {
     const text = draft.trim()
     if (text === '' || busy) return
     onSend(text)
     setDraft('')
   }
+  /** 输入框按键：Enter（非 Shift、非输入法组合态）直接发送，其余按键正常输入。 */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()

@@ -8,6 +8,17 @@ import css from './ReasoningBlock.module.css'
 
 const TICK_MS = 1000
 
+/**
+ * 功能：模型思考过程的折叠块（对应 host DTO 的 reasoning 块）：标题随状态切换「正在思考/思考」，
+ * 收起时显示流式摘要或耗时，展开显示思考全文。
+ * @param id 思考块 id（同时是 useProcessExpansion 的记忆键）
+ * @param text 思考全文
+ * @param streaming 是否仍在流式生成
+ * @param redacted 模型隐藏了思考内容（显示占位文案）
+ * @param preview 收起态是否显示最新一行摘要
+ * @param t 双语标签函数
+ * 内部逻辑：耗时计时——流式开始记 startedAt，展开时每秒 tick 更新，结束（streaming 变 false）冻结耗时；历史会话无开始时间，耗时显示「持续了几秒」；收起且流式时不启动定时器，避免隐藏内容每秒重渲染；展开状态经 useProcessExpansion 跨重挂载记忆。
+ */
 export function ReasoningBlock({ id, text, streaming, redacted, preview, t }: {
   id: string; text: string; streaming: boolean; redacted: boolean; preview: boolean; t: Translate
 }) {
@@ -50,13 +61,22 @@ export function ReasoningBlock({ id, text, streaming, redacted, preview, t }: {
     </ProcessRow>
   </div>
 }
-/** Latest nonempty line index; a new line remounts the summary text and replays its entrance animation. */
+/**
+ * 功能：取「最后一个非空行」的下标作为摘要内容的 key。
+ * @param text 思考全文
+ * @returns 非空行下标；新行出现时 key 变化会重挂载摘要文本并重放入场动画
+ */
 function reasoningLineKey(text: string): number {
   return text.replace(/\r\n?/gu, '\n').split('\n').findLastIndex(line => line.trim() !== '')
 }
 function DurationSummary({ text }: { text: string }) {
   return <><span className={css.separator} aria-hidden="true">·</span><span className={css.summary}>{text}</span></>
 }
+/**
+ * 功能：收起流式态的单行摘要：横向滚出最新一行，内容超宽时标记 overflow（渲染渐隐边缘）。
+ * @param text 最新非空行文本
+ * @param lineKey 行 key，变化时重挂载触发入场动画
+ */
 function ThoughtSummary({ text, lineKey }: { text: string; lineKey: number }) {
   const viewport = useRef<HTMLSpanElement>(null)
   const [overflow, setOverflow] = useState(false)
@@ -69,6 +89,13 @@ function ThoughtSummary({ text, lineKey }: { text: string; lineKey: number }) {
   }, [text])
   return <><span className={css.separator} aria-hidden="true">·</span><span ref={viewport} className={css.summary} data-overflow={overflow || undefined}><span key={lineKey} className={css.summaryText}>{text}</span></span></>
 }
+/**
+ * 功能：展开态的思考全文滚动区；流式时自动跟随底部（用户上滚即停跟，重新滚到底恢复跟随）。
+ * @param text 思考全文
+ * @param streaming 是否流式（决定是否自动吸底）
+ * @param t 双语标签函数
+ * 内部逻辑：following 标记「是否贴底」（距底 ≤ 8px 视为贴底）；ResizeObserver 监听视口与内容尺寸变化，跟随中就滚到底；data-edges 标记上下渐隐边缘（top/bottom/both/none）。
+ */
 function ThoughtContent({ text, streaming, t }: { text: string; streaming: boolean; t: Translate }) {
   const viewport = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)

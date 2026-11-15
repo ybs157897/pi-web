@@ -22,16 +22,22 @@ const API_OPTIONS = [
   { id: 'google-generative-ai', label: 'Google Generative AI' },
 ]
 
-/** A route id usable as a settings key and as the stem of a credential name. */
+/** 可用作设置键与凭据名前缀的提供商路由 id 规则。 */
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/
 
-/** The two ways the add card gains a provider, matching DSH's segmented control. */
+/** 添加卡的两种添加方式，对应 DSH 的分段控件。 */
 type AddMode = 'catalog' | 'custom'
 
 /**
- * DSH's Models page: one row per configured provider, then one add card with
- * two ways in — adopt a provider the catalog already ships, or declare a
- * custom model API. Only one editor is open at a time.
+ * 功能：DSH 的模型设置页——每个已配置供应商一行，再加一张添加卡，卡内有两种
+ * 添加方式：采纳内置目录自带的供应商，或声明自定义模型 API。同一时间只打开
+ * 一个编辑器。
+ * @param props catalog 模型目录；saving 外部保存中；onSave 提交 ProviderInput；
+ *              onRefresh 刷新目录回调。
+ * 内部逻辑：configured 为用户可触达或已存档的供应商，目录中其余为可采纳项；
+ * 左侧供应商瓦片切换编辑对象，添加卡以 SegmentedControl 切换 catalog/custom
+ * 面板（visited 记录已访问面板避免白屏）；删除仅对 project 来源开放并弹确认框；
+ * 保存成功以 savedName 显示提示。
  */
 export function ModelsPanel({ catalog, saving, onSave, onRefresh }: {
   catalog: ModelCatalog | null
@@ -56,18 +62,23 @@ export function ModelsPanel({ catalog, saving, onSave, onRefresh }: {
   const [deleteFailure, setDeleteFailure] = useState('')
   const picked = addable.find(provider => provider.id === choice) ?? addable[0]
 
+  /** 打开添加卡：目录中有可采纳项时默认 catalog 模式，否则直接进入 custom。 */
   const openAdd = () => {
     const initial: AddMode = addable.length > 0 ? 'catalog' : 'custom'
     setEditing(null); setSavedName(undefined); setDeleteFailure('')
     setAddMode(initial); setVisited(new Set<AddMode>([initial]))
     setChoice(addable[0]?.id); setAddOpen(true)
   }
+  /** 关闭添加卡并退出行内编辑态。 */
   const closeAdd = () => { setAddOpen(false); setEditing(null) }
+  /** 保存成功收尾：关闭添加卡并显示「已保存 x」。 */
   const finish = (name: string) => { closeAdd(); setSavedName(name) }
+  /** 打开/切换某供应商的编辑器（再次点击同一项则收起）。 */
   const openEditor = (id: string) => {
     setAddOpen(false); setSavedName(undefined)
     setEditing(current => current === id ? null : id)
   }
+  /** 确认删除 deleteTarget 指向的供应商并刷新目录；失败写入 deleteFailure。 */
   const remove = async () => {
     if (deleteTarget === undefined || deleting) return
     setDeleting(true); setDeleteFailure('')
@@ -187,6 +198,7 @@ export function ModelsPanel({ catalog, saving, onSave, onRefresh }: {
   </div>
 }
 
+/** 模型目录中一行模型的编辑草稿：行 key、ID/名称、容量文本、输入模态、推理档位与原始字段。 */
 interface ModelDraft {
   key: string
   id: string
@@ -194,20 +206,21 @@ interface ModelDraft {
   contextWindow: string
   maxTokens: string
   input: Array<'text' | 'image'>
-  /** Declared reasoning levels; undefined is how a model says it does not reason. */
+  /** 声明的推理档位；undefined 表示模型不做推理。 */
   levels?: ReasoningEntry[]
-  /** Untouched fields of the stored model, carried back on save. */
+  /** 存储模型中未触碰的字段，保存时原样带回。 */
   base?: ProviderModelInput
 }
 
-/** Levels a model offers when the switch turns on, in escalation order. */
+/** 推理开关打开时模型默认提供的档位（按递进顺序）。 */
 const INITIAL_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
+/** off 档发送空值（null），其余档位直接用档位名作为参数值。 */
 function defaultLevelValue(level: string): string | null {
   return level === 'off' ? null : level
 }
 
-/** DSH accepts a plain count or a K/M suffix for the capacity fields. */
+/** DSH 容量字段接受纯数字或 K/M 后缀（如 131072、256K、1M）。 */
 function parseCapacity(text: string): number | undefined {
   const trimmed = text.trim()
   if (trimmed === '') return undefined
@@ -219,7 +232,7 @@ function parseCapacity(text: string): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-/** Compact capacity text, matching the shipped catalog's own spelling. */
+/** 容量的紧凑文本（与内置目录的写法一致）：整百万 M、整千 K，否则原样。 */
 function formatCapacity(value: number | undefined): string {
   if (value === undefined) return ''
   if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`
@@ -227,6 +240,7 @@ function formatCapacity(value: number | undefined): string {
   return String(value)
 }
 
+/** 把存储的模型输入转为编辑草稿：容量留空表示沿用 base，名称与 ID 相同时视作未命名。 */
 function draftFromModel(model: ProviderModelInput): ModelDraft {
   const levels = draftReasoningLevels(model)
   return {
@@ -241,11 +255,13 @@ function draftFromModel(model: ProviderModelInput): ModelDraft {
   }
 }
 
+/** 供应商名首字符（大写）作为瓦片图标；空名回退 ?。 */
 function providerInitial(name: string): string {
   const trimmed = name.trim()
   return trimmed === '' ? '?' : Array.from(trimmed)[0]!.toLocaleUpperCase()
 }
 
+/** 判断是否为合法的 http/https 地址。 */
 function isHttpUrl(value: string): boolean {
   try {
     const protocol = new URL(value).protocol
@@ -256,10 +272,18 @@ function isHttpUrl(value: string): boolean {
 }
 
 /**
- * One provider's editor: the write-only API key first, then the curated
- * fields behind DSH's "customized settings" disclosure, and the model
- * directory. A custom route's create form shows the same fields directly
- * because its identity and protocol cannot be defaulted.
+ * 单个供应商的编辑器：先是只写的 API 密钥输入，随后是 DSH「自定义设置」折叠里的
+ * 精选字段与模型目录。自定义路由的创建表单直接展示同一组字段——它的身份与协议
+ * 无法给出默认值。
+ * @param props provider 待编辑供应商（create 时缺省）；catalog 模型目录；
+ *              saving 外部保存中；create 是否为新建表单；hideTitle 隐藏标题行；
+ *              onSave 提交 ProviderInput；onCancel 取消回调；onSaved 保存成功回调；
+ *              onRefresh 刷新目录回调。
+ * 内部逻辑：加载时经 api.getProvider 初始化草稿；requestDraft（baseUrl/协议/模型行）
+ * 的每次变更都递增版本并写入 provider-editor-state，未保存时禁用「测试连接/获取模型」；
+ * discover/test 以活动 id + 版本号防过期响应；模型删除即保存（removeModel 直接落盘）；
+ * save 校验 ID 规则/重名/地址/模型 ID 重复/容量格式后组装 ProviderInput 提交，
+ * thinkingLevelMap 由推理开关独占（关=移除，开=写入 pin 后的档位）。
  */
 function ProviderEditor({ provider, catalog, saving, create = false, hideTitle = false, onSave, onCancel, onSaved, onRefresh }: {
   provider?: ProviderSummary
@@ -303,6 +327,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
   }
   const clearCheckFeedback = () => setCheckState(current => clearProviderEditorFeedback(current))
   const showFormError = (message: string) => setCheckState(current => setProviderEditorFeedback(current, { tone: 'error', message }))
+  /** 应用服务端返回的配置：初始化各字段草稿并把请求基线写入检查状态。 */
   const applyConfig = (value: ProviderConfigSummary) => {
     const nextRows = value.models.map(draftFromModel)
     requestVersion.current += 1
@@ -320,17 +345,21 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [create, provider?.id])
+  /** 整体替换模型行草稿并同步请求草稿（触发 dirty 检测）。 */
   const replaceRows = (nextRows: ModelDraft[]) => {
     setRows(nextRows)
     updateRequestDraft(baseUrl, protocol, nextRows)
   }
+  /** 按 rowKey 补丁更新单行模型草稿。 */
   const patchRow = (rowKey: string, patch: Partial<ModelDraft>) => {
     replaceRows(rows.map(row => row.key === rowKey ? { ...row, ...patch } : row))
   }
+  /** 追加模型行：跳过与目录重复的 ID（空 ID 的自定义行保留）。 */
   const addRows = (models: ProviderModelInput[]) => {
     const known = new Set(rows.map(row => row.id).filter(Boolean))
     replaceRows([...rows, ...models.filter(model => model.id === '' || !known.has(model.id)).map(draftFromModel)])
   }
+  /** 从提供商拉取可用模型列表并追加进目录；空结果与失败都有对应反馈。 */
   const discover = async () => {
     if (provider === undefined) return
     const started = beginProviderCheck(checkState, 'discovering')
@@ -352,6 +381,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       if (version === requestVersion.current) setCheckState(current => finishProviderCheck(current, 'discovering', activityId, { tone: 'error', message: cause instanceof Error ? cause.message : t('无法获取模型', 'Could not list models') }))
     }
   }
+  /** 测试供应商连通性，结果以 success/error 反馈条展示。 */
   const test = async () => {
     if (provider === undefined) return
     const started = beginProviderCheck(checkState, 'testing')
@@ -378,6 +408,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
     replaceRows(nextRows)
     void save(undefined, nextRows)
   }
+  /** 校验并提交供应商配置；成功后重置密钥输入、同步保存基线并回调 onSaved。 */
   const save = async (event?: FormEvent, overrideRows?: ModelDraft[]) => {
     event?.preventDefault()
     if (disabled) return
@@ -454,8 +485,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
       setCheckState(current => setProviderEditorFeedback(current, { tone: 'error', message: cause instanceof Error ? cause.message : t('保存失败', 'Could not save provider') }))
     } finally { setPending(false) }
   }
-  // The editor offers every level the API accepts, not just the model's
-  // current directory: a deleted level must be addable again.
+  // 编辑器提供 API 支持的全部档位，而不只是模型当前目录里的档位：被删除的档位必须能再加回来。
   const availableLevels = catalog?.thinkingLevels ?? [...INITIAL_LEVELS]
   const envVars = create ? [] : provider?.envVars ?? []
   const envConfigured = create ? [] : provider?.envConfigured ?? []
@@ -573,7 +603,7 @@ function ProviderEditor({ provider, catalog, saving, create = false, hideTitle =
   </div>
 }
 
-/** The shared model catalog editor used by both provider families. */
+/** 两类供应商共用的模型目录编辑器：模型行列表（编辑弹窗/删除）、获取模型与恢复默认。 */
 function ModelDirectory({ catalog, config, customized, defaults, rows, disabled, discovering, canDiscover, checksDisabled, onRows, onPatch, onRemove, onAdd, onDiscover, onRestore, availableLevels, t }: {
   catalog: ModelCatalog | null
   config: ProviderConfigSummary | null
@@ -650,13 +680,13 @@ function ModelDirectory({ catalog, config, customized, defaults, rows, disabled,
   </section>
 }
 
-/** The levels the editor starts with when the reasoning switch turns on. */
+/** 推理开关打开时编辑器的初始档位（取 INITIAL_LEVELS 中可用的部分）。 */
 function initialReasoningLevels(available: readonly string[]): ReasoningEntry[] {
   return INITIAL_LEVELS.filter(level => available.includes(level))
     .map(level => ({ level, value: defaultLevelValue(level) }))
 }
 
-/** Move one reasoning entry; out-of-range targets leave the order untouched. */
+/** 移动一个推理档位条目；越界目标不改变顺序。 */
 function moveReasoningEntries(entries: readonly ReasoningEntry[], from: number, to: number): ReasoningEntry[] {
   if (from === to || from < 0 || to < 0 || from >= entries.length || to >= entries.length) return [...entries]
   const next = [...entries]
@@ -666,9 +696,8 @@ function moveReasoningEntries(entries: readonly ReasoningEntry[], from: number, 
 }
 
 /**
- * The next level the add button inserts: the first unused level after the
- * highest level already used, so a fresh chip lands at the end of the
- * escalation order even after the user reordered the row.
+ * 「添加档位」按钮要插入的下一个档位：取已使用最高档位之后的第一个未用档位，
+ * 这样即使用户手动重排过行，新 chip 仍落在递进顺序的末尾。
  */
 function nextReasoningLevel(used: readonly string[], available: readonly string[]): string | undefined {
   const highest = Math.max(-1, ...used.map(level => available.indexOf(level)))
@@ -676,7 +705,7 @@ function nextReasoningLevel(used: readonly string[], available: readonly string[
     ?? available.find(level => !used.includes(level))
 }
 
-/** One grouped block inside the model dialog: heading, one-line explanation, controls. */
+/** 模型弹窗内的分组块：标题、一行说明与控件主体。 */
 function ModelSettingsGroup({ group, title, description, children }: {
   group: 'basic' | 'tokens' | 'modalities' | 'capabilities' | 'reasoning'
   title: string
@@ -692,7 +721,7 @@ function ModelSettingsGroup({ group, title, description, children }: {
   </section>
 }
 
-/** A toggle rendered as a bordered option button with its own check indicator. */
+/** 带勾选指示的边框式选项按钮（布尔切换）。 */
 function BooleanModelOption({ label, selected, disabled = false, onToggle }: {
   label: string
   selected: boolean
@@ -710,9 +739,13 @@ function BooleanModelOption({ label, selected, disabled = false, onToggle }: {
 }
 
 /**
- * The chips that order a model's reasoning levels. Each chip carries its wire
- * value underneath: clicking the level swaps it for a select of the levels
- * still free, clicking the value edits the parameter sent for that level.
+ * 排列模型推理档位的 chip 编辑器。每个 chip 底下带着它的线上取值：点击档位名
+ * 换成剩余空闲档位的选择器，点击取值编辑该档位发送的参数。
+ * @param props entries 当前档位条目；available 可选档位全集；disabled 禁用态；
+ *              onChange 档位列表变更回调；t 翻译函数。
+ * 内部逻辑：chip 可拖拽排序或 Alt+左右方向键移动（焦点跟随移动后的档位）；
+ * 点击档位进入行内 select 编辑（Enter 提交、Escape 取消、失焦提交）；
+ * 档位选择只列未被占用的档位（目录外档位保留）；至少保留一个档位。
  */
 function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
   entries: ReasoningEntry[]
@@ -825,7 +858,7 @@ function ReasoningChipEditor({ entries, available, disabled, onChange, t }: {
   </div>
 }
 
-/** The JSON map shown for reasoning wire values; levels without a value are omitted. */
+/** 推理线上取值的 JSON 展示文本；没有取值的档位不出现在映射里。 */
 function reasoningMapText(levels: readonly ReasoningEntry[] | undefined): string {
   if (levels === undefined) return '{}'
   const entries = levels.filter(entry => typeof entry.value === 'string' && entry.value !== '')
@@ -833,10 +866,15 @@ function reasoningMapText(levels: readonly ReasoningEntry[] | undefined): string
 }
 
 /**
- * ZCode's model dialog, mapped onto Pi's model fields: a smart-config switch,
- * the four basic fields, then an "advanced" fold with input types, reasoning
- * levels (chips) and their wire-value map. Edits stay local until Done writes
- * them back into the directory; Cancel discards them.
+ * ZCode 的模型弹窗映射到 Pi 的模型字段：智能配置开关、四个基本字段，以及
+ * 「高级」折叠（输入类型、推理档位 chips 及其线上取值映射）。编辑只在本地，
+ * 「完成」才写回目录，「取消」丢弃。
+ * @param props row 当前模型草稿；position 在目录中的序号；providerId 所属提供商；
+ *              catalog 模型目录（智能配置来源）；availableLevels 可选档位；
+ *              disabled 禁用态；onCommit 提交草稿；onClose 关闭弹窗；t 翻译函数。
+ * 内部逻辑：draft 为 row 的深拷贝；smart 开启时按模型 ID 从内置目录带入推荐
+ * 上下文窗口与档位（adoptRecommended）；mapText 与 draft.levels 双向同步
+ * （applyMap 校验 JSON 对象）；reset 回滚到传入的 row。
  */
 function ModelEditorModal({ row, position, providerId, catalog, availableLevels, disabled, onCommit, onClose, t }: {
   row: ModelDraft
@@ -868,6 +906,7 @@ function ModelEditorModal({ row, position, providerId, catalog, availableLevels,
   const recommended = providerId === undefined || draft.id.trim() === ''
     ? undefined
     : catalog?.models.find(model => model.provider === providerId && model.modelId === draft.id.trim())
+  /** 智能配置采纳：从目录推荐项带入上下文窗口与推理档位（带档位时同步映射文本）。 */
   const adoptRecommended = (): void => {
     if (recommended === undefined) return
     const levels = recommended.thinkingLevels !== undefined
@@ -879,6 +918,7 @@ function ModelEditorModal({ row, position, providerId, catalog, availableLevels,
     })
     if (levels !== undefined) setMapText(reasoningMapText(levels))
   }
+  /** 应用映射文本：合法 JSON 对象时按档位写回取值，非法时提示错误。 */
   const applyMap = (text: string): void => {
     setMapText(text)
     if (draft.levels === undefined) return
@@ -893,6 +933,7 @@ function ModelEditorModal({ row, position, providerId, catalog, availableLevels,
       setMapError(t('需要合法的 JSON 对象，例如 {"low": "low"}。', 'Needs a valid JSON object, e.g. {"low": "low"}.'))
     }
   }
+  /** 重置表单：回滚到打开时的 row 草稿并恢复智能配置开关。 */
   const reset = (): void => {
     const next = cloneRow(row)
     setDraft(next)

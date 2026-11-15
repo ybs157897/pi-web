@@ -5,7 +5,15 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './PersonalizationPanel.module.css'
 
-/** ZCode's personalization editor: one Markdown document, saved into the app home's AGENTS.md. */
+/**
+ * 功能：ZCode 风格的个性化指令编辑面板——单个 Markdown 文档编辑器，
+ * 保存到应用主目录的用户级 AGENTS.md，应用于本机所有工作区。
+ * @param props 无 props。
+ * 内部逻辑：挂载及 locale 变化时经 api.getPersonalization 拉取当前内容（用 active
+ * 标记防止卸载后 setState）；draft 为编辑草稿，used 以 UTF-8 字节数计（TextEncoder），
+ * 超出 limitBytes 时禁止保存并提示精简；dirty 判断是否与已保存内容不同；
+ * save() 调 api.savePersonalization，成功后同步 state/draft 并显示「已保存，后续请求生效」。
+ */
 export default function PersonalizationPanel() {
   const { settings } = useUiPreferences()
   const t = (chinese: string, english: string) => settings.locale === 'en' ? english : chinese
@@ -37,6 +45,7 @@ export default function PersonalizationPanel() {
   const overLimit = used > limit
   const dirty = state !== null && draft !== state.content
 
+  /** 保存草稿到用户级 AGENTS.md：dirty 且未超限时才执行，成功后同步服务端返回。 */
   const save = async () => {
     if (saving || !dirty || overLimit) return
     setSaving(true)

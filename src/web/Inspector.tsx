@@ -25,6 +25,7 @@ import type { SubagentSummary, WorkspaceSummary } from '../shared/types.ts'
 import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
 
+/** Inspector 内嵌查看的文件对象：路径、可选内容/类型/语言/定位行/大小与资源地址。 */
 export interface InspectorFile {
   path: string
   content?: string
@@ -32,9 +33,9 @@ export interface InspectorFile {
   language?: string
   line?: number
   size?: number
-  /** Workspace that owns the path, used to resolve local Markdown images. */
+  /** 该路径所属的工作区，用于解析本地 Markdown 图片。 */
   workspaceId?: string
-  /** Same-origin, workspace-scoped asset URL returned by the server. */
+  /** 服务端返回的同源、工作区范围内的资源 URL。 */
   url?: string
 }
 
@@ -55,22 +56,24 @@ export interface InspectorSubagentDirectory {
   onOpen: (childId: string, title?: string) => void
 }
 
+/** 文件浏览视图的数据：目标工作区、初始目录（空为根）与文件打开回调。 */
 export interface InspectorBrowse {
   workspace: WorkspaceSummary
-  /** The directory the browser opens at; empty means the workspace root. */
+  /** 浏览器初始打开的目录；空串表示工作区根目录。 */
   path?: string
   onOpenFile: (path: string) => void
 }
 
-/** Toast sink shared by the git review pane and its sources. */
+/** Git 审查面板与其来源共享的提示槽。 */
 export interface InspectorGitPane {
   activeSource: GitChangeSourceId
   onSelectSource: (source: GitChangeSourceId) => void
-  /** Last-turn changes synthesized from the conversation's artifacts; undefined means no session context. */
+  /** 由会话工件合成的「上一轮更改」；undefined 表示没有会话上下文。 */
   lastTurnChanges?: readonly LastTurnChange[]
   onNotice: (text: string) => void
 }
 
+/** Inspector 的属性定义：文档/浏览/插件/子智能体数据、多标签外壳状态与全部回调。 */
 export interface InspectorProps {
   file?: InspectorFile | null
   diff?: InspectorDiff | null
@@ -164,7 +167,7 @@ const noop = (): void => {}
 
 const NO_SIDE_PAGES: ReadonlySet<string> = new Set()
 
-/** Append a transcript-owned page host so the inspector shows the same iframe, not a reload. */
+/** 把会话流持有的页面宿主挂进来，让 Inspector 显示同一个 iframe 而不是重新加载。 */
 function PluginPageHostSlot({ pageId, host, hidden, onRelease }: { pageId: string; host: HTMLElement; hidden: boolean; onRelease?: (host: HTMLElement) => void }) {
   const container = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -173,8 +176,8 @@ function PluginPageHostSlot({ pageId, host, hidden, onRelease }: { pageId: strin
     element.appendChild(host)
     return () => {
       if (host.parentElement !== element) return
-      // Keep the iframe connected while the tab closes; detaching and reattaching a frame
-      // reloads it, which would lose the page's local state.
+      // 标签页关闭期间保持 iframe 仍连接在文档里；detach 再 attach 会让 frame 重新加载，
+      // 丢失页面本地状态。
       if (onRelease !== undefined) onRelease(host)
       else element.removeChild(host)
     }
@@ -182,7 +185,16 @@ function PluginPageHostSlot({ pageId, host, hidden, onRelease }: { pageId: strin
   return <div ref={container} className={css.pluginPageHost} hidden={hidden} data-plugin-host-slot={pageId} />
 }
 
-/** Show a workspace file, recorded artifact, submitted plan, workspace browser or plugin page. */
+/**
+ * 功能：右侧 Inspector 面板——查看工作区文件（文本/HTML/PDF/Markdown/图片预览）、
+ * 工具差异、提交的计划、工作区浏览器或插件页面。两种形态：单槽视图（header 带
+ * 视图切换页签）与多标签外壳（tab 栏 + new-tab 启动页 + 右键标签菜单）。
+ * @param props 见 InspectorProps。
+ * 内部逻辑：shellMode 由 tabs/launcher 决定；外壳模式下 header 的关闭按钮关闭当前
+ * 标签（无标签时收起面板），标签右键弹出关闭/关闭其他/全部菜单；各 surface 隐藏时
+ * 保持挂载以保留状态；插件页优先复用会话流的 host（PluginPageHostSlot）而不是开
+ * 第二个 iframe；单槽模式按 view 分派到 PlanPreview/DiffContents/FileContents/浏览器等。
+ */
 export default function Inspector({
   file = null, diff = null, plan = null, browse = null, view, onView, loading = false, error = null,
   pluginPages = [], activePluginPageId, pluginPageHosts = {}, sidePageIds = NO_SIDE_PAGES,
@@ -200,10 +212,10 @@ export default function Inspector({
   const [surfacesOpen, setSurfacesOpen] = useState(false)
   const [surfacesLoading, setSurfacesLoading] = useState(false)
   const surfacesAnchor = useRef<HTMLSpanElement>(null)
-  // The tab context menu is app-level state here because it portals out of the pane.
+  // 标签右键菜单放在组件级状态：它会 portal 到面板之外。
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const tabMenuRef = useRef<HTMLDivElement>(null)
-  // ZCode's shell: any tab, or a reachable launcher, switches the header into a tab strip.
+  // ZCode 外壳：存在任意标签或可触达的启动器时，header 变为标签条。
   const shellMode = tabs.length > 0 || onOpenNewTab !== undefined
   const planView = view === 'plan'
   const pluginView = view === 'plugin' && pluginPages.length > 0
@@ -234,7 +246,7 @@ export default function Inspector({
     document.addEventListener('mousedown', close)
     return () => { document.removeEventListener('mousedown', close) }
   }, [surfacesOpen])
-  // A view switch dismisses the surface menu; it belongs to the tab it was opened from.
+  // 切换视图即收起插件页菜单：菜单只属于打开它的那个页签。
   useEffect(() => { setSurfacesOpen(false) }, [view])
   useEffect(() => {
     if (tabMenu === null) return
@@ -250,6 +262,7 @@ export default function Inspector({
       document.removeEventListener('keydown', key)
     }
   }, [tabMenu])
+  /** 打开/收起「+」插件页面菜单：打开时按需刷新插件 surface 列表。 */
   const toggleSurfaces = (): void => {
     const next = !surfacesOpen
     setSurfacesOpen(next)
@@ -259,6 +272,7 @@ export default function Inspector({
     if (pending instanceof Promise) void pending.finally(() => { setSurfacesLoading(false) })
     else setSurfacesLoading(false)
   }
+  /** 单槽模式的关闭按钮：按当前视图优先关闭子智能体目录/会话/插件页，否则整体关闭。 */
   const closeActive = (): void => {
     if (directoryView && onCloseSubagentDirectory !== undefined) {
       onCloseSubagentDirectory()
@@ -290,12 +304,14 @@ export default function Inspector({
           ? t('关闭文件浏览器', 'Close file browser')
           : planView ? t('关闭计划检查器', 'Close plan inspector') : t('关闭文件检查器', 'Close file inspector')
   if (shellMode) {
-    // In the shell the header close means "close the active tab"; with no tab left it collapses the pane.
+    // 外壳模式下 header 的关闭意味着「关闭当前标签」；没有标签时收起整个面板。
     const activeTab = tabs.find(tab => tab.id === activeTabId)
+    /** 关闭当前激活标签；无标签或回调缺失时退化为整体关闭。 */
     const closeShellActive = (): void => {
       if (activeTab !== undefined && onCloseTab !== undefined) onCloseTab(activeTab.id)
       else onClose()
     }
+    /** 打开某标签的右键菜单，坐标夹取在视口内。 */
     const openTabMenu = (id: string, event: { clientX: number; clientY: number }): void => {
       if (onCloseTab === undefined) return
       setTabMenu({
@@ -433,7 +449,7 @@ export default function Inspector({
         {pluginPages.map(page => {
           const host = pluginPageHosts[page.id]
           const hidden = page.id !== activePluginPageId
-          // An inline card already mounted this page; move its host instead of opening a second iframe.
+          // 会话流的内联卡已经挂载了这个页面；搬移它的宿主，而不是再开一个 iframe。
           return host !== undefined && sidePageIds.has(page.id)
             ? <PluginPageHostSlot key={page.id} pageId={page.id} host={host} hidden={hidden} onRelease={onReleasePluginPageHost} />
             : <PluginUiPane key={page.id} page={page} hidden={hidden}
@@ -463,7 +479,7 @@ export default function Inspector({
   )
 }
 
-/** Everything a tab's content renderer needs; gathered once so the dispatch stays a pure switch. */
+/** 标签内容渲染所需的全部依赖；集中一次收集，让分派保持纯 switch。 */
 interface TabContentDeps {
   active: boolean
   t: (chinese: string, english: string) => string
@@ -487,7 +503,7 @@ interface TabContentDeps {
   launcher?: NonNullable<InspectorProps['launcher']>
 }
 
-/** Route one shell tab to its renderer; every surface keeps its own pane mounted while hidden. */
+/** 把一个外壳标签路由到对应渲染器；隐藏期间每个 surface 都保持自己的面板挂载。 */
 function tabContent(tab: InspectorTab, deps: TabContentDeps): ReactNode {
   const { t, active } = deps
   switch (tab.type) {
@@ -544,7 +560,7 @@ function tabContent(tab: InspectorTab, deps: TabContentDeps): ReactNode {
   }
 }
 
-/** The `new-tab` page: built-in entries up top, recommended plugin apps below a short rule. */
+/** 「新标签页」启动页：上方为内置入口网格，短分隔线下方为推荐的插件应用。 */
 function NewTabLauncher({ launcher }: { launcher: NonNullable<InspectorProps['launcher']> }) {
   const { t } = useUiPreferences()
   const entries = [
@@ -589,6 +605,7 @@ function NewTabLauncher({ launcher }: { launcher: NonNullable<InspectorProps['la
   </div>
 }
 
+/** 差异内容渲染：优先 old+new 双栏 DiffBlock，其次 diff 文本或新增全文，无记录时空态。 */
 function DiffContents({ diff }: { diff: InspectorDiff }) {
   const { t } = useUiPreferences()
   if (diff.oldText !== undefined && diff.newText !== undefined) {
@@ -605,6 +622,9 @@ function DiffContents({ diff }: { diff: InspectorDiff }) {
   return <div className={css.empty}>{t('没有可显示的文件差异', 'No file diff was recorded')}</div>
 }
 
+/** 文件内容渲染：按 MIME/扩展名分派——图片、HTML（预览/源码切换、沙箱 iframe）、
+ * PDF（iframe + 新窗口/下载）、Markdown（预览/源码切换、本地图片按 Markdown 目录解析）、
+ * 文本源码视图；不可内嵌的类型给出打开/下载链接。 */
 function FileContents({ file }: { file: InspectorFile }) {
   const { t } = useUiPreferences()
   const [htmlMode, setHtmlMode] = useState<'preview' | 'source'>('preview')
@@ -612,8 +632,8 @@ function FileContents({ file }: { file: InspectorFile }) {
   const mime = file.mimeType?.split(';')[0]?.trim().toLocaleLowerCase() ?? ''
   const assetUrl = safeWorkspaceAssetUrl(file.url, window.location.href)
   const imageUrl = mime.startsWith('image/') ? safeImageUrl(file.url) : undefined
-  // Local Markdown images are workspace assets, not page URLs. Resolve them
-  // relative to the Markdown file so previews match DSH's document surface.
+  // 本地 Markdown 图片是工作区资源而非页面 URL。按 Markdown 文件所在目录解析相对路径，
+  // 使预览与 DSH 的文档视图一致。
   const pathImages = useMemo(() => {
     if (file.workspaceId === undefined) return undefined
     const directory = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : ''
@@ -700,6 +720,7 @@ function FileContents({ file }: { file: InspectorFile }) {
   </div>
 }
 
+/** 纯文本源码视图：逐行编号的 ReadBlock，支持定位行提示。 */
 function SourceView({ file, t }: { file: InspectorFile; t: (chinese: string, english: string) => string }) {
   const content = file.content ?? ''
   const language = file.language ?? languageFromPath(file.path)
@@ -711,28 +732,34 @@ function SourceView({ file, t }: { file: InspectorFile; t: (chinese: string, eng
   </div>
 }
 
+/** 图片地址安全化：data:image 直通，其余必须是同源工作区资源 URL。 */
 function safeImageUrl(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   if (/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/u.test(value)) return value
   return safeWorkspaceAssetUrl(value, window.location.href)
 }
 
+/** 是否按 HTML 文件渲染（MIME 或扩展名判断）。 */
 function isHtmlFile(file: InspectorFile, mime: string): boolean {
   return mime === 'text/html' || /\.html?$/iu.test(file.path)
 }
 
+/** 是否按 Markdown 文件渲染（MIME 或扩展名判断）。 */
 function isMarkdownFile(file: InspectorFile, mime: string): boolean {
   return mime === 'text/markdown' || /\.(?:md|markdown|mdx)$/iu.test(file.path)
 }
 
+/** 是否按 PDF 文件渲染（MIME 或扩展名判断）。 */
 function isPdfFile(file: InspectorFile, mime: string): boolean {
   return mime === 'application/pdf' || /\.pdf$/iu.test(file.path)
 }
 
+/** 是否为可作纯文本渲染的 MIME 类型（text/* 与常见代码/配置类型）。 */
 function isTextMime(mime: string): boolean {
   return mime.startsWith('text/') || /(?:json|xml|javascript|typescript|yaml|toml|x-sh|x-python|x-rust|x-c|x-c\+\+)/u.test(mime)
 }
 
+/** 从扩展名推断语言名（含 cjs/md/py/rs/sh 等别名），供代码块着色。 */
 function languageFromPath(path: string): string | undefined {
   const extension = path.split('.').at(-1)?.toLocaleLowerCase()
   if (extension === undefined || extension === path.toLocaleLowerCase()) return undefined
@@ -742,6 +769,7 @@ function languageFromPath(path: string): string | undefined {
   return aliases[extension] ?? extension
 }
 
+/** 字节数格式化为 B/KB/MB 文案；非法值返回空串。 */
 function formatFileSize(size: number): string {
   if (!Number.isFinite(size) || size < 0) return ''
   if (size < 1024) return `${size} B`
@@ -749,6 +777,7 @@ function formatFileSize(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** 取路径的文件名（兼容 / 与 \），空路径回退 download。 */
 function baseName(path: string): string {
   return path.split(/[\\/]/u).at(-1) || 'download'
 }

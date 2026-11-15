@@ -6,17 +6,23 @@ import type { TrajectoryCall, TrajectoryRole } from './trajectory-view.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './TrajectoryPane.module.css'
 
+/** TrajectoryPane 的属性定义：会话 id、标题覆盖与全局提示回调。 */
 export interface TrajectoryPaneProps {
   conversationId: string
-  /** Header title override; defaults to the model-call trajectory label. */
+  /** 头部标题覆盖；缺省用「模型调用轨迹」。 */
   title?: string
   onNotice: (text: string) => void
 }
 
 /**
- * The model-call timeline for one conversation: consumes the trajectory export
- * NDJSON (`api.trajectory`) and renders one expandable card per model call,
- * with a header summary, substring filter and expand-all toggle.
+ * 功能：单个会话的模型调用时间线面板——消费轨迹导出 NDJSON（api.trajectory），
+ * 每次模型调用渲染为一张可展开卡片，头部含调用次数/token 汇总、子串过滤框
+ * 与全部展开/收起、刷新按钮。
+ * @param props conversationId 目标会话；title 头部标题覆盖；onNotice 失败时提示。
+ * 内部逻辑：load 拉取 NDJSON 文本，失败时写 error 并经 noticeRef 提示（ref 读取
+ * 不稳定的 onNotice，让 fetch effect 只依赖会话）；cards 由 parseTrajectory +
+ * buildCallCards 派生，expanded 以 Set 记录展开卡片；query 过滤经 matchesCall；
+ * allExpanded 判断是否全部展开，toggleAll 在全展开与全收起间切换。
  */
 export default function TrajectoryPane({ conversationId, title, onNotice }: TrajectoryPaneProps) {
   const { t } = useUiPreferences()
@@ -58,6 +64,7 @@ export default function TrajectoryPane({ conversationId, title, onNotice }: Traj
   )
   const allExpanded = filtered.length > 0 && filtered.every(card => expanded.has(card.index))
 
+  /** 切换单张卡片的展开态。 */
   const toggle = (index: number) => {
     setExpanded(current => {
       const next = new Set(current)
@@ -66,6 +73,7 @@ export default function TrajectoryPane({ conversationId, title, onNotice }: Traj
       return next
     })
   }
+  /** 全部展开/收起：作用于过滤后的可见卡片集合。 */
   const toggleAll = () => {
     setExpanded(allExpanded ? new Set() : new Set(filtered.map(card => card.index)))
   }
@@ -126,6 +134,7 @@ export default function TrajectoryPane({ conversationId, title, onNotice }: Traj
   </section>
 }
 
+/** 单次模型调用卡片：头部为序号/主对话或旁路标记/模型 id/token/时长/时间，展开后显示输入输出明细。 */
 function CallCard({ card, expanded, onToggle }: {
   card: TrajectoryCall
   expanded: boolean
@@ -181,7 +190,7 @@ function CallCard({ card, expanded, onToggle }: {
   </li>
 }
 
-/** Substring filter across model id, purpose, roles text, tool names and output. */
+/** 子串过滤：匹配模型 id、用途、输入消息文本/工具名、输出文本、错误与工具调用参数。 */
 function matchesCall(card: TrajectoryCall, needle: string): boolean {
   if (card.modelId.toLowerCase().includes(needle)) return true
   if (card.purpose?.toLowerCase().includes(needle) === true) return true
@@ -198,6 +207,7 @@ function matchesCall(card: TrajectoryCall, needle: string): boolean {
   return false
 }
 
+/** 按消息角色返回对应的角色标签样式类。 */
 function roleClass(role: TrajectoryRole): string {
   switch (role) {
     case 'system': return css.roleSystem
@@ -207,16 +217,19 @@ function roleClass(role: TrajectoryRole): string {
   }
 }
 
+/** token 数按当前 locale 千分位格式化。 */
 function formatTokens(value: number): string {
   return value.toLocaleString()
 }
 
+/** 时长格式化：1 秒内显示 ms，否则显示一位小数的秒；未知显示 —。 */
 function formatDuration(durationMs: number | null): string {
   if (durationMs === null) return '—'
   if (durationMs < 1000) return `${durationMs}ms`
   return `${(durationMs / 1000).toFixed(1)}s`
 }
 
+/** 时间戳格式化为本地时分的 HH:mm:ss；未知显示 —。 */
 function formatClock(timestamp: number | null): string {
   if (timestamp === null) return '—'
   const date = new Date(timestamp)

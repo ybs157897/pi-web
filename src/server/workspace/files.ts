@@ -5,12 +5,15 @@ import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary } from '../../shared/types.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 
+/** 用户上传的一个附件（Base64 内容）。 */
 export interface AttachmentInput { name: string; mimeType: string; data: string }
+/** 附件保存后的引用（含工作区内相对路径）。 */
 export type AttachmentReference = { name: string; mimeType: string; size: number; path: string }
 
 const MAX_FILE_PREVIEW_BYTES = 8 * 1024 * 1024
 const MAX_FILE_TEXT_BYTES = 2 * 1024 * 1024
 const MAX_SEARCH_FILES = 5_000
+/** 常见扩展名到 MIME 的映射表。 */
 const MIME_BY_EXTENSION: Record<string, string> = {
   '.c': 'text/x-c', '.cc': 'text/x-c++', '.cpp': 'text/x-c++', '.css': 'text/css', '.csv': 'text/csv',
   '.go': 'text/x-go', '.html': 'text/html', '.java': 'text/x-java', '.js': 'text/javascript', '.json': 'application/json',
@@ -21,7 +24,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
 }
 const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'])
 const WINDOWS_DRIVE_PREFIX = /^[A-Za-z]:/
-/** Extension-less text files (`Makefile` has no `extname`, so the extension table never sees it). */
+/** 无扩展名的文本文件（`Makefile` 取不到 extname，扩展名表永远看不到它）。 */
 const TEXT_FILE_NAMES = new Set([
   'makefile', 'dockerfile', 'containerfile', 'justfile', 'procfile', 'rakefile', 'gemfile', 'brewfile', 'vagrantfile',
   'license', 'licence', 'readme', 'notice', 'changelog', 'changes', 'contributing', 'authors', 'contributors',
@@ -30,11 +33,13 @@ const TEXT_FILE_NAMES = new Set([
   '.npmignore', '.npmrc', '.nvmrc', '.prettierrc', '.eslintrc', '.babelrc', '.stylelintrc', '.browserslistrc', '.env',
 ])
 
+/** 判断 target 是否位于 root 内（含等于 root），防路径逃逸。 */
 function isWithin(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/** 判断错误是否为 ENOENT（路径不存在）。 */
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
@@ -54,6 +59,7 @@ async function existing<T>(operation: () => Promise<T>, path: string): Promise<T
   }
 }
 
+/** 清洗上传文件名：取 basename、路径分隔符替换为 `_`、剔除控制字符；空名/点/超 200 字符抛错。 */
 function safeFileName(value: string): string {
   const name = basename(value.split('/').join('_').split(String.fromCharCode(92)).join('_'))
     .split('')
@@ -64,6 +70,7 @@ function safeFileName(value: string): string {
   return name
 }
 
+/** 工作区相对路径安全化：拒绝超长、NUL、反斜杠、绝对路径与盘符；`..` 上跳抛 FORBIDDEN。 */
 function safeRelativePath(path: string): string {
   if (path.length > 2048 || path.includes('\u0000') || path.includes('\\') || isAbsolute(path) || WINDOWS_DRIVE_PREFIX.test(path)) {
     throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
@@ -87,18 +94,22 @@ function platformAbsolutePath(path: string): string | undefined {
 }
 
 /**
- * Turns a requested path into a safe workspace relative path. Tools report the paths
- * of the machine they ran on, so they arrive as absolute paths or with backslash
- * separators; both are mapped back onto the workspace when they point inside it.
- * A path that leaves the workspace keeps the rejection it had before.
+ * 功能：把请求路径转成安全的工作区相对路径。
+ * @param root 工作区根（已 realpath）
+ * @param requested 原始请求路径（工具可能回报绝对路径或反斜杠分隔符）
+ * @param declared 添加工作区时的原始路径，作为第二个可接受的根
+ * @returns 以 `/` 分隔的相对路径
+ * 内部逻辑：反斜杠统一成 `/` 后先判长度与 NUL；按宿主平台解析绝对路径（Windows
+ * 盘符路径只在 win32 上有效，其他平台视为不可解析的名字），指向工作区内（根或
+ * declared 任一命中）就映射回相对路径，逃出工作区保持原拒绝行为。
  */
 export function resolveWorkspacePath(root: string, requested: string, declared?: string): string {
   const normalized = requested.replace(/\\/g, '/')
   if (normalized.length > 2048 || normalized.includes('\u0000')) throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
   const absolute = platformAbsolutePath(normalized)
   if (absolute === undefined) return safeRelativePath(normalized)
-  // The workspace may be addressed by the path it was added with or by its resolved
-  // form, and tools report the former, so both are accepted as the workspace root.
+  // 工作区可能以「添加时的路径」或「resolved 后的路径」被引用，工具回报的是前者，
+  // 所以两个根都接受。
   for (const base of declared === undefined ? [root] : [root, declared]) {
     if (!isWithin(base, absolute)) continue
     return safeRelativePath(relative(base, absolute).split(sep).join('/'))
@@ -106,6 +117,14 @@ export function resolveWorkspacePath(root: string, requested: string, declared?:
   throw new RuntimeError('INVALID_INPUT', '工作区路径无效')
 }
 
+/**
+ * 功能：把相对路径解析为根内的规范绝对路径，逐段拦截符号链接。
+ * @param allowMissingFinal 允许最后一段不存在（保存附件的新文件用）
+ * @returns realpath 后的规范路径； realpath 失败且允许缺失时退回 resolve 结果
+ * 内部逻辑：先安全化相对路径并整体 isWithin 校验；再逐段 lstat——任何一段是符号
+ * 链接即 FORBIDDEN，中间段不是目录报错；最后 realpath 再核一次仍在根内（防根
+ * 自身或尾部链接被换走）。
+ */
 async function checkedPath(root: string, relativePath: string, allowMissingFinal = false): Promise<string> {
   const safePath = safeRelativePath(relativePath)
   const target = resolve(root, safePath)
@@ -133,19 +152,20 @@ async function checkedPath(root: string, relativePath: string, allowMissingFinal
   return canonical
 }
 
+/** 按扩展名/已知文件名推断 MIME；未命中回退 application/octet-stream。 */
 function mimeType(path: string): string {
   if (TEXT_FILE_NAMES.has(basename(path).toLocaleLowerCase())) return 'text/plain'
   return MIME_BY_EXTENSION[extname(path).toLowerCase()] ?? 'application/octet-stream'
 }
 
-/** Bytes above this many are judged by the control-character scan alone. */
+/** 超过该字节数的样本，只靠控制字符扫描判断（不再做 UTF-8 解码验证）。 */
 const TEXT_SNIFF_LIMIT = 8 * 1024
 
 /**
- * Whether an unknown-type file reads as text: no control bytes outside tab/newline/carriage
- * return in the head, and the head decodes as UTF-8. A sample that ends inside a multi-byte
- * sequence would report a replacement character for valid text, so large files decode only
- * up to the last sequence boundary.
+ * 功能：判断未知类型的文件是否按文本读。
+ * 内部逻辑：头部（≤ TEXT_SNIFF_LIMIT）除 tab/换行/回车外不得有控制字节；头部还
+ * 必须以严格 UTF-8 解码通过。样本可能截断在多字节序列中间，会把合法文本误报成
+ * 替换字符，所以大文件只解码到最后一个序列边界为止。
  */
 function looksLikeText(buffer: Buffer): boolean {
   const sample = buffer.subarray(0, Math.min(buffer.length, TEXT_SNIFF_LIMIT))
@@ -163,14 +183,14 @@ function looksLikeText(buffer: Buffer): boolean {
   }
 }
 
-/** The extension table alone cannot name a `Makefile`; content decides the rest. */
+/** 扩展名表叫不出 `Makefile` 这类文件；类型未知时由内容嗅探决定。 */
 function effectiveMimeType(path: string, buffer: Buffer): string {
   const type = mimeType(path)
   if (type !== 'application/octet-stream') return type
   return looksLikeText(buffer) ? 'text/plain' : type
 }
 
-/** Directories that never hold a file a reader would click on. */
+/** 永远不会有读者想点开的目录（构建产物、依赖、缓存）。 */
 const SKIPPED_DIRECTORIES = new Set([
   'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'coverage',
   '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.cache', '.turbo', 'target',
@@ -180,11 +200,12 @@ const MAX_SUFFIX_SCAN = 20_000
 const MAX_SUFFIX_CANDIDATES = 200
 
 /**
- * Finds the workspace files whose path ends with the requested one.
- *
- * The request is a relative path such as `webpush-protocol.html`; a file at
- * `docs/webpush-protocol.html` ends with it. The comparison is on whole path
- * segments, so `a.md` never matches `ba.md`.
+ * 功能：按「路径后缀」在工作区里找请求文件。
+ * @param root 工作区根
+ * @param requested 相对请求路径，如 `webpush-protocol.html`
+ * @returns 匹配的相对路径列表（≤ MAX_SUFFIX_CANDIDATES，按名称排序）
+ * 内部逻辑：BFS 遍历（跳过 SKIPPED_DIRECTORIES 与符号链接），比较用整段路径
+ * （needle 带前导 `/`），因此 `a.md` 不会匹配 `ba.md`；扫描文件数与候选数都有上限。
  */
 async function findBySuffix(root: string, requested: string): Promise<string[]> {
   if (requested === '') return []
@@ -218,20 +239,28 @@ async function findBySuffix(root: string, requested: string): Promise<string[]> 
   return matches.sort((left, right) => left.localeCompare(right))
 }
 
+/** 判断 MIME 是否按文本展示。 */
 function isTextType(type: string): boolean {
   return type.startsWith('text/') || type === 'application/json' || type === 'application/xml' || type === 'application/sql'
 }
 
-/** Serves bounded, canonical workspace reads and stores incoming user files under their conversation's workspace. */
+/** 提供有上限、规范化的工作区读取，并把用户上传文件存进其会话的工作区。 */
 export class WorkspaceFiles {
   constructor(private readonly workspaces: () => readonly WorkspaceSummary[]) {}
 
+  /** 按 ID 查工作区；不存在抛 NOT_FOUND。 */
   workspace(id: string): WorkspaceSummary {
     const item = this.workspaces().find(candidate => candidate.id === id)
     if (!item) throw new RuntimeError('NOT_FOUND', '工作区不存在')
     return item
   }
 
+  /**
+   * 功能：把一个本地目录登记为新工作区（构造 WorkspaceSummary，不落盘）。
+   * @param path 目录路径；不存在或不是目录即抛错
+   * @param name 可选显示名，缺省取目录 basename
+   * @returns 新工作区摘要（随机 UUID 作为 id）；重复路径抛 CONFLICT
+   */
   async addWorkspace(path: string, name?: string, now = Date.now()): Promise<WorkspaceSummary> {
     const canonical = await realpath(resolve(path)).catch(() => {
       throw new RuntimeError('NOT_FOUND', '工作区目录不存在或无法读取')
@@ -244,6 +273,13 @@ export class WorkspaceFiles {
     return { id: randomUUID(), name: normalizedName, path: canonical, createdAt: now, updatedAt: now }
   }
 
+  /**
+   * 功能：列出一层目录；带 query 时改为全工作区模糊搜索（路径包含该词即命中）。
+   * @param id 工作区 ID
+   * @param path 相对目录路径（空为根）
+   * @param query 搜索词（≤ 200 字符，不区分大小写）
+   * @returns 条目列表；无 query 按目录优先排序，有 query 按路径排序，扫描 ≤ 5000 文件、结果 ≤ 500 条
+   */
   async list(id: string, path = '', query?: string): Promise<WorkspaceFileEntry[]> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
@@ -280,6 +316,12 @@ export class WorkspaceFiles {
     return results.sort((left, right) => left.path.localeCompare(right.path))
   }
 
+  /**
+   * 功能：读取一个工作区文件/目录用于预览。
+   * @returns 按类型返回 image（内联 base64）/ text（UTF-8，≤ 2 MiB 且无 NUL）/ binary（base64）/ directory（列目录）
+   * 内部逻辑：路径先经 resolveEntry 兜底后缀匹配；预览上限 8 MiB；目录请求返回
+   * 其内容列表让检查器直接展示。
+   */
   async read(id: string, path: string): Promise<WorkspaceFile> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
@@ -329,6 +371,10 @@ export class WorkspaceFiles {
     return { path, canonical: await checkedPath(root, path) }
   }
 
+  /**
+   * 功能：把工作区文件作为资源读取（图像内联等）。
+   * @returns MIME 与原始字节；只读普通文件且 ≤ 8 MiB，路径同样经后缀兜底
+   */
   async asset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
@@ -341,6 +387,14 @@ export class WorkspaceFiles {
     return { mimeType: effectiveMimeType(resolved.canonical, data), data }
   }
 
+  /**
+   * 功能：把一条消息的附件（Base64）保存到工作区的 `.attachments/<会话ID>/` 下。
+   * @param requestId 请求 ID：哈希后作为文件名前缀，实现幂等——同请求同内容重复提交不报错
+   * @returns 保存后的引用列表
+   * 内部逻辑：最多 8 个、总量 ≤ 16 MiB、单文件 ≤ 8 MiB；校验 MIME 形状与 Base64
+   * 规范性（重编码必须一致）；文件名 `请求哈希前16位-序号-清洗后的原名`；用
+   * O_CREAT|O_EXCL|O_NOFOLLOW 独占写入，EEXIST 时比对已有内容一致才视为重复。
+   */
   async saveAttachments(id: string, conversationId: string, requestId: string, files: readonly AttachmentInput[]): Promise<AttachmentReference[]> {
     if (files.length > 8) throw new RuntimeError('INVALID_INPUT', '单条消息最多附加 8 个文件')
     const workspace = this.workspace(id)
@@ -385,6 +439,7 @@ export class WorkspaceFiles {
     return saved
   }
 
+  /** 列一层目录的普通条目：跳过符号链接，目录排前、其余按名称排序。 */
   private async listDirectory(directory: string, relativeDirectory: string): Promise<WorkspaceFileEntry[]> {
     const entries = await readdir(directory, { withFileTypes: true })
     const result: WorkspaceFileEntry[] = []

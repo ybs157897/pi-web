@@ -21,7 +21,12 @@ import { CHAT_EMPTY_GREETINGS, chatEmptyGreeting, greetingFontSizePx, nextGreeti
 import css from './Composer.module.css'
 
 export interface DraftImage { id: string; file: File; preview: string; data: string; mimeType: string; status: 'reading' | 'ready' | 'error'; error?: string }
+/** 繁忙时的发送模式：排队发送或立即插入（steer）。 */
 export type BusySendMode = 'followUp' | 'steer'
+/**
+ * Composer 的属性定义：输入值与附件、模型目录与当前模型、队列、权限与计划模式，
+ * 以及发送/停止/队列编辑/模型选择等回调。
+ */
 export interface ComposerProps {
   value: string; images: readonly DraftImage[]; catalog: ModelCatalog | null
   model?: { provider: string; modelId: string }; thinkingLevel: ThinkingLevel; busy: boolean; disabled?: boolean
@@ -46,13 +51,14 @@ export interface ComposerProps {
 }
 const LEVEL_NAMES: Record<ThinkingLevel, string> = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 
-/** Human-readable attachment size; DSH shows the extension plus this value. */
+/** 附件大小的可读文案；DSH 展示扩展名加上这个值。 */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)}KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
+/** 取文件扩展名（大写，最长 8 字符）；无扩展名时返回 FILE。 */
 function fileExtension(name: string): string {
   const index = name.lastIndexOf('.')
   return index > 0 && index < name.length - 1 ? name.slice(index + 1).toUpperCase().slice(0, 8) : 'FILE'
@@ -64,7 +70,17 @@ function pluginContextPreview(text: string, max = 80): string {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line
 }
 
-/** DSH's shared hero/docked composer, connected to Pi conversation operations. */
+/**
+ * 功能：DSH 的共享 hero/停靠双形态输入卡，对接 Pi 会话操作——hero 形态是空会话
+ * 首屏（问候语 + 工作区/分支选择），docked 形态是会话底部工具栏：附件、插件上下文
+ * 芯片、输入框、/@/$ 触发的建议面板、模型/权限/计划等工具与用量状态条。
+ * @param props 见 ComposerProps。
+ * 内部逻辑：updateValue 在光标前检测 @/$// 触发符维护 trigger 建议（文件/技能/指令），
+ * 方向键/Enter/Tab 在面板内导航与确认；onKeyDown 遵守输入法守卫（observeComposition）、
+ * 自定义换行快捷键与繁忙时的发送/插入语义；hero 问候语按固定小时滚动，字号随容器
+ * 宽度自适应（ResizeObserver）；document 级拖放计数管理 drop 遮罩；切换到完全权限
+ * 需经风险确认弹窗勾选确认；队列项支持就地编辑与「立即插入」。
+ */
 export default function Composer(props: ComposerProps) {
   const { value, images, catalog, model, thinkingLevel, busy, disabled = false, queue, sendMode, sending,
     onChange, onAddImages, onRemoveImage, onSend, onStop, onRemoveQueue, onSelectModel, onThinkingLevel,
@@ -116,13 +132,13 @@ export default function Composer(props: ComposerProps) {
   const accessIcon = (mode: AccessMode): ReactNode => mode === 'readOnly' ? <PermissionIconReadOnlyRegular size={14} /> : mode === 'workspaceWrite' ? <PermissionIconWorkspaceWriteRegular size={14} /> : <PermissionIconFullAccessRegular size={14} />
 
   useEffect(() => { guard.current = observeComposition(document); return () => { guard.current?.dispose(); guard.current = null } }, [])
-  // ZCode's draft greeting rolls over at fixed hours (ConversationDraftEmptyState.tsx:20-60).
+  // ZCode 的空会话问候语按固定小时切换（ConversationDraftEmptyState.tsx:20-60）。
   useEffect(() => {
     if (!hero) return
     const timer = window.setTimeout(() => setGreetingDate(new Date()), nextGreetingDelayMs(greetingDate))
     return () => window.clearTimeout(timer)
   }, [greetingDate, hero])
-  // Shrink only when the natural 30px text collides with the composer width (:98-137).
+  // 仅当 30px 自然字号与 composer 宽度冲突时才缩小（:98-137）。
   useLayoutEffect(() => {
     if (!hero) return
     const container = greetingRef.current
@@ -234,6 +250,7 @@ export default function Composer(props: ComposerProps) {
   ]
   const commandMatches = trigger?.type === 'command' ? commands.filter(item => item.id.startsWith(trigger.query.toLowerCase())) : []
   const suggestionCount = trigger?.type === 'command' ? commandMatches.length : trigger?.type === 'skill' ? skillMatches.length : matches.length
+  /** 确认当前高亮的建议项：指令执行后清除触发文本；技能/文件把插入文本写回输入框并还原光标。 */
   const chooseSuggestion = (index: number) => {
     if (!trigger) return
     if (trigger.type === 'command') {
@@ -291,12 +308,14 @@ export default function Composer(props: ComposerProps) {
       textarea.current?.setSelectionRange(caret, caret)
     })
   }
+  /** 更新输入值并在新光标处重新检测 @/$// 触发符，维护建议面板状态。 */
   const updateValue = (next: string, caret: number) => {
     onChange(next)
     const match = /(?:^|\s)([@/$])([^\s]*)$/.exec(next.slice(0, caret))
     setTrigger(match ? { type: match[1] === '@' ? 'file' : match[1] === '$' ? 'skill' : 'command', query: match[2] ?? '', from: caret - (match[2]?.length ?? 0) - 1, to: caret } : null)
     setSelectedSuggestion(0)
   }
+  /** 输入框按键处理：输入法期间不拦截；建议面板键导航；自定义换行/发送/插入快捷键。 */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (guard.current?.guards(event.nativeEvent) || event.nativeEvent.isComposing) return
     if (trigger && ['ArrowDown', 'ArrowUp', 'Escape', 'Enter', 'Tab'].includes(event.key)) {
@@ -323,6 +342,7 @@ export default function Composer(props: ComposerProps) {
     event.preventDefault()
     if (canSend) onSend(busy && alternate ? sendMode === 'followUp' ? 'steer' : 'followUp' : sendMode)
   }
+  /** 保存排队消息的编辑：同一内容（key 相同）复用同一 requestId 实现幂等重试。 */
   const submitQueueEdit = async (item: QueueItem, text: string, mode = item.mode) => {
     if (!onUpdateQueue || queueSaving) return
     setQueueSaving(item.id); setQueueError('')
@@ -546,14 +566,14 @@ export default function Composer(props: ComposerProps) {
   </div>
 }
 
-/** One read-only row of a composer statistics panel. */
+/** 用量面板中的单个只读统计行。 */
 function StatRow({ label, value, onClose }: { label: string; value: string; onClose: () => void }) {
   return <MenuItemButton onSelect={onClose}>
     <span className={css.statRow}><span>{label}</span><span>{value}</span></span>
   </MenuItemButton>
 }
 
-/** DSH's context occupancy ring: a 14px dial whose arc is the used share. */
+/** DSH 的上下文占用圆环：14px 表盘，弧长表示已用比例。 */
 function ContextRing({ percent }: { percent: number }) {
   const radius = 5.5
   const circumference = 2 * Math.PI * radius

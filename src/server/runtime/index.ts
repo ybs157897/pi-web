@@ -76,6 +76,16 @@ import { createSubagentSettlement } from './subagent-settle.ts'
 
 import { CODEMODE_EXTENSION_NAME, CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
 
+/**
+ * 功能：装配整个运行时——数据目录、模型运行时、工具注册表、各 feature 服务、
+ * 恢复流程与关闭顺序，返回面向 HTTP 层的完整 Runtime 契约。
+ * @param options 数据目录、工作区、模型目录、demo 开关等启动选项
+ * @returns 组装完毕的 Runtime；恢复完成后（resume、syncIdleAgents）才返回
+ * 内部逻辑：核心（core）先于团队 feature 创建（团队需要 core 的回调），harness
+ * 最后打开并回填给 core；扩展按依赖顺序安装（记忆在执行策略前、轨迹在压缩后）；
+ * 启动恢复链为自动化迁移 → 排队编辑 → 团队对账 → 后台委派结算 → resume →
+ * syncIdleAgents。close 按「停止接收 → drain 后台任务 → harness 关闭」的顺序执行。
+ */
 export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const dataDir = resolve(options.dataDir)
   const requestedWorkspace = options.workspace === undefined ? undefined : resolve(options.workspace)
@@ -83,11 +93,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   if (requestedWorkspace !== undefined) await mkdir(requestedWorkspace, { recursive: true })
   const initialWorkspacePath = requestedWorkspace === undefined ? undefined : await realpath(requestedWorkspace)
   const modelRuntime = options.demo ? createDemoModelRuntime(options.models) : await createModelRuntime({ dataDir, piDir: options.piDir })
-  /** Catalog reloads (file edits, saves, another instance) fanned out to web clients. */
+  /** 目录重载（文件编辑、保存、另一个实例写入）向 web 客户端的扇出通知集合。 */
   const modelListeners = new Set<() => void>()
   const unsubscribeModels = modelRuntime.subscribe(() => {
     for (const listener of [...modelListeners]) {
-      try { listener() } catch { /* a dropped event stream must not stop the reload */ }
+      try { listener() } catch { /* 单个事件流掉线不得中断重载 */ }
     }
   })
   const initialWorkspace: WorkspaceSummary | undefined = initialWorkspacePath === undefined ? undefined : {
@@ -110,9 +120,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     await appState.update(state => { state.settings.defaultWorkspaceId = launchWorkspace.id })
   }
   /**
-   * The live default workspace: whatever the current settings point at, resolved
-   * against the current list so deleting it takes effect on the next read instead
-   * of keeping a startup-time object alive.
+   * 功能：读取当前生效的默认工作区。
+   * @returns 设置指向的工作区；已删除则返回 undefined
+   * 内部逻辑：每次按当前设置与列表实时解析，删除默认工作区在下一次读取即生效，
+   * 而不是保留启动时的对象。
    */
   const defaultWorkspace = (): WorkspaceSummary | undefined => {
     const state = appState.snapshot()
@@ -124,23 +135,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let onPluginChange: (event: PluginChangeEvent) => void = () => undefined
   const pluginStore = await PluginStore.open({ dataDir, onChange: event => onPluginChange(event) })
   const skillStore = new SkillStore({
-    // ZCode-style user-level root: read-only skills shared across every workspace.
-    // Demo runs stay isolated from the real global home.
+    // ZCode 风格的用户级根目录：跨工作区共享的只读技能。demo 运行与真实全局 home 隔离。
     globalRoot: options.demo ? join(dataDir, 'skills') : join(piWebHome(), 'skills'),
-    // Shared user-level root: the `.agents/skills` convention every comparable agent reads.
-    // Demo runs stay isolated from the real home, exactly like the global root above.
+    // 共享的用户级根目录：同类 agent 普遍遵循的 `.agents/skills` 约定。demo 运行与真实 home 隔离，与上面的全局根一致。
     userAgentsRoot: options.demo ? join(dataDir, 'agents-skills') : join(homedir(), '.agents', 'skills'),
     builtinRoot: resolve('skills'),
     pluginRoots: () => pluginStore.skillRoots(),
   })
-  // Probe the sandbox against the default workspace at startup; with no workspace yet there is
-  // nothing to probe, so report the platform capability and let per-conversation creation re-test
-  // against whichever workspace the user picks.
+  // 启动时对默认工作区探测沙盒能力；尚无工作区时无可探测，报告平台能力，
+  // 由逐会话创建时对用户选定的工作区再测。
   const workspaceWriteAvailable = process.platform !== 'darwin'
     ? false
     : defaultWorkspace() === undefined || await workspaceWriteSupported(defaultWorkspace()!.path)
   const storage = await openNodeSqliteStorage(resolve(dataDir, 'pi-durable.sqlite'))
-  // Declared before the extensions so their closures can read the harness at call time.
+  // 先声明再装扩展，扩展闭包可在调用时读取 harness。
   let harness: Harness
   let teamService: ReturnType<typeof createTeam>
   const core = createCore({
@@ -167,9 +175,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
 
   /**
-   * Pi 1.3.0 capabilities this project turns on: imported MCP servers and code mode.
-   * MCP is a read-only import of the global `mcp.json`; a missing file, a bad
-   * entry, or a failing server is reported in the MCP view, never a startup failure.
+   * 本项目启用的 Pi 1.3.0 能力：导入的 MCP 服务与 code mode。MCP 是对全局
+   * `mcp.json` 的只读导入；文件缺失、条目损坏或服务失败只在 MCP 视图里报告，
+   * 永不构成启动失败。
    */
   const mcpConfigPath = options.mcpConfigPath ??
     (options.demo ? join(dataDir, 'mcp.json') : join(options.piDir ?? dataDir, 'mcp.json'))
@@ -182,15 +190,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // 工作政策扩展：chineseReasoning 闭包每请求读设置快照，开关切换在下一请求生效、无需重建 agent。
   registry.install(createWorkPolicyExtension({ dataDir, chineseReasoning: () => appState.snapshot().settings.chineseReasoning }))
   registry.install(createCompactionExtension({ harness: () => harness }))
-  // After the compaction extension, so a captured request reflects the exact post-prune shape.
+  // 装在压缩扩展之后，使捕获的请求反映裁剪后的确切形状。
   registry.install(createTrajectoryExtension({
     dir: join(dataDir, TRAJECTORY_CAPTURE_DIR),
     enabled: process.env.PI_WEB_TRAJECTORY !== '0',
     fullRequest: process.env.PI_WEB_TRAJECTORY_FULL_REQUEST === '1',
     harness: () => harness,
   }))
-  // Installed before the execution policy so its sections are covered by the plan-mode filter and
-  // its write/edit wraps sit inside the plan guard.
+  // 装在执行策略之前：其 section 落入计划模式过滤、其 write/edit 包装位于计划守卫之内。
   registry.install(createMemoryExtension({
     dataDir,
     memoryEnabled: () => appState.snapshot().settings.memoryEnabled,
@@ -199,8 +206,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(ResearchTools)
   registry.install(BrowserTools)
   registry.install(TodoTools)
-  // The task store is host-level, so the tools resolve the feature lazily: it is
-  // constructed below, after the services these tools do not need at install time.
+  // 任务存储是宿主级的，因此工具惰性解析 feature：它在下方、装完这些工具安装期
+  // 不需要的服务之后才创建。
   registry.install(createScheduleExtension({
     automations: {
       list: () => automationsFeature().list(),
@@ -210,8 +217,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       run: id => automationsFeature().run(id),
     },
   }))
-  // Analysis records outlive the conversation that wrote them: the issues page reads them back
-  // with no conversation of its own, so the store lives on the app data directory.
+  // 分析记录比写出它们的会话更长寿：问题页在无关联会话时也能读回，因此存储放在应用数据目录。
   registry.install(createWetrackAnalysisExtension({
     dataDir,
     readDefect: async defectNumber => (await wetrackDefect(defectNumber)).defect,
@@ -241,15 +247,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       return metadata !== undefined && (metadata.accessMode === 'fullAccess' || metadata.accessMode === 'workspaceWrite') && plan?.active !== true
     },
   }))
-  /** Delegation model picks are validated here, where the catalog, allowlist, and level support live. */
+  /** 委派模型选择在这里校验：目录、白名单与等级支持都在此汇聚。 */
   const resolveChildModel = createChildModelResolver({
     models: modelRuntime.models,
     allowlist: () => appState.snapshot().settings.modelAllowlist,
     supportedThinkingLevels: (provider, modelId) => modelRuntime.supportedThinkingLevels(provider, modelId),
   })
   /**
-   * Catalog models the allowlist covers and whose provider holds credentials; the delegation
-   * section lists up to `SUBAGENT_MODEL_LIST_LIMIT` of them, ending with 「等 N 个」 when truncated.
+   * 功能：目录中白名单覆盖且 Provider 已配置凭据的模型清单。
+   * @returns 前 `SUBAGENT_MODEL_LIST_LIMIT` 个模型与总数，截断时前端显示「等 N 个」
+   * 内部逻辑：按 Provider 只查一次凭据（缓存），逐 Provider checkAuth 探测配置状态。
    */
   const availableChildModels = async (): Promise<ChildModelList> => {
     const listed = modelRuntime.models.getModels()
@@ -264,7 +271,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     const usable = listed.filter(pick => configured.get(pick.provider) === true)
     return { models: usable.slice(0, SUBAGENT_MODEL_LIST_LIMIT), total: usable.length }
   }
-  /** Settles background delegations: detached waits that inject the child's result into the parent. */
+  /** 后台委派结算：分离的等待，把子会话结果注入父会话。 */
   const subagentSettlement = createSubagentSettlement({ harness: () => harness })
   registry.install(createSubagentTools({
     prepareChild: teamService.prepareChild,
@@ -279,16 +286,19 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     memberSession: teamService.memberSession,
     resolveChildModel,
   }))
-  // Tool-free: it only appends a per-request reminder from the live plugin projection.
+  // 无工具：仅从实时插件投影追加每请求提醒。
   registry.install(createPluginReferenceExtension({
     capabilities: () => pluginReferenceCapabilities(pluginStore.overview()),
   }))
-  /** Pi's deferred-tool loader; reinstalled whenever the MCP tool set changes. */
+  /** Pi 的延迟工具加载器；MCP 工具集变化时重新安装。 */
   const TOOL_SEARCH_EXTENSION_NAME = 'tool-search'
   /**
-   * Keep the MCP surface (code mode namespaces, `mcp` tools, `tool_search`) and the execution policy
-   * in sync with the current connections. The policy must stay last: it captures the installed tool
-   * snapshot, so every change reinstalls it after the MCP group.
+   * 功能：让 MCP 呈现（code mode 命名空间、`mcp` 工具、`tool_search`）与执行策略
+   * 与当前连接保持同步。
+   * @returns 无返回
+   * 内部逻辑：先卸载旧的四件（codemode、MCP、tool-search、执行策略）再按序重装；
+   * 执行策略必须保持最后——它捕获已安装工具快照，因此每次变化都在 MCP 组之后
+   * 重装它。存在 deferred 工具时才安装 tool-search 加载器。
    */
   const refreshMcpExtensions = (): void => {
     const current = registry.snapshot()
@@ -304,9 +314,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     registry.install(createRuntimeCodemodeExtension({ sandbox: codemodeSandbox, namespaces: mcp.namespaces() }))
     const mcpExtension = mcp.extension()
     if (mcpExtension !== undefined) registry.install(mcpExtension)
-    // `tool_search` loads deferred MCP tools into the model's next request. Tools behind either
-    // `codemode` or `deferred` exposure are registered deferred (scripts can call them directly);
-    // install the loader whenever such a tool exists.
+    // `tool_search` 把延迟的 MCP 工具装进模型的下一次请求。codemode 或 deferred
+    // 暴露下的工具都注册为 deferred（脚本可直接调用）；存在这类工具时才装加载器。
     if (mcpExtension?.tools?.some(tool => tool.deferred === true) === true) {
       registry.install(createToolSearchExtension())
     }
@@ -315,15 +324,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   refreshMcpExtensions()
 
   const pluginListeners = new Set<() => void>()
+  /** 向全部插件监听者扇出变更通知；单个监听者掉线不影响其余。 */
   const notifyPluginListeners = (): void => {
     for (const listener of [...pluginListeners]) {
-      try { listener() } catch { /* a dropped event stream must not stop the reload */ }
+      try { listener() } catch { /* 单个事件流掉线不得中断重载 */ }
     }
   }
-  /** Serialized plugin-driven reloads: install/uninstall/enable can arrive back to back. */
+  /** 插件驱动的重载串行化：安装/卸载/启用可能背靠背到来。 */
   let pluginRefreshTail: Promise<void> = Promise.resolve()
   let runtimeClosed = false
-  /** Skill-only plugin changes must not reconnect the user's own MCP servers. */
+  /** 仅技能层的插件变化不得重连用户自己的 MCP 服务。 */
   let lastMcpProjection = JSON.stringify(pluginStore.mcpServers())
   onPluginChange = (event) => {
     notifyPluginListeners()
@@ -337,7 +347,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           refreshMcpExtensions()
           lastMcpProjection = projection
         } catch {
-          // A failed reload keeps the previous connections; each server's state is in the MCP view.
+          // 重载失败保留既有连接；每个服务的状态见 MCP 视图。
         }
       }
       notifyPluginListeners()
@@ -346,10 +356,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let closePromise: Promise<void> | undefined
   const activeWatchStops = new Set<() => Promise<void>>()
   harness = await Harness.open(storage, {
-    // Every provider stream gets `ttftMs` stamped on its final message.
+    // 每条 Provider 流的最终消息都会被打上 `ttftMs`。
     models: wrapModelsWithTrajectory(modelRuntime.models),
     registry,
     settings: { compaction: COMPACTION_POLICY },
+    /** 按会话解析执行环境：工作区路径、访问模式、记忆根与额外可写目录。 */
     env: async (target) => {
       const metadata = await harness.snapshot(META, target.conversationId, CTX)
       const workspaceId = metadata?.workspaceId ?? defaultWorkspace()?.id
@@ -367,6 +378,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       const extraWriteRoots = memoryRoot !== undefined && selectedMode === 'workspaceWrite' ? [memoryRoot] : []
       return createExecutionEnv(selectedWorkspace.path, selectedMode, extraWriteRoots)
     },
+    /** 新会话创建钩子：注入运行时政策扩展与元数据初值；fork 继承父会话的字段。 */
     conversationCreated: async (tx, conversation) => {
       await ensureRuntimePolicy(tx, conversation)
       const metadata = await tx.doc(META, conversation.id)
@@ -420,6 +432,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       }, CTX)
     },
   })
+  /** 会话 feature：创建、配置、提交、停止、计划、分叉、重试与实时订阅。 */
   const conversationsService = createConversations({
     appState, harness: () => harness, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
     ensureMetadata, withMetadata, markConversationSeen, detailFromView, currentDetail,
@@ -427,19 +440,23 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     defaultWorkspace,
   })
 
+  /** 队列 feature：排队消息的编辑与撤回，复用会话提交入口保证幂等。 */
   const queueService = createQueue({
     harness: () => harness, requireConversation, ensureMetadata, withMetadata,
     submitWithReferences: conversationsService.submitWithReferences, workspaceFiles, defaultWorkspace,
   })
+  /** 交互回复 feature：回答与放弃 ask_user_question / 计划审阅。 */
   const interactionsService = createInteractionReplies({
     harness: () => harness, requireConversation, currentDetail, assertConversationModelAllowed,
   })
 
+  /** 设置 feature：应用设置读写与模型/Provider 的白名单过滤面。 */
   const settingsService = createSettings({
     appState, modelRuntime, workspaceWriteAvailable, assertOpen, syncIdleAgents,
     assertModelAllowed, modelAllowlist, launchWorkspace,
   })
 
+  /** 工作区 feature：注册、目录选择、文件面与 Git 能力面。 */
   const workspacesService = createWorkspaces({
     appState, modelRuntime, workspaceFiles, list: conversationsService.list, withMetadata, parseConversationId,
     assertNoAutomationReferences: (...args) => automationsFeature().assertNoAutomationReferences(...args),
@@ -447,6 +464,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
 
   let automationsService: ReturnType<typeof createAutomations> | undefined
+  /** 自动化 feature 的惰性创建：schedule 工具安装期不需要它。 */
   const automationsFeature = (): ReturnType<typeof createAutomations> => {
     automationsService ??= createAutomations({
       appState, modelRuntime, isClosed: () => runtimeClosed, requireConversation, currentDetail,
@@ -457,6 +475,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     return automationsService
   }
 
+  /** 记录操作者反馈（文本 ≤2000 字符，userAgent 截到 500 字符）。 */
   const sendFeedback = async (input: { text: string; userAgent?: string }): Promise<void> => {
     assertOpen()
     const text = input.text.trim()
@@ -469,20 +488,24 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     })
   }
 
-  /** Standalone issues page: a CLI read or the bundled demo fixture, never a model turn. */
+  /** 独立问题页数据源：CLI 读取或内置 demo fixture，绝不经过模型。 */
   const wetrackDefects = async (): Promise<WetrackDefectList> => readWetrackDefects(
     options.demo === true && !wetrackConfigured() ? { fixture: builtinFixturePath() } : {},
   )
+  /** 单个缺陷详情；demo 且未配置时回退内置 fixture。 */
   const wetrackDefect = async (defectNumber: string): Promise<WetrackDefectDetail> => readWetrackDefect(defectNumber,
     options.demo === true && !wetrackConfigured() ? { fixture: builtinFixturePath() } : {},
   )
+  /** 单个缺陷的报告页数据。 */
   const wetrackReport = async (defectNumber: string): Promise<WetrackDefectReport> => readWetrackReport(defectNumber, { dataDir: options.dataDir })
-  /** Badges for the issues list; the body is fetched per defect so the list stays small. */
+  /** 问题列表的徽标数据；正文按缺陷单独拉取，列表保持轻量。 */
   const wetrackAnalyses = async (): Promise<WetrackAnalysisIndex> => ({
     analyses: await listWetrackAnalyses(dataDir),
   })
+  /** 读取单个缺陷的历史分析记录；无记录返回 null。 */
   const wetrackAnalysis = async (defectNumber: string): Promise<WetrackAnalysisRecord | null> =>
     await readWetrackAnalysis(dataDir, defectNumber) ?? null
+  /** 问题分析运行：由会话 feature 执行的分析任务存储。 */
   const analysisRuns = createWetrackAnalysisRuns({
     dataDir,
     create: conversationsService.create,
@@ -526,10 +549,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }, CTX)
   }
 
-  // The nightly issue analysis is provisioned once, and only once the operator has
-  // bound a workspace to analyse. A deleted task stays deleted: the marker file
-  // remembers that it was already offered. A task that is still there gets its
-  // prompt and workspace kept in sync with the current analysis procedure.
+  // 每晚的问题分析只装配一次，且只在操作者已绑定分析工作区后。已删除的任务
+  // 保持删除：标记文件记住它已被提供过。仍在的任务把提示词与工作区同步到
+  // 当前分析规程。
   const provisionWetrackDaily = async (): Promise<void> => {
     const binding = await analysisRuns.workspaceBinding()
     if (binding.workspaceId === undefined) return
@@ -554,8 +576,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   await provisionWetrackDaily()
 
-  // Submission recovery can start the scheduler itself. Install guards on every stored
-  // conversation before any recovery path is allowed to submit or resume work.
+  // 提交恢复可能自行启动调度器。在任何恢复路径被允许提交或续跑之前，
+  // 先给每个存量会话装上政策守卫。
   let policyCursor: Cursor | undefined
   do {
     const page = await harness.commit(tx => tx.scanConversations({ order: 'ascending' }, 250, policyCursor), CTX)
@@ -572,38 +594,50 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   await queueService.recover()
   await automationsFeature().recover()
   await teamService.reconcileRosters()
-  // Before resume: a background delegation lost to a crash settles now, and the injected message
-  // starts its parent's follow-up run once the scheduler is back.
+  // 在 resume 之前：因崩溃丢失的后台委派现在结算，调度器恢复后注入的消息
+  // 会开启父会话的 follow-up 运行。
   await subagentSettlement.reconcileBackgroundDelegations()
   harness.resume()
-  // Upgrades add code mode to an existing registry, and the stored agent selection is
-  // per conversation: bring idle conversations onto the current presentation before serving.
+  // 升级会把 code mode 加入既有注册表，而 agent 选择是按会话存储的：
+  // 先把空闲会话对齐到当前呈现再开始服务。
   await syncIdleAgents()
 
+  /** 插件 feature：市场操作与插件 UI 宿主桥接。 */
   const pluginsService = createPlugins({
     pluginStore, mcp, harness: () => harness, listeners: pluginListeners,
     flushRefresh: () => pluginRefreshTail.catch(() => undefined),
   })
 
-  /** The editor reads the same file the prompt section reads, so a save applies to the next request. */
+  /** 编辑器读取的文件与提示词 section 相同，因此保存对下一次请求生效。 */
   const personalizationView = async (): Promise<PersonalizationView> => {
     const record = await readPersonalization(dataDir)
     return { content: record.content, filePath: record.filePath, limitBytes: MAX_PERSONALIZATION_BYTES }
   }
 
+  /** 面向 HTTP 层的 Runtime 契约：全部按 feature 分组透传。 */
   return {
+    /** 列出全部无主会话摘要。 */
     list: () => conversationsService.list(),
+    /** 创建新会话。 */
     create: (input) => conversationsService.create(input),
-    // Reading the detail is what "viewing a conversation" means for the client; the sidebar's
-    // unread dot clears on the next list refresh. Internal callers use `currentDetail` directly.
+    // 读取详情就是客户端的「查看会话」；侧栏未读点在下一次列表刷新时清除。
+    // 内部调用方直接用 `currentDetail`。
     detail: (value) => conversationsService.detail(value),
+    /** 更新会话标题/归档/置顶/工作区/模式/模型/思考等级。 */
     update: (value, input) => conversationsService.update(value, input),
+    /** 向会话提交一条用户消息。 */
     submit: (value, input) => conversationsService.submit(value, input),
+    /** 回答一条 pending 交互（问答或计划审阅）。 */
     answerInteraction: (value, callId, answers) => interactionsService.answerInteraction(value, callId, answers),
+    /** 放弃一条 pending 交互。 */
     cancelInteraction: (value, callId) => interactionsService.cancelInteraction(value, callId),
+    /** 编辑一条排队消息并提交替换。 */
     editQueued: (value, submissionId, input) => queueService.editQueued(value, submissionId, input),
+    /** 停止会话当前运行。 */
     stop: (value) => conversationsService.stop(value),
+    /** 触发上下文压缩。 */
     compact: (value) => conversationsService.compact(value),
+    /** 导出会话的完整执行轨迹（SQL + 捕获目录拼装）。 */
     trajectory: async (value) => {
       const conversation = await requireConversation(value)
       return await assembleTrajectory({
@@ -612,93 +646,172 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         conversationId: String(conversation.id),
       })
     },
+    /** 创建/更新会话目标。 */
     goal: (value, input) => conversationsService.goal(value, input),
+    /** 开关计划模式。 */
     setPlan: (value, active) => conversationsService.setPlan(value, active),
+    /** 读取会话的完整团队视图。 */
     team: (value) => teamService.team(value),
+    /** 列出会话的子智能体目录。 */
     children: (value) => teamService.children(value),
+    /** 给一个直属子会话发消息。 */
     childMessage: (value, childValue, input) => teamService.childMessage(value, childValue, input),
+    /** 停止一个直属子会话。 */
     childStop: (value, childValue) => teamService.childStop(value, childValue),
+    /** 撤回一条排队消息。 */
     removeQueued: (value, submissionId) => queueService.removeQueued(value, submissionId),
+    /** 从指定条目分叉新会话。 */
     fork: (value, entryId) => conversationsService.fork(value, entryId),
+    /** 从指定位置重试（分叉 + 重放提交）。 */
     retry: (value, entryId, requestId) => conversationsService.retry(value, entryId, requestId),
+    /** 订阅会话实时详情，返回取消订阅函数。 */
     watch: (value, listener) => conversationsService.watch(value, listener),
+    /** 读取白名单过滤后的模型目录（含默认模型修正写回）。 */
     catalog: () => settingsService.catalog(),
+    /** 订阅模型目录重载通知，返回取消订阅函数。 */
     watchModels: (listener: () => void) => {
       modelListeners.add(listener)
       return () => { modelListeners.delete(listener) }
     },
+    /** 保存 Provider 配置（隐藏模型合并回写）。 */
     saveProvider: (input) => settingsService.saveProvider(input),
+    /** 读取单个 Provider 配置摘要。 */
     provider: (id) => settingsService.provider(id),
+    /** 删除 Provider 配置。 */
     deleteProvider: (id) => settingsService.deleteProvider(id),
+    /** Provider 连通性测试（仅限白名单内模型）。 */
     testProvider: (id, modelId) => settingsService.testProvider(id, modelId),
+    /** 发现 Provider 端点提供的模型清单。 */
     discoverProvider: (id) => settingsService.discoverProvider(id),
+    /** 读取应用设置快照。 */
     settings: () => settingsService.settings(),
+    /** 读取个性化提示词编辑视图。 */
     personalization: async (): Promise<PersonalizationView> => personalizationView(),
+    /** 保存个性化提示词并返回最新视图。 */
     savePersonalization: async (content: string): Promise<PersonalizationView> => {
       await writePersonalization(dataDir, content)
       return personalizationView()
     },
+    /** MCP 视图：服务、工具与连接状态。 */
     mcp: () => mcp.view(),
+    /** 能力声明：可选的访问模式。 */
     capabilities: () => settingsService.capabilities(),
+    /** 更新应用设置。 */
     updateSettings: (input) => settingsService.updateSettings(input),
+    /** 用系统默认程序打开应用配置文件。 */
     openConfigFile: () => settingsService.openConfigFile(),
+    /** 工作区列表。 */
     workspaces: () => workspacesService.list(),
+    /** 添加工作区。 */
     addWorkspace: (input) => workspacesService.add(input),
+    /** 重命名工作区。 */
     renameWorkspace: (id, input) => workspacesService.rename(id, input),
+    /** 注销工作区并改绑其会话。 */
     deleteWorkspace: (id) => workspacesService.remove(id),
+    /** 唤起系统原生目录选择器。 */
     pickDirectory: (signal) => workspacesService.pickDirectory(signal),
+    /** 列出目录内容（树形选择）。 */
     listDirectories: (dir) => workspacesService.listDirectories(dir),
+    /** 在父目录下创建子目录。 */
     createDirectory: (parent, name) => workspacesService.createDirectory(parent, name),
+    /** 列出工作区文件。 */
     workspaceFiles: (id, path, query) => workspacesService.fileList(id, path, query),
+    /** 全工作区搜索。 */
     searchWorkspace: (id, query) => workspacesService.search(id, query),
+    /** 读取工作区文本文件。 */
     workspaceFile: (id, path) => workspacesService.file(id, path),
+    /** 读取工作区二进制资源。 */
     workspaceAsset: (id, path) => workspacesService.asset(id, path),
+    /** 分支快照。 */
     gitBranches: (id) => workspacesService.gitBranches(id),
+    /** 切换分支。 */
     switchGitBranch: (id, input) => workspacesService.switchGitBranch(id, input),
+    /** 新建分支。 */
     createGitBranch: (id, input) => workspacesService.createGitBranch(id, input),
+    /** 变基状态。 */
     gitWorktreeStatus: (id) => workspacesService.gitWorktreeStatus(id),
+    /** 单文件差异。 */
     gitWorktreeDiff: (id, path, sourceId) => workspacesService.gitWorktreeDiff(id, path, sourceId),
+    /** 按暂存内容提交。 */
     gitCommit: (id, input) => workspacesService.gitCommit(id, input),
+    /** 推送当前分支。 */
     gitPush: (id) => workspacesService.gitPush(id),
+    /** 模型生成提交信息建议。 */
     gitCommitMessage: (id, input) => workspacesService.gitCommitMessage(id, input),
+    /** 列出工作区可用技能。 */
     skills: async (workspaceId) => skillStore.list(workspaceFiles.workspace(workspaceId).path),
+    /** 加载技能（入口文档或附属资源）。 */
     skill: async (workspaceId, skillId, resource) => skillStore.load(workspaceFiles.workspace(workspaceId).path, skillId, resource),
+    /** 校验技能清单。 */
     validateSkill: async (workspaceId, skillId) => skillStore.validate(workspaceFiles.workspace(workspaceId).path, skillId),
+    /** 插件总览。 */
     plugins: () => pluginsService.overview(),
+    /** 添加插件市场来源。 */
     addPluginMarketplace: (source) => pluginsService.addMarketplace(source),
+    /** 删除插件市场来源。 */
     removePluginMarketplace: (id) => pluginsService.removeMarketplace(id),
+    /** 刷新插件市场。 */
     refreshPluginMarketplace: (id) => pluginsService.refreshMarketplace(id),
+    /** 安装插件。 */
     installPlugin: (input) => pluginsService.install(input),
+    /** 更新插件。 */
     updatePlugin: (pluginId) => pluginsService.update(pluginId),
+    /** 读取插件描述。 */
     describePlugin: (pluginId) => pluginsService.describe(pluginId),
+    /** 卸载插件（可选保留数据）。 */
     uninstallPlugin: (pluginId, keepData) => pluginsService.uninstall(pluginId, keepData ?? false),
+    /** 启用/停用插件。 */
     setPluginEnabled: (pluginId, enabled) => pluginsService.setEnabled(pluginId, enabled),
+    /** 订阅插件变更通知。 */
     watchPlugins: (listener) => pluginsService.watch(listener),
+    /** 插件 UI surface 清单。 */
     pluginUiSurfaces: () => pluginsService.uiSurfaces(),
+    /** 渲染插件 UI 页面。 */
     pluginUiPage: (input) => pluginsService.uiPage(input),
+    /** 从插件页面调用插件工具。 */
     pluginUiCall: (input) => pluginsService.uiCall(input),
+    /** 读取插件 UI 资源原文。 */
     pluginUiReadResource: (input) => pluginsService.uiReadResource(input),
+    /** 记录/清除一条消息的反馈。 */
     feedback: (value, entryValue, rating) => conversationsService.feedback(value, entryValue, rating),
+    /** 记录操作者反馈。 */
     sendFeedback,
+    /** 定时任务列表。 */
     automations: () => automationsFeature().list(),
+    /** 创建定时任务。 */
     createAutomation: (input) => automationsFeature().create(input),
+    /** 更新定时任务。 */
     updateAutomation: (id, input) => automationsFeature().update(id, input),
+    /** 删除定时任务。 */
     deleteAutomation: (id) => automationsFeature().remove(id),
+    /** 手动执行一次定时任务。 */
     runAutomation: (id) => automationsFeature().run(id),
+    /** 定时任务运行历史。 */
     automationRuns: (id) => automationsFeature().runs(id),
+    /** 清除规则已耗尽的定时任务。 */
     purgeEndedAutomations: () => automationsFeature().purgeEnded(),
+    /** 问题清单列表（CLI 或内置 fixture）。 */
     wetrackDefects,
+    /** 单个缺陷详情。 */
     wetrackDefect,
+    /** 缺陷报告页数据。 */
     wetrackReport,
+    /** 分析徽标列表。 */
     wetrackAnalyses,
+    /** 单个缺陷的历史分析记录。 */
     wetrackAnalysis,
+    /** 分析运行列表。 */
     wetrackAnalysisRuns: analysisRuns.list,
+    /** 启动一次问题分析。 */
     startWetrackAnalysis: analysisRuns.start,
+    /** 读取分析设置。 */
     wetrackAnalysisSettings: analysisRuns.settings,
+    /** 更新分析设置（绑定工作区与思考等级）。 */
     updateWetrackAnalysisSettings: async input => {
       if (input.workspaceId === null || input.workspaceId === undefined) return analysisRuns.settings()
       return analysisRuns.bindWorkspace(input.workspaceId, input.thinkingLevel)
     },
+    /** 关闭运行时：按顺序停止接收、drain 后台任务、关闭 harness 与沙盒/MCP。 */
     async close() {
       if (!closePromise) {
         runtimeClosed = true
@@ -715,8 +828,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
             try {
               await memoryExtraction.drain(MEMORY_EXTRACTION_DRAIN_MS)
               await subagentSettlement.drain()
-              // Capture writes are fire-and-forget appends; drain them before close so a
-              // test's temp-dir removal cannot race a still-queued trajectory line.
+              // 捕获写入是即发即忘的追加；关闭前 drain，防止测试的临时目录删除
+              // 与仍在排队的轨迹行竞争。
               await drainTrajectoryCapture()
               await harness.close(CTX)
               await automationsService?.drain()

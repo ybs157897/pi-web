@@ -16,7 +16,7 @@ export interface PluginPageHostPool {
   hold: (host: HTMLElement) => void
 }
 
-/** `undefined` outside the provider, so a card rendered alone can fall back to its own callback. */
+/** 插件页宿主池 context；provider 之外为 undefined，单独渲染的卡片可回落到自己的回调。 */
 export const PluginPageHostContext = createContext<PluginPageHostPool | undefined>(undefined)
 
 export interface PluginPageHostProps {
@@ -31,9 +31,15 @@ export interface PluginPageHostProps {
 }
 
 /**
- * Keep one plugin page mounted across both surfaces. The host is created once and the pane is
- * portalled into it, so React never unmounts the iframe. Chromium may still reload a re-parented
- * frame; a true zero-reload page plane would keep the host in a fixed parent and position it.
+ * 功能：让一个插件页在「transcript 内联卡片」与「inspector 侧栏 tab」两个表面之间共用同一宿主。
+ * 宿主 div 只创建一次，pane portal 进去，React 永远不卸载其中的 iframe。
+ * @param page 插件页描述（对应 host DTO 的 plugin-ui 页）
+ * @param onContext 插件回传 context 的回调
+ * @param onMessage 插件回传消息文本的回调
+ * @param onOpenLink 插件请求打开链接的回调
+ * @param frameStyle 内联卡片的紧凑高度样式；侧栏里让宿主撑满槽位
+ * @param children render-prop：渲染调用方的挂载点并交出稳定的宿主元素
+ * 内部逻辑：换表面靠宿主 DOM 移动而非重挂 iframe；但 Chromium 对重新挂父的 frame 仍可能重载，真正零重载需固定父容器加定位。
  */
 export function PluginPageHost({ page, onContext, onMessage, onOpenLink, frameStyle, children }: PluginPageHostProps) {
   const [host] = useState<HTMLDivElement>(() => {

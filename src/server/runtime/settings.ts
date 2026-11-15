@@ -1,8 +1,7 @@
 /**
- * Application settings and the model surfaces the client reads.
+ * 应用设置，以及客户端读取的模型目录相关面。
  *
- * Provider edits are allowlist-aware: the directory an editor saves never drops models
- * the allowlist currently hides.
+ * Provider 编辑对白名单敏感：编辑器保存的目录不会悄悄丢掉被白名单隐藏的模型。
  */
 import type {
   AccessMode, AppSettings, ModelCatalog, ModelRef as UiModelRef, ProviderConfigSummary,
@@ -15,6 +14,7 @@ import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } 
 import { RuntimeError } from '../runtime-errors.ts'
 import { openLocalFile, safeFailure } from './helpers.ts'
 
+/** 设置 feature 的依赖注入契约：应用状态、模型运行时与组合根提供的策略回调。 */
 export interface SettingsDeps {
   appState: AppStateStore
   modelRuntime: RuntimeModels
@@ -23,19 +23,36 @@ export interface SettingsDeps {
   syncIdleAgents(): Promise<void>
   assertModelAllowed(model: UiModelRef | undefined, label: string): void
   modelAllowlist(): readonly string[]
-  /** The workspace selected at startup; clearing the default falls back to it. */
+  /** 启动时选中的工作区；清除默认工作区设置时回退到它。 */
   launchWorkspace: WorkspaceSummary | undefined
 }
 
+/**
+ * 功能：创建设置 feature 服务，覆盖应用设置读写、能力声明、模型目录/Provider 的
+ * 白名单过滤面与配置文件打开。
+ * @param deps 依赖注入契约见 SettingsDeps
+ * 职责边界：所有 Provider 相关面都先按白名单过滤再返回；保存 Provider 时会把
+ * 被白名单隐藏的模型合并回请求，避免静默丢失。
+ */
 export function createSettings(deps: SettingsDeps) {
   const { appState, modelRuntime, workspaceWriteAvailable, assertOpen, syncIdleAgents, assertModelAllowed, modelAllowlist, launchWorkspace } = deps
 
+  /** 读取当前应用设置快照。 */
   const settings = (): AppSettings => appState.snapshot().settings
 
+  /** 声明客户端可选的访问模式；不支持写入沙盒的平台剔除 workspaceWrite。 */
   const capabilities = (): { accessModes: AccessMode[] } => ({
     accessModes: workspaceWriteAvailable ? ['readOnly', 'workspaceWrite', 'fullAccess'] : ['readOnly', 'fullAccess'],
   })
 
+  /**
+   * 功能：更新应用设置。
+   * @param input 部分更新的设置字段，可携带默认模型、白名单、默认工作区等
+   * @returns 保存后的完整设置
+   * 内部逻辑：按序校验默认模型在目录内、白名单条目合法、默认模型在新白名单内、
+   * 默认工作区存在、workspaceWrite 受平台支持，然后逐字段落盘；codemodeMode
+   * 显式切换时同步空闲会话的 agent。默认工作区清空时回退到启动工作区。
+   */
   const updateSettings = async (input: UpdateAppSettingsInput): Promise<AppSettings> => {
     if (input.defaultModel && !modelRuntime.models.getModel(input.defaultModel.provider, input.defaultModel.modelId)) {
       throw new RuntimeError('MODEL_UNAVAILABLE', '默认模型不在 Pi 模型目录中')
@@ -91,15 +108,13 @@ export function createSettings(deps: SettingsDeps) {
       else if (input.shortcuts !== undefined) state.settings.shortcuts = structuredClone(input.shortcuts)
       return structuredClone(state.settings)
     })
-    // Code mode is stored in each conversation's agent, so an explicit switch applies now.
-    // The document-layout switch is deliberately not synced here: it changes the contract
-    // for conversations created from now on, and an open conversation keeps the one it
-    // started with. A restart still aligns every idle conversation with the current setting.
+    // Code mode 存在每个会话的 agent 里，显式切换立即生效；文档布局开关刻意不同步——
+    // 它只改变此后新建会话的契约，已打开的会话保持创建时的选择。重启仍会把空闲会话对齐到当前设置。
     if (input.codemodeMode !== undefined && input.codemodeMode !== previousCodemodeMode) await syncIdleAgents()
     return saved
   }
 
-  /** Hand the persisted application configuration file to the operator's default program. */
+  /** 功能：把落盘的应用配置文件交给操作系统的默认程序打开。 */
   const openConfigFile = async (): Promise<void> => {
     assertOpen()
     let present: boolean
@@ -112,6 +127,13 @@ export function createSettings(deps: SettingsDeps) {
     await openLocalFile(appState.path)
   }
 
+  /**
+   * 功能：返回客户端可见的模型目录，并保证默认模型落在白名单内。
+   * @returns 带白名单过滤的目录：models/providers 按白名单裁剪，defaultModel 按
+   * 「已存默认 → 目录默认 → 第一个可用 → 第一个在册」顺序解析
+   * 内部逻辑：已存默认或目录默认不在过滤后的目录里时（可能被白名单隐藏或已下架），
+   * 把解析出的新默认写回设置；暂时未配置凭据但在册的默认保持不动，凭据回来即恢复。
+   */
   const catalog = async () => {
     const result = await modelRuntime.catalog()
     const settings = appState.snapshot().settings
@@ -134,19 +156,19 @@ export function createSettings(deps: SettingsDeps) {
     const defaultModel: UiModelRef | undefined = selected === undefined
       ? undefined
       : { provider: selected.provider, modelId: selected.modelId }
-    // Persist a default the catalog no longer contains (or the allowlist now
-    // hides); a valid but temporarily unconfigured default is left alone so it
-    // returns when its credential does.
+    // 目录已不包含（或被白名单隐藏）的默认要落盘修正；有效但暂时未配置凭据的
+    // 默认保持不动，凭据恢复时它会回来。
     if (defaultModel && effectiveDefault !== undefined && !inCatalog(effectiveDefault)) {
       await appState.update(state => { state.settings.defaultModel = { ...defaultModel } })
     }
     return { ...result, models, providers, ...(defaultModel ? { defaultModel } : {}) }
   }
 
-  /** Provider config is a model surface too: explicit picks and the restore list stay inside the allowlist. */
+  /** Provider 配置同样是模型面：显式选择与恢复列表都保持在白名单内。 */
   const providerInAllowlist = (id: string, models: ProviderConfigSummary['models']): ProviderConfigSummary['models'] =>
     models.filter(model => modelWithinAllowlist(modelAllowlist(), { provider: id, modelId: model.id }))
 
+  /** 读取单个 Provider 配置摘要，模型与默认恢复列表均按白名单过滤。 */
   const provider = async (id: string): Promise<ProviderConfigSummary> => {
     const result = await modelRuntime.provider(id)
     return {
@@ -155,12 +177,15 @@ export function createSettings(deps: SettingsDeps) {
       ...(result.defaults ? { defaults: providerInAllowlist(id, result.defaults) } : {}),
     }
   }
+  /** 删除一个 Provider 配置。 */
   const deleteProvider = (id: string) => modelRuntime.deleteProvider(id)
   /**
-   * The provider editor only renders models the allowlist permits, so a save
-   * carries just the visible rows. Merge the currently hidden models back in:
-   * a removed visible row still deletes that model, while saving a filtered
-   * directory never quietly drops the models the filter hid.
+   * 功能：保存 Provider 配置，并把被白名单隐藏的模型合并回请求。
+   * @param input 编辑器提交的 Provider 目录
+   * @returns 无返回；保存成功即生效
+   * 内部逻辑：编辑器只渲染白名单允许的模型，保存只携带可见行。若既有被隐藏的
+   * 模型，先读旧配置把它们补回再保存——可见行的删除仍会删除该模型，而过滤
+   * 永远不会让保存悄悄丢掉被隐藏的模型。
    */
   const saveProvider = async (input: ProviderInput): Promise<void> => {
     let existing: ProviderConfigSummary | undefined
@@ -176,8 +201,8 @@ export function createSettings(deps: SettingsDeps) {
     if (hidden.length === 0) return modelRuntime.saveProvider(input)
     await modelRuntime.saveProvider({ ...input, models: [...input.models, ...hidden] })
   }
-  // A probe spends real quota, so it may only target an allowed model: an
-  // explicit one is checked, and the picked default travels into the call.
+  // 连通性测试消耗真实配额，因此只能指向白名单允许的模型：显式指定的先校验，
+  // 自动选中的默认模型直接进入调用。
   const testProvider = async (id: string, modelId?: string) => {
     const allowed = (modelRuntime.models.getProvider(id)?.getModels() ?? [])
       .filter(model => modelWithinAllowlist(modelAllowlist(), { provider: model.provider, modelId: model.id }))
@@ -187,6 +212,7 @@ export function createSettings(deps: SettingsDeps) {
     assertModelAllowed(selected, '所选模型')
     return modelRuntime.testProvider(id, selected.modelId)
   }
+  /** 向 Provider 端点发现可用模型清单，结果按白名单过滤。 */
   const discoverProvider = async (id: string) => {
     const result = await modelRuntime.discover(id)
     return { models: result.models.filter(model => modelWithinAllowlist(modelAllowlist(), { provider: id, modelId: model.id })) }

@@ -30,6 +30,7 @@ import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
 
+/** 已发送但尚未落盘的消息（乐观 UI）：气泡渲染用，状态为发送中/已接收。 */
 export interface PendingMessage {
   id: string
   requestId: string
@@ -40,6 +41,7 @@ export interface PendingMessage {
   status: 'sending' | 'accepted'
 }
 
+/** 交给 inspector 展示的文件 diff 载荷。 */
 export interface InspectorDiff {
   path: string
   oldText?: string | null
@@ -47,20 +49,21 @@ export interface InspectorDiff {
   diff?: string
 }
 
+/** Transcript 组件的全部输入与回调。 */
 export interface TranscriptProps {
   messages: readonly ChatMessage[]
-  /** The conversation these messages belong to; the subagent strip re-reads its live children. */
+  /** 消息所属的会话；子智能体条带据此重读活跃孩子。 */
   conversationId?: string
   pending?: readonly PendingMessage[]
-  /** A compaction is running: render the same transcript-level status row as the completed marker. */
+  /** 压缩进行中：渲染与会话级完成标记同款的转录状态行。 */
   compactionRunning?: boolean
-  /** The conversation has a live run: the tail spinner marks the transcript as still working. */
+  /** 会话存在活跃 run：尾部 spinner 表明转录仍在工作。 */
   running?: boolean
-  /** Projected interactions, so question rows read their call's DSH state. */
+  /** 投影出的交互记录，让提问行读取其调用的 DSH 状态。 */
   interactions?: readonly InteractionRequest[]
-  /** The conversation's direct subagent projection; the strip's first paint, refreshed by its own polling. */
+  /** 会话的直接子智能体投影；作为条带首帧，随后由条带自己的轮询刷新。 */
   subagents?: readonly SubagentSummary[]
-  /** Work-details presentation policy; absent uses the saved settings. */
+  /** 工作详情呈现策略；缺省用已保存设置。 */
   policy?: ChatPresentationPolicy
   onFork?: (entryId: string) => void
   onRetry?: (entryId: string) => void
@@ -68,21 +71,24 @@ export interface TranscriptProps {
   onOpenFile?: (path: string, line?: number) => void
   onInspectDiff?: (diff: InspectorDiff) => void
   onOpenTool?: (messageId: string, toolCallId?: string) => void
-  /** Open the child conversation a `subagent` row created as a read-only inspector tab. */
+  /** 把 `subagent` 行创建的子会话作为只读 inspector tab 打开。 */
   onOpenSubagent?: (conversationId: string, title?: string) => void
-  /** Open a submitted plan in the inspector's plan view; `auto` marks DSH's one automatic open. */
+  /** 在 inspector 计划视图中打开已提交计划；`auto` 标记 DSH 的唯一一次自动打开。 */
   onOpenPlan?: (plan: PlanDocument, auto?: boolean) => void
-  /** Open a plugin UI page in the inspector; a row calls it once for a fullscreen surface, and
-   * an inline card passes its host so both surfaces share one iframe. */
+  /** 在 inspector 打开插件 UI 页面；fullscreen 表面时行调用一次，内联卡片传入宿主让两表面共用一个 iframe。 */
   onOpenPluginUi?: (page: PluginUiPage, host?: HTMLElement) => void
-  /** Context/message/link relays for inline plugin pages. */
+  /** 内联插件页的 context/消息/链接中继。 */
   onPluginContext?: (entry: PluginContextEntry) => void
   onPluginMessage?: (text: string) => void
   onPluginOpenLink?: (url: string) => void
   resolveFileImage?: (path: string) => string | undefined
 }
 
-/** Render host-owned conversation state with the ZCode-aligned message and work components. */
+/**
+ * 功能：转录区主组件——用对齐 ZCode 的消息与工作组件渲染宿主持有的会话状态。
+ * @param props 见 TranscriptProps
+ * 内部逻辑：buildRenderModel 把消息切分成 run/时间线；迟到应答按 callId 建索引（reply 气泡从自己的消息读，工具行用调用的应答结算）；呈现策略缺省取设置；尾部 spinner 由 turnChatLoadingVisible 决定；压缩进行中显示状态行。
+ */
 export default function Transcript({
   messages, conversationId, pending = [], compactionRunning = false, running = false, interactions, policy, subagents, onFork, onRetry, onFeedback,
   onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage,
@@ -90,8 +96,7 @@ export default function Transcript({
   const { settings, t } = useUiPreferences()
   const presentation = policy ?? presentationPolicyFor(settings.transcriptView, settings.collapseTiming)
   const model = useMemo(() => buildRenderModel(messages, interactions), [messages, interactions])
-  // Late answers keyed by their question call: the reply bubble reads them from
-  // its own message, and the tool row uses its call's answer to settle.
+  // 迟到应答按其提问调用建索引：reply 气泡从自己的消息读取，工具行用其调用的应答结算。
   const replies = useMemo(() => {
     const byCall = new Map<string, LateAnswer>()
     for (const message of messages) {
@@ -117,12 +122,11 @@ export default function Transcript({
   const showChanges = settings.codingViews
   const lastRun = model.runs.at(-1)
   const lastRunKey = lastRun?.key
-  // The subagent strip's live children: the projection seeds it and a 1.5s poll refreshes
-  // it while any child still runs, so chips keep their status without re-projecting the
-  // whole conversation.
+  // 子智能体条带的活跃孩子：投影作种子，有孩子仍在运行时 1.5s 轮询刷新，
+  // chip 状态保持更新而无需重新投影整个会话。
   const liveSubagents = useLiveSubagents(conversationId, subagents)
-  // DSH mounts its running status at the end of the flow; ZCode decides whether the
-  // turn-tail spinner may show at all. Both point at the same place: the transcript tail.
+  // DSH 把运行状态挂在流程末尾；ZCode 决定回合尾 spinner 是否允许显示。
+  // 两者指向同一位置：转录尾部。
   const tailLoading = turnChatLoadingVisible({
     isRunning: running,
     blockedByInteraction: interactionBlocksTurnLoading(interactions),
@@ -190,12 +194,12 @@ function TurnRunningIndicator({ t }: { t: Translate }) {
   )
 }
 
-/** One recorded system message, rendered as the transcript's own status row. */
+/** 一条已记录的系统消息，渲染为转录自己的状态行。 */
 function SystemMessageRow({ message }: { message: ChatMessage }) {
   return <div className={css.systemMessage}>{messageText(message)}</div>
 }
 
-/** The live compaction marker; it belongs to the turn that is compacting. */
+/** 活跃压缩标记；归属正在压缩的回合。 */
 function CompactionRunningRow({ t }: { t: Translate }) {
   return (
     <div className={`${css.systemMessage} ${css.compactionRunning}`} role="status" aria-live="polite">
@@ -206,15 +210,25 @@ function CompactionRunningRow({ t }: { t: Translate }) {
 }
 
 
+/**
+ * 功能：单个 run 的转录段：首条用户行 → 工作分组 → 答案前的系统行 → 各段响应 →
+ * 答案后的系统行 → 失败/停止重试条 → 活跃压缩标记。
+ * @param run 渲染 run
+ * @param latest 是否为最新 run
+ * @param live 会话仍在运行这个最新回合
+ * @param liveCompaction 活跃压缩标记归属正在压缩的回合
+ * @param policy 呈现策略（透传给 ProcessGroup）
+ * 其余参数为各类回调与共享载荷（replies/interactions/labels）。
+ */
 function RunTranscript({
   run, latest, live, liveCompaction, policy, subagents, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
-  /** The conversation is still running this latest turn. */
+  /** 会话仍在运行这个最新回合。 */
   live: boolean
-  /** The live compaction marker belongs to the turn that is compacting. */
+  /** 活跃压缩标记归属正在压缩的回合。 */
   liveCompaction: boolean
   policy: ChatPresentationPolicy
   subagents?: readonly SubagentSummary[]
@@ -256,8 +270,8 @@ function RunTranscript({
           labels={labels} resolveFileImage={resolveFileImage} t={t} />
       ))}
       {run.systemRows.filter(row => !row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
-      {/* DSH's turn-tail plan card (`ui-plan/index.ts:79-96`) is carried by the
-          `exit_plan_mode` tool row, which renders the same card in its body. */}
+      {/* DSH 的回合尾计划卡（`ui-plan/index.ts:79-96`）由 `exit_plan_mode` 工具行承载，
+          该行在自身正文里渲染同一张卡。 */}
       {run.responses.length === 0 && (run.status === 'error' || run.status === 'cancelled') && (
         <div className={css.retryNotice} data-status={run.status} role={run.status === 'error' ? 'alert' : 'status'}>
           <span>{run.status === 'error' ? t('回答失败', 'Response failed') : t('回答已停止', 'Response stopped')}</span>
@@ -280,10 +294,17 @@ function RunTranscript({
 }
 
 /**
- * DSH's turn-tail plan card (`ui-plan/index.ts:79-96`, `PlanCard.tsx:43-60`) sits at the end of
- * the turn that submitted the plan; in Pi the plan lives on the `exit_plan_mode` tool row, which
- * already carries the same "计划 · Markdown" label and heading title, so the card is rendered
- * there (`ToolCard.tsx`) instead of being duplicated after the answer.
+ * DSH 的回合尾计划卡（`ui-plan/index.ts:79-96`、`PlanCard.tsx:43-60`）位于提交计划的回合末尾；
+ * Pi 中计划挂在 `exit_plan_mode` 工具行上，该行已带同样的「计划 · Markdown」标签与标题，
+ * 因此卡片在那里渲染（`ToolCard.tsx`），而不在答案后重复一份。
+ */
+/**
+ * 功能：用户消息气泡行：内容块按纯文本渲染，带时间戳与复制按钮。
+ * @param message 用户消息
+ * @param onOpenFile 打开文件回调（文件块点击）
+ * @param resolveFileImage 工作区图片地址解析
+ * @param t 双语标签函数
+ * 内部逻辑：无可见内容块不渲染；复制走 navigator.clipboard，1.5s 恢复按钮态。
  */
 function MessageRow({ message, onOpenFile, resolveFileImage, t }: {
   message: ChatMessage
@@ -325,15 +346,24 @@ function MessageRow({ message, onOpenFile, resolveFileImage, t }: {
   )
 }
 
+/**
+ * 功能：一个 run 的工作分组：可折叠头（标题 + 可选正文预览）与过程体。
+ * @param run 渲染 run
+ * @param latest / live 驱动自动展开的边界事实
+ * @param policy 呈现策略（stepGrouping 决定折叠形态，liveReasoningPreview 传给思考块）
+ * @param subagents 会话的活跃子智能体投影（供内联条带）
+ * 其余为过程部件渲染所需的回调与载荷。
+ * 内部逻辑：autoOpen 只在 live/latest 边界移动（run 接管/落定/被取代），普通重投影帧保持不动，组不会自己开合抖动；manualOpen 是用户手动翻转；夹带用户输入时强制展开且 header 禁点；折叠时头部显示 foldedProsePreview（装饰性）；带内联插件页的成功工具行钉在折叠区外（pinned），避免折叠时页面消失；连续子智能体调用在 groupSubagentRuns 中折叠成条带。
+ */
 function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
-  /** The conversation is still running this latest turn. */
+  /** 会话仍在运行这个最新回合。 */
   live: boolean
   policy: ChatPresentationPolicy
   t: Translate
-  /** The conversation's live subagent projection, for the inline strips. */
+  /** 会话的活跃子智能体投影，供内联条带使用。 */
   subagents?: readonly SubagentSummary[]
   onOpenFile?: TranscriptProps['onOpenFile']
   onInspectDiff?: TranscriptProps['onInspectDiff']
@@ -350,11 +380,11 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   interactions?: readonly InteractionRequest[]
 }) {
   const hasInterleavedUser = run.process.some(part => part.kind === 'user')
-  // Keep a work header while preserving each display mode's default expansion.
-  // Verbose mode remains flat and interleaved user messages stay visible.
+  // 保留工作头部同时遵循各显示档的默认展开。
+  // verbose 保持平铺，交错用户消息保持可见。
   const grouped = policy.stepGrouping !== 'none'
-  // The auto open state moves only on a live/latest boundary (a run taking over, settling,
-  // or being superseded); ordinary re-projected frames keep it, so the group never flaps.
+  // 自动展开态只在 live/latest 边界移动（run 接管、落定或被取代）；普通重投影帧
+  // 保持原值，分组不会自己开合抖动。
   const [autoOpen, setAutoOpen] = useState(() => defaultProcessOpen(policy, latest, live, hasInterleavedUser))
   const previousFrame = useRef({ live, latest })
   useEffect(() => {
@@ -369,20 +399,19 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
-  // A folded group also hides the prose the model wrote beside its tool calls; naming that
-  // prose in the header keeps the substance one click away instead of behind a duration.
+  // 折叠的分组还会藏起模型伴随工具调用写的正文；在头部点出这段正文，
+  // 让实质内容保持一键可达，而不是藏在耗时后面。
   const preview = open || live ? undefined : foldedProsePreview(run)
-  // ZCode keeps a successful tool row with an inline plugin page outside the folded
-  // history region. Otherwise the page would disappear when the work group collapses
-  // and the final answer would take its place.
+  // ZCode 把带内联插件页的成功工具行留在折叠历史区之外。否则分组收起时页面
+  // 会消失，最终答案顶替它的位置。
   type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
   const pinned = grouped
     ? run.process.filter((part): part is ToolPart => part.kind === 'tool'
       && showsInlinePluginUi(part.item.result?.details, part.item.result))
     : []
   const inline = pinned.length === 0 ? run.process : run.process.filter(part => !pinned.includes(part as ToolPart))
-  // Consecutive subagent calls fold into inline strips here (a codemode call lifts its
-  // nested subagents into a strip of its own); every other part passes through.
+  // 连续的子智能体调用在此折叠成内联条带（codemode 调用会把嵌套子智能体提升成
+  // 自己的条带）；其余部件原样通过。
   const parts = useMemo(
     () => groupSubagentRuns(inline, t, live, subagents),
     [inline, t, live, subagents],
@@ -414,7 +443,7 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
         <span className={css.processTitle} data-running={live || undefined}>{title}</span>
         <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-        {/* Decorative hint: the header keeps its duration as the accessible name. */}
+        {/* 装饰性提示：可访问名称仍是头部自带的耗时。 */}
         {preview !== undefined && <span className={css.processPreview} data-process-preview="" aria-hidden="true">{preview}</span>}
       </button>
       <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
@@ -423,6 +452,13 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   </>
 }
 
+/**
+ * 功能：单个过程部件的分派渲染：user → 消息行；tool → 工具卡；toolGroup → 分组卡；
+ * content → 过程正文；reasoning → 思考块。
+ * @param part 过程部件
+ * @param runRunning run 是否在运行（影响工具行状态）
+ * 其余为透传回调与载荷。
+ */
 function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, replies, interactions }: {
   part: ProcessPart
@@ -459,13 +495,23 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
   return <ReasoningBlock id={part.key} text={part.text} streaming={part.streaming} redacted={part.redacted} preview={policy.liveReasoningPreview} t={t} />
 }
 
+/**
+ * 功能：一段助手响应：Markdown 答案 + 失败/停止提示 + 改动文件卡 + 操作栏
+ * （复制、点赞点踩、分叉、重试、用量菜单、时间戳）。
+ * @param response 响应段（一条助手消息的内容块）
+ * @param run 所属 run（状态/产物/usage）
+ * @param last 是否为本 run 最后一段响应（重试/改动文件/用量只挂最后一段）
+ * @param live 会话仍在运行这个最新回合
+ * @param showChanges 是否开启编码视图（含改动文件卡）
+ * 内部逻辑：streaming = 消息流式或 run 状态 running 或会话 live——run 状态在两次工具轮之间会短暂回落 completed，会话级 live 让末态操作、用量与改动文件保持隐藏直到真正落定；fileMentions 把 run 产出的文件路径接进 Markdown 行内代码。
+ */
 function AssistantResponse({ response, run, last, live, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
   response: ResponsePart
   run: RenderRun
   last: boolean
-  /** The conversation is still running this latest turn. */
+  /** 会话仍在运行这个最新回合。 */
   live: boolean
-  /** Whether the coding views (including the changed-files card) are on. */
+  /** 编码视图（含改动文件卡）是否开启。 */
   showChanges?: boolean
   onInspectDiff?: TranscriptProps['onInspectDiff']
   onFork?: TranscriptProps['onFork']
@@ -481,8 +527,8 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
   const [copied, setCopied] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const text = responseText(response)
-  // The run status drops to completed between tool rounds; the conversation-level
-  // live flag keeps end-state actions, usage and changed files hidden until it settles.
+  // run 状态在两次工具轮之间会回落为 completed；会话级 live 标志让末态操作、
+  // 用量与改动文件保持隐藏，直到回合真正落定。
   const streaming = message.streaming === true || run.status === 'running' || live
   const entryId = message.entryId
   const mentionPaths = useMemo(() => [...new Set(run.artifacts
@@ -580,6 +626,14 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
   )
 }
 
+/**
+ * 功能：单个内容块的渲染分派：text 按场景（用户纯文本 / 答案 Markdown / 过程 Markdown）；
+ * thinking 与 toolCall 在转录区由专用组件渲染，这里返回 null；image → 灯箱；file → 文件 chip。
+ * @param block 内容块
+ * @param streaming 该块是否流式
+ * @param plainText 用户气泡内的纯文本模式
+ * @param answer 答案区模式（用 AnswerMarkdown，带文件提及与图片路径解析）
+ */
 function ContentBlockView({ block, streaming = false, plainText = false, answer = false, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
   block: ContentBlock
   streaming?: boolean
@@ -612,6 +666,7 @@ function ContentBlockView({ block, streaming = false, plainText = false, answer 
   }
 }
 
+/** 可点击放大的图片块：缩略按钮 + DSH ImageLightbox 全屏预览。 */
 function ImageBlock({ url, alt }: { url: string; alt: string }) {
   const { t } = useUiPreferences()
   const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -626,6 +681,10 @@ function ImageBlock({ url, alt }: { url: string; alt: string }) {
   )
 }
 
+/**
+ * 功能：消息里的文件块：图片类型解析出预览地址走 ImageBlock；否则渲染文件 chip
+ * （字形 + 文件名 + 大小），点击经 onOpenFile 打开。
+ */
 function FileBlock({ block, onOpenFile, resolveFileImage, t }: {
   block: Extract<ContentBlock, { type: 'file' }>
   onOpenFile?: TranscriptProps['onOpenFile']
@@ -645,6 +704,9 @@ function FileBlock({ block, onOpenFile, resolveFileImage, t }: {
   )
 }
 
+/**
+ * 功能：乐观 UI 的「待落盘」消息行：渲染发送中的文本、图片/文件附件与状态（发送中/已接收）。
+ */
 function PendingRow({ message, onOpenFile, t }: { message: PendingMessage; onOpenFile?: TranscriptProps['onOpenFile']; t: Translate }) {
   const files = [...message.images, ...(message.files ?? [])]
   return (
@@ -665,11 +727,12 @@ function PendingRow({ message, onOpenFile, t }: { message: PendingMessage; onOpe
   )
 }
 
+/** 响应段的纯文本（只收 text 块），供复制按钮使用。 */
 function responseText(response: ResponsePart): string {
   return response.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
 
-/** One read-only row of the turn usage panel. */
+/** 用量菜单里的一行只读数据（label + 数值/金额）。 */
 function UsageRow({ label, value, money = false, separatorBefore = false, onSelect }: {
   label: string
   value: number
@@ -682,7 +745,13 @@ function UsageRow({ label, value, money = false, separatorBefore = false, onSele
   </MenuItemButton>
 }
 
-/** Resolve inline-code tokens that name a file this run wrote, matching DSH's mention vocabulary. */
+/**
+ * 功能：把行内代码 token 解析成本 run 写过的文件，形成 Markdown 文件提及（对齐 DSH 词表）。
+ * @param paths 本 run 产出的去重路径
+ * @param open 点击提及时的打开回调
+ * @param label 提及的展示文案
+ * 内部逻辑：完整路径直接匹配；否则按 basename 唯一匹配（多个同名文件不解析）。
+ */
 function producedFileMentions(paths: readonly string[], open: (path: string) => void, label: (path: string) => string): MarkdownFileMentions {
   const onlyWithBasename = (value: string): string | undefined => {
     const matches = paths.filter(path => pathBasename(path) === value)
@@ -697,25 +766,29 @@ function producedFileMentions(paths: readonly string[], open: (path: string) => 
   }
 }
 
+/** 路径的 basename（兼容 Windows 反斜杠）。 */
 function pathBasename(path: string): string {
   return path.split(/[/\\]/u).at(-1) ?? path
 }
 
-/** Turn an authored absolute image destination into this workspace's asset URL. */
+/** 把模型写出的图片目标地址解析成本工作区的资产 URL。 */
 function localPathMediaUrl(value: string, resolveFileImage: NonNullable<TranscriptProps['resolveFileImage']>): string | undefined {
   const file = parseAnswerFileLink(value)
   return file ? resolveFileImage(file.path) : undefined
 }
 
+/** 消息时间戳的 HH:mm 展示（24 小时制，按 UI 语言选 locale）。 */
 function formatClock(timestamp: number, locale: 'zh' | 'en'): string {
   return new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(timestamp)
 }
 
+/** 时间戳的 ISO 形式（供 `<time dateTime>`）；非法时间返回 undefined。 */
 function safeIsoTime(timestamp: number): string | undefined {
   if (!Number.isFinite(timestamp) || Number.isNaN(new Date(timestamp).getTime())) return undefined
   return new Date(timestamp).toISOString()
 }
 
+/** 文件大小的 B/KB/MB 展示；非法尺寸显示「未知大小」。 */
 function formatFileSize(size: number, t: Translate): string {
   if (!Number.isFinite(size) || size < 0) return t('未知大小', 'Unknown size')
   if (size < 1024) return `${size} B`
@@ -723,6 +796,7 @@ function formatFileSize(size: number, t: Translate): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** 把文件产物转换成 inspector 的 diff 载荷。 */
 function inspectorDiff(artifact: FileArtifact): InspectorDiff {
   return {
     path: artifact.path,

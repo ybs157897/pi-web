@@ -26,15 +26,15 @@ import type { AgentChange } from '@earendil-works/pi-durable'
 import type { ChildModelRef, ChildModelResolver } from '../agents/builtins.ts'
 
 /**
- * Agent Teams, following DSH `packages/experimental/agent-team`.
+ * Agent Teams，遵循 DSH `packages/experimental/agent-team`。
  *
- * The Lead conversation owns the durable roster and the shared task board (DSH stores both as
- * full snapshots in the Lead session log; here they are two arrays in one conversation document).
- * A teammate is an ordinary task-owned child conversation, the same seam `subagent-tools.ts` uses,
- * so the child inherits the Lead's agent configuration. Every mutation is a compare-and-set on the
- * task revision, exactly like `task-board.ts:105-211`.
+ * Lead 会话持有持久的成员名册与共享任务看板（DSH 把两者作为完整快照存在 Lead 会话
+ * 日志里；这里是一个会话文档中的两个数组）。teammate 是普通的任务归属子会话，与
+ * `subagent-tools.ts` 用同一接缝，因此子会话继承 Lead 的 agent 配置。每次变更都是
+ * 对任务 revision 的 compare-and-set，与 `task-board.ts:105-211` 完全一致。
  */
 
+/** team 扩展的九个工具名。 */
 export const TEAM_TOOL_NAMES = [
   'spawn_teammate',
   'send_message',
@@ -47,7 +47,7 @@ export const TEAM_TOOL_NAMES = [
   'team_task_update',
 ] as const
 
-/** DSH defaults: `agent-team/src/index.ts:42-45`. */
+/** DSH 默认值：`agent-team/src/index.ts:42-45`。以下为团队容量与消息/文本限制。 */
 export const MAX_TEAM_MEMBERS = 16
 export const MAX_TEAM_TASKS = 256
 export const MAX_TEAM_MESSAGE_BYTES = 65_536
@@ -58,11 +58,12 @@ export const MIN_WAIT_MS = 10_000
 export const MAX_WAIT_MS = 3_600_000
 export const DEFAULT_WAIT_MS = 30_000
 
-/** The Lead pseudo-member's model-facing name; reserved and never reusable (DSH `roster.ts:436-444`). */
+/** Lead 伪成员面向模型的名称；保留且永不复用（DSH `roster.ts:436-444`）。 */
 export const LEAD_NAME = 'lead'
+/** 成员名的合法格式：小写 kebab-case。 */
 const MEMBER_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 
-/** One durable roster row, mirroring DSH's `TeamMemberSnapshot` (`types.ts:47-56`). */
+/** 一行持久名册记录，对应 DSH 的 `TeamMemberSnapshot`（`types.ts:47-56`）。 */
 export type TeamMemberRecord = {
   name: string
   role: 'lead' | 'teammate'
@@ -72,7 +73,7 @@ export type TeamMemberRecord = {
   error?: string
 }
 
-/** DSH's `TeamTaskSnapshot` (`types.ts:74-84`) plus the durable timestamps the panel orders by. */
+/** DSH 的 `TeamTaskSnapshot`（`types.ts:74-84`）加上面板排序所需的持久时间戳。 */
 export type TeamTaskRecord = {
   id: string
   revision: number
@@ -86,9 +87,10 @@ export type TeamTaskRecord = {
   updatedAt: number
 }
 
+/** Team 文档的值：成员名册与任务列表两个数组。 */
 export type TeamDocValue = { members: TeamMemberRecord[]; tasks: TeamTaskRecord[] }
 
-/** `pi-web.team` lives on the Lead conversation; `agent-team/src/index.ts:56-109` owns the same state. */
+/** `pi-web.team` 文档挂在 Lead 会话上；`agent-team/src/index.ts:56-109` 持有同样的状态。 */
 export const Team = defineDoc<TeamDocValue>({
   kind: 'pi-web.team',
   version: 1,
@@ -99,8 +101,8 @@ export const Team = defineDoc<TeamDocValue>({
 })
 
 /**
- * Written on a teammate's own conversation so its team tools resolve the Lead's board instead of
- * creating a second, empty team. DSH resolves this through the child's `parentSession` header.
+ * 写在 teammate 自己的会话上，让它的 team 工具解析到 Lead 的看板，而不是再建第二个
+ * 空团队。DSH 经子会话的 `parentSession` 头解析同一件事。
  */
 export const TeamLink = defineDoc<{ leadConversationId: string | null; name: string | null }>({
   kind: 'pi-web.team-member',
@@ -112,11 +114,11 @@ export const TeamLink = defineDoc<{ leadConversationId: string | null; name: str
 })
 
 /**
- * Background anchor task per Lead conversation. DSH's teammates are continuable children that do not
- * keep the Lead busy; Pi's equivalent is documented in the pi-durable README ("A task created with
- * `{ background: true }` is a boundary: work it owns survives the parent's abort and does not keep
- * the parent busy") — member conversations are owned by this parked task, so a running teammate
- * never blocks the Lead's own run, while `interrupt_agent` still aborts the member directly.
+ * 每个 Lead 会话一个的后台锚点任务。DSH 的 teammates 是 continuable 子会话，不会让
+ * Lead 保持忙碌；Pi 中的等价物在 pi-durable README 有说明（"以 `{ background: true }`
+ * 创建的任务是一个边界：它拥有的工作在父任务中止后仍然存活，也不会让父任务忙碌"）——
+ * 成员会话归属这个停驻任务，因此运行中的 teammate 永不阻塞 Lead 自己的运行，而
+ * `interrupt_agent` 仍可直接中止成员。
  */
 export const TeamAnchors = defineDoc<{ taskId: number | null }>({
   kind: 'pi-web.team-anchor',
@@ -132,7 +134,7 @@ const TeamAnchor = defineTask<{ lead: string }, { phase: 'anchor' }, null, objec
   version: 1,
   initial: () => ({ phase: 'anchor' }),
   phases: {
-    // Park for the lifetime of the runtime; the reconciliation edge is the owner link itself.
+    // 在 runtime 的整个生命周期内停驻；对账边界就是 owner 链接本身。
     anchor: async (_task, runtime, context) => {
       if (!runtime.signal.aborted) {
         await new Promise<void>((resolve) => {
@@ -145,7 +147,7 @@ const TeamAnchor = defineTask<{ lead: string }, { phase: 'anchor' }, null, objec
           outcome: { status: 'aborted' as const, reason: 'team anchor released' },
         }), context)
       } catch {
-        // The Harness is closing: the parked boundary has nothing left to record.
+        // Harness 正在关闭：停驻的边界已无内容可记录。
       }
     },
   },
@@ -157,7 +159,7 @@ const TeamAnchor = defineTask<{ lead: string }, { phase: 'anchor' }, null, objec
   },
 })
 
-/** Stable rule codes; tool errors surface the message, tests assert the category. */
+/** 稳定的规则码；工具错误向模型展示 message，测试断言 category。 */
 export type TeamRuleCode =
   | 'invalid-argument'
   | 'invalid-member-name'
@@ -181,6 +183,7 @@ export type TeamRuleCode =
   | 'invalid-timeout'
   | 'provisioning-conflict'
 
+/** 团队规则错误：携带稳定的 TeamRuleCode，工具错误用它分类。 */
 export class TeamRuleError extends Error {
   constructor(message: string, readonly code: TeamRuleCode) {
     super(message)
@@ -188,10 +191,10 @@ export class TeamRuleError extends Error {
   }
 }
 
-/** Who mutates one task: the Lead, or a teammate by its durable name. */
+/** 一次任务变更的发起方：Lead，或按持久名称标识的 teammate。 */
 export type TeamActor = { lead: boolean; name: string }
 
-/** Trimmed non-empty text, bounded; DSH `validation.ts:12-19`. */
+/** 必填文本校验：trim、非空、限长；DSH `validation.ts:12-19`。 */
 export function requiredText(value: string, field: string, maxLength: number): string {
   const text = value.trim()
   if (text === '') throw new TeamRuleError(`${field} must be non-empty`, 'invalid-argument')
@@ -200,8 +203,11 @@ export function requiredText(value: string, field: string, maxLength: number): s
 }
 
 /**
- * DSH `validation.ts:26-34`: slash-normalize one workspace-relative prefix and reject absolute,
- * drive-letter, empty-segment and parent-traversal values. The scope is advisory, never a lock.
+ * 功能：规范化一个 workspace 相对前缀（DSH `validation.ts:26-34`）：斜杠统一，拒绝
+ * 绝对路径、盘符、空段与父目录穿越值。
+ * 边界：写入范围只是建议性标注，永远不是锁。
+ * @param value 原始范围字符串。
+ * @returns 规范化后的范围。
  */
 export function normalizeWriteScope(value: string): string {
   const normalized = value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+$/u, '')
@@ -213,12 +219,12 @@ export function normalizeWriteScope(value: string): string {
   return normalized
 }
 
-/** Normalize and de-duplicate the advisory scopes (`task-board.ts:234-237`). */
+/** 规范化并去重建议性写入范围（`task-board.ts:234-237`）。 */
 export function normalizeWriteScopes(values: readonly string[]): string[] {
   return [...new Set(values.map(normalizeWriteScope))]
 }
 
-/** DSH `roster.ts:436-444`: lower-kebab-case, at most 64 characters, never `lead`. */
+/** 成员名规则：DSH `roster.ts:436-444`——小写 kebab-case、至多 64 字符、不得为 `lead`。 */
 export function normalizeMemberName(value: string): string {
   if (!MEMBER_NAME.test(value) || value.length > MAX_TEAM_NAME_LENGTH || value === LEAD_NAME) {
     throw new TeamRuleError(
@@ -229,16 +235,17 @@ export function normalizeMemberName(value: string): string {
   return value
 }
 
-/** Whether every current blocker completed (`task-view.ts:24-26`). */
+/** 判断任务的全部当前阻塞项是否都已完成（`task-view.ts:24-26`）。 */
 export function taskReady(tasks: readonly TeamTaskRecord[], task: TeamTaskRecord): boolean {
   return task.blockedBy.every(id => tasks.find(candidate => candidate.id === id)?.status === 'completed')
 }
 
+/** 两个写入范围是否重叠（相等或互为路径前缀）。 */
 function scopesOverlap(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
 }
 
-/** One detached wire view (`task-view.ts:37-62`), with the explicit `blocked` flag the panel uses. */
+/** 一个独立的线上视图（`task-view.ts:37-62`），带面板使用的显式 `blocked` 标记。 */
 export function taskView(tasks: readonly TeamTaskRecord[], task: TeamTaskRecord): TeamTaskView {
   const warnings = new Set<string>()
   for (const other of tasks) {
@@ -266,8 +273,10 @@ export function taskView(tasks: readonly TeamTaskRecord[], task: TeamTaskRecord)
 }
 
 /**
- * Detect a dependency cycle among non-deleted tasks (`task-graph.ts:54-69`); a self edge counts.
- * Returns the id where the cycle closes, or undefined.
+ * 功能：在非删除任务间检测依赖环（`task-graph.ts:54-69`）；自环也算环。
+ * 内部逻辑：DFS 三色标记（visiting/visited），发现回边即返回成环处 id。
+ * @param tasks 全部任务记录。
+ * @returns 环闭合处的任务 id；无环时 undefined。
  */
 export function detectCycle(tasks: readonly TeamTaskRecord[]): string | undefined {
   const active = new Map(tasks.filter(task => task.status !== 'deleted').map(task => [task.id, task]))
@@ -294,7 +303,7 @@ export function detectCycle(tasks: readonly TeamTaskRecord[]): string | undefine
   return undefined
 }
 
-/** Validate a complete candidate graph (`task-graph.ts:26-69`). */
+/** 校验一份完整的候选任务图（`task-graph.ts:26-69`）：自环、重复阻塞项、缺失阻塞项与依赖环。 */
 function assertTaskGraph(tasks: readonly TeamTaskRecord[]): void {
   const active = new Map(tasks.filter(task => task.status !== 'deleted').map(task => [task.id, task]))
   for (const task of active.values()) {
@@ -316,7 +325,7 @@ function assertTaskGraph(tasks: readonly TeamTaskRecord[]): void {
   if (cycle !== undefined) throw new TeamRuleError(`task dependency cycle includes "${cycle}"`, 'dependency-cycle')
 }
 
-/** Validate and de-duplicate blocker ids against the current board, self included (`task-board.ts:213-232`). */
+/** 对照当前看板校验并去重阻塞项 id（含自引用检查）（`task-board.ts:213-232`）。 */
 function validateDependencies(tasks: readonly TeamTaskRecord[], values: readonly string[], selfId?: string): string[] {
   const seen = new Set<string>()
   const result: string[] = []
@@ -334,6 +343,7 @@ function validateDependencies(tasks: readonly TeamTaskRecord[], values: readonly
   return result
 }
 
+/** 生成本看板的下一个任务 id：取现有 `task-N` 的最大 N 加一。 */
 function nextTaskId(tasks: readonly TeamTaskRecord[]): string {
   let max = 0
   for (const task of tasks) {
@@ -343,6 +353,7 @@ function nextTaskId(tasks: readonly TeamTaskRecord[]): string {
   return `task-${max + 1}`
 }
 
+/** 创建任务的输入：主题、描述、可选阻塞项与建议写入范围。 */
 export type CreateTaskInput = {
   subject: string
   description: string
@@ -350,7 +361,7 @@ export type CreateTaskInput = {
   writeScopes?: readonly string[]
 }
 
-/** Create one unowned pending revision-one task (`task-board.ts:44-69`). */
+/** 创建一个无负责人、pending、revision 1 的任务（`task-board.ts:44-69`）。 */
 export function createTask(doc: TeamDocValue, input: CreateTaskInput, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   const active = doc.tasks.filter(task => task.status !== 'deleted').length
   if (active >= MAX_TEAM_TASKS) throw new TeamRuleError(`Team task limit ${MAX_TEAM_TASKS} reached`, 'task-limit')
@@ -374,13 +385,14 @@ export function createTask(doc: TeamDocValue, input: CreateTaskInput, now: numbe
   return { doc: { members: doc.members, tasks }, task }
 }
 
+/** 按任务 id 定位任务；不存在抛 task-not-found。 */
 function locateTask(doc: TeamDocValue, taskId: string): TeamTaskRecord {
   const task = doc.tasks.find(candidate => candidate.id === taskId)
   if (task === undefined) throw new TeamRuleError(`team task "${taskId}" not found`, 'task-not-found')
   return task
 }
 
-/** Compare-and-set one transition (`task-board.ts:105-211`): stale or deleted refuses before the action. */
+/** 以 compare-and-set 执行一次状态迁移（`task-board.ts:105-211`）：revision 过期或已删除在动作前拒绝。 */
 function mutateTask(
   doc: TeamDocValue,
   taskId: string,
@@ -405,18 +417,20 @@ function mutateTask(
   return { doc: { members: doc.members, tasks }, task: next }
 }
 
+/** 权限检查：非 Lead 只能变更自己拥有的任务。 */
 function authorizeOwner(task: TeamTaskRecord, actor: TeamActor): void {
   if (!actor.lead && task.owner !== actor.name) {
     throw new TeamRuleError('task mutation requires its owner or Team Lead', 'unauthorized')
   }
 }
 
+/** 返回去掉 owner 字段的任务记录（回到无负责人状态）。 */
 function withoutOwner(task: TeamTaskRecord): TeamTaskRecord {
   const { owner: _owner, ...rest } = task
   return rest
 }
 
-/** Claim: ready, unowned (or already the caller's), then in progress (`task-board.ts:129-137`). */
+/** 认领任务：须就绪、无主（或已是调用方的），然后转 in_progress（`task-board.ts:129-137`）。 */
 export function claimTask(doc: TeamDocValue, taskId: string, expectedRevision: number, owner: string, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     if (current.owner !== undefined && current.owner !== owner) {
@@ -429,7 +443,7 @@ export function claimTask(doc: TeamDocValue, taskId: string, expectedRevision: n
   }, now)
 }
 
-/** Release an in-progress task back to the unowned pool (`task-board.ts:138-141`). */
+/** 把进行中的任务释放回无主池（`task-board.ts:138-141`）。 */
 export function releaseTask(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     authorizeOwner(current, actor)
@@ -438,7 +452,7 @@ export function releaseTask(doc: TeamDocValue, taskId: string, expectedRevision:
   }, now)
 }
 
-/** Edit the text or advisory scopes (`task-board.ts:143-156`). */
+/** 编辑任务文本或建议性写入范围（`task-board.ts:143-156`）。 */
 export function editTask(
   doc: TeamDocValue,
   taskId: string,
@@ -461,7 +475,7 @@ export function editTask(
   }, now)
 }
 
-/** Replace the complete blocker list, self-reference and cycles rejected (`task-board.ts:157-161`). */
+/** 整体替换阻塞项列表，拒绝自引用与依赖环（`task-board.ts:157-161`）。 */
 export function setDependencies(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, blockedBy: readonly string[], now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     authorizeOwner(current, actor)
@@ -469,7 +483,7 @@ export function setDependencies(doc: TeamDocValue, taskId: string, expectedRevis
   }, now)
 }
 
-/** Complete an in-progress task (`task-board.ts:162-166`). */
+/** 完成一个进行中的任务（`task-board.ts:162-166`）。 */
 export function completeTask(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     authorizeOwner(current, actor)
@@ -478,7 +492,7 @@ export function completeTask(doc: TeamDocValue, taskId: string, expectedRevision
   }, now)
 }
 
-/** Reopen a completed task as unowned pending (`task-board.ts:167-171`). */
+/** 把已完成任务重新打开为无主的 pending（`task-board.ts:167-171`）。 */
 export function reopenTask(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     authorizeOwner(current, actor)
@@ -488,8 +502,8 @@ export function reopenTask(doc: TeamDocValue, taskId: string, expectedRevision: 
 }
 
 /**
- * Lead-only assignment (`task-board.ts:172-188`). Omitting the owner unassigns and returns the task
- * to pending; assigning requires readiness and an active member (or the Lead itself).
+ * 仅限 Lead 的指派（`task-board.ts:172-188`）。省略 owner 即取消指派并回到 pending；
+ * 指派要求任务就绪且成员处于 active（或指给 Lead 本身）。
  */
 export function reassignTask(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, owner: string | undefined, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
@@ -507,7 +521,7 @@ export function reassignTask(doc: TeamDocValue, taskId: string, expectedRevision
   }, now)
 }
 
-/** Delete a task no active task still depends on (`task-board.ts:189-198`). */
+/** 删除一个没有其他活动任务依赖它的任务（`task-board.ts:189-198`）。 */
 export function deleteTask(doc: TeamDocValue, taskId: string, expectedRevision: number, actor: TeamActor, now: number): { doc: TeamDocValue; task: TeamTaskRecord } {
   return mutateTask(doc, taskId, expectedRevision, current => {
     authorizeOwner(current, actor)
@@ -520,46 +534,47 @@ export function deleteTask(doc: TeamDocValue, taskId: string, expectedRevision: 
   }, now)
 }
 
-/** Live turn status plus the child's model, supplied by the runtime. */
+/** 会话的实时回合状态与子会话模型，由 runtime 提供。 */
 export type TeamConversationInfo = { status: 'running' | 'inactive'; model?: string }
 
 /**
- * Durable evidence about one provisioned member session, gathered outside the tool's commit.
- * DSH's reconciliation reads the persisted child Session directly (`roster.ts:385-397`); Pi has
- * no session-log reader in the tool API, so the runtime answers the same questions from the
- * conversation table, the child's `pi-web.team-member` link, and its submission record.
+ * 关于一个已供应成员会话的持久证据，在工具 commit 之外收集。DSH 的对账直接读取持久化
+ * 的子 Session（`roster.ts:385-397`）；Pi 的工具 API 没有会话日志读取器，runtime 从
+ * 会话表、子会话的 `pi-web.team-member` 链接与其提交记录回答同样的问题。
  */
 export type MemberSessionState = {
-  /** The child conversation record exists. */
+  /** 子会话记录存在。 */
   exists: boolean
-  /** The child's link document points back at this Lead under this member name. */
+  /** 子会话的链接文档以该成员名指回此 Lead。 */
   linked: boolean
-  /** The initial prompt submission (`team-spawn:<lead>:<name>`) was durably rejected or withdrawn. */
+  /** 初始 prompt 提交（`team-spawn:<lead>:<name>`）被持久拒绝或撤回。 */
   promptRejected: boolean
-  /** The child currently has a live run, so its creator is still completing in this process. */
+  /** 子会话当前有存活运行，其创建者仍在本进程内完成收尾。 */
   running: boolean
 }
 
-/** The document access a reconciliation needs; the tool API and the runtime both satisfy it. */
+/** 对账所需的文档访问；工具 API 与 runtime 双方都能满足。 */
 export type TeamDocAccess = {
   read: (leadId: ConversationId, context: Context) => Promise<TeamDocValue | undefined>
   commit: (change: (tx: Tx) => void | Promise<void>, context: Context) => Promise<void>
 }
 
-/** What the runtime reports about a member's child conversation. */
+/** runtime 对一个成员子会话的探针函数。 */
 export type MemberSessionProbe = (conversationId: string, leadId: ConversationId, name: string) => Promise<MemberSessionState>
 
 /**
- * DSH's provisioning reconciliation (`roster.ts:375-417`): a member left in `provisioning` whose
- * child Session no longer exists — or cannot be resumed as this member's continuation — becomes
- * `failed` with the reason on its row. A live child is skipped: its creator still owns the
- * terminal edge in this process (`roster.ts:379-382`).
+ * 功能：DSH 的 provisioning 对账（`roster.ts:375-417`）：停留在 `provisioning` 的成员，
+ * 其子会话已不存在——或不能作为该成员的续篇恢复——则变为 `failed` 并在行上写原因。
+ * 存活的子会话跳过：其创建者在本进程内仍持有终态边（`roster.ts:379-382`）。
  *
- * Pi difference: the child is a durable conversation, so "resumable" means the record exists and
- * its link still names this member; an initial prompt the inbox explicitly rejected is the one
- * terminal failure the reconciliation can see. A prompt never submitted (a crash between child
- * creation and submission) stays `active` because the replay path re-submits it under the same
- * request ID — DSH's continuation is not resumable in that state (`roster.ts:389-394`).
+ * Pi 差异：子会话是持久会话，"可恢复"意味着记录存在且链接仍指向该成员；收件箱显式
+ * 拒绝的初始 prompt 是对账可见的唯一终态失败。从未提交的 prompt（子会话创建与提交
+ * 之间崩溃）保持 `active`，因为重放路径会以同一请求 ID 重新提交——DSH 的 continuation
+ * 在该状态下不可恢复（`roster.ts:389-394`）。
+ * @param access 文档读/写通道。
+ * @param options 含 memberSession 探针。
+ * @param leadId Lead 会话 id。
+ * @param context 执行上下文。
  */
 export async function reconcileProvisioning(
   access: TeamDocAccess,
@@ -583,7 +598,7 @@ export async function reconcileProvisioning(
       settled.push({ name: member.name, phase: 'failed', error: `child conversation recovery failed: ${describe(error)}` })
       continue
     }
-    // A live child means creation is still completing here; the creator writes the terminal edge.
+    // 存活的子会话意味着创建仍在本进程收尾；终态边由创建者写入。
     if (state.running) continue
     if (!state.exists) {
       settled.push({ name: member.name, phase: 'failed', error: 'provisioning did not leave a resumable child conversation' })
@@ -600,7 +615,7 @@ export async function reconcileProvisioning(
     const stored = await tx.doc(Team, leadId)
     for (const row of settled) {
       const member = stored.members.find(candidate => candidate.name === row.name)
-      // Another writer may have settled it already; the first terminal edge wins.
+      // 另一个写入者可能已结算；第一个终态边胜出。
       if (member?.phase !== 'provisioning') continue
       member.phase = row.phase
       if (row.error === undefined) delete member.error
@@ -622,7 +637,7 @@ function memberView(member: TeamMemberRecord, status: TeamMemberView['status'], 
   }
 }
 
-/** Wire rows: the synthetic Lead row first, then durable teammates in creation order. */
+/** 线上成员行：合成 Lead 行在前，持久 teammates 按创建顺序排列。 */
 export async function memberViews(
   doc: TeamDocValue,
   leadId: string,
@@ -655,7 +670,7 @@ export async function memberViews(
   return rows
 }
 
-/** Build the team projection from one Lead document and each member conversation's live status. */
+/** 从一份 Lead 文档与各成员会话的实时状态构建团队投影。 */
 export async function projectTeam(
   doc: TeamDocValue,
   leadId: string,
@@ -667,35 +682,38 @@ export async function projectTeam(
   }
 }
 
-/** Options supplied by the runtime: conversation plumbing the tool API does not expose. */
+/** runtime 提供的配置：工具 API 不暴露的会话管道。 */
 export type TeamToolOptions = {
-  /** Stamp the child's title/workspace/access mode inside the creating commit. */
+  /** 在创建事务内写入子会话的标题/工作区/访问模式。 */
   prepareChild: (tx: Tx, childId: ConversationId, parentId: ConversationId, label: string) => Promise<void>
-  /** Live turn status plus the model of one conversation (the member's own agent). */
+  /** 一个会话的实时回合状态与模型（成员自己的 agent）。 */
   conversationInfo: (conversationId: string) => Promise<TeamConversationInfo>
-  /** Observe member busy transitions for `wait_agent`; returns a stop function. */
+  /** 为 `wait_agent` 观察成员忙碌状态变化；返回停止函数。 */
   watchMembers: (leadId: string, onChange: () => void) => Promise<() => Promise<void>>
   /**
-   * Durable evidence about one provisioned member session. The spawn replay path and the
-   * provisioning reconciliation both need reads the tool API cannot perform inside its own commit
-   * (`docs/history/families.md` A6), so the runtime answers them from the conversation table.
+   * 关于一个已供应成员会话的持久证据。spawn 重放路径与 provisioning 对账都需要工具
+   * API 无法在自己 commit 内完成的读取（`docs/history/families.md` A6），runtime 从
+   * 会话表回答。
    */
   memberSession: MemberSessionProbe
-  /** Validate and clamp an explicit teammate model pick (fresh context only) against the catalog. */
+  /** 对显式选取的成员模型（仅 fresh 上下文）按目录校验并夹取。 */
   resolveChildModel?: ChildModelResolver
 }
 
+/** 当前调用方在团队中的位置：Lead 会话 id、角色与名称。 */
 type TeamScope = { leadId: ConversationId; role: 'lead' | 'teammate'; name: string }
 
+/** 把字符串会话 id 转为 ConversationId；非法值抛 invalid-argument。 */
 function toConversationId(value: string): ConversationId {
   const id = Number(value)
   if (!Number.isSafeInteger(id) || id <= 0) throw new TeamRuleError('invalid conversation id', 'invalid-argument')
   return id as ConversationId
 }
 
+/** 无团队时的空文档。 */
 const EMPTY_TEAM: TeamDocValue = { members: [], tasks: [] }
 
-/** Resolve the team this conversation belongs to: its own board as Lead, else its Lead's board. */
+/** 解析本会话所属的团队：Lead 读自己的看板，teammate 读其 Lead 的看板。 */
 export async function resolveTeamScope(api: ToolExecutionApi, context: Context): Promise<TeamScope> {
   const link = await api.snapshot(TeamLink, api.conversationId, context)
   if (link?.leadConversationId) {
@@ -712,18 +730,22 @@ async function readDoc(api: ToolExecutionApi, leadId: ConversationId, context: C
   return await api.snapshot(Team, leadId, context) ?? EMPTY_TEAM
 }
 
+/** 断言调用方是 Lead；否则抛 lead-required。 */
 function assertLead(scope: TeamScope): void {
   if (scope.role !== 'lead') throw new TeamRuleError('only the Team Lead can perform this action', 'lead-required')
 }
 
+/** 从 TeamScope 构造任务变更发起方。 */
 function actorOf(scope: TeamScope): TeamActor {
   return { lead: scope.role === 'lead', name: scope.name }
 }
 
+/** 校验成员目标名：必填文本，限长 MAX_TEAM_NAME_LENGTH。 */
 function requireMember(value: string): string {
   return requiredText(value, 'target', MAX_TEAM_NAME_LENGTH)
 }
 
+/** 清洗成员展示 label：缺省回落为名称；超过 200 字符抛错。 */
 function memberLabel(value: string | undefined, name: string): string {
   const label = (value ?? '').trim()
   if (label === '') return name
@@ -731,16 +753,19 @@ function memberLabel(value: string | undefined, name: string): string {
   return label
 }
 
-/** What a spawn call should do for one name, given the durable roster (`roster.ts:263-276`). */
+/** 给定持久名册，一次 spawn 调用对某个名字应做的事（`roster.ts:263-276`）。 */
 export type SpawnReplayPlan =
   | { kind: 'create' }
   | { kind: 'reuse'; conversationId: string }
   | { kind: 'taken' }
 
 /**
- * The spawn idempotency decision. A replay of the same call finds the row its first attempt wrote
- * and reuses that child (`spawn_teammate` is `replay: 'safe'`); any other same-named row means the
- * name was already used, and DSH never reuses a teammate name (`roster.ts:263-276,436-444`).
+ * 功能：spawn 的幂等决策。同一调用的重放会找到首次写入的行并复用该子会话
+ * （`spawn_teammate` 是 `replay: 'safe'`）；其他同名行意味着名字已被占用，而 DSH 从不
+ * 复用 teammate 名称（`roster.ts:263-276,436-444`）。
+ * @param doc 当前团队文档。
+ * @param name 目标成员名。
+ * @returns create / reuse / taken 三种计划。
  */
 export function planSpawnReplay(doc: TeamDocValue, name: string): SpawnReplayPlan {
   const existing = doc.members.find(member => member.role === 'teammate' && member.name === name)
@@ -751,6 +776,7 @@ export function planSpawnReplay(doc: TeamDocValue, name: string): SpawnReplayPla
   return { kind: 'taken' }
 }
 
+/** spawn 前置检查：名字不得已被使用过；成员数不得超过 MAX_TEAM_MEMBERS。 */
 function spawnLimit(doc: TeamDocValue, name: string): void {
   if (doc.members.some(member => member.name === name)) {
     throw new TeamRuleError(`teammate name "${name}" was already used in this Team`, 'member-name-taken')
@@ -760,28 +786,32 @@ function spawnLimit(doc: TeamDocValue, name: string): void {
   }
 }
 
+/** 确保名册中存在 Lead 行；没有则在头部补一行合成 Lead 记录。 */
 function ensureLeadRow(doc: TeamDocValue, leadId: ConversationId): void {
   if (doc.members.some(member => member.role === 'lead')) return
   doc.members.unshift({ name: LEAD_NAME, role: 'lead', conversationId: String(leadId), phase: 'active', label: 'Lead' })
 }
 
+/** 把任意错误压成一行描述：取 message、折叠空白、截断 300 字符；空则报 unknown error。 */
 function describe(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   return text.replace(/\s+/g, ' ').trim().slice(0, 300) || 'unknown error'
 }
 
+/** 把值序列化为缩进 JSON 的文本输出块。 */
 function jsonText(value: unknown): { type: 'text'; text: string }[] {
   return [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }]
 }
 
-/** Do not infer task completion or wake an already completed teammate from inactivity. */
+/** 不要从 inactivity 推断任务完成，也不要唤醒已完成工作的成员。 */
 const NO_ACTIVE_PEER_MESSAGE = 'No other Team member is running or provisioning. Read the returned results and shared tasks first; use send_message only if a required inactive member still has work to do.'
 
+/** 成员是否处于忙碌状态：running 或 provisioning。 */
 function isActiveStatus(status: TeamMemberView['status']): boolean {
   return status === 'running' || status === 'provisioning'
 }
 
-/** One teammate's collected state for the `wait_agent` result: status plus the last answer text. */
+/** `wait_agent` 结果中一个成员的汇总状态：状态加上最近一次答复文本。 */
 type WaitAgentMember = {
   name: string
   status: string
@@ -791,13 +821,20 @@ type WaitAgentMember = {
   answerEntryId?: string
   conversationPath?: string
 }
+/** `wait_agent` 的完整结果：是否超时、无进展原因或成员名册。 */
 type WaitAgentResult = { timedOut: boolean; noProgress?: { reason: 'no-active-peer'; message: string }; members?: WaitAgentMember[] }
 
+/** 成员答复预览的最大字符数。 */
 const MAX_MEMBER_ANSWER_CHARS = 2_000
 
 /**
- * Collect the roster the Lead sees after a wait: each teammate's live status and, once it has
- * inactive, a bounded recent assistant-text preview and its source for follow-up inspection.
+ * 功能：收集等待结束后 Lead 所见的名册：每个 teammate 的实时状态；非 running 时附带
+ * 有界的最近 assistant 文本预览及其来源（answerStatus 与条目 id），供后续追查。
+ * @param api 工具执行 API。
+ * @param doc 团队文档。
+ * @param info 会话实时信息回调。
+ * @param context 执行上下文。
+ * @returns 成员状态列表。
  */
 async function teamRosterWithAnswers(
   api: ToolExecutionApi,
@@ -852,7 +889,14 @@ async function teamRosterWithAnswers(
   return { members }
 }
 
-/** Bounded `wait_agent`: doc changes plus member busy transitions, aborted with the call. */
+/**
+ * 功能：有界的 `wait_agent` 等待：观察文档变化与成员忙碌状态变化，直到变化发生或
+ * 超时；abort 随调用一起终止。
+ * 内部逻辑：挂接 doc watcher 与成员观察器；用快照对比补偿获取观察器期间落下的变化；
+ * 超时 resolve(false)，变化 resolve(true)，abort reject。
+ * @param observed 等待前观察到的文档与成员视图（用于竞态补偿）。
+ * @returns 是否因变化而唤醒（false 为超时自然返回）。
+ */
 export async function waitForTeamChange(
   api: ToolExecutionApi,
   options: TeamToolOptions,
@@ -893,7 +937,7 @@ export async function waitForTeamChange(
       stopDoc = () => docWatch.stop()
     }
     stopMembers = await options.watchMembers(String(leadId), notify)
-    // Recover a transition that landed while the asynchronous watchers were being acquired.
+    // 补偿异步观察器获取期间落下的状态变化。
     if (!settled) {
       const afterDoc = await readDoc(api, leadId, context)
       const afterMembers = await memberViews(afterDoc, String(leadId), options.conversationInfo)
@@ -916,8 +960,10 @@ export async function waitForTeamChange(
   }
 }
 
+/** 团队工具名的类型别名。 */
 type TeamToolName = (typeof TEAM_TOOL_NAMES)[number]
 
+/** 每个工具的调用示例参数文本（section 生成用）。 */
 const TEAM_TOOL_EXAMPLES: Record<TeamToolName, string> = {
   spawn_teammate: '{ name: "worker", prompt: "..." }',
   send_message: '{ target: "worker", message: "..." }',
@@ -930,20 +976,24 @@ const TEAM_TOOL_EXAMPLES: Record<TeamToolName, string> = {
   team_task_update: '{ task_id: "task-1", expected_revision: 1, action: "claim" }',
 }
 
+/** 解析全部团队工具在当前 agent 下的路由。 */
 function teamRoutes(agent: ToolCatalog): Record<TeamToolName, ToolRoute> {
   return Object.fromEntries(TEAM_TOOL_NAMES.map(name => [name, resolveToolRoute(agent, name)])) as Record<TeamToolName, ToolRoute>
 }
 
+/** 生成单个工具的路由调用说明；不可调用时 undefined。 */
 function teamCall(name: TeamToolName, routes: Record<TeamToolName, ToolRoute>, args = TEAM_TOOL_EXAMPLES[name]): string | undefined {
   return toolRouteInstruction(name, routes[name], args)
 }
 
+/** 团队共享工作目录的公共策略文本；按计划模式是否开启给出只读/协作两个版本。 */
 function sharedTeamPolicy(planActive: boolean): string {
   return planActive
     ? '团队共享同一工作目录。计划模式对所有成员均为只读：检查并报告证据，保留所有文件，不修改工作区。'
     : '团队共享同一工作目录；文件改动对所有成员立即可见。保留其他成员的改动，遵守分配的写入范围，修改共享文件前先协调重叠工作。'
 }
 
+/** team-policy section：成员视角给执行/汇报/任务规则，Lead 视角给委派/观察/看板规则。 */
 const teamSection = section('team-policy', async (input, context) => {
   const [link, plan] = await Promise.all([
     input.read.snapshot(TeamLink, input.conversationId, context),
@@ -1026,8 +1076,16 @@ const teamSection = section('team-policy', async (input, context) => {
   return lines.join('\n')
 })
 
-/** Build the Team extension; `options` is closed over by every tool definition in this call. */
+/**
+ * 功能：装配 team 扩展，贡献 9 个工具（spawn_teammate / send_message / list_agents /
+ * wait_agent / interrupt_agent / team_task_create / team_task_list / team_task_get /
+ * team_task_update）、1 个 section（team-policy：成员与 Lead 两套协作规则）和 1 个
+ * 后台锚点任务（TeamAnchor）。`options` 被本调用内的所有工具定义闭包引用。
+ * @param options runtime 注入的会话管道与授权依赖。
+ * @returns 名为 `team` 的扩展。
+ */
 export function createTeamTools(options: TeamToolOptions): Extension {
+  /** 把一次成员失败记入名册（phase=failed + 错误描述）；记录失败本身仅诊断告警。 */
   async function markMemberFailed(api: ToolExecutionApi, leadId: ConversationId, name: string, error: unknown, context: Context): Promise<void> {
     try {
       await api.commit(async (tx) => {
@@ -1043,6 +1101,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     }
   }
 
+  /** 构造 spawn 失败的工具结果：error 级诊断 + isError 输出 + failed 视图。 */
   function spawnFailure(api: ToolExecutionApi, reason: string): ToolExecutionResult<TeamMemberView> {
     api.diagnostic({ severity: 'error', message: `Teammate creation failed: ${reason}` })
     return {
@@ -1072,8 +1131,16 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         modelId: Type.String(),
       })),
     }),
-    // A rerun after a crash must reuse the child it already created instead of spawning twice.
+    // 崩溃后的重跑必须复用已创建的子会话，而不是再 spawn 一次。
     replay: 'safe',
+    /**
+     * 功能：创建团队成员（四步装配流程）。
+     * 输入校验/权限：仅 Lead；名称经 normalizeMemberName；prompt 必填限长；fork 模式
+     * 拒绝指定 model；先对账 provisioning 成员；名字是幂等键（重放复用已建子会话）。
+     * 内部逻辑：1) 先写 provisioning 边（创建失败也留行）；2) 一个 commit 内创建任务
+     * 归属子会话与身份链接（fork 走 forkLeadConversation，fresh 建新会话；可选仅覆盖
+     * 模型）；3) 提交初始 prompt（不等待运行）；4) 结算 active 边。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<TeamMemberView>> => {
       const scope = await resolveTeamScope(api, context)
       assertLead(scope)
@@ -1088,8 +1155,8 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         )
       }
       const leadId = scope.leadId
-      // Settle members an earlier crash left in `provisioning` before this call adds another
-      // (DSH reconciles at Lead start, `roster.ts:175-179,375-417`).
+      // 在本次调用添加新成员之前，先结算此前崩溃留下的 `provisioning` 成员
+      // （DSH 在 Lead 启动时对账，`roster.ts:175-179,375-417`）。
       await reconcileProvisioning(
         { read: (id, ctx) => api.snapshot(Team, id, ctx), commit: (change, ctx) => api.commit(change, ctx) },
         { memberSession: options.memberSession },
@@ -1097,11 +1164,11 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         context,
       )
       const before = await readDoc(api, leadId, context)
-      // The name is the idempotency key: a replayed spawn finds the row and child it already made.
+      // 名字即幂等键：重放的 spawn 会找到自己已写的行与子会话。
       const plan = planSpawnReplay(before, name)
       if (plan.kind === 'reuse') {
-        // The row alone is not enough: the child must still exist and its link must name this
-        // member, exactly the pair the provisioning reconciliation checks (`roster.ts:385-397`).
+        // 仅凭行还不够：子会话必须仍存在且链接指向本成员——正是 provisioning 对账检查
+        // 的那对条件（`roster.ts:385-397`）。
         const state = await options.memberSession(plan.conversationId, leadId, name)
         if (!state.exists || !state.linked) {
           const reason = state.exists
@@ -1116,7 +1183,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       }
       if (plan.kind === 'create') spawnLimit(before, name)
 
-      // 1. Record the provisioning edge before any child exists, so a failed creation leaves a row.
+      // 1. 在子会话存在之前记录 provisioning 边，创建失败也会留下一行。
       if (plan.kind === 'create') {
         await api.commit(async (tx) => {
           const doc = await tx.doc(Team, leadId)
@@ -1126,10 +1193,10 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         }, context)
       }
 
-      // 2. Create the task-owned child and its identity link in one commit (docs/history/families.md A6).
-      //    A replayed call reuses the child already recorded for this name.
-      // A fresh spawn with an explicit model overrides only model/thinkingLevel — never tools or
-      // instructions, which keep cloning the Lead's composition (DSH teammates are Lead copies).
+      // 2. 在同一个 commit 内创建任务归属子会话与身份链接（docs/history/families.md A6）。
+      //    重放的调用复用为该名字记录的子会话。
+      // fresh spawn 显式指定模型时只覆盖 model/thinkingLevel——绝不覆盖工具或指令，
+      // 它们继续克隆 Lead 的组合（DSH 的 teammates 是 Lead 的副本）。
       let agent: AgentChange | undefined
       if (plan.kind === 'create' && mode === 'fresh' && args.model !== undefined && options.resolveChildModel !== undefined) {
         const lead = await api.agent(context)
@@ -1144,20 +1211,19 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         childId = plan.kind === 'reuse'
           ? toConversationId(plan.conversationId)
           : await api.commit(async (tx) => {
-            // Read the board and the fork boundary before the conversation write: a table/doc read
-            // after a write can queue (docs/history/families.md A6).
+            // 在会话写入之前读看板与 fork 边界：写后再读表/文档可能排队（docs/history/families.md A6）。
             const doc = await tx.doc(Team, leadId)
             const stored = doc.members.find(member => member.name === name)
             const ref = await tx.doc(TeamAnchors, leadId)
-            // The fork seed ends at the Lead's last completed turn, never at its in-flight one
-            // (DSH `subagent-fork-in-process/src/index.ts:44-56`).
+            // fork 的种子止于 Lead 最后一个已完成回合，绝不含进行中的回合
+            // （DSH `subagent-fork-in-process/src/index.ts:44-56`）。
             const cutoff = mode === 'fork' ? await lastCompletedTurnEntry(tx, leadId) : undefined
             const anchorId = await reusableAnchor(tx, ref.taskId, leadId, (created) => { ref.taskId = Number(created) })
             const record = mode === 'fork'
               ? await forkLeadConversation(tx, leadId, cutoff, anchorId)
               : await tx.createConversation({ ownership: { kind: 'task', taskId: anchorId } })
-            // The Tx creation call takes no agent options; `configure` writes the model pick to the
-            // cloned `pi.agent` document in the same commit.
+            // Tx 创建调用不接受 agent 选项；`configure` 在同一 commit 内把模型选取写入
+            // 克隆的 `pi.agent` 文档。
             if (agent !== undefined) await configure(tx, record.id, agent)
             await options.prepareChild(tx, record.id, leadId, label)
             const link = await tx.doc(TeamLink, record.id)
@@ -1175,7 +1241,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         name, role: 'teammate', phase: 'provisioning', status: 'running', conversationId: String(childId), label,
       } satisfies TeamMemberView, context)
 
-      // 3. Deliver the initial prompt as the child's first message, without waiting for the run.
+      // 3. 把初始 prompt 作为子会话的第一条消息送达，不等待运行。
       const child = await api.conversation(childId, context)
       if (child === undefined) {
         const reason = `child conversation ${String(childId)} is no longer available`
@@ -1196,7 +1262,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
         return spawnFailure(api, `the initial prompt was not accepted: ${describe(error)}`)
       }
 
-      // 4. Settle the durable active edge; creation succeeded even if the run already finished.
+      // 4. 结算持久的 active 边；即使运行已经结束，创建也算成功。
       const settled = await api.commit(async (tx) => {
         const doc = await tx.doc(Team, leadId)
         const stored = doc.members.find(member => member.name === name)
@@ -1218,6 +1284,13 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       'target 来自 spawn_teammate 或 list_agents，也可为 "lead"。发送成功仅表示收件箱已接纳，不代表收到接收方的答复。',
     ].join(' '),
     parameters: Type.Object({ target: Type.String(), message: Type.String() }),
+    /**
+     * 功能：向团队成员或 lead 发送一条消息。
+     * 输入校验：target 必须是活动成员或 lead；不能给自己发；带框架的消息不超过
+     * MAX_TEAM_MESSAGE_BYTES。
+     * 内部逻辑：先继承计划模式约束，再以 steer 模式提交到目标会话（running 的目标在
+     * 最近步骤边界收到，inactive 的启动新回合）；投递失败写 error 诊断后抛出。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<{ sent: boolean; target: string; conversationId: string }>> => {
       const scope = await resolveTeamScope(api, context)
       const targetName = requireMember(args.target)
@@ -1266,6 +1339,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       'inactive 表示没有回合正在执行，不代表任务结果。provisioning 和 failed 描述成员创建状态。',
     ].join(' '),
     parameters: Type.Object({}),
+    /** 功能：列出 Lead 合成行与全部成员的线上视图（含实时状态与模型）。 */
     execute: async (_args, api, context): Promise<ToolExecutionResult<{ members: TeamMemberView[] }>> => {
       const scope = await resolveTeamScope(api, context)
       const doc = await readDoc(api, scope.leadId, context)
@@ -1283,6 +1357,12 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       `timeout_ms 为 ${MIN_WAIT_MS} 到 ${MAX_WAIT_MS} 之间的整数，默认 ${DEFAULT_WAIT_MS}。`,
     ].join(' '),
     parameters: Type.Object({ timeout_ms: Type.Optional(Type.Number()) }),
+    /**
+     * 功能：等待成员状态/消息/共享任务的下一步变化。
+     * 输入校验：timeout_ms 为 MIN_WAIT_MS–MAX_WAIT_MS 的安全整数。
+     * 边界：没有其他活动成员时立即返回 noProgress（不唤醒 inactive 成员）并附带答复
+     * 名册；等待经 waitForTeamChange 有界观察；返回后重新读取文档收集各成员答复预览。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<WaitAgentResult>> => {
       const timeoutMs = args.timeout_ms ?? DEFAULT_WAIT_MS
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs < MIN_WAIT_MS || timeoutMs > MAX_WAIT_MS) {
@@ -1308,6 +1388,11 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     name: 'interrupt_agent',
     description: '中断一名成员的当前回合，并保留其待处理收件箱。仅团队负责人可调用。',
     parameters: Type.Object({ target: Type.String() }),
+    /**
+     * 功能：中断一名成员的当前回合（保留其待处理收件箱）。
+     * 输入校验/权限：仅 Lead；目标必须是活动成员且不能是 Lead 自己。
+     * 内部逻辑：先取实时状态作为 previousStatus，再对目标会话 abort。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<{ previousStatus: 'running' | 'inactive' }>> => {
       const scope = await resolveTeamScope(api, context)
       assertLead(scope)
@@ -1335,6 +1420,13 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       blocked_by: Type.Optional(Type.Array(Type.String())),
       write_scopes: Type.Optional(Type.Array(Type.String())),
     }),
+    /**
+     * 功能：在共享看板上创建任务。
+     * 输入校验：subject/description 必填限长；blocked_by 与 write_scopes 经纯函数校验
+     * （存在性、自环、依赖环、范围规范化）。
+     * 内部逻辑：ensureLeadRow 保证 Lead 行存在；createTask 产出新任务后写回文档并返回
+     * 线上视图。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<TeamTaskView>> => {
       const scope = await resolveTeamScope(api, context)
       const view = await api.commit(async (tx) => {
@@ -1364,6 +1456,11 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       cursor: Type.Optional(Type.Number()),
       limit: Type.Optional(Type.Number()),
     }),
+    /**
+     * 功能：分页列出共享任务（过滤 status/owner/ready）。
+     * 输入校验：cursor 为非负安全整数；limit 为 1–100 的安全整数。
+     * 边界：删除状态的任务不返回；还有剩余时附 nextCursor。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<{ tasks: TeamTaskView[]; nextCursor?: number }>> => {
       const scope = await resolveTeamScope(api, context)
       const doc = await readDoc(api, scope.leadId, context)
@@ -1388,6 +1485,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
     name: 'team_task_get',
     description: '修改或执行共享任务前，读取该任务完整的最新内容。',
     parameters: Type.Object({ task_id: Type.String() }),
+    /** 功能：读取单个任务的完整线上视图（含最新 revision，修改前必读）。 */
     execute: async (args, api, context): Promise<ToolExecutionResult<TeamTaskView>> => {
       const scope = await resolveTeamScope(api, context)
       const doc = await readDoc(api, scope.leadId, context)
@@ -1418,6 +1516,13 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       write_scopes: Type.Optional(Type.Array(Type.String())),
       owner: Type.Optional(Type.String()),
     }),
+    /**
+     * 功能：以 expected_revision 做 CAS 的任务更新，按 action 分派到对应纯函数
+     * （claim/release/edit/set_dependencies/complete/reopen/reassign/delete）。
+     * 输入校验/权限：revision 过期或已删除在纯函数内拒绝；set_dependencies 必须带
+     * blocked_by；各动作的归属权限（owner 或 Lead）与 Lead 专属的 reassign 也在其中
+     * 裁决；变更后的任务图整体校验。
+     */
     execute: async (args, api, context): Promise<ToolExecutionResult<TeamTaskView>> => {
       const scope = await resolveTeamScope(api, context)
       const actor = actorOf(scope)
@@ -1478,9 +1583,11 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 }
 
 /**
- * Reuse the Lead's parked background anchor, or create one. The anchor is the ownership boundary
- * that keeps a member's run out of the Lead's idle scope (pi-durable README: background tasks are
- * excluded from ordinary idle waits, conversation aborts, and cascades).
+ * 功能：复用 Lead 停驻的后台锚点，或新建一个。锚点是所有权边界，把成员的运行挡在
+ * Lead 的空闲范围之外（pi-durable README：后台任务不参与普通空闲等待、会话中止与
+ * 级联中止）。
+ * 内部逻辑：已有记录且任务仍在 pending/running/waiting 时直接复用；否则创建新锚点
+ * 任务（background: true，归属当前会话）并经 remember 回写文档。
  */
 async function reusableAnchor(
   tx: Tx,
@@ -1504,14 +1611,17 @@ async function reusableAnchor(
 }
 
 /**
- * The parent entry that closes its last completed turn, or undefined before the first one.
+ * 功能：找到父会话关闭其最后一个已完成回合的条目；首个回合完成前返回 undefined。
  *
- * DSH seeds a fork child with the balanced completed-turn prefix and never the in-flight turn
- * (`subagent-fork-in-process/src/index.ts:44-56`, README "Seed boundary"). Pi's entry log has no
- * `turn/end` marker, so the same boundary is derived from the model messages: a turn ends with an
- * assistant answer whose `stopReason` is `stop` or `length`; `toolUse` still has work outstanding,
- * and `pending`/`error`/`aborted` did not complete. Steering inputs placed during an unfinished
- * turn sit after this entry, so they are excluded with it.
+ * DSH 给 fork 子会话播种平衡的已完成回合前缀，绝不包含进行中的回合
+ * （`subagent-fork-in-process/src/index.ts:44-56`，README "Seed boundary"）。Pi 的条目
+ * 日志没有 `turn/end` 标记，因此同一边界从模型消息推导：一个回合以 stopReason 为
+ * `stop` 或 `length` 的 assistant 答复结束；`toolUse` 还有未完成的工作，
+ * `pending`/`error`/`aborted` 未完成。未完成回合期间插入的 steer 输入位于该条目之后，
+ * 因此随之一并排除。
+ * @param tx 事务句柄。
+ * @param conversationId 父（Lead）会话 id。
+ * @returns 截断条目 id，或 undefined。
  */
 export async function lastCompletedTurnEntry(tx: Tx, conversationId: ConversationId): Promise<EntryId | undefined> {
   let cutoff: EntryId | undefined
@@ -1530,10 +1640,10 @@ export async function lastCompletedTurnEntry(tx: Tx, conversationId: Conversatio
 }
 
 /**
- * Fork the Lead's completed-turn prefix into a task-owned child. Before the first completed turn
- * the prefix is empty, so the child starts fresh — DSH's `prepareContinuable` returns `{}` in that
- * case and the child behaves like a spawn (`index.ts:72-77`). `cutoff` must be read before the
- * commit's first table write (docs/history/families.md A6).
+ * 功能：把 Lead 的已完成回合前缀 fork 成任务归属的子会话。
+ * 内部逻辑：首个已完成回合之前前缀为空，子会话全新开始——DSH 的 `prepareContinuable`
+ * 在该情况下返回 `{}`，子会话表现得像 spawn（`index.ts:72-77`）。`cutoff` 必须在
+ * commit 的首次表写入之前读取（docs/history/families.md A6）。
  */
 async function forkLeadConversation(tx: Tx, leadId: ConversationId, cutoff: EntryId | undefined, taskId: TaskId): Promise<{ id: ConversationId }> {
   const ownership = { kind: 'task' as const, taskId }

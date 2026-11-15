@@ -11,6 +11,12 @@ import { createRuntime } from './runtime/index.ts'
 const host = '127.0.0.1'
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
+/**
+ * 功能：解析 PI_WEB_PORT 环境变量为监听端口。
+ * @param value 环境变量原始值；undefined 时用默认端口 4317。
+ * @returns 0–65535 的端口数字。
+ * 内部逻辑：非纯数字、越界或非安全整数都会抛出格式提示错误。
+ */
 function parsePort(value: string | undefined): number {
   if (value === undefined) return 4317
   if (!/^\d+$/.test(value)) throw new Error('PI_WEB_PORT must be an integer between 0 and 65535')
@@ -19,6 +25,10 @@ function parsePort(value: string | undefined): number {
   return port
 }
 
+/**
+ * 功能：容错版端口解析：任何非法值一律回落默认 4317（仅在启动失败消息路径使用）。
+ * @param value 环境变量原始值。
+ */
 function parsePortSafely(value: string | undefined): number {
   try {
     return parsePort(value)
@@ -27,6 +37,13 @@ function parsePortSafely(value: string | undefined): number {
   }
 }
 
+/**
+ * 功能：在指定端口监听并等待成功或失败。
+ * @param server 待监听的服务器。
+ * @param port 端口。
+ * @returns 监听成功兑现；error 事件（如端口占用）拒绝。
+ * 内部逻辑：临时挂一次性 error 监听，成功后摘除，避免把监听错误与后续错误混淆。
+ */
 function listen(server: ServerType, port: number): Promise<void> {
   return new Promise((resolveListen, rejectListen) => {
     const onError = (error: Error) => rejectListen(error)
@@ -38,10 +55,20 @@ function listen(server: ServerType, port: number): Promise<void> {
   })
 }
 
+/** 从未知错误对象中提取 `code` 字段（Node fs/net 错误约定），非对象返回 undefined。 */
 function errorCode(error: unknown): unknown {
   return typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
 }
 
+/**
+ * 功能：把启动失败翻译成用户可读的一条消息。
+ * @param error 启动过程中抛出的错误。
+ * @param port 解析出的端口。
+ * @param production 是否生产模式（影响缺资源提示）。
+ * @returns 一行可操作的失败说明。
+ * 内部逻辑：按错误码逐类映射——端口格式错误原样返回、EADDRINUSE、EACCES、
+ * 生产模式缺前端资源（ENOENT）、EROFS（只读文件系统），其余回落通用提示。
+ */
 function startFailureMessage(error: unknown, port: number, production: boolean): string {
   if (error instanceof Error && error.message === 'PI_WEB_PORT must be an integer between 0 and 65535') return error.message
   if (errorCode(error) === 'EADDRINUSE') return `Port ${port} is already in use. Set PI_WEB_PORT to choose another local port.`
@@ -51,17 +78,23 @@ function startFailureMessage(error: unknown, port: number, production: boolean):
   return 'Pi Web could not start. Check the local runtime and configuration.'
 }
 
-/** Starts the local web server and returns an idempotent graceful close operation. */
+/**
+ * 功能：启动本地 Web 服务（API + 开发前端或生产静态资源），返回幂等的优雅关闭操作。
+ * @returns 携带 host、port（实际端口）、server、runtime 与 close 的对象；close 幂等且会摘除信号监听。
+ * 内部逻辑：顺序为——解析环境变量 → 首次全局主目录迁移（显式数据目录与 demo 跳过）→ 建目录/
+ * 生产资源探测 → createRuntime + createApp → 按模式装配服务器（生产用 adaptor；开发把 /api
+ * 之外的请求交给 Vite 中间件并做 HMR）→ 监听；任一步失败清理已创建的 runtime/vite/server 后抛出。
+ * 启动成功后注册 SIGINT/SIGTERM 处理：关闭依次执行 app.shutdown、vite.close、server.close、
+ * runtime.close，全部失败聚合为 AggregateError。
+ */
 export async function startServer() {
   const port = parsePort(process.env.PI_WEB_PORT)
   const home = piWebHome()
   const dataDir = resolve(process.env.PI_WEB_DATA_DIR ?? home)
-  // No implicit default: without PI_WEB_WORKSPACE the app starts with an empty
-  // workspace list and the user adds folders from the UI.
+  // 无隐式默认：没有 PI_WEB_WORKSPACE 时应用以空工作区列表启动，目录由用户在 UI 里添加。
   const workspace = process.env.PI_WEB_WORKSPACE === undefined ? undefined : resolve(process.env.PI_WEB_WORKSPACE)
   const demo = process.env.PI_WEB_DEMO === '1'
-  // One-time import of the old project-local `.data` and `~/.pi/agent` files
-  // into the global home. Explicit data directories (tests/demo) are untouched.
+  // 把旧版项目内 `.data` 与 `~/.pi/agent` 一次性导入全局主目录。显式数据目录（测试/demo）不做迁移。
   if (!demo && process.env.PI_WEB_DATA_DIR === undefined) {
     try {
       const migrated = await migrateGlobalHome(home, resolve('.data'))
@@ -70,8 +103,8 @@ export async function startServer() {
       console.warn(`Pi Web skipped the legacy import into ${home}: ${error instanceof Error ? error.message : 'unknown error'}`)
     }
   }
-  // Optional override for the imported Pi MCP file; the runtime otherwise reads the
-  // user-level `mcp.json` (demo mode keeps its own copy under the data directory).
+  // 被导入的 Pi MCP 文件的可选覆盖；未设置时 runtime 读取用户级 `mcp.json`
+  // （demo 模式在数据目录下保留自己的副本）。
   const mcpConfigPath = process.env.PI_WEB_MCP_CONFIG === undefined ? undefined : resolve(process.env.PI_WEB_MCP_CONFIG)
   const production = process.argv.includes('--production') || process.env.NODE_ENV === 'production'
   const distRoot = resolve(projectRoot, 'dist/web')

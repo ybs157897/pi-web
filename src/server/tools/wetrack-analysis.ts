@@ -9,8 +9,10 @@ import {
   writeWetrackAnalysis,
 } from '../automation/wetrack-analysis.ts'
 
+/** 扩展注册名：`wetrack-analysis`。 */
 export const WETRACK_ANALYSIS_EXTENSION_NAME = 'wetrack-analysis'
 
+/** `status` 字段 schema：analyzing / analyzed / fixed / blocked 四种枚举。 */
 const STATUS = Type.Union([
   Type.Literal('analyzing'),
   Type.Literal('analyzed'),
@@ -18,10 +20,12 @@ const STATUS = Type.Union([
   Type.Literal('blocked'),
 ])
 
+/** 构造标准的单段文本输出块。 */
 function output(text: string) {
   return [{ type: 'text' as const, text }]
 }
 
+/** 把已保存的分析记录渲染为简短回执文本（标题、可选摘要与正文字数）。 */
 function receipt(record: WetrackAnalysisRecord): string {
   const head = `已写入 ${record.defectNumber} 的分析（${record.status}）：${record.title}`
   const summary = record.summary === '' ? '' : `\n摘要：${record.summary}`
@@ -29,9 +33,11 @@ function receipt(record: WetrackAnalysisRecord): string {
 }
 
 /**
- * The policy section teaches when a record is written. It is a section rather than tool
- * description text because the rules apply to every analysis, including scheduled runs whose
- * prompt the user did not write.
+ * 功能：创建 wetrack-analysis 策略 section，说明何时应当写入分析记录。
+ * 内部逻辑：用 section 而不是工具描述文本承载这些规则，是因为规则适用于每一次分析，
+ * 包括定时任务中用户没有亲自撰写 prompt 的运行；仅当 agent 暴露或可调用
+ * `wetrack_analysis_save` 时才注入。
+ * @returns section 定义；不可见时返回 undefined。
  */
 function analysisSection() {
   return section('wetrack-analysis', async (input) => {
@@ -59,6 +65,14 @@ function analysisSection() {
   })
 }
 
+/**
+ * 功能：递归清洗缺陷详情对象，剔除敏感信息与噪音。
+ * 内部逻辑：键名命中 password/secret/token/api-key 等模式时整个条目删除；description
+ * 做 HTML 去标签、实体解码与空白规整；疑似 base64 图片的字符串替换为占位提示；其余
+ * 值递归处理。
+ * @param value 任意嵌套的详情数据。
+ * @returns 清洗后的同构数据。
+ */
 function cleanContext(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(cleanContext)
   if (typeof value !== 'object' || value === null) return value
@@ -81,10 +95,19 @@ function cleanContext(value: unknown): unknown {
   }))
 }
 
+/**
+ * 功能：装配 wetrack-analysis 扩展，贡献 2–4 个工具与 1 个 section：
+ * `wetrack_analysis_save` / `wetrack_analysis_get` 恒定提供；传入 readDefect 才有
+ * `wetrack_analysis_detail`，传入 readDefects 才有 `wetrack_analysis_list`；另注入
+ * wetrack-analysis 策略 section（写入时机与正文要求）。
+ * @param options dataDir 为分析记录存储目录；readDefect / readDefects 为可选的缺陷
+ *   读取依赖（协调者用后者把待处理缺陷交给子代理）。
+ * @returns 名为 `wetrack-analysis` 的扩展。
+ */
 export function createWetrackAnalysisExtension(options: {
   dataDir: string
   readDefect?: (defectNumber: string) => Promise<unknown>
-  /** Reads the pending issue list; a coordinator uses it to hand work to subagents. */
+  /** 读取待处理缺陷清单；协调者用它把工作分派给子代理。 */
   readDefects?: () => Promise<WetrackDefectList>
 }): Extension {
   const saveTool = defineTool({
@@ -104,6 +127,12 @@ export function createWetrackAnalysisExtension(options: {
       title: Type.Optional(Type.String({ maxLength: 200 })),
       summary: Type.Optional(Type.String({ maxLength: 1_000, description: '一行摘要，≤100 字' })),
     }),
+    /**
+     * 功能：持久保存一条缺陷分析。
+     * 输入校验：先检查中止信号；defectNumber 须为 DTS+数字；status=blocked 必须带
+     * blockedReason；expectedRevision 过期（乐观锁）由 writeWetrackAnalysis 拒绝。
+     * 内部逻辑：写入 dataDir 下的分析记录；blocked 尝试不会覆盖此前可靠结论。
+     */
     execute: async (args, api, context) => {
       context.abortSignal?.throwIfAborted()
       const defectNumber = args.defectNumber.trim()
@@ -131,6 +160,11 @@ export function createWetrackAnalysisExtension(options: {
     parameters: Type.Object({
       defectNumber: Type.String({ minLength: 4, maxLength: 32 }),
     }),
+    /**
+     * 功能：读取一条缺陷已保存的分析（含版本号），供重新分析前比对。
+     * 输入校验：检查中止信号；defectNumber 须为 DTS+数字。
+     * 内部逻辑：无记录时返回 revision 0；有记录时输出回执 + 完整 markdown 正文。
+     */
     execute: async (args, _api, context) => {
       context.abortSignal?.throwIfAborted()
       const defectNumber = args.defectNumber.trim()
@@ -152,6 +186,11 @@ export function createWetrackAnalysisExtension(options: {
     parameters: Type.Object({
       defectNumber: Type.String({ minLength: 4, maxLength: 32 }),
     }),
+    /**
+     * 功能：只读获取一条缺陷的当前详情（经注入的 readDefect）。
+     * 输入校验：检查中止信号；defectNumber 须为 DTS+数字；读不到抛错。
+     * 内部逻辑：详情先经 cleanContext 清洗敏感/噪音字段，再以 JSON 输出。
+     */
     execute: async (args, _api, context) => {
       context.abortSignal?.throwIfAborted()
       const defectNumber = args.defectNumber.trim()
@@ -173,10 +212,16 @@ export function createWetrackAnalysisExtension(options: {
       '结果包含总数和下一个偏移量。待处理不代表该缺陷没有已保存的分析。',
     ].join(' '),
     parameters: Type.Object({
-      /** Cap the returned rows; the list can hold dozens of pending defects. */
+      /** 限制返回行数；待处理缺陷可能有几十条。 */
       maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
       offset: Type.Optional(Type.Integer({ minimum: 0 })),
     }),
+    /**
+     * 功能：分页列出当前用户待处理的 WeTrack 缺陷（经注入的 readDefects）。
+     * 输入校验：检查中止信号；未连接 WeTrack 时抛错（带清单自带提示）。
+     * 内部逻辑：每条只挑出编号、标题、状态与严重级字段；按 offset/maxResults 截页并
+     * 计算 nextOffset。
+     */
     execute: async (args, _api, context) => {
       context.abortSignal?.throwIfAborted()
       const list = await options.readDefects!()

@@ -5,15 +5,16 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { Pair, isMap, parseDocument } from 'yaml'
 
-/** The index is injected into every request, so it is bounded independently of the fact files. */
+/** 索引随每个请求注入，因此独立于事实文件设界。 */
 export const MEMORY_INDEX_LINE_LIMIT = 200
+/** 索引字符数上限。 */
 export const MEMORY_INDEX_CHARACTER_LIMIT = 25_000
+/** 单次读取记忆文件（含索引）的字节上限。 */
 export const MAX_MEMORY_INDEX_BYTES = 256 * 1024
 
 /**
- * Path segments a memory write may never touch. Mirrors ZCode's list; the names are normalized
- * before comparison so invisible characters, Windows ADS syntax, and trailing dots/spaces cannot
- * smuggle a protected directory past the check.
+ * 记忆写入永远不得触碰的路径段。对齐 ZCode 的清单；比较前先归一化段名，防止
+ * 不可见字符、Windows ADS 语法与结尾的点/空格把受保护目录走私过检查。
  */
 export const SENSITIVE_MEMORY_PATH_SEGMENTS = new Set([
   '.git', 'hooks', '.husky', '.githooks', 'node_modules', '.vscode', '.idea', 'head', 'config',
@@ -21,12 +22,19 @@ export const SENSITIVE_MEMORY_PATH_SEGMENTS = new Set([
   '.yarn', '.mvn',
 ])
 
+/** 解析记忆根目录的输入：应用数据目录与工作区路径。 */
 export interface MemoryRootInput {
   dataDir: string
   workspacePath: string
 }
 
-/** `<dataDir>/memories/projects/<slug>-<hash16>/memory`, keyed by the canonical workspace path. */
+/**
+ * 功能：按规范化工作区路径解析记忆根目录。
+ * @param input 数据目录与工作区路径
+ * @returns `<dataDir>/memories/projects/<slug>-<hash16>/memory`
+ * 内部逻辑：以规范化路径（Windows 再小写）的 SHA-256 前 16 位为键，slug 取自
+ * 目录名——同一工作区稳定映射到同一记忆根。
+ */
 export function resolveMemoryRoot(input: MemoryRootInput): string {
   const normalized = resolve(input.workspacePath)
   const keySource = process.platform === 'win32' ? normalized.toLowerCase() : normalized
@@ -35,11 +43,13 @@ export function resolveMemoryRoot(input: MemoryRootInput): string {
   return join(input.dataDir, 'memories', 'projects', `${slug}-${hash}`, 'memory')
 }
 
+/** 把目录名清洗为文件名安全的 slug（≤48 字符，非法字符转 -）；空则回退 'project'。 */
 function sanitizeProjectSlug(value: string): string {
   const slug = value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
   return slug.length > 0 ? slug : 'project'
 }
 
+/** 相对路径必须留在基准目录内：非空、不是 `..`、不以 `..` 开头、不是绝对路径。 */
 function isContainedRelativePath(value: string): boolean {
   return value !== ''
     && value !== '..'
@@ -49,12 +59,18 @@ function isContainedRelativePath(value: string): boolean {
     && !isAbsolute(value)
 }
 
-/** True when the resolved path stays inside the memory root, regardless of file type. */
+/** 解析后的路径留在记忆根内即真，不论文件类型。 */
 export function isContainedMemoryPath(filePath: string, rootDir: string): boolean {
   return isContainedRelativePath(relative(rootDir, resolve(filePath)))
 }
 
-/** Contained, a Markdown file, plus no protected segment anywhere in the relative path. */
+/**
+ * 功能：判定并返回一个安全的记忆文件路径。
+ * @param filePath 原始路径
+ * @param rootDir 记忆根目录
+ * @returns 规范化后的绝对路径；不满足条件返回 undefined
+ * 内部逻辑：要求留在根内、是 .md 文件、且相对路径不含任何受保护段。
+ */
 export function resolveSafeMemoryPath(filePath: string, rootDir: string): string | undefined {
   const candidate = resolve(filePath)
   if (!candidate.endsWith('.md')) return undefined
@@ -64,6 +80,7 @@ export function resolveSafeMemoryPath(filePath: string, rootDir: string): string
   return candidate
 }
 
+/** 相对路径的任一段（按 / 与 \\ 分割）命中受保护名单即真。 */
 function containsSensitiveMemoryPathSegment(relativePath: string): boolean {
   return relativePath
     .split(/[\\/]+/u)
@@ -71,6 +88,7 @@ function containsSensitiveMemoryPathSegment(relativePath: string): boolean {
     .some(segment => SENSITIVE_MEMORY_PATH_SEGMENTS.has(normalizeSensitiveSegment(segment)))
 }
 
+/** 段名归一化：小写、去不可见字符、截断 ADS 冒号前缀、去结尾点与空格。 */
 function normalizeSensitiveSegment(segment: string): string {
   return segment
     .toLowerCase()
@@ -79,17 +97,21 @@ function normalizeSensitiveSegment(segment: string): string {
     .replace(/[. ]+$/u, '')
 }
 
+/** YAML frontmatter 起始块的正则（容忍 BOM 与 CRLF）。 */
 const FRONTMATTER = /^(\uFEFF?)---[ \t]*(\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/u
 
-/** Strip a leading YAML frontmatter block; anything else is returned unchanged. */
+/** 剥掉开头的 YAML frontmatter 块；没有则原样返回。 */
 export function stripFrontmatter(content: string): string {
   const match = FRONTMATTER.exec(content)
   return match === null ? content : content.slice(match[0].length)
 }
 
 /**
- * Remove top-level HTML comments only. Comments inside code fences or block quotes are part of the
- * rendered document and must stay provider-visible, so the mdast tree (which nests them) decides.
+ * 功能：只删除顶层的 HTML 注释。
+ * @param content 记忆索引正文
+ * @returns 删除顶层注释后的文本；解析失败原样返回
+ * 内部逻辑：代码围栏或块引用内的注释是渲染文档的一部分，必须保持对模型可见，
+ * 因此由 mdast 树（会把它们嵌套起来）判断层级，而不是文本替换。
  */
 function stripTopLevelHtmlComments(content: string): string {
   if (!content.includes('<!--')) return content
@@ -113,6 +135,7 @@ function stripTopLevelHtmlComments(content: string): string {
   return output + content.slice(last)
 }
 
+/** 组装索引超界的警告文案（行数/字符数的组合表述）。 */
 function sizeDescription(overLines: boolean, overCharacters: boolean): string {
   if (overLines && overCharacters) {
     return `超过 ${MEMORY_INDEX_LINE_LIMIT} 行且超过 ${MEMORY_INDEX_CHARACTER_LIMIT} 字符`
@@ -123,7 +146,13 @@ function sizeDescription(overLines: boolean, overCharacters: boolean): string {
   return `超过 ${MEMORY_INDEX_LINE_LIMIT} 行`
 }
 
-/** Normalize MEMORY.md into the bounded index the model sees. */
+/**
+ * 功能：把 MEMORY.md 归一化为注入模型的索引。
+ * @param content MEMORY.md 原文
+ * @returns 有界索引文本；空索引返回 ''
+ * 内部逻辑：先剥 frontmatter 与顶层 HTML 注释；超行按行截断、超字符按最后一个
+ * 换行截断，并在尾部附警告（提醒索引行保持一行 ~200 字符、细节移入主题文件）。
+ */
 export function formatMemoryIndex(content: string): string {
   const body = stripFrontmatter(content)
   const stripped = stripTopLevelHtmlComments(body).trim()
@@ -145,6 +174,7 @@ export function formatMemoryIndex(content: string): string {
   ].join('\n')
 }
 
+/** 记忆文件读取失败的原因枚举。 */
 export type MemoryFileReason =
   | 'source-symlink'
   | 'source-not-regular-file'
@@ -153,25 +183,33 @@ export type MemoryFileReason =
   | 'source-invalid-utf8'
   | 'source-read-failed'
 
+/** 一次记忆文件读取的结果：loaded（含内容、字节数与哈希）、missing 或 error。 */
 export type MemoryFileRecord =
   | { status: 'loaded'; content: string; bytes: number; sha256: string }
   | { status: 'missing' }
   | { status: 'error'; reason: MemoryFileReason }
 
+/** 从错误对象里取 errno 字符串码（如 ENOENT）。 */
 function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
     ? error.code
     : undefined
 }
 
+/** 用 dev+ino 判断两个 stat 是否指向同一文件。 */
 function sameFile(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
 /**
- * Bounded, tamper-resistant UTF-8 read used for MEMORY.md, fact files, and the manifest.
- * The memory root is host-managed, so there is no workspace-symlink preamble: the source file
- * itself must be a regular, non-symlink file that does not change while it is read.
+ * 功能：用于 MEMORY.md、事实文件与清单的有界、防篡改 UTF-8 读取。
+ * @param source 文件路径
+ * @param limit 字节上限，默认 MAX_MEMORY_INDEX_BYTES
+ * @returns loaded（content/bytes/sha256）或 missing/error 记录；不抛出
+ * 内部逻辑：记忆根由宿主管理，没有工作区软链前导——源文件本身必须是常规非软链
+ * 文件，且在读取全程不变化。打开时带 O_NOFOLLOW（Windows 缺失则靠前后 lstat 比对
+ * 检测路径替换），读前读后核对 dev/ino、大小与 mtime/ctime，最终按 fatal UTF-8
+ * 解码并拒绝含 NUL 的内容。
  */
 export async function readMemoryFile(source: string, limit = MAX_MEMORY_INDEX_BYTES): Promise<MemoryFileRecord> {
   let info
@@ -200,8 +238,8 @@ export async function readMemoryFile(source: string, limit = MAX_MEMORY_INDEX_BY
     if (!sameFile(info, before)) return { status: 'error', reason: 'source-changed-during-read' }
     if (before.size > limit) return { status: 'error', reason: 'source-too-large' }
 
-    // Windows may not provide O_NOFOLLOW, so verify the opened handle still matches the path
-    // before and after reading. This detects path swaps but cannot be atomic without kernel support.
+    // Windows 可能不提供 O_NOFOLLOW，因此在读取前后都验证已打开的句柄仍与路径
+    // 匹配。这能检测路径替换，但没有内核支持时做不到原子。
     let pathBefore
     try {
       pathBefore = await lstat(source)
@@ -262,9 +300,10 @@ export async function readMemoryFile(source: string, limit = MAX_MEMORY_INDEX_BY
   }
 }
 
+/** 本进程已确保存在的记忆根目录集合（去重）。 */
 const ensuredDirectories = new Set<string>()
 
-/** Create the memory root once per process; a failure never blocks the request that needed it. */
+/** 功能：每进程创建一次记忆根目录；失败只告警，绝不阻塞需要它的请求。 */
 export async function ensureMemoryDirectory(root: string): Promise<void> {
   if (ensuredDirectories.has(root)) return
   ensuredDirectories.add(root)
@@ -275,7 +314,7 @@ export async function ensureMemoryDirectory(root: string): Promise<void> {
   }
 }
 
-/** The path argument of a tool call, tolerating the field names different tools use. */
+/** 从工具调用参数里取路径：兼容 path / file_path / filePath / file 字段名。 */
 export function argumentPath(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
@@ -287,9 +326,14 @@ export function argumentPath(value: unknown): string | undefined {
 }
 
 /**
- * Stamp the conversation that wrote a fact file. Pure string transform: the frontmatter AST keeps
- * comments and key order, `metadata.node_type` is forced to the first metadata key, and an
- * existing non-empty `originSessionId` wins (stamping is idempotent).
+ * 功能：把写入事实文件的会话 ID 打进 frontmatter。
+ * @param content 文件内容（write 场景即整个文件）
+ * @param filePath 目标路径（不在安全记忆路径内则原样返回）
+ * @param rootDir 记忆根目录
+ * @param sessionId 来源会话 ID
+ * @returns 打戳后的内容；纯字符串变换
+ * 内部逻辑：frontmatter AST 保留注释与键序；`metadata.node_type` 强制为 metadata
+ * 的第一个键；已有非空 `originSessionId` 时优先保留——打戳幂等。
  */
 export function stampOriginSessionId(content: string, filePath: string, rootDir: string, sessionId: string): string {
   if (resolveSafeMemoryPath(filePath, rootDir) === undefined) return content
@@ -318,7 +362,7 @@ export function stampOriginSessionId(content: string, filePath: string, rootDir:
   return `${bom}---${lineEnding}${restored}${closing}${content.slice(match[0].length)}`
 }
 
-/** Whether an existing fact file still lacks its stamp; unreadable or unparseable files need none. */
+/** 判断既有事实文件是否还缺来源戳；不可读或不可解析的文件视为不需要。 */
 export async function fileNeedsOriginStamp(source: string): Promise<boolean> {
   const record = await readMemoryFile(source)
   if (record.status !== 'loaded') return false
@@ -333,7 +377,7 @@ export async function fileNeedsOriginStamp(source: string): Promise<boolean> {
   return !(typeof existing === 'string' && existing.trim() !== '')
 }
 
-/** Best-effort write-back used by the post-edit stamp path; callers swallow its errors. */
+/** 编辑后补打来源戳的尽力写回（临时文件 + rename 原子替换）；调用方吞掉其错误。 */
 export async function stampExistingFile(source: string, rootDir: string, sessionId: string): Promise<void> {
   if (resolveSafeMemoryPath(source, rootDir) === undefined) return
   const record = await readMemoryFile(source)

@@ -1,9 +1,8 @@
 /**
- * Queue edits and withdrawals.
+ * 排队消息的编辑与撤回。
  *
- * Editing a queued message aborts the original submission and submits a replacement
- * under a derived request id, so a retry after a restart never duplicates it. The
- * per-submission lock keeps concurrent edits of the same row ordered.
+ * 编辑排队消息会先中止原提交，再以派生的 request id 提交替换消息，因此重启后的
+ * 重试不会造成重复。按提交 ID 的行级锁保证对同一行的并发编辑有序执行。
  */
 import { createHash } from 'node:crypto'
 import type { Context } from '@earendil-works/chord/context'
@@ -17,6 +16,7 @@ import {
   parseSubmissionId, queueContent,
 } from './helpers.ts'
 
+/** 队列 feature 的依赖注入契约：harness 惰性获取，提交逻辑复用会话 feature 的入口。 */
 export interface QueueDeps {
   harness: () => Harness
   requireConversation(value: string): Promise<Conversation>
@@ -33,11 +33,25 @@ export interface QueueDeps {
   defaultWorkspace(): WorkspaceSummary | undefined
 }
 
+/**
+ * 功能：创建队列 feature 服务，负责排队消息的编辑、撤回与启动时的编辑恢复。
+ * @param deps 依赖注入契约见 QueueDeps；换提交复用 submitWithReferences 保证幂等
+ * 职责边界：只处理排队的输入提交；已进入运行的消息通过 CONFLICT 拒绝编辑/撤回。
+ */
 export function createQueue(deps: QueueDeps) {
   const { requireConversation, ensureMetadata, withMetadata, submitWithReferences, workspaceFiles, defaultWorkspace } = deps
   const harness = (): Harness => deps.harness()
 
+  /** 按 key 串行的行级锁集合；key 为 `会话ID:提交ID`，锁在无等待者时自清理。 */
   const queueActionLocks = new Map<string, Promise<void>>()
+  /**
+   * 功能：把 action 串行挂到同一 key 的已有 promise 链上。
+   * @param key 锁标识（会话+提交）
+   * @param action 要串行执行的异步操作
+   * @returns action 的结果；失败不破坏链条
+   * 内部逻辑：新请求排在前一个完成后执行（无论成败），队列存的是吞掉结果的
+   * settled promise；若当前 key 已无后继等待则删除条目，避免 Map 无限增长。
+   */
   const withQueueActionLock = async <T>(key: string, action: () => Promise<T>): Promise<T> => {
     const previous = queueActionLocks.get(key) ?? Promise.resolve()
     const result = previous.then(action, action)
@@ -47,6 +61,7 @@ export function createQueue(deps: QueueDeps) {
       if (queueActionLocks.get(key) === settled) queueActionLocks.delete(key)
     }
   }
+  /** 从会话收件箱读取一条排队消息的文本/图片/附件内容；非排队输入返回 undefined。 */
   const queuedContentFor = async (conversation: Awaited<ReturnType<typeof requireConversation>>, submissionId: SubmissionId): Promise<QueueContent | undefined> => {
     const view = await conversation.watch(CTX)
     try {
@@ -60,6 +75,16 @@ export function createQueue(deps: QueueDeps) {
     }
   }
 
+  /**
+   * 功能：推进一条排队编辑的状态机直至提交替换消息。
+   * @param conversation 目标会话
+   * @param requestId 编辑请求 ID（queueEdits 文档的键）
+   * @returns 替换提交的 ID
+   * 内部逻辑：complete 状态幂等返回；conflict 拒绝。pending/aborting 时先中止
+   * 原排队提交——已进入运行（already_placed）或状态漂移都标记 conflict；成功
+   * 中止后以 `queue-edit:<requestId>` 提交替换消息并写入 complete 与替换提交 ID，
+   * 同时清掉原提交的排队时间戳。该方法由 editQueued 与重启恢复共用。
+   */
   const finishQueueEdit = async (conversation: Awaited<ReturnType<typeof requireConversation>>, requestId: string): Promise<{ submissionId: string }> => {
     const id = conversation.id
     const metadata = await ensureMetadata(id)
@@ -120,6 +145,16 @@ export function createQueue(deps: QueueDeps) {
     return replacement
   }
 
+  /**
+   * 功能：编辑一条排队消息，必要时保存新附件，然后推进状态机提交替换消息。
+   * @param value 会话 ID 字符串
+   * @param submissionValue 原排队提交 ID 字符串
+   * @param input 新文本、忙碌策略、图片与可选附件
+   * @returns 替换提交的 ID
+   * 内部逻辑：整个流程在 `会话:提交` 行级锁内执行。同一 requestId 的重试要求
+   * 来源提交与内容指纹一致（否则 CONFLICT）；首次编辑校验原消息仍在排队、
+   * 保存附件、写 pending 记录后进入 finishQueueEdit。
+   */
   const editQueued = async (value: string, submissionValue: string, input: EditQueueInput): Promise<{ submissionId: string }> => {
     assertSubmit(input)
     const conversation = await requireConversation(value)
@@ -172,6 +207,14 @@ export function createQueue(deps: QueueDeps) {
     })
   }
 
+  /**
+   * 功能：撤回一条排队消息（中止原提交并清理其排队时间戳）。
+   * @param value 会话 ID 字符串
+   * @param submissionValue 排队提交 ID 字符串
+   * @returns 无返回；已进入运行或状态漂移时抛 CONFLICT/NOT_FOUND
+   * 内部逻辑：在行级锁内校验提交归属与排队状态后调用 abortSubmission；
+   * already_placed 视为冲突，not_found/settled 视为不存在。
+   */
   const removeQueued = async (value: string, submissionValue: string): Promise<void> => {
     const conversation = await requireConversation(value)
     const submissionId = parseSubmissionId(submissionValue)
@@ -189,6 +232,12 @@ export function createQueue(deps: QueueDeps) {
     })
   }
 
+  /**
+   * 功能：启动恢复——扫描全部无主会话，续推未完成的排队编辑状态机。
+   * @returns 无返回；单条编辑的 CONFLICT/NOT_FOUND 视为该行已终态，跳过继续
+   * 内部逻辑：分页扫描会话记录，对 queueEdits 里 pending/aborting/aborted 状态
+   * 的条目逐条调用 finishQueueEdit；崩溃前已提交替换或已漂移的编辑由此收敛。
+   */
   const recoverQueueEdits = async (): Promise<void> => {
     const records: ConversationRecord[] = []
     let cursor: Cursor | undefined

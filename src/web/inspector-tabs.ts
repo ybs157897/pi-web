@@ -1,10 +1,12 @@
 // 右侧 Inspector 面板的 tab 纯模型：判重、关闭回退、launcher 原地替换与 workspace 级内存记忆。
 // 语义对齐 ZCode side pane（useAppPanels / commitOpenedSidePaneState / closeSidePaneTab）。
 
+/** Inspector 面板支持的 tab 种类；new-tab 是 launcher 占位 tab，不是真实内容。 */
 export type InspectorTabType =
   | 'document' | 'browse' | 'git' | 'browser' | 'trajectory'
   | 'selection-chat' | 'plugin' | 'subagent' | 'subagents' | 'new-tab'
 
+/** document 类 tab 展示的单个文件载荷。 */
 export interface TabFile {
   path: string
   content?: string
@@ -16,6 +18,7 @@ export interface TabFile {
   url?: string
 }
 
+/** document 类 tab 展示的 diff 载荷（新旧文本或现成 diff 片段，三选一）。 */
 export interface TabDiff {
   path: string
   oldText?: string | null
@@ -23,11 +26,13 @@ export interface TabDiff {
   diff?: string
 }
 
+/** document tab 的三类内容：单文件、diff、计划预览。 */
 export type DocumentDoc =
   | { kind: 'file'; file: TabFile }
   | { kind: 'diff'; diff: TabDiff }
   | { kind: 'plan' }
 
+/** 单个 Inspector tab 的完整状态；可选字段按 type 各取所需（见字段前注释）。 */
 export interface InspectorTab {
   id: string
   type: InspectorTabType
@@ -53,17 +58,29 @@ export interface InspectorTab {
   addressDraft?: string
 }
 
+/** 一个面板的 tab 列表与激活 tab；activeTabId 为 null 表示空面板。 */
 export interface PaneState { tabs: InspectorTab[]; activeTabId: string | null }
 
+/** pane 记忆最多保存的 workspace 数，超出淘汰最久未写的。 */
 const PANE_MEMORY_LIMIT = 50
 
 // workspace 级内存记忆：Map 插入序即最近一次写入序（重写先 delete 再 set），LRU 按「写」驱动。
 const paneMemory = new Map<string, PaneState>()
 
+/**
+ * 功能：读某 workspace 的面板记忆，取出后做一次归一清洗。
+ * @param workspaceId 工作区 id
+ * @returns 归一后的 PaneState；无记忆返回 null
+ */
 export function readPaneMemory(workspaceId: string): PaneState | null {
   return normalizePaneState(paneMemory.get(workspaceId) ?? null)
 }
 
+/**
+ * 功能：写入某 workspace 的面板记忆（LRU：先删后写让重写排在队尾），超出上限淘汰最旧条目。
+ * @param workspaceId 工作区 id
+ * @param state 要保存的面板状态（写入前归一化；归一为 null 时等于清除记忆）
+ */
 export function writePaneMemory(workspaceId: string, state: PaneState): void {
   const next = normalizePaneState(state)
   paneMemory.delete(workspaceId)
@@ -75,6 +92,12 @@ export function writePaneMemory(workspaceId: string, state: PaneState): void {
   }
 }
 
+/**
+ * 功能：激活指定 tab，仅改 activeTabId，tab 数组浅拷贝保持顺序不变。
+ * @param state 当前面板状态
+ * @param id 目标 tab id
+ * @returns 新 PaneState（不可变更新，不校验 id 是否存在）
+ */
 export function activateTab(state: PaneState, id: string): PaneState {
   return { tabs: [...state.tabs], activeTabId: id }
 }
@@ -108,11 +131,21 @@ export function closeTabs(state: PaneState, ids: readonly string[]): { state: Pa
   return { state: { tabs, activeTabId: activeId }, activeId }
 }
 
+/**
+ * 功能：关闭除指定 id 以外的全部 tab，并把该 tab 设为激活。
+ * @param state 当前面板状态
+ * @param id 保留的 tab id
+ * @returns 归一后的新状态；id 不存在时归一为空面板兜底
+ */
 export function closeOtherTabs(state: PaneState, id: string): PaneState {
   return normalizePaneState({ tabs: state.tabs.filter(tab => tab.id === id), activeTabId: id })
     ?? { tabs: [], activeTabId: null }
 }
 
+/**
+ * 功能：清空面板——返回无 tab、无激活项的空 PaneState。
+ * @returns 空面板状态
+ */
 export function closeAllTabs(state: PaneState): PaneState {
   return { tabs: [], activeTabId: null }
 }
@@ -141,6 +174,13 @@ export function openFromLauncher(state: PaneState, tab: InspectorTab): PaneState
   return { tabs, activeTabId: tab.id }
 }
 
+/**
+ * 功能：拖拽排序——把 fromId 的 tab 移动到 toIndex 位置。
+ * @param state 当前面板状态
+ * @param fromId 要移动的 tab id
+ * @param toIndex 目标下标（按「先移出再插入」的数组语义）
+ * @returns 新 PaneState；fromId 不存在时原样返回，激活 tab 保持不变
+ */
 export function reorderTab(state: PaneState, fromId: string, toIndex: number): PaneState {
   const from = state.tabs.findIndex(tab => tab.id === fromId)
   if (from === -1) return state
@@ -183,6 +223,11 @@ export function normalizePaneState(state: PaneState | null): PaneState | null {
 export const CONVERSATION_SCOPED_TYPES: readonly InspectorTabType[] =
   ['plugin', 'subagent', 'trajectory', 'selection-chat']
 
+/**
+ * 功能：切换会话时移除会话作用域类型的 tab（plugin/subagent/trajectory/selection-chat），只留跨会话持久的 tab。
+ * @param state 当前面板状态
+ * @returns 移除后归一化的新状态
+ */
 export function stripConversationScoped(state: PaneState): PaneState {
   const scoped = new Set<string>(CONVERSATION_SCOPED_TYPES)
   const tabs = state.tabs.filter(tab => !scoped.has(tab.type))

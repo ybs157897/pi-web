@@ -5,18 +5,23 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './WorkspaceDialog.module.css'
 
+/** DirectoryBrowser 的属性定义：对话框开关、关闭回调与目录选定回调。 */
 export interface DirectoryBrowserProps {
   open: boolean
   onClose: () => void
-  /** Chosen absolute directory. */
+  /** 选定的绝对目录路径。 */
   onPick: (path: string) => void
 }
 
 /**
- * DSH's browse directory picker: the hosts without a native panel (Windows today)
- * pick a workspace directory from the host filesystem here instead.
- * @param props - dialog visibility and the picked path.
- * @returns the directory browser dialog.
+ * 功能：DSH 风格的目录选择对话框——在没有原生目录面板的宿主上（目前是 Windows），
+ * 用它代替系统面板浏览宿主文件系统并选定工作区目录。
+ * @param props open 是否打开；onClose 关闭回调；onPick 以选中的绝对路径回调。
+ * @returns 目录选择对话框。
+ * 内部逻辑：listing 保存当前 DirectoryListing（面包屑 + 子目录项），open 变化时
+ * 通过 api.listDirectories 加载；load() 支持按面包屑/子目录逐层进入；showHidden
+ * 控制隐藏目录过滤；createFolder 在当前目录下新建文件夹并刷新；底部「打开」
+ * 按钮以 listing.path 回调 onPick。
  */
 export default function DirectoryBrowser({ open, onClose, onPick }: DirectoryBrowserProps) {
   const { t } = useUiPreferences()
@@ -26,6 +31,7 @@ export default function DirectoryBrowser({ open, onClose, onPick }: DirectoryBro
   const [showHidden, setShowHidden] = useState(false)
   const [folderDraft, setFolderDraft] = useState('')
 
+  /** 加载目录列表：不传 path 时从宿主默认位置开始；失败信息写入 error。 */
   const load = async (path?: string): Promise<void> => {
     setLoading(true); setError('')
     try { setListing(await api.listDirectories(path)) }
@@ -34,6 +40,7 @@ export default function DirectoryBrowser({ open, onClose, onPick }: DirectoryBro
   }
   useEffect(() => { if (open) void load() }, [open])
 
+  /** 在当前目录下新建文件夹：校验草稿名非空，成功后清空输入并刷新列表。 */
   const createFolder = async (): Promise<void> => {
     if (listing === null || folderDraft.trim() === '') return
     setError('')

@@ -7,12 +7,12 @@ import { resolveToolRoute, toolRouteInstruction } from '../conversation/tool-rou
 import { Subagents } from '../conversation/subagent-policy.ts'
 
 /**
- * Plan mode as the conversation document stores it. Pi re-renders every section before each request,
- * so a switch that lands while a run is going takes effect on the next request: that is DSH's
- * "pending" plan-mode semantics, and it needs no extra state.
+ * 会话文档中的计划模式状态。Pi 在每次请求前重渲染所有 section，因此一次切换若发生在
+ * 运行中途，会在下一次请求生效——这就是 DSH 的"pending"计划模式语义，无需额外状态。
  */
 export type PlanState = { active: boolean; updatedAt: number }
 
+/** 会话作用域的计划模式文档：active 标记与更新时间。 */
 export const Plans = defineDoc<PlanState>({
   kind: 'pi-web.plan',
   version: 1,
@@ -22,35 +22,40 @@ export const Plans = defineDoc<PlanState>({
   initial: () => ({ active: false, updatedAt: 0 }),
 })
 
-/** The button that approves a plan; the review card renders it as its primary action. */
+/** 批准计划的按钮文案；审阅卡把它渲染为主操作。 */
 export const PLAN_APPROVE_LABEL = '同意执行'
+/** 只读访问模式下的批准按钮文案（语义是"确认方案"而非授权实施）。 */
 export const READ_ONLY_PLAN_APPROVE_LABEL = '确认方案'
-/** Answer id the plan-review card submits; the route only inspects the selected labels. */
+/** 计划审阅卡提交的答复 id；路由只检查所选 label。 */
 export const PLAN_REVIEW_ANSWER_ID = 'plan-review'
 
-/** A plan review as `pi-web.interactions` stores it next to the question calls. */
+/** 存放在 `pi-web.interactions` 里、与提问调用并列的计划审阅记录。 */
 export type StoredPlanReview = {
   kind: 'plan-review'
-  /** The plan markdown the model submitted; unchanged by later revisions. */
+  /** 模型提交的计划 markdown；后续修订不会改动它。 */
   detail: string
   approveLabel: string
   askedAt: number
-  /** `superseded` means a newer submission replaced this review before the user decided. */
+  /** `superseded` 表示用户决定之前有更新的提交替换了本次审阅。 */
   status: 'pending' | 'answered' | 'superseded' | 'cancelled'
-  /** Only set once answered: true approved the plan, false asked for changes. */
+  /** 仅在答复后设置：true 批准计划，false 要求修改。 */
   approved?: boolean
-  /** What the user wants changed, echoed to the model in the reply message. */
+  /** 用户想改什么，会在回复消息里回传给模型。 */
   feedback?: string
   answers?: AskUserQuestionAnswerItem[]
   answeredAt?: number
   cancelledAt?: number
 }
 
+/** 计划首行的一级标题前缀。 */
 const HEADING_PREFIX = '# '
 
 /**
- * Validate the model's plan: non-empty Markdown whose first line is a level-1 heading. Throwing here
- * gives the model an actionable tool error instead of a silently unusable review card.
+ * 功能：校验模型提交的计划：非空 Markdown 且首行是一级标题。
+ * 内部逻辑：为空、缺一级标题、标题内容为空分别抛出带修复指引的错误——让模型拿到
+ * 可行动的工具错误，而不是拿到一张无法使用的审阅卡。
+ * @param value 计划文本（预期为字符串）。
+ * @returns trim 后的合法计划 markdown。
  */
 export function cleanPlan(value: unknown): string {
   const plan = typeof value === 'string' ? value.trim() : ''
@@ -66,14 +71,18 @@ export function cleanPlan(value: unknown): string {
   return plan
 }
 
-/** The plan's first level-1 heading text, which is what the transcript shows as the call title. */
+/**
+ * 功能：提取计划的第一个一级标题文本，作为会话记录里工具调用的标题。
+ * @param plan 计划 markdown。
+ * @returns 标题文本；没有一级标题时 undefined。
+ */
 export function planTitle(plan: string): string | undefined {
   const heading = plan.split('\n').map(line => line.trim()).find(line => line.startsWith(HEADING_PREFIX))
   const title = heading?.slice(HEADING_PREFIX.length).trim()
   return title ? title : undefined
 }
 
-/** Plan mode is off, so there is nothing to submit; the message tells the model how to recover. */
+/** 计划模式未开启时的报错文案：无可提交计划，并告诉模型如何恢复。 */
 export const PLAN_INACTIVE_ERROR = [
   '本会话未开启计划模式，因此没有可提交的计划。',
   '仅使用当前请求提供的计划工具；没有可用工具时，在答复中直接给出计划。',
@@ -81,8 +90,11 @@ export const PLAN_INACTIVE_ERROR = [
 ].join(' ')
 
 /**
- * Read one stored interaction as a plan review. Returns the same object it was given so the runtime
- * can settle it in place inside a document transaction; `undefined` means it is a question call.
+ * 功能：把一条已存储的 interaction 读为计划审阅记录。
+ * 内部逻辑：校验 kind、detail、approveLabel、askedAt 与状态合法性；返回的是原对象引用，
+ * 让 runtime 能在文档事务内就地结算；不是审阅记录（如提问调用）时返回 undefined。
+ * @param value interaction 表中的一个条目。
+ * @returns 合法的 StoredPlanReview，或 undefined。
  */
 export function planReviewOf(value: unknown): StoredPlanReview | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
@@ -92,34 +104,48 @@ export function planReviewOf(value: unknown): StoredPlanReview | undefined {
   return record as StoredPlanReview
 }
 
+/** 计划审阅记录允许的状态集合（planReviewOf 校验用）。 */
 const REVIEW_STATUSES = new Set<StoredPlanReview['status']>(['pending', 'answered', 'superseded', 'cancelled'])
 
 /**
- * The interaction table is declared by the question slice as a table of question records; a plan
- * review is the same table's second record shape. This is the single place the shape widens, so the
- * writes below stay ordinary document mutations.
+ * 功能：把 interaction 表放宽为普通键值表。提问切片声明的表类型是"提问记录表"，计划
+ * 审阅是同一张表的第二种记录形状；这里是唯一拓宽类型的位置，使后续写入保持普通文档
+ * 变更操作。
+ * @param table interaction 文档的原始值。
+ * @returns 放宽后的键值表。
  */
 export function interactionTable(table: unknown): Record<string, unknown> {
   return table as Record<string, unknown>
 }
 
-/** Labels an approval, for callers that answer the route without the card's exact button text. */
+/** 认可批准的同义 label 集合，供不使用卡片按钮原文的调用方答复时识别。 */
 const APPROVAL_WORDS = new Set(['同意', '同意执行', '批准', '通过', 'approve', 'approved', 'yes', 'ok', 'okay'])
 
+/**
+ * 功能：判断一个 label 是否表示批准。
+ * @param value 用户选择的 label 或自定义文本。
+ * @param approveLabel 审阅卡上的批准按钮原文。
+ * @returns 与按钮原文一致或命中同义词集合时 true。
+ */
 function isApproval(value: string, approveLabel: string): boolean {
   const label = value.trim()
   return label !== '' && (label === approveLabel || APPROVAL_WORDS.has(label.toLocaleLowerCase()))
 }
 
+/** 计划审阅的决策结果：是否批准与回传给模型的反馈。 */
 export type PlanReviewDecision = {
   approved: boolean
-  /** Selected labels and custom text that are not an approval, joined for the model. */
+  /** 非批准的所选 label 与自定义文本，拼接后回传给模型。 */
   feedback?: string
 }
 
 /**
- * DSH's plan-review decision: the approve label (or an equivalent "yes") approves the plan, anything
- * else asks for changes and keeps plan mode on. Feedback travels back to the model in the reply.
+ * 功能：按 DSH 语义裁决计划审阅：批准按钮（或等价的"同意/yes"）即批准计划；其余任何
+ * 选择都视为要求修改并保持计划模式开启。
+ * 内部逻辑：任一答复选中批准语义即 approved；其余 label 与自定义文本拼接为 feedback。
+ * @param review 待结算的审阅记录。
+ * @param answers 用户的答复项。
+ * @returns 批准布尔值与可选反馈。
  */
 export function decidePlanReview(review: StoredPlanReview, answers: readonly AskUserQuestionAnswerItem[]): PlanReviewDecision {
   const approved = answers.some(answer => answer.selected.some(label => isApproval(label, review.approveLabel)))
@@ -130,7 +156,7 @@ export function decidePlanReview(review: StoredPlanReview, answers: readonly Ask
   return { approved, ...(notes.length ? { feedback: notes.join('; ') } : {}) }
 }
 
-/** The policy section: how the model must work while plan mode is on. Nothing is injected when it is off. */
+/** plan-policy section：计划模式开启时模型必须遵守的工作规则；未开启时不注入任何内容。 */
 const planSection = section('plan-policy', async (input, context) => {
   const [doc, identity] = await Promise.all([
     input.read.snapshot(Plans, input.conversationId, context),
@@ -176,14 +202,14 @@ const planSection = section('plan-policy', async (input, context) => {
 })
 
 /**
- * DSH's exit_plan_mode in its non-blocking form: validate the plan, store a plan-review interaction
- * in `pi-web.interactions`, and report the plan as pending. The user's decision arrives later through
- * `POST /api/conversations/:id/interactions/:callId/answer` and turns plan mode off when approved.
+ * 计划扩展的配置：readAccessMode 用于在事务内读取当前访问模式，只读会话的批准按钮
+ * 换成"确认方案"。
  */
 export type PlanExtensionOptions = {
   readAccessMode?: (tx: Tx, conversationId: ConversationId) => Promise<AccessMode | undefined>
 }
 
+/** 构造 `exit_plan_mode` 工具；按 options 决定只读模式下的批准按钮文案。 */
 const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
   name: 'exit_plan_mode',
   description: [
@@ -198,6 +224,15 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
     '示例：“搜索并理解 vim 模式如何实现”→ 报告发现，不提交计划；“为 vim 实现 yank 模式”→ 提交实施计划；“添加认证，认证方式未定”→ 先询问认证方式，再提交。',
   ].join(' '),
   parameters: Type.Object({ plan: Type.String() }),
+  /**
+   * 功能：提交计划（DSH exit_plan_mode 的非阻塞形式）。
+   * 输入校验：计划模式未开启抛 PLAN_INACTIVE_ERROR（附带进入计划模式的指引）；
+   * cleanPlan 校验计划格式；事务内对提交文档二次确认，快照后发生的切换以已提交
+   * 文档为准。
+   * 内部逻辑：把 pending 计划审阅写入 Interactions（一次只保留一个待审计划——修订
+   * 提交会把仍在 pending 的旧审阅标记为 superseded），用户决定稍后经 answer API
+   * 送达，批准时关闭计划模式。绝不阻塞等待。
+   */
   execute: async (args, api, context) => {
     const state = await api.snapshot(Plans, api.conversationId, context)
     if (state?.active !== true) {
@@ -213,11 +248,11 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
         if (accessMode === 'readOnly' || accessMode === undefined) approveLabel = READ_ONLY_PLAN_APPROVE_LABEL
       }
       const doc = await tx.doc(Plans, api.conversationId)
-      // Re-checked against the committed document: a switch that landed since the snapshot wins.
+      // 对照已提交文档再查一次：快照之后落下的切换以文档为准。
       if (!doc.active) throw new Error(PLAN_INACTIVE_ERROR)
       const table = interactionTable(await tx.doc(Interactions, api.conversationId))
-      // One plan is under review at a time: a revised submission replaces whatever was still
-      // pending, so a dismissed or forgotten review can never resurface as the live decision.
+      // 同一时间只有一个计划在审：修订提交会替换仍在 pending 的旧审阅，被关掉或遗忘
+      // 的审阅不会作为当前决策重新浮出。
       for (const stored of Object.values(table)) {
         const review = planReviewOf(stored)
         if (review?.status === 'pending') review.status = 'superseded'
@@ -247,10 +282,9 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
 })
 
 /**
- * ZCode's EnterPlanMode in its free form: the model switches into plan mode itself, without a
- * permission prompt (`plan-mode-policy` allows it unconditionally) and without asking the user.
- * The description carries ZCode's "prefer it for implementation tasks" instruction so asking for
- * a plan just works — the model enters plan mode instead of telling the user to flip a chip.
+ * ZCode EnterPlanMode 的自由形态：模型自行进入计划模式，无需权限弹窗
+ * （`plan-mode-policy` 无条件允许）也不询问用户。描述里携带 ZCode"实施任务优先进入
+ * 计划模式"的指令，让"请求计划"直接可用——模型进入计划模式，而不是让用户去拨开关。
  */
 const enterPlanModeTool = defineTool({
   name: 'enter_plan_mode',
@@ -262,6 +296,13 @@ const enterPlanModeTool = defineTool({
     '计划模式已经开启时，无须重复调用。',
   ].join(' '),
   parameters: Type.Object({}),
+  /**
+   * 功能：把当前会话切换为计划模式。
+   * 输入校验：目标（goal）处于活动状态时拒绝（计划与目标不能同时活动）；已开启时
+   * 返回提示不重复切换；本请求没有 exit_plan_mode 工具时拒绝进入。
+   * 内部逻辑：事务内置 active=true 并刷新 updatedAt，计划策略 section 会在下一个
+   * 请求生效。
+   */
   execute: async (_args, api, context) => {
     const goal = await api.snapshot(Goals, api.conversationId, context)
     if (goal?.goal?.phase === 'active') {
@@ -294,7 +335,12 @@ const enterPlanModeTool = defineTool({
   },
 })
 
-/** DSH's plan mode: the document, the policy section and `exit_plan_mode`; register it in the runtime. */
+/**
+ * 功能：装配 plan 工具扩展（DSH 计划模式）：贡献 2 个工具（enter_plan_mode /
+ * exit_plan_mode）与 1 个 section（plan-policy 计划模式工作规则）；由 runtime 注册。
+ * @param options 可选配置，用于读取访问模式以决定批准按钮文案。
+ * @returns 名为 `plan` 的扩展。
+ */
 export function createPlanExtension(options: PlanExtensionOptions = {}): Extension {
   return defineExtension({
     name: 'plan',
@@ -303,4 +349,5 @@ export function createPlanExtension(options: PlanExtensionOptions = {}): Extensi
   })
 }
 
+/** 按默认配置预装配好的 plan 扩展实例。 */
 export const PlanExtension: Extension = createPlanExtension()

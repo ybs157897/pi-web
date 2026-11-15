@@ -16,6 +16,7 @@ import { RuntimeError } from '../runtime-errors.ts'
 import { SUBAGENT_TOOL } from '../tools/subagent.ts'
 import { skillsDemoResponse } from '../skills/demo.ts'
 
+/** 一次演示响应的门：started 在请求到达时 resolve，released 在放行时 resolve。 */
 interface ResponseGate {
   started: Promise<void>
   resolveStarted(): void
@@ -23,24 +24,27 @@ interface ResponseGate {
   resolveReleased(): void
 }
 
+/** 下一响应要经过的门；同一时刻至多安装一个。 */
 let nextGate: ResponseGate | undefined
 const DEMO_MODEL: ModelRef = { provider: 'pi-web-demo', modelId: 'demo-model' }
 const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-/** Windows follows DSH: only `pwsh`; other platforms only `bash`. */
+/** Windows 对齐 DSH：只用 `pwsh`；其他平台只用 `bash`。 */
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 const SHELL_LABEL = process.platform === 'win32' ? 'PowerShell' : 'bash'
+/** 按平台取命令变体：win32 取 PowerShell 版，否则取 POSIX 版。 */
 function shellCommand(posix: string, powershell: string): string {
   return process.platform === 'win32' ? powershell : posix
 }
+/** 订阅到达演示 Provider 的请求的观察者集合。 */
 const requestObservers = new Set<(request: Parameters<FauxResponseFactory>[0]) => void>()
 
-/** Observe requests reaching the explicit demo provider, for runtime wiring acceptance. */
+/** 观察 demo Provider 收到的请求，供运行时接线验收。 */
 export function observeDemoRequests(observer: (request: Parameters<FauxResponseFactory>[0]) => void): () => void {
   requestObservers.add(observer)
   return () => { requestObservers.delete(observer) }
 }
 
-/** Pause the next demo model response until released or the Pi request is aborted. */
+/** 功能：暂停下一次 demo 模型响应，直到放行或 Pi 请求被中止。 */
 export function holdNextDemoResponse(): { started: Promise<void>; release(): void } {
   if (nextGate) throw new Error('A demo response gate is already installed')
   let resolveStarted!: () => void
@@ -61,6 +65,7 @@ export function holdNextDemoResponse(): { started: Promise<void>; release(): voi
   }
 }
 
+/** 在已安装的门前等待：请求到达即 resolve started，释放或中止后返回。 */
 async function waitAtGate(signal: AbortSignal | undefined): Promise<void> {
   const gate = nextGate
   if (!gate) return
@@ -79,6 +84,7 @@ async function waitAtGate(signal: AbortSignal | undefined): Promise<void> {
   }
 }
 
+/** 取上下文中最后一条用户消息的文本（多模态取 text 分块拼接）。 */
 function latestUserText(context: Parameters<FauxResponseFactory>[0]): string {
   const latest = [...context.messages].reverse().find((message) => message.role === 'user')
   if (!latest) return ''
@@ -86,9 +92,10 @@ function latestUserText(context: Parameters<FauxResponseFactory>[0]): string {
   return latest.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n')
 }
 
+/** HTTP 路由转入会话的结构化回答消息形状。 */
 type DemoAnswerReply = { callId: string; answers: Array<{ id: string; selected: string[]; custom?: string }> }
 
-/** Recognize the structured answer message the HTTP route steers into the conversation. */
+/** 识别 HTTP 路由转入会话的结构化回答消息。 */
 function parseAnswerReply(text: string): DemoAnswerReply | undefined {
   if (!text.includes('answer_to_pending_question')) return undefined
   const start = text.indexOf('{')
@@ -111,6 +118,7 @@ function parseAnswerReply(text: string): DemoAnswerReply | undefined {
   }
 }
 
+/** 把回答整理成「- id: 选项（或已跳过）」的摘要行。 */
 function answerSummary(reply: DemoAnswerReply): string {
   return reply.answers.map(answer => {
     const value = [...answer.selected, ...(answer.custom ? [answer.custom] : [])]
@@ -118,7 +126,7 @@ function answerSummary(reply: DemoAnswerReply): string {
   }).join('\n')
 }
 
-/** The plan-review decision the answer route steers in; the question reply parser would misread it. */
+/** 回答路由转入的计划审阅决定；问题回答解析器会误读它，因此先行判断。 */
 function parsePlanReviewReply(text: string): { approved: boolean; feedback?: string } | undefined {
   if (!text.includes('plan-review')) return undefined
   const start = text.indexOf('{')
@@ -133,7 +141,7 @@ function parsePlanReviewReply(text: string): { approved: boolean; feedback?: str
   }
 }
 
-/** Recognize the dismissal message the cancel route steers in; the answer parser never sees it. */
+/** 识别取消路由转入的放弃消息；回答解析器看不到它（先行判断）。 */
 function parseDismissedReply(text: string): { callId: string } | undefined {
   if (!text.includes('dismissed_pending_question')) return undefined
   const start = text.indexOf('{')
@@ -147,7 +155,7 @@ function parseDismissedReply(text: string): { callId: string } | undefined {
   }
 }
 
-/** The plan the demo model submits first, and the revision it submits after a change request. */const DEMO_PLAN = [
+/** 演示模型首先提交的计划，以及收到修改要求后提交的修订版。 */const DEMO_PLAN = [
   '# 演示计划：分三步落地计划模式',
   '',
   '## 目标',
@@ -183,14 +191,14 @@ const DEMO_PLAN_REVISED = [
   '- 只涉及会话文档字段，把 pi-web.plan 的 active 置回 false 即可',
 ].join('\n')
 
-/** Teammate prompts carry their own marker so the child's faux script answers instead of delegating. */
+/** 队友提示词自带标记，使子会话的 faux 脚本直接回答而不是继续委派。 */
 const TEAM_CHILD_MARKER = '[team-child]'
 const TEAM_FOLLOWUP_MARKER = '[team-child-followup]'
 const TEAM_SLOW_MARKER = '[team-child-slow]'
 const DEMO_TEAM_ANSWER = '已完成：团队面板需要的字段与状态映射已核对，结论写在共享任务里。'
 const DEMO_TEAM_FOLLOWUP_ANSWER = '进度：资料已整理完，正在等待实现任务解除依赖。'
 
-/** Abortable delay, so a closing runtime never waits out the slow demo teammate. */
+/** 可中止的延时，保证关闭中的运行时不必等慢速演示成员等到结束。 */
 async function demoDelay(ms: number, signal: AbortSignal | undefined): Promise<void> {
   if (signal?.aborted) return
   await new Promise<void>((resolve) => {
@@ -199,13 +207,13 @@ async function demoDelay(ms: number, signal: AbortSignal | undefined): Promise<v
   })
 }
 
-/** The visible text of one tool result, used to recover the created task id. */
+/** 一条工具结果的可见文本；用于回读已创建的任务 ID 等信息。 */
 function toolResultText(message: { content: string | readonly { type: string; text?: string }[] }): string {
   if (typeof message.content === 'string') return message.content
   return message.content.flatMap(part => part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
 }
 
-/** A deterministic checkpoint for compaction requests, so the mechanism is testable without a real model. */
+/** 压缩请求的确定性检查点，使压缩机制无需真实模型即可测试。 */
 const DEMO_COMPACTION_SUMMARY = [
   '## Goal',
   'Complete the demo task in this conversation.',
@@ -233,6 +241,7 @@ const DEMO_COMPACTION_SUMMARY = [
   '- Demo compaction checkpoint; exact paths and errors are in the retained tail.',
 ].join('\n')
 
+/** 识别压缩请求并返回固定检查点；其余请求返回 undefined（落回主脚本）。 */
 function demoCompactionResponse(context: Parameters<FauxResponseFactory>[0]) {
   const system = context.messages.filter(message => message.role === 'system').map(message => toolResultText(message)).join('\n')
   const lastUser = latestUserText(context)
@@ -244,15 +253,15 @@ function demoCompactionResponse(context: Parameters<FauxResponseFactory>[0]) {
   return isCompaction ? fauxAssistantMessage(fauxText(DEMO_COMPACTION_SUMMARY)) : undefined
 }
 
-/** The fixed delegation the `[subagent]` script submits, and the answer its child writes back. */
+/** `[subagent]` 脚本提交的固定委派，以及其子会话写回的答案。 */
 const DEMO_SUBAGENT_CHILD_MARKER = '[subagent-child]'
 const DEMO_SUBAGENT_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 归纳子智能体一期机制：子会话如何创建、答案如何取回、面板如何挂上去。`
-/** The background delegation the `[subagent-bg]` script submits, and the marker its settlement turn arrives with. */
+/** `[subagent-bg]` 脚本提交的后台委派，以及结算轮次到达时携带的标记。 */
 const DEMO_SUBAGENT_BG_MARKER = '[subagent-bg]'
 const DEMO_SUBAGENT_BG_TASK = `${DEMO_SUBAGENT_CHILD_MARKER} 后台调研任务：总结 demo 会话继承语义。`
 const DEMO_SUBAGENT_BG_LABEL = '后台机制归纳'
 const DEMO_SUBAGENT_SETTLEMENT_MARKER = '[subagent-settlement]'
-/** The parallel delegations the `[subagents]` script submits, so the one-line strip can be checked. */
+/** `[subagents]` 脚本提交的并行委派，用于检查一行色带的折叠。 */
 const DEMO_PARALLEL_SUBAGENT_TASKS = [
   { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于春天的小作文，500 字左右。`, label: 'spring' },
   { task: `${DEMO_SUBAGENT_CHILD_MARKER} 写一篇关于城市清晨的小作文，500 字左右。`, label: 'city' },
@@ -266,7 +275,7 @@ const DEMO_SUBAGENT_ANSWER = [
   '3. UI 通过 `GET /api/conversations/:id/children` 读取子会话摘要，在会话头的计数触发器里展开、打开或停止。',
 ].join('\n')
 
-/** The deterministic extraction script: one fact file, one index update, then a plain stop. */
+/** 确定性的记忆提取脚本：写一个事实文件、更新一次索引，然后普通结束。 */
 const DEMO_MEMORY_FACT_NAME = 'user-prefers-zh.md'
 const DEMO_MEMORY_FACT = [
   '---',
@@ -294,6 +303,7 @@ const DEMO_MEMORY_DIRECT_FACT = [
   '',
 ].join('\n')
 
+/** 拼接全部系统消息正文与 sections，供脚本匹配提示词内容。 */
 function systemTextOf(context: Parameters<FauxResponseFactory>[0]): string {
   return context.messages
     .filter(message => message.role === 'system')
@@ -307,12 +317,13 @@ function systemTextOf(context: Parameters<FauxResponseFactory>[0]): string {
     .join('\n')
 }
 
-/** The memory root is declared by the memory section; the demo scripts read it rather than guess. */
+/** 记忆根目录由记忆 section 声明；演示脚本从提示词里读取而不是猜测。 */
 function demoMemoryRoot(context: Parameters<FauxResponseFactory>[0]): string | undefined {
   const match = /你在 `([^`]+)` 有一个基于文件的持久记忆/u.exec(systemTextOf(context))
   return match?.[1]
 }
 
+/** 记忆提取子代理的固定三步脚本：写事实文件 → 更新 MEMORY.md → 普通收尾。 */
 function demoMemoryExtractionResponse(context: Parameters<FauxResponseFactory>[0]) {
   if (!latestUserText(context).includes('记忆提取子代理')) return undefined
   const root = demoMemoryRoot(context)
@@ -336,7 +347,15 @@ function demoMemoryExtractionResponse(context: Parameters<FauxResponseFactory>[0
   return fauxAssistantMessage(fauxText('已保存。'))
 }
 
-/** Exported for the demo-script unit tests: script branches are asserted against hand-built transcripts. */
+/**
+ * 功能：演示模型的完整脚本化响应工厂，按用户文本里的标记分发到固定剧本。
+ * @param context faux 请求上下文（消息与当前工具集）
+ * @param options 含中止信号，供门等待与延时中止
+ * @returns 一条固定剧本的助手消息
+ * 内部逻辑：先过观察者与响应门，再依次尝试技能/压缩/记忆提取子脚本；主脚本按
+ * 标记（[plan]、[todo]、[team]、[subagent] 等）与「已收到的工具结果数」推进状态机。
+ * 导出供 demo 脚本单元测试：用手工构造的记录断言各分支。
+ */
 export const scriptedResponse: FauxResponseFactory = async (context, options) => {
   for (const observer of requestObservers) observer(context)
   await waitAtGate(options?.signal)
@@ -374,8 +393,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   if (userText.includes('[memory-demo]')) {
     return fauxAssistantMessage(fauxText('好，后续都用中文回答。'))
   }
-  // Live-tool acceptance without a real model: `[plugin-tool:<tool name>]` calls one registered tool
-  // and reports its text, so a plugin MCP tool can be proven reachable end to end.
+  // 无真实模型的工具实收验收：`[plugin-tool:<工具名>]` 调用一个已注册工具并回显其
+  // 文本，从而端到端证明插件 MCP 工具可达。
   const pluginTool = /\[plugin-tool:([A-Za-z0-9_]+)\]/u.exec(userText)?.[1]
   if (pluginTool !== undefined) {
     if (currentResults.length === 0) {
@@ -409,8 +428,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       ].join('\n')),
     ])
   }
-  // The statechart review answers before the generic question reply: the wrap-up names the
-  // adjusted rows, the shape the review gate has to produce.
+  // 状态机审阅先于一般问答回答：收尾要点名被调整的行，这正是审阅门必须产生的形状。
   const statechartReply = answerReply !== undefined && answerReply.answers.some(answer => answer.id === 'sc-adjust' || answer.id === 'sc-missing')
     ? answerReply
     : undefined
@@ -436,8 +454,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   if (userText.includes('[ask]')) {
     switch (currentResults.length) {
       case 0:
-        // The lead-in shares the message with the question call, so a settled turn folds it
-        // into the work group — the shape the collapsed header's prose preview has to name.
+        // 引导语与提问调用共用一条消息，落定轮次因此把它折进工作组——
+        // 这正是折叠头的文字预览需要点名的形状。
         return fauxAssistantMessage([
           fauxThinking('先把演示范围问清楚，再决定后续步骤。'),
           fauxText('先确认这次演示覆盖哪一层：选前端交互会重点看卡片与选项，选全链路会一直跑到收尾回复。\n\n补充要求可以留空，我会按默认顺序演示。'),
@@ -475,7 +493,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
           fauxToolCall('skill_load', { skill: 'builtin:statechart' }, { id: `demo-sc-load-${String(context.messages.length)}` }),
         ], { stopReason: 'toolUse' })
       case 1:
-        // The review-gate shape: matrix + table + diagram in the reply, disputed rows in the form.
+        // 审阅门的形状：回复里是矩阵 + 表格 + 图，待定行进表单。
         return fauxAssistantMessage([
           fauxThinking('按 skill 方法穷举「状态 × 事件」矩阵，把待定的转移行交给用户调整。'),
           fauxText([
@@ -683,8 +701,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
     ])
   }
   if (userText.includes('[direct-tool]')) {
-    // With `codemode.mode: only` Pi offers the model just `codemode`, so a direct shell
-    // call is refused; with `on` it is a normal tool call. The runtime test uses both.
+    // `codemode.mode: only` 时 Pi 只给模型 `codemode`，直接 shell 调用会被拒绝；
+    // `on` 时则是普通工具调用。运行时测试两种都覆盖。
     const shellResults = currentResults.filter((message) => message.toolName === SHELL_TOOL)
     if (shellResults.length === 0) {
       return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('printf direct-ok', 'Write-Output direct-ok') },
@@ -720,7 +738,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   const planSubmissions = context.messages.filter((message) => message.role === 'toolResult' && message.toolName === 'exit_plan_mode' && !message.isError).length
   const beforeThisTurn = context.messages.slice(0, lastUserIndex)
   const lastResult = [...beforeThisTurn].reverse().find((message) => message.role === 'toolResult')
-  // A refused call submitted nothing, so only a successful one leaves a plan waiting for review.
+  // 被拒绝的调用什么都没提交，因此只有成功的那次会留下一个待审计划。
   const planAwaitingReview = lastResult?.toolName === 'exit_plan_mode' && !lastResult.isError
   const submittedThisTurn = currentResults.some((message) => message.toolName === 'exit_plan_mode')
   if (userText.includes('[plan]') || planReply !== undefined || planAwaitingReview) {
@@ -728,8 +746,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       const refused = [...currentResults].reverse().find((message) => message.toolName === 'exit_plan_mode')?.isError === true
       const entered = currentResults.some((message) => message.toolName === 'enter_plan_mode' && !message.isError)
       if (refused && !entered) {
-        // ZCode's EnterPlanMode: the model switches into plan mode itself instead of asking
-        // the user to flip the composer chip.
+        // 对齐 ZCode 的 EnterPlanMode：模型自己切进计划模式，而不是让用户拨输入框的开关。
         return fauxAssistantMessage(fauxToolCall('enter_plan_mode', {}, { id: `demo-plan-enter-${runToken}` }), { stopReason: 'toolUse' })
       }
       if (refused) {
@@ -804,7 +821,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       fauxText('继续推进目标：本轮核对了剩余条目并汇总了结果。仍有未完成项就等下一条续跑轮次；达到轮次上限后自动续跑停止，由用户决定下一步。'),
     ])
   }
-  // The teammate's own markers, so a spawned member answers with text instead of acting as Lead.
+  // 队友自己的标记：被创建的成员用文本回答，而不是扮演 Lead。
   if (userText.includes(TEAM_SLOW_MARKER)) {
     await demoDelay(12_000, options?.signal)
     return fauxAssistantMessage([
@@ -865,7 +882,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       }, { id: `demo-team-task-claim-${runToken}` }), { stopReason: 'toolUse' })
     }
     if (teamCount('team_task_update') === 1) {
-      // Deliberately stale: the claim committed revision 2, so this is rejected.
+      // 故意用过期的 revision：claim 已把版本提交到 2，所以这次 release 会被拒绝。
       return fauxAssistantMessage(fauxToolCall('team_task_update', {
         task_id: taskId, expected_revision: 1, action: 'release',
       }, { id: `demo-team-task-stale-${runToken}` }), { stopReason: 'toolUse' })
@@ -889,7 +906,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
         context: 'fresh',
       }, { id: `demo-team-timeout-spawn-${runToken}` }), { stopReason: 'toolUse' })
     }
-    // One second of real work so the freshly spawned member's turn is live before the wait starts.
+    // 先做 1 秒真实工作，让新成员的轮次在等待开始前处于运行中。
     if (teamCount(SHELL_TOOL) === 0) {
       return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('sleep 1', 'Start-Sleep -Seconds 1') }, { id: `demo-team-timeout-sleep-${runToken}` }), { stopReason: 'toolUse' })
     }
@@ -911,8 +928,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
     ])
   }
   if (userText.includes('[team-replay]')) {
-    // The same name and prompt twice in one run: the second call is the replay path and must
-    // reuse the member the first one created instead of adding a second child conversation.
+    // 一次运行里同名同提示调用两次：第二次走重放路径，必须复用第一次创建的
+    // 成员，而不是再开一个子会话。
     if (teamCount('spawn_teammate') < 2) {
       return fauxAssistantMessage(fauxToolCall('spawn_teammate', {
         name: 'replayed',
@@ -927,8 +944,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
     ])
   }
   if (userText.includes('[team-fork]')) {
-    // One in-flight tool round before the spawn, so the test can prove the fork seed stops at
-    // the previous completed turn instead of copying this turn's partial work.
+    // spawn 前先做一轮在途工具调用，测试由此证明 fork 种子停在上一个已完成轮次，
+    // 而不是复制本轮的半成品。
     if (teamCount(SHELL_TOOL) === 0) {
       return fauxAssistantMessage(fauxToolCall(SHELL_TOOL, { command: shellCommand('echo inflight-turn', 'Write-Output inflight-turn') }, { id: `demo-team-fork-bash-${runToken}` }), { stopReason: 'toolUse' })
     }
@@ -1000,8 +1017,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       ].join('\n')),
     ])
   }
-  // The `[subagent-bg]` script: submit the background delegation, then close the turn as
-  // soon as the spawn receipt lands — the whole point is not waiting for the child.
+  // `[subagent-bg]` 脚本：提交后台委派，spawn 回执一落地就收尾——要点正是不等子会话。
   if (userText.includes(DEMO_SUBAGENT_BG_MARKER)) {
     if (currentResults.length === 0) {
       return fauxAssistantMessage(fauxToolCall(SUBAGENT_TOOL, {
@@ -1015,9 +1031,8 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       fauxText('已把调研任务交给后台子智能体：本轮到此结束，不等它跑完；它完成后会以一条结算消息开启下一轮。'),
     ])
   }
-  // The settlement notification arrives as a later user message in the parent conversation.
-  // Checked before every delegation script: the settlement body quotes the child's answer,
-  // so its 子智能体 wording must never fall into a delegation branch.
+  // 结算通知作为父会话后来的用户消息到达。先于全部委派脚本检查：结算正文引用了
+  // 子会话的回答，其中的「子智能体」措辞绝不能落进委派分支。
   if (userText.includes(DEMO_SUBAGENT_SETTLEMENT_MARKER)) {
     return fauxAssistantMessage([
       fauxThinking('后台子智能体的结算通知已到，据此收尾。'),
@@ -1027,7 +1042,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
       ].join('\n')),
     ])
   }
-  // The child's own marker, so a delegated task answers with text instead of delegating again.
+  // 子会话自己的标记：被委派的任务用文本回答，而不是再次委派。
   if (userText.includes(DEMO_SUBAGENT_CHILD_MARKER)) {
     if (userText.includes('[child-read]')) {
       if (currentResults.length === 0) {
@@ -1104,7 +1119,13 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   ])
 }
 
-/** Build an explicit deterministic demo catalog; production never falls back to it. */
+/**
+ * 功能：构建显式的确定性演示模型运行时。
+ * @param modelsOverride 可选的模型集合覆盖（把演示 Provider 装进指定集合）
+ * @returns 全部方法走固定剧本的 RuntimeModels
+ * 内部逻辑：faux Provider 预装 512 次同一脚本化响应；保存/删除/测试/发现按演示
+ * 语义报错（不保存、不可删、不发真实请求）。生产永不回退到此实现。
+ */
 export function createDemoModelRuntime(modelsOverride?: RuntimeModels['models']): RuntimeModels {
   const faux = fauxProvider({
     provider: DEMO_MODEL.provider,

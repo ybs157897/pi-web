@@ -1,9 +1,9 @@
 import type { ProcessPart, ToolItem } from './render-model.ts'
 
-/** ZCode's UI-synthesized process groups; a group only forms for two or more rows. */
+/** ZCode 式由 UI 合成的过程分组；连续同类行 ≥ 2 行才成组。 */
 export type ProcessToolGroupKind = 'explore' | 'execute'
 
-/** The bucket a read-only child contributes to a `查阅` summary. */
+/** 只读子行在 `查阅` 汇总里归属的桶。 */
 export type ExploreBucket = 'fetch' | 'search' | 'list' | 'file'
 
 const READ_ONLY_TOOL_NAMES = new Set([
@@ -13,12 +13,17 @@ const READ_ONLY_TOOL_NAMES = new Set([
 ])
 const SHELL_TOOL_NAMES = new Set(['bash', 'shell', 'exec', 'exec_command', 'terminal', 'run_command', 'pwsh'])
 
-/** ZCode's read-only shell allowlist; writes and redirects keep a command in 终端. */
+/** ZCode 的只读 shell 白名单；带写入或重定向的命令归入 `终端`。 */
 const SHELL_READ_RE = /\b(rg|grep|find|ls|cat|head|tail|wc|stat|pwd|which|readlink|tree|sed\s+-n|get-childitem|gci|dir|get-content|gc|type|select-string|sls|get-location|test-path|resolve-path)\b|^git\s+(status|log|show|diff)\b/i
 const SHELL_WRITE_RE = /\b(sed\s+-i|perl\s+-pi|tee|mv|cp|rm|mkdir|rmdir|touch|truncate|chmod|chown|remove-item|del|erase|set-content|add-content|clear-content|out-file|new-item|move-item|copy-item|rename-item|set-item)\b|^git\s+(add|commit|rm|mv|checkout|switch|restore|reset|clean|revert|cherry-pick|merge|rebase)\b/i
 const SHELL_REDIRECT_WRITE_RE = /(^|[^\d<])>>?\s*\S|&>\s*\S/i
 
-/** A tool row that joins the surrounding `查阅` group, or null when it breaks the group. */
+/**
+ * 功能：判定一条工具行是否入组以及入哪个组。
+ * @param item 工具行
+ * @returns `'explore'`（进 `查阅` 组）、`'execute'`（进 `终端` 组）；不属于任何组返回 undefined
+ * 内部逻辑：内置只读工具名直接入 explore；shell 行解析出命令后，命中写入正则或写重定向即 execute，否则命中只读白名单为 explore，读不出命令的 shell 行保守归 execute。
+ */
 export function toolGroupKind(item: ToolItem): ProcessToolGroupKind | undefined {
   const name = toolName(item)
   if (READ_ONLY_TOOL_NAMES.has(name)) return 'explore'
@@ -30,7 +35,11 @@ export function toolGroupKind(item: ToolItem): ProcessToolGroupKind | undefined 
   return 'execute'
 }
 
-/** The summary bucket for one row inside a `查阅` group. */
+/**
+ * 功能：`查阅` 组内一行的汇总桶（fetch/search/list/file），供分组头显示计数。
+ * @param item 只读工具行
+ * @returns 四桶之一；shell 行按命令内容正则二次分桶，其余按文件读取算 file
+ */
 export function exploreBucket(item: ToolItem): ExploreBucket {
   const name = toolName(item)
   if (name === 'web_fetch' || name === 'fetch_url' || name === 'fetch') return 'fetch'
@@ -44,7 +53,12 @@ export function exploreBucket(item: ToolItem): ExploreBucket {
   return 'file'
 }
 
-/** Fold consecutive read-only rows into `查阅` and the rest into `终端`; singles stay flat. */
+/**
+ * 功能：把连续同类工具行折叠成 `查阅` / `终端` 分组；单行不成组，保持原样平铺。
+ * @param parts 过程部件序列（工具行与其他内容混排）
+ * @returns 折叠后的新序列：非工具部件原样保留，成组处替换为 kind='toolGroup' 的聚合部件
+ * 内部逻辑：从左到右扫描，遇到可入组行就向后吞并同类行（kind 必须一致）；不足 2 行不成组（对齐 ZCode：第二条连续行出现才合成父节点）；分组 key 由组类型与首行 key 生成。
+ */
 export function groupProcessParts(parts: readonly ProcessPart[]): ProcessPart[] {
   const grouped: ProcessPart[] = []
   let index = 0
@@ -69,7 +83,7 @@ export function groupProcessParts(parts: readonly ProcessPart[]): ProcessPart[] 
       items.push(candidate.item)
       next += 1
     }
-    // ZCode only synthesizes a parent after the second consecutive row.
+    // ZCode 只在出现第二条连续行后才合成父节点。
     if (items.length < 2) {
       grouped.push(part)
       index += 1
@@ -85,7 +99,12 @@ function toolName(item: ToolItem): string {
   return (item.call?.name ?? item.result?.toolName ?? '').toLocaleLowerCase()
 }
 
-/** The command strings a shell row actually runs, with the shell wrapper and quoting removed. */
+/**
+ * 功能：提取一条 shell 工具行实际运行的命令串，去掉 shell 包装与引号。
+ * @param item 工具行
+ * @returns 去重后的命令段列表（按 `&&` `||` `;` 切分）
+ * 内部逻辑：依次尝试 arguments 的 command/cmd/script/parsed_cmd 字段；数组形式优先取 `-lc` 的下一个元素；对象形式取 `cmd`；`zsh|bash|sh -lc` 与 `powershell -Command` 包装先剥壳再剥引号。
+ */
 export function shellCommands(item: ToolItem): string[] {
   const args = item.call?.arguments
   const candidates: string[] = []

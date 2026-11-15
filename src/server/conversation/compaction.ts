@@ -1,11 +1,10 @@
 /**
- * Context compaction for pi-web.
+ * pi-web 的上下文压缩。
  *
- * Layered after the implementations in Pi's own coding agent, pda, do-computer and pi-pocket:
- * pressure-time tool-result pruning, a budget-triggered idle compaction, and a cache-aware
- * summarizer that keeps the checkpoint small enough to be worth replacing what it removes.
+ * 叠加在 Pi 自家 coding agent、pda、do-computer 与 pi-pocket 的实现之上：压力触发的工具结果
+ * 裁剪、预算触发的空闲压缩，以及缓存感知的摘要器——检查点要足够小，替换掉的内容才划算。
  *
- * Only the mechanism lives here. Transcript and trajectory presentation stay in the client.
+ * 这里只放机制。转录与轨迹的呈现留在客户端。
  */
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import {
@@ -27,8 +26,10 @@ import type { Api, AssistantMessage, Message, Model, Usage, UserMessage } from '
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate'
 import { captureSideCall } from './trajectory.ts'
 
+/** 压缩扩展注册名，供装配与测试引用。 */
 export const COMPACTION_EXTENSION_NAME = 'pi-web-compaction'
 
+/** 读取一个正整数环境变量；未设置或非法时用 fallback。 */
 function positiveEnv(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
@@ -36,6 +37,7 @@ function positiveEnv(name: string, fallback: number): number {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback
 }
 
+/** 读取一个非负整数环境变量；未设置或非法时用 fallback。 */
 function nonNegativeEnv(name: string, fallback: number): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
@@ -44,8 +46,8 @@ function nonNegativeEnv(name: string, fallback: number): number {
 }
 
 /**
- * Pi Durable's automatic thresholds, read once at startup. `PI_WEB_COMPACTION_*` overrides exist
- * for tests and operators; production defaults follow Pi's coding agent with a larger verbatim tail.
+ * 压缩策略常量：启动时一次性读取。`PI_WEB_COMPACTION_*` 覆盖项供测试与运维使用；
+ * 生产默认值沿用 Pi 的 coding agent，但保留更大的逐字尾部。
  */
 export const COMPACTION_POLICY: {
   enabled: boolean
@@ -59,61 +61,88 @@ export const COMPACTION_POLICY: {
   backgroundTokens: nonNegativeEnv('PI_WEB_COMPACTION_BACKGROUND_TOKENS', 34_000),
 }
 
-/** Fallback only for a provider model without a declared window; a real window is used in full. */
+/** 仅为未声明窗口的 provider 模型兜底；真实窗口全额使用。 */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
-/** Optional operator cap for cost control; unset means "use the model's window". */
+/** 运维可选的成本控制上限；未设置表示"使用模型窗口"。 */
 function configuredContextBudget(): number | undefined {
   const raw = process.env.PI_WEB_CONTEXT_BUDGET
   if (raw === undefined) return undefined
   const value = Number(raw)
   return Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
-/** Longest checkpoint we accept from the summarizer. */
+/** 接受摘要器产出的检查点最大 token 数。 */
 export const SUMMARY_MAX_TOKENS = 8_192
+/** 接受的检查点最大字符数（validateSummary 使用）。 */
 export const SUMMARY_MAX_CHARS = 16_000
-/** Room a cached-prefix summary request must leave for the answer and thinking. */
+/** 缓存前缀摘要请求必须为回答与思考预留的空间。 */
 const SUMMARY_ROOM_TOKENS = 16_384
+/** pi-ai 自身的估算裕量，构造 cached 请求时扣除。 */
 const PI_AI_MARGIN_TOKENS = 4_096
-/** A compaction must save at least this much beyond the retained tail. */
+/** 一次压缩除保留尾部之外至少要省出这么多 token 才值得做。 */
 const MIN_SAVINGS_TOKENS = 4_096
-/** Prune only once a request has used this share of the effective window. */
+/** 请求达到有效窗口的这个占比之后才开始裁剪。 */
 const PRUNE_TRIGGER_RATIO = 0.85
+/** 超过该长度的工具结果文本才参与裁剪。 */
 const PRUNE_THRESHOLD_CHARS = 8_192
+/** 裁剪后保留的头部字符数。 */
 const PRUNE_HEAD_CHARS = 4_096
+/** 裁剪后保留的尾部字符数。 */
 const PRUNE_TAIL_CHARS = 1_024
+/** 裁剪时豁免的最近工具结果条数。 */
 const PRUNE_KEEP_RECENT_RESULTS = 4
+/** 裁剪占位标记，出现在被裁剪文本的中缝。 */
 const PRUNE_MARKER = '\n\n[... tool result middle pruned to save context ...]\n\n'
+/** 序列化摘要时单个工具结果的截断长度。 */
 export const TOOL_RESULT_SUMMARY_CHARS = 2_000
+/** 文件列表（read/modified）的最大条目数。 */
 const FILE_LIST_LIMIT = 100
+/** 压缩摘要 memo 的键：同一次压缩的重试复用已生成/已失败的结论。 */
 const SUMMARY_MEMO = 'pi-web.compaction.summary'
+/** 摘要落入会话时的固定前缀，framedSummaryTokens 按它计量。 */
 const SUMMARY_PREFIX = 'The conversation history before this point was compacted into the following summary:'
+/** 摘要包裹的开标签。 */
 const SUMMARY_OPEN = '<summary>'
+/** 摘要包裹的闭标签。 */
 const SUMMARY_CLOSE = '</summary>'
 
+/** 视为"读文件"的工具名集合，用于从工具调用中提取已读文件列表。 */
 const READ_TOOLS = new Set(['read', 'read_file', 'view'])
+/** 视为"写文件"的工具名集合，用于提取已改文件列表。 */
 const WRITE_TOOLS = new Set(['write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'create_file'])
 
+/** 压缩摘要 memo 的两种形态：成功摘要或失败原因。 */
 type SummaryMemo = { summary: string } | { failed: string }
 
+/** 从对话中提取的文件清单：已读与已修改两个去重列表（各限 FILE_LIST_LIMIT）。 */
 export interface FileLists {
   read: string[]
   modified: string[]
 }
 
+/** 被保留边界的描述：保留的消息条数与首条非空用户文本的开头（用于摘要 scope 文案）。 */
 interface KeptBoundary {
   count: number
   opening: string
 }
 
+/**
+ * 一次摘要生成的请求：`cached` 直接在现有上下文尾部附加提问（利用 provider 前缀缓存）；
+ * `serialized` 把影子消息序列化为带角色标记的转录文本重发。
+ */
 export type SummaryRequest =
   | { mode: 'cached'; messages: Message[]; maxTokens: number }
   | { mode: 'serialized'; messages: Message[]; maxTokens: number }
 
+/** 取单条消息的用量 token：优先 totalTokens，缺省时按四桶相加。 */
 function usageTokens(usage: Usage): number {
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite
 }
 
-/** Effective context budget: the model's real window, optionally capped by the operator. */
+/**
+ * 功能：计算有效上下文预算：模型真实窗口，可被运维上限收敛。
+ * @param model 携带 contextWindow 的模型。
+ * @returns 窗口与 PI_WEB_CONTEXT_BUDGET 的较小者；窗口非法时用 DEFAULT_CONTEXT_WINDOW 兜底。
+ */
 export function compactionBudget(model: { contextWindow: number }): number {
   const window = Number.isFinite(model.contextWindow) && model.contextWindow > 0
     ? model.contextWindow
@@ -122,7 +151,7 @@ export function compactionBudget(model: { contextWindow: number }): number {
   return cap === undefined ? window : Math.min(window, cap)
 }
 
-/** Estimated tokens of the next request: newest real usage plus estimates after it. */
+/** 功能：估算下一次请求的 token 数——最新的真实用量加上其后消息的估算值。 */
 export function estimateContextTokens(view: Pick<ContextView, 'messages'>): number {
   const messages = view.messages
   let measured: AssistantMessage | undefined
@@ -144,11 +173,17 @@ export function estimateContextTokens(view: Pick<ContextView, 'messages'>): numb
   return total
 }
 
+/** 功能：对一组消息逐条估算 token 并求和。 */
 export function estimateMessagesTokens(messages: readonly Message[]): number {
   return messages.reduce((total, message) => total + estimateMessageTokens(message), 0)
 }
 
-/** The context size at which a compaction starts to pay off. */
+/**
+ * 功能：计算压缩开始划算的上下文规模阈值。
+ * @param model 携带 contextWindow 的模型。
+ * @param policy 压缩策略；默认 COMPACTION_POLICY。
+ * @returns max(keepRecent + 最小节省量, 预算 - reserve)。
+ */
 export function compactionThreshold(
   model: { contextWindow: number },
   policy = COMPACTION_POLICY,
@@ -158,16 +193,15 @@ export function compactionThreshold(
 }
 
 /**
- * Whether pi-web starts a compaction of its own, or leaves the threshold to Pi Durable.
- *
- * Pi Durable compacts at `contextWindow - reserveTokens` with a generation-owned,
- * blocking compaction: the generation waits for that summary and continues on the
- * compacted context. pi-web's compaction is conversation-owned — its summary is
- * admitted through the inbox and lands at a later boundary, where it moves the head
- * back and undoes the platform's cut, so the context grows instead of shrinking and
- * the next request overflows the window, ending the run. pi-web therefore compacts
- * only in the band the platform would not cover: below its own threshold, and below
- * the platform's.
+ * 功能：判定是否由 pi-web 自己发起压缩，还是把阈值留给 Pi Durable。
+ * @param tokens 当前估算的上下文 token 数。
+ * @param model 携带 contextWindow 的模型。
+ * @param policy 压缩策略。
+ * @returns true 表示 pi-web 拥有这个区间的压缩权。
+ * 内部逻辑：Pi Durable 在 `contextWindow - reserveTokens` 处做生成任务拥有的阻塞式压缩——生成
+ * 等摘要并在压缩后的上下文上继续。pi-web 的压缩是会话拥有的——摘要经 inbox 进入、落在更晚的
+ * 边界，会把头部移回去抵消平台的裁切，导致上下文不减反增、下一次请求溢出窗口而终止运行。
+ * 因此 pi-web 只在平台不会覆盖的区间压缩：低于自身阈值且低于平台阈值。
  */
 export function ownsCompactionThreshold(
   tokens: number,
@@ -179,7 +213,13 @@ export function ownsCompactionThreshold(
   return compactionThreshold(model, policy) < platform
 }
 
-/** Whether the conversation has outgrown its effective budget with enough left to summarize. */
+/**
+ * 功能：判定会话是否超出有效预算且仍有足够内容可被摘要。
+ * @param tokens 当前估算 token 数。
+ * @param model 携带 contextWindow 的模型。
+ * @param policy 压缩策略。
+ * @returns true 达到阈值且减去保留尾部后仍能省出 MIN_SAVINGS_TOKENS。
+ */
 export function shouldCompactContext(
   tokens: number,
   model: { contextWindow: number },
@@ -193,24 +233,33 @@ export function shouldCompactContext(
 /* Tool-result pruning                                                 */
 /* ------------------------------------------------------------------ */
 
+/** 把消息内容（字符串或块数组）摊平成纯文本；图片块以 `[image]` 占位。 */
 function textOf(content: string | readonly { type: string; text?: string }[]): string {
   if (typeof content === 'string') return content
   return content.flatMap(block => block.type === 'text' ? [block.text ?? ''] : block.type === 'image' ? ['[image]'] : []).join('\n')
 }
 
+/** 按上限截断文本，超长时附加"已截断 N 字符"标记。 */
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n[... ${text.length - max} characters truncated]`
 }
 
+/**
+ * 单段文本的裁剪：不超过阈值原样返回 null（未裁）；超过则保留头 PRUNE_HEAD_CHARS 与尾
+ * PRUNE_TAIL_CHARS，中缝插入 PRUNE_MARKER。
+ */
 function pruneText(text: string): string | null {
   if (text.length <= PRUNE_THRESHOLD_CHARS) return null
   return `${text.slice(0, PRUNE_HEAD_CHARS)}${PRUNE_MARKER}${text.slice(text.length - PRUNE_TAIL_CHARS)}`
 }
 
 /**
- * Replace the middle of old, oversized tool results for one request. This is deliberately
- * stateless: the stored transcript keeps the full output, and the same pressure produces the
- * same request bytes, so a warm provider prefix stays stable across turns.
+ * 功能：为一次请求替换旧的、超大的工具结果中段。刻意做成无状态：持久转录保存完整输出，
+ * 同样的压力产生同样的请求字节，使 provider 的温热前缀跨轮保持稳定。
+ * @param messages 请求消息序列。
+ * @returns 裁剪后的新消息数组（无变化时原样返回同一引用）。
+ * 内部逻辑：定位全部 toolResult 消息；除最近 PRUNE_KEEP_RECENT_RESULTS 条之外全部列为候选；
+ * 候选中的 text 块按 pruneText 裁剪；无任何实际改动时返回原数组。
  */
 export function pruneToolResults(messages: readonly Message[]): readonly Message[] {
   const resultIndexes = messages.flatMap((message, index) => message.role === 'toolResult' ? [index] : [])
@@ -246,10 +295,12 @@ interface SummaryLine {
   error?: boolean
 }
 
+/** 转义一行 JSON：把尖括号与行分隔类控制符转成 \uXXXX，防止转录文本伪造标签或换行边界。 */
 function escapeLine(value: SummaryLine): string {
   return JSON.stringify(value).replace(/[<>\u0085\u2028\u2029]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
 }
 
+/** 从工具调用参数中提取文件路径：依次尝试 path/file_path/filePath/file 键，反斜杠归一为正斜杠。 */
 function argumentPath(argumentsValue: unknown): string | undefined {
   if (typeof argumentsValue !== 'object' || argumentsValue === null || Array.isArray(argumentsValue)) return undefined
   const record = argumentsValue as Record<string, unknown>
@@ -260,6 +311,13 @@ function argumentPath(argumentsValue: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * 功能：从消息序列中提取已读/已修改文件清单。
+ * @param messages 参与摘要的完整消息序列（含先前摘要）。
+ * @returns FileLists：两类各去重并限 FILE_LIST_LIMIT。
+ * 内部逻辑：用户消息若以摘要前缀开头或含 `<read-files>`/`<modified-files>` 标签，则解析并累加；
+ * assistant 消息的 toolCall 按 READ_TOOLS/WRITE_TOOLS 归类路径参数。
+ */
 export function extractFileLists(messages: readonly Message[]): FileLists {
   const read = new Set<string>()
   const modified = new Set<string>()
@@ -287,6 +345,7 @@ export function extractFileLists(messages: readonly Message[]): FileLists {
   }
 }
 
+/** 功能：合并多个文件清单：逐类去重并按 FILE_LIST_LIMIT 截断。 */
 export function mergeFileLists(...lists: readonly FileLists[]): FileLists {
   return {
     read: [...new Set(lists.flatMap(list => list.read))].slice(0, FILE_LIST_LIMIT),
@@ -294,6 +353,12 @@ export function mergeFileLists(...lists: readonly FileLists[]): FileLists {
   }
 }
 
+/**
+ * 功能：从文本中解析 `<read-files>`/`<modified-files>` 标签内的文件列表。
+ * @param text 含标签的文本（通常是先前摘要的用户消息）。
+ * @returns FileLists；标签缺失或为空时对应类为空数组。
+ * 内部逻辑：按标签构建非贪婪正则，逐行 trim 去空后限 FILE_LIST_LIMIT。
+ */
 export function parseFileLists(text: string): FileLists {
   const grab = (tag: string): string[] => {
     const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text)
@@ -303,6 +368,7 @@ export function parseFileLists(text: string): FileLists {
   return { read: grab('read-files'), modified: grab('modified-files') }
 }
 
+/** 功能：剥掉文本中的两个文件列表标签块并 trim，用于把旧摘要正文与新列表重新拼装。 */
 export function stripFileLists(text: string): string {
   return text
     .replace(/<read-files>[\s\S]*?<\/read-files>/g, '')
@@ -310,6 +376,7 @@ export function stripFileLists(text: string): string {
     .trim()
 }
 
+/** 功能：把文件清单渲染为 `<read-files>`/`<modified-files>` 标签块；空类不产出对应块。 */
 export function formatFileLists(files: FileLists): string {
   const sections: string[] = []
   if (files.read.length > 0) sections.push(`<read-files>\n${files.read.join('\n')}\n</read-files>`)
@@ -317,7 +384,7 @@ export function formatFileLists(files: FileLists): string {
   return sections.join('\n')
 }
 
-/** One JSON object per line with role attribution, so tool output cannot impersonate a user. */
+/** 摘要用转录格式：一行一个 JSON 对象并带角色归属，工具输出无法冒充用户发言。 */
 export function serializeForSummary(messages: readonly Message[]): string {
   const lines: SummaryLine[] = []
   for (const message of messages) {
@@ -430,7 +497,19 @@ ${SUMMARY_SOURCE_RULES}
 每节都填写具体信息。Progress 必须包含模板中的 Done、In Progress 和 Blocked 三个子节，每节至少有一项具体内容或明确写出 "none"。不要照抄模板占位文本。若对话以先前摘要开头，只保留仍相关的上下文，保留用户后续纠正，将没有证据支持的主张标为未验证。不要添加文件列表，宿主会补充。${focus}`
 }
 
-/** Build the model request: cached-prefix when the window has room, otherwise a serialized transcript. */
+/**
+ * 功能：构建摘要生成的模型请求：窗口放得下时用缓存前缀（cached），否则退化为序列化转录（serialized）。
+ * @param options.view 当前上下文视图（cached 模式的消息基底）。
+ * @param options.shadowed 将被摘要替换的影子消息（serialized 模式重发）。
+ * @param options.firstKept 原样保留的第一条 entry id，用于描述摘要边界。
+ * @param options.instructions 操作者补充的关注点（可缺省）。
+ * @param options.model 模型（contextWindow/maxTokens 用于预算）。
+ * @param options.now 可注入的时间戳（测试）。
+ * @returns SummaryRequest（mode/messages/maxTokens）。
+ * 内部逻辑：cached 分支在现有消息尾部附加 summaryAsk 提问，剩余空间不足 SUMMARY_ROOM_TOKENS
+ * 时整体退到 serialized 分支——system 指令 + 影子消息的 `<conversation>` 转录 + 提问；
+ * maxTokens 均收敛到 [1024, min(SUMMARY_MAX_TOKENS, model.maxTokens)]。
+ */
 export function buildSummaryRequest(options: {
   view: ContextView
   shadowed: readonly Message[]
@@ -481,7 +560,7 @@ interface MarkdownHeading {
   line: number
 }
 
-/** Parse headings outside fenced code, where strings such as `## Goal` are ordinary content. */
+/** 解析围栏代码块之外的 Markdown 标题——围栏内的 `## Goal` 之类字符串只是普通内容。 */
 function markdownHeadings(text: string): MarkdownHeading[] {
   const lines = text.split(/\r?\n/)
   const headings: MarkdownHeading[] = []
@@ -506,6 +585,7 @@ function markdownHeadings(text: string): MarkdownHeading[] {
   return headings
 }
 
+/** 判断行序列的围栏代码块内是否含实质内容；有代码即视为该 section 有内容。 */
 function hasFencedCodeContent(lines: readonly string[]): boolean {
   let fence: { marker: '`' | '~'; length: number } | undefined
   for (const line of lines) {
@@ -521,6 +601,16 @@ function hasFencedCodeContent(lines: readonly string[]): boolean {
   return false
 }
 
+/**
+ * 功能：判断一个 section 的行是否含非占位实质内容。
+ * @param lines section 的行。
+ * @param headings 该范围内的嵌套标题（行号需以 firstLine 为基准换算）。
+ * @param firstLine section 首行在原文中的行号。
+ * @returns true 存在实质内容；false 全是空白/占位/模板残留。
+ * 内部逻辑：围栏代码即真；逐行剥离引用、列表、任务框前缀后——行内代码是字面证据（含内容即真）；
+ * 去强调符号后整体形如 `[...]` 的视为占位；剥离模板占位文本与标点后无残留，或仅剩
+ * tbd/todo/placeholder 的视为空。
+ */
 function hasSectionContent(
   lines: readonly string[],
   headings: readonly MarkdownHeading[],
@@ -554,7 +644,13 @@ function hasSectionContent(
   })
 }
 
-/** A checkpoint must have the complete unique form and non-placeholder content in every section. */
+/**
+ * 功能：校验检查点摘要是否符合完整合同：形制齐全（六大节、Progress 三子节）且每节都有非占位内容。
+ * @param text 摘要器产出的原文。
+ * @returns 校验通过返回 trim 后的文本；为空、超长（SUMMARY_MAX_CHARS）或任何形制缺失返回 null。
+ * 内部逻辑：顶层 `##` 标题必须与 REQUIRED_SUMMARY_HEADINGS 逐一同名同数；逐节做 hasSectionContent；
+ * Progress 节额外要求 Done/In Progress/Blocked 三个三级标题齐全且各自有内容。
+ */
 export function validateSummary(text: string): string | null {
   const trimmed = text.trim()
   if (trimmed === '' || trimmed.length > SUMMARY_MAX_CHARS) return null
@@ -587,13 +683,18 @@ export function validateSummary(text: string): string | null {
   return trimmed
 }
 
+/**
+ * 功能：从摘要调用的终态回答中提取纯文本摘要。
+ * @param answer 助手终态消息。
+ * @returns 拼接的文本（trim）；停止原因非 stop、含 toolCall 或文本为空时返回 null。
+ */
 export function summaryText(answer: AssistantMessage): string | null {
   if (answer.stopReason !== 'stop') return null
   if (answer.content.some(block => block.type === 'toolCall')) return null
   return answer.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim() || null
 }
 
-/** The durable framing Pi uses for a placed summary, measured for the shrink check. */
+/** Pi 把摘要放入会话所用的持久化框架（前缀+标签），按此形态计量 token 供"是否更小"检查。 */
 export function framedSummaryTokens(summary: string, now = Date.now()): number {
   return estimateMessageTokens({
     role: 'user',
@@ -602,6 +703,7 @@ export function framedSummaryTokens(summary: string, now = Date.now()): number {
   })
 }
 
+/** 把一次用量累加进总量（逐字段相加，含可选的 cacheWrite1h/reasoning 与成本五项）。 */
 function addUsage(total: Usage, usage: Usage): void {
   total.input += usage.input
   total.output += usage.output
@@ -621,22 +723,41 @@ function addUsage(total: Usage, usage: Usage): void {
 /* Extension                                                           */
 /* ------------------------------------------------------------------ */
 
+/** 压缩扩展的装配选项：惰性 harness 引用与可选的策略覆盖（测试注入）。 */
 export interface CompactionExtensionOptions {
-  /** Resolved lazily: the extension is installed before `Harness.open` returns. */
+  /** 惰性解析：扩展在 `Harness.open` 返回之前就已安装。 */
   harness: () => Harness | undefined
   policy?: typeof COMPACTION_POLICY
 }
 
+/**
+ * 功能：装配 pi-web-compaction 扩展。
+ * 贡献：无 section/工具；挂 CompactionTask.beforeCompact（生成/校验/记账摘要）与
+ * GenerationTask 的 beforeRequest（压力裁剪）、afterTools/onYield（空闲触发压缩）钩子。
+ * @param options.harness 惰性 harness；options.policy 覆盖策略（缺省 COMPACTION_POLICY）。
+ * @returns defineExtension 产物。
+ * 内部逻辑：inflight 集合 + 60 秒去抖防止同一会话重复触发；压缩只在 pi-web 拥有阈值的区间
+ * 进行（见 ownsCompactionThreshold）；摘要经 memo 复用，失败或校验不过都返回 undefined
+ * （交回平台默认行为），仅中断时原样抛出。
+ */
 export function createCompactionExtension(options: CompactionExtensionOptions): Extension {
   const policy = options.policy ?? COMPACTION_POLICY
   const inflight = new Set<string>()
 
+  /** 取当前钩子所属的会话对象；harness 未就绪或会话缺失时返回 undefined。 */
   const conversationFor = async (api: HookApi, context: Context) => {
     const harness = options.harness()
     if (harness === undefined) return undefined
     return await harness.conversation(api.conversationId, context)
   }
 
+  /**
+   * 功能：空闲时机的压缩尝试（afterTools/onYield 调用）。
+   * @returns 无返回值；触发时经 conversation.compact 后台启动，失败静默（清理 inflight）。
+   * 内部逻辑：策略关闭、同会话已在压缩中（inflight）直接返回；读上下文与 agent、解析模型；
+   * 先判平台区间（ownsCompactionThreshold）再判自身阈值（shouldCompactContext）；
+   * 已存在压缩记录（LiveDoc）时不再叠加；进入即标记 inflight，60 秒后自动清理（timer.unref）。
+   */
   const maybeCompact = async (api: HookApi, context: Context): Promise<void> => {
     if (!policy.enabled) return
     const id = String(api.conversationId)
@@ -646,7 +767,7 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
     const [view, agent] = await Promise.all([conversation.context(context), conversation.agent(context)])
     const model = agent.model === undefined ? undefined : api.models.getModel(agent.model.provider, agent.model.modelId)
     if (model === undefined) return
-    // The platform owns the threshold it compacts at; see `ownsCompactionThreshold`.
+    // 平台拥有它自己压缩的阈值；见 `ownsCompactionThreshold`。
     const tokens = estimateContextTokens(view)
     if (!ownsCompactionThreshold(tokens, model, policy)) return
     if (!shouldCompactContext(tokens, model, policy)) return
@@ -662,6 +783,7 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
     }
   }
 
+  /** GenerationTask.beforeRequest：压力触发工具结果裁剪——达到窗口 85% 时对出站消息做 prune。 */
   const beforeRequest = async (request: { messages: readonly Message[] }, api: HookApi, context: Context) => {
     const conversation = await conversationFor(api, context)
     if (conversation === undefined) return undefined
@@ -674,6 +796,14 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
     return pruned === request.messages ? undefined : { messages: pruned }
   }
 
+  /**
+   * CompactionTask.beforeCompact：提供检查点摘要。
+   * @returns `{ summary }` 替换平台默认摘要；undefined 表示放弃（交回平台默认行为）。
+   * 内部逻辑：先查 memo（重试复用已成功或已失败的结论）；构建请求后经 captureSideCall 调模型
+   * （中断时原样抛出，其余失败记 memo 返回 undefined）；成功则记账 usage（best effort，失败不阻断）、
+   * 提取并校验摘要文本、剥离旧列表并补充文件清单，且框架化摘要必须小于被替换内容才接受；
+   * 接受的摘要写回 memo。
+   */
   const beforeCompact = async (
     compaction: Parameters<CompactionHooks['beforeCompact']>[0],
     api: HookApi,
@@ -731,7 +861,7 @@ export function createCompactionExtension(options: CompactionExtensionOptions): 
           else addUsage(total as unknown as Usage, answer.usage)
         }, context)
       } catch {
-        // Accounting is best effort; it must not turn a usable summary into a failed compaction.
+        // 记账是尽力而为；绝不能把一份可用摘要变成失败的压缩。
       }
     }
     const text = summaryText(answer)

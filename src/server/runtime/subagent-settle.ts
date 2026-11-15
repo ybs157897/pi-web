@@ -1,14 +1,12 @@
 /**
- * Background subagent settlement: delivering a background delegation's result to its parent.
+ * 后台子智能体结算：把后台委派的结果送达其父会话。
  *
- * A background delegation's tool call has already returned an activation, so the child's answer
- * cannot travel on the tool result. Instead the settlement watches the child conversation from the
- * runtime — every handle reachable from the tool's `api` is bound to the tool invocation and dies
- * with it, so the watcher resolves the child afresh from the harness and rides the never-aborting
- * background context. When the child's run ends, it injects a `[subagent-settlement]` message into
- * the parent with `whenBusy: 'followUp'` — the same request-receipt channel typed replies use, so
- * a retry after a restart never injects it twice. A delegation whose settlement was lost to a
- * crash is re-injected once at startup by `reconcileBackgroundDelegations`.
+ * 后台委派的工具调用已先行返回激活回执，子会话的答案无法经由工具结果传递。
+ * 结算改为从运行时侧监听子会话——工具 `api` 能拿到的每个句柄都绑定在工具调用上
+ * 并随之消亡，因此监视器从 harness 重新解析子会话，并挂在永不中止的后台上下文上。
+ * 子会话运行结束时，以 `whenBusy: 'followUp'` 向父会话注入一条 `[subagent-settlement]`
+ * 消息——与手打回复相同的请求回执通道，重启重试不会重复注入。结算因崩溃而丢失的
+ * 委派由 `reconcileBackgroundDelegations` 在启动时补投一次。
  */
 import { createHash } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -17,37 +15,46 @@ import { answerText, Subagents, type SubagentSettlementInput } from '../tools/su
 import { Plans } from '../tools/plan.ts'
 import { CTX, liveRunTaskId, META } from './helpers.ts'
 
-/** How long `drain` waits for in-flight settlements before runtime close proceeds. */
+/** `drain` 等待在途结算的时长上限，超过后运行时关闭流程继续。 */
 export const SUBAGENT_SETTLE_DRAIN_MS = 60_000
 
-/** First line of every settlement message; the parent's transcript shows it as a tagged delivery. */
+/** 每条结算消息的首行标记；父会话记录里以带标签的送达形式展示。 */
 export const SUBAGENT_SETTLEMENT_MARKER = '[subagent-settlement]'
 
-/** One settlement as it is injected into the parent, keyed by its idempotent request id. */
+/** 注入父会话的一次结算，以其幂等 request id 为键。 */
 export type SettlementOutcome = {
   requestId: string
   label: string
   childId: string
   status: 'completed' | 'failed'
-  /** The child's final assistant text when completed, otherwise why the delegation has no answer. */
+  /** 子会话完成时的最终回答文本；失败时说明委派为何没有答案。 */
   body: string
 }
 
+/** 结算 feature 的依赖注入契约：harness 迟绑定，工厂可在 harness 打开前构建。 */
 export interface SubagentSettlementDeps {
-  /** Late-bound so the factory can be built before the harness is opened. */
+  /** 迟绑定，让工厂在 harness 打开前就能创建。 */
   harness: () => Harness
 }
 
+/**
+ * 功能：创建后台子智能体结算服务——监听后台委派的子会话并在其结束后向父会话注入结果。
+ * @param deps harness 迟绑定句柄
+ * 职责边界：只处理后台委派的结算；前台委派在 subagent 工具调用内同步等待。
+ */
 export function createSubagentSettlement(deps: SubagentSettlementDeps) {
   const harness = (): Harness => deps.harness()
-  /** Settlements started but not yet finished; `drain` waits for them at runtime close. */
+  /** 已启动但未完成的结算；运行时关闭时 drain 会等待它们。 */
   const inFlight = new Set<Promise<void>>()
 
   /**
-   * Inject one settlement into the parent under its request id. The receipt check makes it
-   * idempotent — an already-accepted settlement (live retry, replay, or reconcile after a crash
-   * between submit and receipt) resolves without a second message. A parent that no longer exists
-   * has nobody to report to, so the settlement is dropped silently.
+   * 功能：按 request id 向父会话注入一次结算。
+   * @param parentId 父会话 ID
+   * @param outcome 结算内容（requestId、标签、状态、正文）
+   * @returns 无返回；父会话不存在时静默丢弃
+   * 内部逻辑：回执检查保证幂等——已接受的结算（实时重试、重放、或提交与回执之间
+   * 崩溃后的对账）直接返回，不再发第二条消息；计划模式仍在开启时附提示，让模型
+   * 把结论并入计划而不开始实施。
    */
   const settleBackground = async (parentId: ConversationId, outcome: SettlementOutcome): Promise<void> => {
     const conversation = await harness().conversation(parentId, CTX)
@@ -83,7 +90,7 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
     }, CTX)
   }
 
-  /** Mark one delegation delivered on the child's record, so reconciliation skips it. */
+  /** 在子会话记录上标记委派已送达，让对账跳过它。 */
   const markDelivered = async (childId: ConversationId): Promise<void> => {
     await harness().commit(async (tx) => {
       const doc = await tx.doc(Subagents, childId)
@@ -92,16 +99,18 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
     }, CTX)
   }
 
-  /** Inject one settled outcome and mark the delegation delivered on the child's record. */
+  /** 注入一次已结算的结果，并在子会话记录上标记委派已送达。 */
   const settleOne = async (input: SubagentSettlementInput, outcome: Omit<SettlementOutcome, 'requestId' | 'label' | 'childId'>): Promise<void> => {
     await settleBackground(input.parent, { requestId: input.settleRequestId, label: input.label, childId: String(input.child), ...outcome })
     await markDelivered(input.child)
   }
 
   /**
-   * Arm the settlement for one background delegation. Detached on purpose: the tool call has
-   * already returned. The child is watched from the runtime — a watch created here survives the
-   * tool invocation, unlike anything the call's `api` handed out.
+   * 功能：为一个后台委派布防结算。刻意分离执行：工具调用已经返回。
+   * @param input 委派信息（父/子会话、结算 requestId、标签）
+   * @returns 无返回；失败静默（结算可由启动对账兜底）
+   * 内部逻辑：子会话从运行时侧监听——这里创建的 watch 能活过工具调用，
+   * 工具 `api` 交出的任何东西都不行；在途 promise 记入 inFlight 供 drain 等待。
    */
   const settleWhenAnswered = (input: SubagentSettlementInput): void => {
     const pending = armSettlement(input).catch(() => undefined)
@@ -109,14 +118,23 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
     void pending.then(() => { inFlight.delete(pending) })
   }
 
+  /**
+   * 功能：监听子会话直到其首次运行结束，然后结算。
+   * @param input 委派信息
+   * @returns 无返回；监听在结算或子会话消失后停止
+   * 内部逻辑：watch 只负责标记时机，答案从运行时级上下文读取（watch 视图带原始
+   * 条目而非消息）。空闲即有最终回答 → 结算完成；运行过但没说话 → 等 400ms 重读
+   * 一次（运行结束的发布可能先于答案条目可读）后按失败结算；从未显示运行的空闲
+   * 子会话视为任务尚未开始，继续监听。
+   */
   const armSettlement = async (input: SubagentSettlementInput): Promise<void> => {
     const conversation = await harness().conversation(input.child, CTX)
     if (conversation === undefined) return
     const watch = await conversation.watch(CTX)
     let settledNow = false
     let sawRun = false
-    // The watch only marks the moments; the answer is read from the runtime-level context, which
-    // reflects the committed transcript (the watch view carries raw entries, not messages).
+    // watch 只标记时机；答案从运行时级上下文读取，它反映已提交的记录
+    //（watch 视图携带的是原始条目而非消息）。
     const check = async (): Promise<void> => {
       if (settledNow) return
       if (liveRunTaskId(watch.value) !== undefined) {
@@ -130,10 +148,9 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
         await settleOne(input, { status: 'completed', body: answer })
         return
       }
-      // The run started and ended without saying anything: report the failure. The run-end
-      // publication can land before the answer entries are readable, so a failed verdict waits one
-      // beat and re-reads before it fires. An idle child with no answer that never showed a run is
-      // a task not started yet, so keep watching.
+      // 运行开始又结束但什么都没说：报告失败。运行结束的发布可能先于答案条目
+      // 可读落地，因此失败的判定先等一拍再重读；从未显示运行的空闲子会话是
+      // 尚未开始的任务，继续监听。
       if (sawRun) {
         await delay(400)
         const late = await finalChildAnswer(input.child)
@@ -144,11 +161,11 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
       }
     }
     void check().catch(() => undefined)
-    // A watch event after the harness closed (runtime teardown) must not surface as a rejection.
+    // harness 关闭后（运行时拆除）到来的 watch 事件不得以 rejection 浮出。
     watch.start(() => check().catch(() => undefined))
   }
 
-  /** The child's final assistant text, or '' while it holds none (still running, or nothing said). */
+  /** 子会话最后一条助手回答；没有（仍在运行或什么都没说）时返回 ''。 */
   const finalChildAnswer = async (childId: ConversationId): Promise<string> => {
     const conversation = await harness().conversation(childId, CTX)
     if (conversation === undefined) return ''
@@ -157,10 +174,11 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
   }
 
   /**
-   * Re-deliver every background delegation whose settlement was lost to a crash: scan all
-   * conversations for undelivered delegation records and settle the ones whose child already
-   * holds a final answer (the rest wait for the next reconciliation). The settle request id's
-   * receipt check keeps an already-delivered message from being injected twice.
+   * 功能：重新投递所有因崩溃而丢失结算的后台委派。
+   * @returns 无返回；单条记录畸形静默跳过
+   * 内部逻辑：分页扫描全部会话，找未送达的委派记录；子会话已有最终回答的立即
+   * 结算（其余等下一次对账）。结算 request id 的回执检查保证已送达的消息不会
+   * 被注入两次。
    */
   const reconcileBackgroundDelegations = async (): Promise<void> => {
     let cursor: Cursor | undefined
@@ -183,14 +201,14 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
           })
           await markDelivered(record.id)
         } catch {
-          // One malformed record must not stop the remaining delegations from being settled.
+          // 一条畸形记录不得阻止其余委派继续被结算。
         }
       }
       cursor = page.next
     } while (cursor)
   }
 
-  /** Wait for the in-flight settlements to land, bounded so runtime close cannot hang on one. */
+  /** 等待在途结算落地，有界等待保证运行时关闭不会挂在单个结算上。 */
   const drain = async (): Promise<void> => {
     const pending = [...inFlight]
     if (pending.length === 0) return

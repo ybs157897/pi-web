@@ -1,9 +1,8 @@
 /**
- * Shared primitives for the runtime features.
+ * 各运行时 feature 共享的基础构件。
  *
- * Everything here is either a pure function or module-level constant: no runtime
- * state is captured, so any feature module can import it without a dependency on
- * the composition root.
+ * 这里只有纯函数与模块级常量：不捕获任何运行时状态，任何 feature 模块都可以
+ * 引入而不依赖组合根。
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -25,6 +24,7 @@ import { SKILL_READ_TOOLS } from '../tools/skill.ts'
 import { GOAL_TOOL_NAMES } from '../tools/goal.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 
+/** 每个会话的持久元数据文档（META doc）的类型：标题、归档/置顶、未读基准、排队记录、请求回执、工作区绑定与排队编辑状态机。 */
 export type ConversationMetadata = {
   [key: string]: JsonValue
   title: string
@@ -32,7 +32,7 @@ export type ConversationMetadata = {
   updatedAt: number
   archived: boolean
   pinned: boolean
-  /** Last time the client viewed the conversation; the sidebar's unread marker compares against it. */
+  /** 客户端最近一次查看该会话的时间；侧栏未读标记用它与 updatedAt 比较。 */
   seenAt: number
   titleSource: 'auto' | 'user'
   queueCreatedAt: Record<string, number>
@@ -49,6 +49,7 @@ export type ConversationMetadata = {
   }>
 }
 
+/** 会话元数据文档定义：按会话作用域、只保留最新版本、fork 时取初始值。 */
 export const META = defineDoc<ConversationMetadata>({
   kind: 'pi-durable-web.conversation',
   version: 1,
@@ -72,20 +73,24 @@ export const META = defineDoc<ConversationMetadata>({
   }),
 })
 
+/** 会话类型文档：目前只区分「缺陷分析」会话（决定标题钉住、跳过自动命名等）。 */
 export const CONVERSATION_KIND = defineDoc<{ kind?: 'defectAnalysis' }>({
   kind: 'pi-durable-web.conversation-kind', version: 1, scope: 'conversation', history: 'latest', fork: 'initial', checkpointWhen: () => false, initial: () => ({}),
 })
 
+/** 后台运行上下文：所有运行时操作都挂在这条不随请求终止的上下文上。 */
 export const CTX: Context = BACKGROUND_CONTEXT
+/** 新会话的占位标题；首条消息到达后被自动命名或用户命名替换。 */
 export const DEFAULT_TITLE = 'New conversation'
+/** 运行时接受的思考等级全集。 */
 export const SUPPORTED_THINKING = new Set<ThinkingLevel>(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-/** The Pi code mode extension's registry name (`createCodemodeExtension`). */
+/** Pi code mode 扩展在注册表中的名称（`createCodemodeExtension`）。 */
 export const CODEMODE_EXTENSION_NAME = 'codemode'
-/** Tools a read-only conversation keeps: reads plus interaction tools that touch no workspace state. */
+/** 只读会话保留的工具：读类工具加上不触碰工作区状态的交互类工具。 */
 export const READ_ONLY_TOOLS = new Set(['read', 'list_files', 'search_files', 'glob', 'grep', 'todo_write', 'ask_user_question', 'exit_plan_mode', CODEMODE_TOOL_NAME, SUBAGENT_TOOL, ...TEAM_TOOL_NAMES, ...SKILL_READ_TOOLS, ...GOAL_TOOL_NAMES])
 /**
- * Mirrors `PLAN_TOOLS` in execution-policy.ts. Page-originated plugin tool calls are a second
- * execution entry point, so they apply the same Plan-mode allowlist.
+ * 与 execution-policy.ts 的 `PLAN_TOOLS` 保持一致。来自插件页面的工具调用是第二执行
+ * 入口，因此同样适用计划模式的工具白名单。
  */
 export const PLUGIN_UI_PLAN_TOOLS = new Set([
   'read', 'list_files', 'search_files', 'glob', 'grep', 'skill_list', 'skill_load', 'skill_validate',
@@ -94,7 +99,14 @@ export const PLUGIN_UI_PLAN_TOOLS = new Set([
   'team_task_list', 'team_task_get',
 ])
 
-/** Add the host's tool-free policy without changing a conversation's tools or custom instructions. */
+/**
+ * 功能：把宿主的「无工具」政策扩展注入会话 agent，不改动会话的工具集与自定义指令。
+ * @param tx 当前事务
+ * @param record 会话记录
+ * @returns 无返回
+ * 内部逻辑：把五个必需扩展名按序补到 agent.extensions（数组形态 unshift、对象形态
+ * 合并 add 并从 remove 中剔除）；有属主的会话再继承属主的计划模式约束。
+ */
 export async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): Promise<void> {
   const conversationId = record.id
   const agent = await tx.doc(AgentDoc, conversationId)
@@ -112,29 +124,35 @@ export async function ensureRuntimePolicy(tx: Tx, record: ConversationRecord): P
   if (record.owner) await inheritPlanConstraint(tx, conversationId, record.owner.conversationId)
 }
 
+/** 解析正整数 ID；非安全整数或非正数抛 INVALID_INPUT，label 用于错误文案。 */
 export function parseNumericId(value: string, label: string): number {
   const id = Number(value)
   if (!Number.isSafeInteger(id) || id <= 0) throw new RuntimeError('INVALID_INPUT', `${label} 无效`)
   return id
 }
 
+/** 把字符串解析为会话 ID；无效即抛 INVALID_INPUT。 */
 export function parseConversationId(value: string): ConversationId {
   return parseNumericId(value, '会话 ID') as ConversationId
 }
 
+/** 把字符串解析为消息条目 ID；无效即抛 INVALID_INPUT。 */
 export function parseEntryId(value: string): EntryId {
   return parseNumericId(value, '消息 ID') as EntryId
 }
 
+/** 把字符串解析为提交 ID；无效即抛 INVALID_INPUT。 */
 export function parseSubmissionId(value: string): SubmissionId {
   return parseNumericId(value, '提交 ID') as SubmissionId
 }
 
+/** 把 unknown 收敛为普通对象（剔除 null 与数组），失败返回 undefined。 */
 export function objectValue(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return Object.fromEntries(Object.entries(value))
 }
 
+/** 从会话视图中读取正在执行的运行任务 ID；空闲时返回 undefined。 */
 export function liveRunTaskId(view: ConversationView): TaskId | undefined {
   const live = objectValue(view.docs['pi.live'])
   const run = live ? objectValue(live.run) : undefined
@@ -142,6 +160,7 @@ export function liveRunTaskId(view: ConversationView): TaskId | undefined {
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id as TaskId : undefined
 }
 
+/** 从 unknown 中提取附件引用数组；字段缺失或类型不符的条目直接丢弃。 */
 export function attachmentReferences(value: unknown): AttachmentReference[] {
   if (!Array.isArray(value)) return []
   return value.flatMap(item => {
@@ -151,8 +170,15 @@ export function attachmentReferences(value: unknown): AttachmentReference[] {
   })
 }
 
+/** 一条排队消息的内容形状：文本 + 图片 + 附件引用。 */
 export type QueueContent = { text: string; images: Array<{ data: string; mimeType: string }>; files: AttachmentReference[] }
 
+/**
+ * 功能：从排队条目的 content 与 entry 数据中重建消息内容。
+ * @param value 排队条目的 content（字符串或多模态分块数组）
+ * @param entryValue 条目的 entry 数据，附件从 `data.files` 读取
+ * @returns 文本按出现顺序以换行拼接，图片与附件按结构化引用收集
+ */
 export function queueContent(value: unknown, entryValue: unknown): QueueContent {
   const images: QueueContent['images'] = []
   const texts: string[] = []
@@ -172,6 +198,7 @@ export function queueContent(value: unknown, entryValue: unknown): QueueContent 
   return { text: texts.join('\n'), images, files }
 }
 
+/** 校验并归一化标题：undefined 透传；空串或超 200 字符抛 INVALID_INPUT。 */
 export function safeTitle(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   const title = value.trim()
@@ -179,7 +206,7 @@ export function safeTitle(value: string | undefined): string | undefined {
   return title
 }
 
-/** Sum one background generation's usage into a stored total. */
+/** 把一次后台生成的用量累加进存量总数（含 1h 缓存写与推理 token 的可选字段）。 */
 export function accumulateUsage(total: Usage, usage: Usage): void {
   total.input += usage.input
   total.output += usage.output
@@ -195,6 +222,13 @@ export function accumulateUsage(total: Usage, usage: Usage): void {
   total.cost.total += usage.cost.total
 }
 
+/**
+ * 功能：把任意失败值转成可安全展示的错误文本。
+ * @param value 任意抛出的值（通常是 Error）
+ * @returns 脱敏后的单行文本，最长 500 字符
+ * 内部逻辑：非 Error 一律以「操作失败」兜底；随后依次抹掉 Authorization 头、
+ * Bearer token、各类 key/token/secret 赋值形与密钥样式 token，并压平换行。
+ */
 export function safeFailure(value: unknown): string {
   const text = value instanceof Error ? value.message : '操作失败'
   return text
@@ -206,22 +240,27 @@ export function safeFailure(value: unknown): string {
     .slice(0, 500)
 }
 
+/** 打开本地文件的系统命令超时上限。 */
 const OPEN_CONFIG_TIMEOUT_MS = 15_000
-/** Children listed per parent, mirroring DSH's catalog page, and the row-level answer summary bound. */
+/** 每个父会话列出的子智能体数量上限，对齐 DSH 的目录页；行内答案摘要的长度界在下面。 */
 export const SUBAGENT_LIMIT = 50
+/** 子智能体目录行中最新答案的截断长度。 */
 export const SUBAGENT_ANSWER_CHARS = 200
+/** 发给子智能体的消息文本长度上限。 */
 export const SUBAGENT_MESSAGE_CHARS = 20_000
 
 /**
- * Open one local file on the operator's desktop, following the same platform
- * split directory-picker.ts uses for its native surface. The launcher hands
- * off and exits, so a command that never returns is killed at the timeout
- * instead of holding the request open.
+ * 功能：用系统默认程序在操作者桌面上打开一个本地文件。
+ * @param path 文件绝对路径
+ * @returns 打开成功即 resolve
+ * 内部逻辑：按 directory-picker.ts 相同的平台划分选命令（macOS open / Windows
+ * cmd start / Linux xdg-open）；启动器只交接不驻留，永不退出的命令在超时处被
+ * 杀掉，不会挂住请求。
  */
 export function openLocalFile(path: string): Promise<void> {
   const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : process.platform === 'linux' ? 'xdg-open' : undefined
   if (command === undefined) throw new RuntimeError('UNSUPPORTED', '当前系统没有可用的文件打开方式')
-  // `start` is a cmd builtin, and its first quoted argument is the window title.
+  // `start` 是 cmd 内建命令，第一个带引号的参数是窗口标题，因此留空。
   const args = command === 'cmd' ? ['/c', 'start', '', path] : [path]
   return new Promise<void>((resolve, reject) => {
     execFile(command, args, { timeout: OPEN_CONFIG_TIMEOUT_MS }, (error, _stdout, stderr) => {
@@ -243,11 +282,13 @@ export function openLocalFile(path: string): Promise<void> {
   })
 }
 
+/** 剥离 data URL 前缀，返回纯 Base64 部分；已是纯 Base64 则原样返回。 */
 function imageData(value: string): string {
   const match = /^data:[^,]*;base64,(.*)$/s.exec(value)
   return match?.[1] ?? value
 }
 
+/** 把一次提交归一化为 canonical JSON：图片/附件取关键字段，whenBusy 补默认值。作为指纹与幂等比较的稳定形状。 */
 export function canonicalSubmit(input: SubmitInput): string {
   return JSON.stringify({
     text: input.text,
@@ -257,10 +298,19 @@ export function canonicalSubmit(input: SubmitInput): string {
   })
 }
 
+/** 计算一次提交的 SHA-256 内容指纹，用于 requestId 的幂等冲突检测。 */
 export function fingerprintSubmit(input: SubmitInput): string {
   return createHash('sha256').update(canonicalSubmit(input)).digest('hex')
 }
 
+/**
+ * 功能：把提交输入转成会话内核的用户消息内容。
+ * @param input 提交输入（文本、图片、忙碌策略）
+ * @param files 已保存到工作区的附件引用
+ * @returns 纯文本时返回字符串；含图片时返回文本分块 + 图片分块的数组
+ * 内部逻辑：附件以 `[File attachment: ...]` 引用行追加到文本尾部（正文已含该引用
+ * 则不重复）；图片先剥 data URL 前缀。
+ */
 export function submissionContent(input: SubmitInput, files: readonly AttachmentReference[] = []): UserInput {
   const images = input.images ?? []
   const references = files.map(file => `[File attachment: ${file.name} (${file.path})]`).filter(reference => !input.text.includes(reference))
@@ -272,6 +322,14 @@ export function submissionContent(input: SubmitInput, files: readonly Attachment
   ]
 }
 
+/**
+ * 功能：校验一次提交输入的边界（requestId、文本、图片、附件与总量）。
+ * @param input 待校验的提交输入
+ * @returns 通过即无返回，否则抛 INVALID_INPUT
+ * 内部逻辑：requestId 1-256 字符、文本 ≤1M、whenBusy 限枚举、图片 ≤16 张且
+ * 类型/大小受限、附件 ≤8 个且逐个验证 Base64 合法性与 8 MiB 上限、附件总量
+ * ≤16 MiB；纯空白且无图片附件的消息为空消息，拒绝。
+ */
 export function assertSubmit(input: SubmitInput): void {
   if (typeof input.requestId !== 'string' || input.requestId.trim().length === 0 || input.requestId.length > 256) {
     throw new RuntimeError('INVALID_INPUT', 'requestId 必须是 1 到 256 个字符')
@@ -300,6 +358,7 @@ export function assertSubmit(input: SubmitInput): void {
   if (!input.text.trim() && !(input.images?.length) && !(input.files?.length)) throw new RuntimeError('INVALID_INPUT', '消息不能为空')
 }
 
+/** 深拷贝会话元数据的可变副本（嵌套记录 structuredClone，浅层字段展开复制）。 */
 export function cloneMetadata(value: Readonly<ConversationMetadata>): ConversationMetadata {
   return {
     title: value.title,
@@ -307,8 +366,8 @@ export function cloneMetadata(value: Readonly<ConversationMetadata>): Conversati
     updatedAt: value.updatedAt,
     archived: value.archived,
     pinned: value.pinned,
-    // Documents written before the unread marker existed read as seen at their last update,
-    // so upgrading does not light up every historical conversation at once.
+    // 未读标记出现之前写入的文档按其最后更新时间视为已读，
+    // 升级时不会让所有历史会话同时亮起未读点。
     seenAt: value.seenAt ?? value.updatedAt,
     titleSource: value.titleSource,
     queueCreatedAt: { ...value.queueCreatedAt },

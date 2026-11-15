@@ -1,25 +1,21 @@
 /**
- * Client-side shaping for the trajectory export NDJSON
- * (GET /api/conversations/:id/trajectory, assembled by
- * src/server/conversation/trajectory.ts — the authoritative source for every
- * line shape). Each export line is a JSON object tagged with a `type`; only
- * lines carrying model IO become call cards:
+ * 轨迹导出 NDJSON 的客户端整形
+ * （GET /api/conversations/:id/trajectory，由
+ * src/server/conversation/trajectory.ts 组装——每一行形状的权威来源）。导出每行是
+ * 带 `type` 标签的 JSON 对象；只有携带模型 IO 的行会成为调用卡片：
  *
- * - `request`  — one outbound generation call: `ts`, `task`, `request` (its
- *                number within the task), `model` (`{provider, modelId}`),
- *                `thinkingLevel`, `messageCount`, `messages` (pi-ai Message[]).
- * - `response` — the terminal assistant message of that call: `ts`, `task`,
- *                `request`, `message` (pi-ai AssistantMessage: `content`
- *                blocks, `usage.input`/`usage.output`, `model`, `errorMessage`,
- *                `durationMs`).
- * - `sidecall` — one model call outside the generation task (session title,
- *                compaction summary, commit message…): `ts`, `purpose`,
- *                `model`, `startedAt`, `durationMs`, `input`, and either
- *                `answer` (AssistantMessage) or `error` (string).
+ * - `request`  — 一次出站生成调用：`ts`、`task`、`request`（任务内序号）、
+ *                `model`（`{provider, modelId}`）、`thinkingLevel`、`messageCount`、
+ *                `messages`（pi-ai Message[]）。
+ * - `response` — 该调用的末条助手消息：`ts`、`task`、`request`、`message`
+ *                （pi-ai AssistantMessage：`content` 块、`usage.input`/`usage.output`、
+ *                `model`、`errorMessage`、`durationMs`）。
+ * - `sidecall` — 生成任务之外的模型调用（会话标题、压缩摘要、提交信息…）：`ts`、
+ *                `purpose`、`model`、`startedAt`、`durationMs`、`input`，以及
+ *                `answer`（AssistantMessage）或 `error`（字符串）二者之一。
  *
- * `conversation`/`entry`/`task` lines are the durable transcript, `catalog`
- * lists the offered tools and `tools` carries entry ids only — none of them
- * have model IO, so `parseTrajectory` drops them.
+ * `conversation`/`entry`/`task` 行是持久转录，`catalog` 列出提供的工具，`tools`
+ * 只带 entry id——它们都没有模型 IO，因此 `parseTrajectory` 丢弃。
  */
 
 export interface TrajectoryModelRef {
@@ -27,7 +23,7 @@ export interface TrajectoryModelRef {
   modelId?: string
 }
 
-/** A `request` capture line: the exact outbound payload of one generation call. */
+/** 一条 `request` 捕获行：一次生成调用的完整出站载荷。 */
 export interface TrajectoryRequestLine {
   type: 'request'
   ts?: number
@@ -37,7 +33,7 @@ export interface TrajectoryRequestLine {
   messages?: unknown[]
 }
 
-/** A `response` capture line: the terminal assistant message of one generation call. */
+/** 一条 `response` 捕获行：一次生成调用的末条助手消息。 */
 export interface TrajectoryResponseLine {
   type: 'response'
   ts?: number
@@ -46,7 +42,7 @@ export interface TrajectoryResponseLine {
   message?: unknown
 }
 
-/** A `sidecall` capture line: one model call outside the generation task. */
+/** 一条 `sidecall` 捕获行：生成任务之外的一次模型调用。 */
 export interface TrajectorySidecallLine {
   type: 'sidecall'
   ts?: number
@@ -59,36 +55,39 @@ export interface TrajectorySidecallLine {
   error?: string
 }
 
+/** 三种带模型 IO 的导出行。 */
 export type TrajectoryLine = TrajectoryRequestLine | TrajectoryResponseLine | TrajectorySidecallLine
 
+/** 摘要行的角色（pi-ai role 的展示映射：toolResult → tool）。 */
 export type TrajectoryRole = 'system' | 'user' | 'assistant' | 'tool'
 
-/** One summarized input message: tool calls and tool results become their own lines. */
+/** 一条摘要后的输入消息：工具调用与工具结果各占一行。 */
 export interface TrajectoryInputLine {
   role: TrajectoryRole
-  /** Tool name on tool-call and tool-result lines. */
+  /** tool-call 与 tool-result 行上的工具名。 */
   toolName?: string
   text: string
 }
 
+/** 卡片上的一条工具调用（名称 + 序列化参数）。 */
 export interface TrajectoryToolCall {
   name: string
   arguments: string
 }
 
-/** One model call shaped for the timeline card. */
+/** 整形为时间线卡片的一次模型调用。 */
 export interface TrajectoryCall {
-  /** 1-based chronological order. */
+  /** 按时间序的 1 起始序号。 */
   index: number
-  /** True for side calls (title, compaction, commit message…), false for the main conversation. */
+  /** 侧调用（标题/压缩/提交信息…）为 true，主会话为 false。 */
   side: boolean
-  /** Side-call purpose label, when the capture recorded one. */
+  /** 侧调用的用途标签（捕获记录了才有）。 */
   purpose?: string
   modelId: string
   inputTokens: number
   outputTokens: number
   durationMs: number | null
-  /** Clock time (ms since epoch) the call started. */
+  /** 调用开始的墙钟时间（epoch 毫秒）。 */
   timestamp: number | null
   input: TrajectoryInputLine[]
   outputText: string
@@ -96,6 +95,7 @@ export interface TrajectoryCall {
   error: string | null
 }
 
+/** 头部汇总行：卡片数与 token 总量。 */
 export interface TrajectorySummary {
   count: number
   inputTokens: number
@@ -104,7 +104,11 @@ export interface TrajectorySummary {
 
 const IO_TYPES = new Set(['request', 'response', 'sidecall'])
 
-/** Parses the NDJSON export, skipping corrupt lines and dropping non-IO types. */
+/**
+ * 功能：解析 NDJSON 导出文本：跳过损坏行、丢弃非 IO 类型。
+ * @param text 轨迹导出全文
+ * @returns TrajectoryLine 数组
+ */
 export function parseTrajectory(text: string): TrajectoryLine[] {
   const lines: TrajectoryLine[] = []
   for (const raw of text.split('\n')) {
@@ -113,7 +117,7 @@ export function parseTrajectory(text: string): TrajectoryLine[] {
     try {
       parsed = JSON.parse(raw)
     } catch {
-      continue // A torn last line must not poison the rest of the export.
+      continue // 最后一行被截断不能污染其余导出。
     }
     if (typeof parsed !== 'object' || parsed === null) continue
     const type = (parsed as { type?: unknown }).type
@@ -123,6 +127,7 @@ export function parseTrajectory(text: string): TrajectoryLine[] {
   return lines
 }
 
+/** 卡片构建中的可变草稿；pendingKey 表示尚未等到配对响应。 */
 interface CallDraft {
   side: boolean
   purpose?: string
@@ -135,15 +140,15 @@ interface CallDraft {
   error: string | null
   inputTokens: number
   outputTokens: number
-  /** `${task}:${request}` while the call has not seen its response yet. */
+  /** 响应未到时为 `${task}:${request}`。 */
   pendingKey: string | null
 }
 
 /**
- * Shapes the parsed lines into chronological call cards. A `response` is paired
- * with its `request` by the captured `task`/`request` numbers; a response whose
- * pair cannot be found merges into the most recent call so its IO is not lost
- * (or opens its own card when there is nothing to merge into).
+ * 功能：把解析出的行整形为按时间排列的调用卡片。
+ * @param lines parseTrajectory 的输出
+ * @returns TrajectoryCall 数组（index 为 1 起始序号）
+ * 内部逻辑：`response` 用捕获的 `task`/`request` 序号与 `request` 配对；配不到的响应并入最近的调用以免丢失 IO（无对象可并时自成一张卡）；sidecall 各自成卡。
  */
 export function buildCallCards(lines: readonly TrajectoryLine[]): TrajectoryCall[] {
   const drafts: CallDraft[] = []
@@ -165,9 +170,8 @@ export function buildCallCards(lines: readonly TrajectoryLine[]): TrajectoryCall
       continue
     }
     if (line.type === 'response') {
-      // Pair by the captured task/request numbers; an unpairable response joins
-      // the previous card so its IO is not lost (or opens its own card when
-      // there is nothing to join).
+      // 按捕获的 task/request 序号配对；配不到的响应并入上一张卡避免丢 IO
+      // （没有可并对象时自成一张卡）。
       const draft = takePending(drafts, pairKey(line.task, line.request))
         ?? (drafts.length > 0 ? drafts[drafts.length - 1] : undefined)
       if (draft === undefined) {
@@ -195,7 +199,10 @@ export function buildCallCards(lines: readonly TrajectoryLine[]): TrajectoryCall
   }))
 }
 
-/** Totals the cards for the header summary line. */
+/**
+ * 功能：汇总所有卡片，供头部摘要行展示。
+ * @returns 调用次数与输入/输出 token 总量
+ */
 export function summarizeCalls(cards: readonly TrajectoryCall[]): TrajectorySummary {
   let inputTokens = 0
   let outputTokens = 0
@@ -207,30 +214,36 @@ export function summarizeCalls(cards: readonly TrajectoryCall[]): TrajectorySumm
 }
 
 /* ------------------------------------------------------------------ */
-/* Pairing and shaping                                                 */
+/* 配对与整形                                                           */
 /* ------------------------------------------------------------------ */
 
+/** 生成 `${task}:${request}` 配对键；任一缺失返回 null。 */
 function pairKey(task: string | undefined, request: number | undefined): string | null {
   return typeof task === 'string' && typeof request === 'number' ? `${task}:${request}` : null
 }
 
+/**
+ * 功能：为响应寻找配对的待响应草稿：先按 key 精确匹配；没有精确配对时取最新的
+ * 仍未闭合的请求；都没有返回 undefined（调用方并入上一张卡）。
+ */
 function takePending(drafts: CallDraft[], key: string | null): CallDraft | undefined {
   if (key !== null) {
     const exact = drafts.find(draft => draft.pendingKey === key)
     if (exact !== undefined) return exact
   }
-  // No exact pair: the newest still-open request, else the caller merges into
-  // the previous card.
+  // 无精确配对：取最新的未闭合请求，否则由调用方并入上一张卡。
   for (let position = drafts.length - 1; position >= 0; position -= 1) {
     if (drafts[position]!.pendingKey !== null) return drafts[position]
   }
   return undefined
 }
 
+/** 取 modelId；model 引用缺失或无 modelId 返回空串。 */
 function modelIdOf(model: TrajectoryModelRef | undefined): string {
   return typeof model?.modelId === 'string' ? model.modelId : ''
 }
 
+/** 把响应落到草稿上：输出文本、工具调用、usage、错误与时长（缺失时用 ts 差兜底）。 */
 function applyResponse(draft: CallDraft, line: TrajectoryResponseLine): void {
   draft.pendingKey = null
   const message = asRecord(line.message)
@@ -249,7 +262,7 @@ function applyResponse(draft: CallDraft, line: TrajectoryResponseLine): void {
   }
 }
 
-/** A response with no request to join: kept as its own card so its IO survives. */
+/** 无请求可配的响应：自成一张卡，保住它的 IO。 */
 function responseDraft(line: TrajectoryResponseLine): CallDraft {
   const message = asRecord(line.message)
   return {
@@ -269,6 +282,7 @@ function responseDraft(line: TrajectoryResponseLine): CallDraft {
   }
 }
 
+/** sidecall 行 → 草稿：purpose、模型（answer 兜底）、开始时间与时长、输入输出与错误。 */
 function sidecallDraft(line: TrajectorySidecallLine): CallDraft {
   const answer = asRecord(line.answer)
   return {
@@ -291,16 +305,17 @@ function sidecallDraft(line: TrajectorySidecallLine): CallDraft {
   }
 }
 
+/** 读助手消息 usage 中的 input/output 字段；缺失按 0 计。 */
 function usageNumber(message: Record<string, unknown> | undefined, field: 'input' | 'output'): number {
   const usage = message === undefined ? undefined : asRecord(message.usage)
   return usage !== undefined && typeof usage[field] === 'number' ? usage[field] as number : 0
 }
 
 /* ------------------------------------------------------------------ */
-/* Message shaping                                                     */
+/* 消息整形                                                             */
 /* ------------------------------------------------------------------ */
 
-/** Shapes an outbound `messages` array into display lines. */
+/** 把出站 `messages` 数组整形为展示行。 */
 function shapeMessages(messages: unknown): TrajectoryInputLine[] {
   if (!Array.isArray(messages)) return []
   const lines: TrajectoryInputLine[] = []
@@ -308,6 +323,7 @@ function shapeMessages(messages: unknown): TrajectoryInputLine[] {
   return lines
 }
 
+/** 单条消息 → 展示行：system/user 整体一行；toolResult 一行；assistant 的文本与每个工具调用各一行。 */
 function shapeMessage(message: unknown): TrajectoryInputLine[] {
   const record = asRecord(message)
   const role = record === undefined || typeof record.role !== 'string' ? undefined : record.role
@@ -332,7 +348,7 @@ function shapeMessage(message: unknown): TrajectoryInputLine[] {
   return []
 }
 
-/** Side-call input arrives raw (prompt string, message array, or any payload). */
+/** 侧调用输入是原始形态（提示词字符串、消息数组或任意载荷），按形态整形。 */
 function shapeSidecallInput(input: unknown): TrajectoryInputLine[] {
   if (typeof input === 'string') return input === '' ? [] : [{ role: 'user', text: input }]
   if (Array.isArray(input) && input.some(message => asRecord(message)?.role !== undefined)) {
@@ -343,7 +359,7 @@ function shapeSidecallInput(input: unknown): TrajectoryInputLine[] {
   return text === '' || text === '{}' || text === '[]' ? [] : [{ role: 'user', text }]
 }
 
-/** Flattens message content to text; images become a placeholder. */
+/** 把消息 content 摊平成文本；图片换成 `[image]` 占位。 */
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -357,6 +373,7 @@ function contentText(content: unknown): string {
   return parts.join('\n')
 }
 
+/** 只取 content 里的 text 块，换行拼接。 */
 function textParts(content: unknown): string {
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
@@ -367,6 +384,7 @@ function textParts(content: unknown): string {
   return parts.join('\n')
 }
 
+/** 抽出 content 里的 toolCall 块（名称 + 序列化参数）。 */
 function toolCallsOf(content: unknown): TrajectoryToolCall[] {
   if (!Array.isArray(content)) return []
   const calls: TrajectoryToolCall[] = []
@@ -381,6 +399,7 @@ function toolCallsOf(content: unknown): TrajectoryToolCall[] {
   return calls
 }
 
+/** JSON 序列化；循环引用等失败时退回 String(value)。 */
 function stringify(value: unknown): string {
   try {
     return JSON.stringify(value) ?? ''
@@ -389,6 +408,7 @@ function stringify(value: unknown): string {
   }
 }
 
+/** 值是对象（含数组）时窄化为 record；其他返回 undefined。 */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
 }

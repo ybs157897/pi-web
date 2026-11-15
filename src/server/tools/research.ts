@@ -8,44 +8,74 @@ import { searchWithRipgrep } from './search/native.ts'
 import { boundedSearch, MAX_TOOL_OUTPUT_BYTES, makeExcerpt, type SearchMatch } from './search/format.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 
+/** 四个检索工具名：list_files / search_files / glob / grep。 */
 export const RESEARCH_TOOL_NAMES = ['list_files', 'search_files', 'glob', 'grep'] as const
 
+/** 相对路径参数的最大长度。 */
 const MAX_PATH_LENGTH = 1_024
+/** search_files 查询词的最大长度。 */
 const MAX_QUERY_LENGTH = 200
+/** glob/grep 模式的最大长度。 */
 const MAX_PATTERN_LENGTH = 1_024
+/** 目录遍历的节点（条目）上限。 */
 const MAX_SCAN_NODES = 2_000
+/** glob 遍历的节点上限（含隐藏路径故放宽）。 */
 const MAX_GLOB_SCAN_NODES = 5_000
+/** 单个文件读入的字节上限。 */
 const MAX_FILE_BYTES = 512 * 1_024
+/** 单次搜索累计读取的字节上限。 */
 const MAX_TOTAL_READ_BYTES = 4 * 1_024 * 1_024
+/** list_files 返回条目上限。 */
 const MAX_LIST_ENTRIES = 100
+/** search_files/grep 的结果数上限。 */
 const MAX_SEARCH_RESULTS = 50
+/** glob 的结果数上限。 */
 const MAX_GLOB_RESULTS = 100
+/** 单条结果路径的长度上限（超长计入截断）。 */
 const MAX_RESULT_PATH_LENGTH = 512
 
+/** 默认遍历排除的目录：隐藏路径、node_modules、运行时数据目录。 */
 const OMITTED_DIRECTORIES = new Set(['.git', 'node_modules', '.data'])
+/** glob 遍历排除的目录（含隐藏路径，只排除 VCS 元数据、生成树与数据目录）。 */
 const GLOB_OMITTED_DIRECTORIES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl', 'node_modules', 'dist', '.data'])
+/** 视为敏感凭据的文件扩展名。 */
 const PRIVATE_FILE_EXTENSIONS = new Set(['.pem', '.key', '.p12', '.pfx', '.keystore'])
+/** 视为敏感凭据的文件名模式（credentials/secrets/tokens/私钥等）。 */
 const PRIVATE_FILE_NAME = /^(?:(?:credentials?|secrets?|tokens?|private[-_]?key)\.(?:json|ya?ml|toml|txt)|id_rsa|id_ed25519)$/i
 
+/** list_files 的一条结果：相对路径与条目类型。 */
 type ListedEntry = { path: string; type: 'file' | 'directory' }
+/** glob 的一条命中：相对路径与修改时间。 */
 type GlobMatch = { path: string; mtimeMs: number }
+/** 工作区内一个已校验的路径：相对路径、绝对路径（规范化）与 lstat 信息。 */
 type WorkspacePath = { path: string; absolute: string; info: Awaited<ReturnType<typeof lstat>> }
+/** 遍历中的一个条目：WorkspacePath 再加类型与修改时间。 */
 type WalkEntry = WorkspacePath & { type: 'file' | 'directory'; mtimeMs: number }
+/** 搜索时读一个文件的结果：文本/超大/二进制/不可读四种。 */
 type SearchRead =
   | { kind: 'text'; content: string; bytes: number }
   | { kind: 'oversize'; bytes: number }
   | { kind: 'binary'; bytes: number }
   | { kind: 'unreadable'; bytes: number }
 
+/** 判断 target 是否位于 root 之内（相对路径不为 `..` 开头且非绝对）。 */
 function isWithin(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/** 判断错误是否为文件不存在（ENOENT）。 */
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
 }
 
+/**
+ * 功能：校验并规范化相对路径参数。
+ * 输入校验：必须为相对、无反斜杠、无 NUL、无盘符、长度 ≤ MAX_PATH_LENGTH；含 `..`
+ * 段抛 FORBIDDEN；命中隐藏/敏感名抛 FORBIDDEN。
+ * @param value 调用方传入的路径。
+ * @returns 规范化后的相对路径（去除空段与 `.`）。
+ */
 function safeRelativePath(value: unknown): string {
   if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH || value.includes('\u0000') || value.includes('\\') || isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
     throw new RuntimeError('INVALID_INPUT', `Workspace paths must be relative and no longer than ${MAX_PATH_LENGTH} characters.`)
@@ -56,34 +86,45 @@ function safeRelativePath(value: unknown): string {
   return segments.join('/')
 }
 
+/** 判断文件名是否属于敏感凭据文件（按扩展名或名称模式）。 */
 function isPrivateFile(name: string): boolean {
   const extension = name.toLowerCase().slice(name.toLowerCase().lastIndexOf('.'))
   return PRIVATE_FILE_NAME.test(name) || PRIVATE_FILE_EXTENSIONS.has(extension)
 }
 
+/** 默认遍历的名称过滤：隐藏名、OMITTED_DIRECTORIES、敏感凭据文件一律跳过。 */
 function isRestrictedName(name: string): boolean {
   return name.startsWith('.') || OMITTED_DIRECTORIES.has(name.toLowerCase()) || isPrivateFile(name)
 }
 
-/** Glob discovery includes hidden paths but still refuses VCS metadata, generated trees, and credential files. */
+/** glob 的发现包含隐藏路径，但仍拒绝 VCS 元数据、生成树与凭据文件。 */
 function isGlobExcluded(name: string): boolean {
   return GLOB_OMITTED_DIRECTORIES.has(name.toLowerCase()) || isPrivateFile(name)
 }
 
 /**
- * `path.matchesGlob` treats a leading dot as "not matched by *". Mask dot segments on both
- * sides with a NUL-prefixed marker (paths cannot contain NUL) so hidden files stay discoverable.
+ * `path.matchesGlob` 会把开头的点视为"不被 * 匹配"。两侧的点段都用 NUL 前缀标记掩码
+ * （路径里不可能有 NUL），使隐藏文件仍可被发现。
  */
 const GLOB_DOT = '\u0000dot\u0000'
 
+/** 掩码单个段：以点开头的段替换点为 GLOB_DOT 标记。 */
 function maskGlobSegment(segment: string): string {
   return segment.startsWith('.') ? `${GLOB_DOT}${segment.slice(1)}` : segment
 }
 
+/** 掩码整条路径的每个段。 */
 function maskGlobPath(value: string): string {
   return value.split('/').map(maskGlobSegment).join('/')
 }
 
+/**
+ * 功能：校验并规范化 glob 模式。
+ * 输入校验：必须为相对、非空、无反斜杠/NUL/盘符、长度 ≤ MAX_PATTERN_LENGTH；含 `..`
+ * 段抛 FORBIDDEN。
+ * @param value 调用方传入的模式。
+ * @returns 规范化模式；不含 `/` 时自动加双星加斜杠前缀匹配任意深度。
+ */
 function globPattern(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_PATTERN_LENGTH
     || value.includes('\u0000') || value.includes('\\') || isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
@@ -96,6 +137,12 @@ function globPattern(value: unknown): string {
   return pattern.includes('/') ? pattern : `**/${pattern}`
 }
 
+/**
+ * 功能：构造 glob 匹配函数。
+ * 内部逻辑：模式与路径两侧都先做点段掩码；引擎抛错时转成 INVALID_INPUT RuntimeError。
+ * @param value 调用方传入的模式。
+ * @returns 判定相对路径是否命中的谓词。
+ */
 function globMatcher(value: unknown): (path: string) => boolean {
   const pattern = maskGlobPath(globPattern(value))
   return (path) => {
@@ -107,11 +154,17 @@ function globMatcher(value: unknown): (path: string) => boolean {
   }
 }
 
+/** grep 的 include 过滤：未传返回 undefined（不过滤），传了复用 glob 匹配。 */
 function includeMatcher(value: unknown): ((path: string) => boolean) | undefined {
   if (value === undefined) return undefined
   return globMatcher(value)
 }
 
+/**
+ * 功能：校验 grep 模式：非空单行字符串、无 NUL、长度 ≤ MAX_PATTERN_LENGTH。
+ * @param value 调用方传入的正则模式。
+ * @returns 原始模式字符串。
+ */
 function validateGrepPattern(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_PATTERN_LENGTH
     || value.includes('\u0000') || /[\r\n]/.test(value)) {
@@ -120,7 +173,7 @@ function validateGrepPattern(value: unknown): string {
   return value
 }
 
-/** Compile a pattern for the JavaScript fallback; the native path uses ripgrep syntax directly. */
+/** 为 JavaScript 回退编译正则；原生路径直接使用 ripgrep 语法。 */
 function grepPattern(value: string, caseSensitive: boolean): RegExp {
   try {
     return new RegExp(value, caseSensitive ? '' : 'i')
@@ -129,6 +182,12 @@ function grepPattern(value: string, caseSensitive: boolean): RegExp {
   }
 }
 
+/**
+ * 功能：取当前会话绑定的 workspace 目录。
+ * 输入校验：cwd 缺失、为空或非绝对路径抛 UNSUPPORTED。
+ * @param api 工具执行 API。
+ * @returns workspace 目录路径。
+ */
 function requireWorkspace(api: ToolExecutionApi): string {
   const cwd = api.env?.cwd
   if (typeof cwd !== 'string' || cwd.trim() === '' || !isAbsolute(cwd)) {
@@ -137,10 +196,19 @@ function requireWorkspace(api: ToolExecutionApi): string {
   return cwd
 }
 
+/** 已请求中止时立即抛 AbortError。 */
 function abortIfRequested(context: Context): void {
   context.abortSignal?.throwIfAborted()
 }
 
+/**
+ * 功能：解析并校验 workspace 根目录。
+ * 输入校验：检查中止信号（解析前后各一次）；目录不存在抛 NOT_FOUND；不是目录抛
+ * INVALID_INPUT。
+ * @param api 工具执行 API。
+ * @param context 执行上下文。
+ * @returns realpath 规范化后的 workspace 根。
+ */
 async function workspaceRoot(api: ToolExecutionApi, context: Context): Promise<string> {
   abortIfRequested(context)
   let root: string
@@ -156,7 +224,16 @@ async function workspaceRoot(api: ToolExecutionApi, context: Context): Promise<s
   return root
 }
 
-/** Resolve only existing paths, checking each component so a symlink cannot redirect a read. */
+/**
+ * 功能：把相对路径解析为 workspace 内的已校验路径，只解析存在的路径。
+ * 权限检查：逐段 lstat——任一段是符号链接抛 FORBIDDEN；中间段不是目录抛
+ * INVALID_INPUT；缺失抛 NOT_FOUND；越出 workspace（解析前后各查一次 isWithin）抛
+ * FORBIDDEN。
+ * @param root workspace 根。
+ * @param path 相对路径（可为 undefined，表示根本身）。
+ * @param context 执行上下文。
+ * @returns 规范化的 WorkspacePath。
+ */
 async function checkedPath(root: string, path: unknown, context: Context): Promise<WorkspacePath> {
   const normalized = safeRelativePath(path ?? '')
   const absolute = resolve(root, normalized)
@@ -182,6 +259,20 @@ async function checkedPath(root: string, path: unknown, context: Context): Promi
   return { path: normalized, absolute: canonical, info }
 }
 
+/**
+ * 功能：广度优先遍历 workspace 目录，逐条目回调 visit。
+ * 权限检查：目录与子项均拒绝符号链接；每层 realpath 校验不越出 root。
+ * 边界：按 filter 跳过受限名； examined 超过 maxNodes 或 visit 返回 false（配额满）
+ * 即停止并标记 truncated；相对路径超 MAX_RESULT_PATH_LENGTH 也计入截断。
+ * @param root workspace 根。
+ * @param start 遍历起点。
+ * @param recursive 是否递归子目录。
+ * @param context 执行上下文。
+ * @param visit 逐条目回调，返回 false 停止遍历。
+ * @param filter 名称过滤器，默认 isRestrictedName。
+ * @param maxNodes 节点上限。
+ * @returns 检查的条目数与是否被截断。
+ */
 async function walkDirectory(
   root: string,
   start: WorkspacePath,
@@ -254,10 +345,15 @@ async function walkDirectory(
   return { examined: Math.min(examined, maxNodes), truncated }
 }
 
+/** 构造标准的单段文本输出块。 */
 function textOutput(text: string) {
   return [{ type: 'text' as const, text }]
 }
 
+/**
+ * 功能：在工具输出字节预算内渲染 list_files 结果。
+ * 内部逻辑：循环从尾部逐条丢弃并标记 truncated，直到文本落入 MAX_TOOL_OUTPUT_BYTES。
+ */
 function boundedListing(scope: string, recursive: boolean, examined: number, entries: ListedEntry[], truncated: boolean): string {
   while (true) {
     const lines = entries.map(entry => `- ${entry.type} ${JSON.stringify(entry.path)}`)
@@ -272,6 +368,9 @@ function boundedListing(scope: string, recursive: boolean, examined: number, ent
   }
 }
 
+/**
+ * 功能：在工具输出字节预算内渲染 glob 结果（同 boundedListing 的裁剪策略）。
+ */
 function boundedGlob(scope: string, pattern: string, examined: number, entries: GlobMatch[], truncated: boolean): string {
   while (true) {
     const lines = entries.map(entry => `- ${JSON.stringify(entry.path)}`)
@@ -286,10 +385,23 @@ function boundedGlob(scope: string, pattern: string, examined: number, entries: 
   }
 }
 
+/** 让出一个事件循环节拍（setImmediate），使长扫描期间的 abort 信号有机会被处理。 */
 async function yieldToAbort(): Promise<void> {
   await new Promise<void>(resolveNext => setImmediate(resolveNext))
 }
 
+/**
+ * 功能：为搜索安全地读一个文件。
+ * 输入校验/边界：先按 lstat 大小判断超大（MAX_FILE_BYTES 或剩余配额不足）；
+ * checkedPath 逐段校验路径；用 O_NOFOLLOW 打开并比对 dev/ino 防止打开期间被换成
+ * 符号链接；分块读取（每块 64 KiB）并周期性检查中止；读完再确认文件没有在读取期间
+ * 变大（否则归为 oversize）；内容含 NUL 判为二进制；打开/读取失败归为 unreadable。
+ * @param root workspace 根。
+ * @param entry 遍历条目。
+ * @param context 执行上下文。
+ * @param remainingBytes 本次搜索剩余的可读字节配额。
+ * @returns SearchRead 四类结果之一。
+ */
 async function readSearchFile(
   root: string,
   entry: WalkEntry,
@@ -334,6 +446,18 @@ async function readSearchFile(
   }
 }
 
+/**
+ * 功能：在文件内容中做字面量子串匹配（逐行）。
+ * 边界：每 256 行检查一次中止并让出事件循环；达到 maxResults 即停止并标记 hasMore；
+ * 摘录经 makeExcerpt 以命中位置居中截取。
+ * @param content 文件文本内容。
+ * @param query 字面量查询词。
+ * @param caseSensitive 是否区分大小写。
+ * @param maxResults 本文件允许的最大命中数。
+ * @param path 相对路径（写入结果）。
+ * @param context 执行上下文。
+ * @returns 命中列表与是否还有更多。
+ */
 async function findMatches(
   content: string,
   query: string,
@@ -360,6 +484,16 @@ async function findMatches(
   return { matches, hasMore: false }
 }
 
+/**
+ * 功能：在文件内容中做正则匹配（逐行，JavaScript 回退引擎）。
+ * 边界：与 findMatches 相同——每 256 行让出事件循环；达到 maxResults 标记 hasMore。
+ * @param content 文件文本内容。
+ * @param regex 已编译的正则。
+ * @param maxResults 本文件允许的最大命中数。
+ * @param path 相对路径（写入结果）。
+ * @param context 执行上下文。
+ * @returns 命中列表与是否还有更多。
+ */
 async function findRegexMatches(
   content: string,
   regex: RegExp,
@@ -383,6 +517,7 @@ async function findRegexMatches(
   return { matches, hasMore: false }
 }
 
+/** `list_files` 工具：列出工作区文件与目录相对路径，边界见 execute 注释。 */
 const listFilesTool = defineTool({
   name: 'list_files',
   description: `列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 ${MAX_LIST_ENTRIES} 的整数（默认 ${MAX_LIST_ENTRIES}）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。`,
@@ -392,6 +527,11 @@ const listFilesTool = defineTool({
     maxEntries: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_ENTRIES })),
   }),
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  /**
+   * 功能：列出工作区条目。
+   * 输入校验：path 必须指向 workspace 内目录；maxEntries 夹取到 1–MAX_LIST_ENTRIES。
+   * 边界：walkDirectory 限节点数与符号链接；结果按路径排序，输出受字节预算裁剪。
+   */
   execute: async (args, api, context) => {
     abortIfRequested(context)
     const root = await workspaceRoot(api, context)
@@ -412,6 +552,7 @@ const listFilesTool = defineTool({
   },
 })
 
+/** `search_files` 工具：工作区字面量文本搜索，边界见 execute 注释。 */
 const searchFilesTool = defineTool({
   name: 'search_files',
   description: `在工作区文本文件中搜索长度为 1 到 ${MAX_QUERY_LENGTH} 字符的单行字面量短语，默认忽略大小写。返回相对路径、从 1 开始的行号和片段。path 默认 "."；recursive 默认 true；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
@@ -423,6 +564,12 @@ const searchFilesTool = defineTool({
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
   }),
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  /**
+   * 功能：在工作区文本文件中做字面量搜索。
+   * 输入校验：query 为单行、1–MAX_QUERY_LENGTH 字符、无 NUL；path 可为文件或目录。
+   * 边界：累计读取不超 MAX_TOTAL_READ_BYTES（超配额文件计 oversize）；跳过二进制/
+   * 不可读文件并计数；达到 maxResults 停止；结果经 boundedSearch 裁剪到字节预算。
+   */
   execute: async (args, api, context) => {
     abortIfRequested(context)
     const query = args.query.trim()
@@ -503,6 +650,7 @@ const searchFilesTool = defineTool({
   },
 })
 
+/** `glob` 工具：按 glob 模式查文件（含隐藏路径），边界见 execute 注释。 */
 const globTool = defineTool({
   name: 'glob',
   description: `查找路径匹配 glob 模式的文件。模式不含 "/" 时匹配任意深度的文件名；"**" 匹配任意深度。包含隐藏路径；排除 VCS 元数据、node_modules、dist、.data、常见敏感文件及符号链接。按修改时间从新到旧返回最多 ${MAX_GLOB_RESULTS} 个路径。只读，不使用 shell。优先使用本工具，不用 find 或 ls -R。`,
@@ -512,6 +660,12 @@ const globTool = defineTool({
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_GLOB_RESULTS })),
   }),
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  /**
+   * 功能：按 glob 模式查找文件。
+   * 输入校验：pattern 经 globMatcher（含相对/长度/越界校验）。
+   * 边界：递归遍历用 isGlobExcluded 过滤、节点上限 MAX_GLOB_SCAN_NODES；命中按修改
+   * 时间新到旧排序后截取 maxResults；输出经 boundedGlob 裁剪到字节预算。
+   */
   execute: async (args, api, context) => {
     abortIfRequested(context)
     const matchesPattern = globMatcher(args.pattern)
@@ -534,6 +688,7 @@ const globTool = defineTool({
   },
 })
 
+/** `grep` 工具：正则文本搜索（原生 ripgrep 优先，JavaScript 回退），边界见 execute 注释。 */
 const grepTool = defineTool({
   name: 'grep',
   description: `使用正则表达式搜索工作区文本文件（原生 ripgrep，可回退到 JavaScript；默认忽略大小写）。用于查找未知内容或文件位置；已知文件路径时直接用 read。不要通过 shell 运行 \`grep\` 或 \`rg\`，它们会绕过工作区策略、输出限制和敏感文件过滤。原生引擎使用 ripgrep 正则语法；ripgrep 拒绝模式时会尝试 JavaScript 回退。path 默认 "."；include 可按 glob 过滤文件（如 "*.ts"）；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、node_modules、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
@@ -545,6 +700,12 @@ const grepTool = defineTool({
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
   }),
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
+  /**
+   * 功能：用正则在 workspace 内搜索文本文件。
+   * 输入校验：pattern 单行非空限长；include 为可选 glob；path 为文件或目录。
+   * 权限/边界：原生 ripgrep 带 abort 信号；失败时写 info 诊断并回退到 JavaScript
+   * 遍历（同样的符号链接/敏感文件/字节配额约束）；结果经 boundedSearch 裁剪到字节预算。
+   */
   execute: async (args, api, context) => {
     abortIfRequested(context)
     const pattern = validateGrepPattern(args.pattern)
@@ -657,6 +818,7 @@ const grepTool = defineTool({
   },
 })
 
+/** research 工具扩展：贡献 list_files / search_files / glob / grep 四个只读工具，不贡献 section。 */
 export const ResearchTools: Extension = defineExtension({
   name: 'research-tools',
   tools: [listFilesTool, searchFilesTool, globTool, grepTool],

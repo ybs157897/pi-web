@@ -1,8 +1,7 @@
 /**
- * Built-in delegation profiles (ZCode parity, Chinese adaptation) and the child-model
- * resolution both delegation tools share. `general-purpose` keeps the parent's tool set;
- * `Explore` narrows it to read-only search. The profiles replace the child conversation's
- * copied instructions, so a delegation runs as the profile, not as a copy of the parent.
+ * 内置委派档案（对齐 ZCode、中文适配）与两个委派工具共用的子模型解析。
+ * `general-purpose` 保留父会话的工具集；`Explore` 收窄为只读检索。
+ * 档案会替换子会话复制来的指令，因此委派运行的是档案身份，而非父会话的副本。
  */
 import type { ThinkingLevel } from '../../shared/types.ts'
 import { clampThinkingLevel } from '../model/catalog.ts'
@@ -11,19 +10,20 @@ import { RuntimeError } from '../runtime-errors.ts'
 import { EXPLORE_TOOLS } from '../conversation/subagent-policy.ts'
 import type { SubagentProfile } from '../tools/subagent.ts'
 
-/** One built-in profile as the delegation tools and the delegation section read it. */
+/** 一个内置档案，供委派工具与委派政策 section 读取。 */
 export type BuiltinProfile = {
   name: SubagentProfile
-  /** Directory-facing description (Chinese). */
+  /** 面向目录（子智能体列表）的中文描述。 */
   description: string
-  /** One-line summary the delegation-policy section renders. */
+  /** 委派政策 section 渲染的单行摘要。 */
   summary: string
-  /** Replaces the child's copied instructions. */
+  /** 替换子会话复制来的指令。 */
   systemPrompt: string
-  /** Tool-name whitelist; undefined keeps the parent's tool set. */
+  /** 工具名白名单；undefined 表示保留父会话工具集。 */
   readonlyTools?: string[]
 }
 
+/** 两个内置委派档案：通用执行档与只读检索档；systemPrompt 为完整中文人设，委派时整体替换子会话指令。 */
 export const BUILTIN_PROFILES: BuiltinProfile[] = [
   {
     name: 'general-purpose',
@@ -73,28 +73,39 @@ export const BUILTIN_PROFILES: BuiltinProfile[] = [
   },
 ]
 
-/** The profile one delegation selected; the default `general-purpose` always resolves. */
+/**
+ * 功能：按名字解析一次委派选中的档案；默认档案 `general-purpose` 永远可解析。
+ * @param name 档案名；undefined 或未知名字时回落到 BUILTIN_PROFILES[0]。
+ * @returns 对应的 BuiltinProfile。
+ */
 export function profileByName(name: string | undefined): BuiltinProfile {
   return BUILTIN_PROFILES.find(profile => profile.name === name) ?? BUILTIN_PROFILES[0]!
 }
 
-/** A child model as the delegation tools accept it. */
+/** 委派工具接受的子模型引用：provider 与 modelId。 */
 export type ChildModelRef = { provider: string; modelId: string }
 
-/** A validated child model pick: the model plus the thinking level the child should run at. */
+/** 校验通过的子模型选择：模型本身加上子会话应运行的思考级别。 */
 export type ChildModelResolution = { model: ChildModelRef; thinkingLevel?: ThinkingLevel }
 
 /**
- * Validate one child model pick against the catalog and the allowlist, then clamp the parent's
- * thinking level to what the selected model supports. Assembled by the runtime (where the model
- * runtime and app state live); the tools depend only on this signature.
+ * 子模型解析器签名：对照模型目录与白名单校验一次子模型选择，并把父会话的思考级别
+ * 收敛到所选模型支持的范围内。由 runtime 装配（模型运行时与应用状态都在那里）；
+ * 委派工具只依赖此签名。
  */
 export type ChildModelResolver = (
   ref: ChildModelRef,
   parent: { thinkingLevel: ThinkingLevel },
 ) => ChildModelResolution
 
-/** Build the runtime's `resolveChildModel` from the model catalog, the allowlist, and the level support. */
+/**
+ * 功能：由模型目录、白名单与思考级别支持集，装配运行时的 `resolveChildModel`。
+ * @param deps.models 模型目录（getModel 返回 undefined 即目录中不存在）。
+ * @param deps.allowlist 惰性读取的模型白名单；undefined 表示不限制。
+ * @param deps.supportedThinkingLevels 查询模型支持的思考级别集合；undefined 表示不做收敛。
+ * @returns ChildModelResolver 闭包；校验失败抛 MODEL_UNAVAILABLE 的 RuntimeError。
+ * 内部逻辑：先查目录存在性，再过白名单；思考级别——模型未声明支持集时继承父级别，否则 clamp。
+ */
 export function createChildModelResolver(deps: {
   models: { getModel(provider: string, modelId: string): unknown }
   allowlist: () => readonly string[] | undefined

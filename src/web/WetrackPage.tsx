@@ -20,17 +20,25 @@ import {
 } from './wetrack-view.ts'
 import css from './WetrackPage.module.css'
 
+/** 列表页的加载/错误/数据状态。 */
 interface LoadState { loading: boolean; error: string; list?: WetrackDefectList }
+/** 缺陷详情面板的加载/错误/数据状态。 */
 interface DetailState { loading: boolean; error: string; value?: WetrackDefectDetail }
+/** 本地结论面板的加载/错误/数据状态。 */
 interface ReportState { loading: boolean; error: string; value?: WetrackDefectReport }
+/** 问题分析面板的加载/错误/数据状态（null 表示从未分析）。 */
 interface AnalysisState { loading: boolean; error: string; value?: WetrackAnalysisRecord | null }
+/** 页面视图：问题列表 / 缺陷详情 / 分析设置。 */
 type View = 'list' | 'detail' | 'settings'
+/** 工作流筛选：待开发解决 / 待自验 / 全部。 */
 type WorkflowFilter = 'development' | 'verification' | 'all'
 
+/** 提取任意抛出值的 message 文本。 */
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+/** 构建 antd 主题配置：跟随明暗模式并覆盖主色/背景/文本/圆角等 token。 */
 function themeConfig(dark: boolean): ThemeConfig {
   return {
     algorithm: dark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
@@ -48,6 +56,7 @@ function themeConfig(dark: boolean): ThemeConfig {
   }
 }
 
+/** 分析状态的展示文案与 antd Tag 颜色。 */
 const ANALYSIS_STATUS_LABELS: Record<WetrackAnalysisStatus, { zh: string; en: string; color: string }> = {
   analyzing: { zh: '分析中', en: 'Analyzing', color: 'gold' },
   analyzed: { zh: '已分析', en: 'Analyzed', color: 'blue' },
@@ -55,7 +64,17 @@ const ANALYSIS_STATUS_LABELS: Record<WetrackAnalysisStatus, { zh: string; en: st
   blocked: { zh: '受阻', en: 'Blocked', color: 'red' },
 }
 
-/** Issue list, full-page detail and list-level analysis settings. */
+/**
+ * 功能：WeTrack 问题清单页——列表视图（工作流筛选 + 搜索 + 项目分组 + 缺陷卡列表）、
+ * 全页详情视图（问题分析/缺陷详情/本地结论三页签）与列表级分析设置视图。
+ * 整页用 ConfigProvider + 自定义主题包裹 antd 组件。
+ * @param props workspaces 可选工作区（分析设置绑定用）；onOpenConversation 打开
+ *              分析会话。
+ * 内部逻辑：load 拉取缺陷清单并顺带刷新分析索引；open 切到详情时并行拉取
+ * 详情/本地结论/分析记录（latest ref 票据丢弃过期响应）；存在运行中/排队分析时
+ * 每 2 秒轮询 refreshAnalysis 并同步当前详情的分析记录；startAnalysis 在未绑定
+ * 工作区时先跳设置页；设置页共享绑定工作区/思考等级并展示激活的 Skills。
+ */
 export default function WetrackPage({ workspaces, onOpenConversation }: {
   workspaces: readonly WorkspaceSummary[]
   onOpenConversation: (id: string) => void
@@ -79,12 +98,14 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
   const [actionError, setActionError] = useState('')
   const latest = useRef<string>()
 
+  /** 并行刷新分析索引与运行状态，映射为按缺陷编号索引的 Map。 */
   const refreshAnalysis = useCallback(async (): Promise<void> => {
     const [index, runResult] = await Promise.all([api.wetrackAnalyses(), api.wetrackAnalysisRuns()])
     setAnalyses(new Map(index.analyses.map(summary => [summary.defectNumber, summary])))
     setRuns(new Map(runResult.runs.map(run => [run.defectNumber, run])))
   }, [])
 
+  /** 拉取缺陷清单；分析索引刷新失败不影响列表（静默吞掉）。 */
   const load = useCallback(async (): Promise<void> => {
     setState(current => ({ ...current, loading: true, error: '' }))
     const analysisRequest = refreshAnalysis().catch(() => undefined)
@@ -96,6 +117,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     }
   }, [refreshAnalysis, t])
 
+  /** 读取列表级分析设置（共享工作区、模型、思考等级、激活 Skills）。 */
   const loadSettings = useCallback(async (): Promise<void> => {
     try { setAnalysisSettings(await api.wetrackAnalysisSettings()) } catch (cause) { setActionError(messageOf(cause)) }
   }, [])
@@ -115,6 +137,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     return () => { clearInterval(timer) }
   }, [refreshAnalysis, runs])
 
+  /** 打开某缺陷的详情视图：并行加载详情、本地结论与分析记录；票据防过期覆盖。 */
   const open = useCallback((item: WetrackDefectItem): void => {
     const defectNumber = item.defectNumber
     latest.current = defectNumber
@@ -139,6 +162,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     )
   }, [])
 
+  /** 返回列表视图：清空选中项并重新加载清单。 */
   const backToList = useCallback((): void => {
     latest.current = undefined
     setSelected(undefined)
@@ -146,6 +170,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     void load()
   }, [load])
 
+  /** 绑定共享分析工作区并保存设置。 */
   const bindWorkspace = async (workspaceId: string): Promise<void> => {
     setSavingWorkspace(true)
     setActionError('')
@@ -154,6 +179,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     finally { setSavingWorkspace(false) }
   }
 
+  /** 更新分析思考等级（保持已绑定工作区不变）。 */
   const bindThinkingLevel = async (thinkingLevel: ThinkingLevel): Promise<void> => {
     setSavingWorkspace(true)
     setActionError('')
@@ -162,6 +188,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     finally { setSavingWorkspace(false) }
   }
 
+  /** 对当前缺陷启动 AI 分析：未绑定工作区时先引导到设置页；成功后更新运行状态。 */
   const startAnalysis = async (): Promise<void> => {
     const defectNumber = latest.current
     if (defectNumber === undefined) return
@@ -191,6 +218,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
     ...groups.map(group => ({ key: group.key, label: <span className={css.tabLabel}>{group.label}<em>{group.items.length}</em></span> })),
   ], [filtered.length, groups, t])
 
+  /** 页面外壳：以 antd ConfigProvider（locale + 主题）包裹任意视图内容。 */
   const shell = (body: ReactNode): ReactNode => <main className={css.page}>
     <ConfigProvider locale={settings.locale === 'en' ? enUS : zhCN} theme={themeConfig(dark)}>{body}</ConfigProvider>
   </main>
@@ -287,6 +315,7 @@ export default function WetrackPage({ workspaces, onOpenConversation }: {
   </>)
 }
 
+/** 详情/设置视图的页头：返回列表按钮 + 标题/副标题 + 可选动作区。 */
 function PageHeader({ title, subtitle, onBack, actions }: { title: string; subtitle: string; onBack: () => void; actions?: ReactNode }) {
   const { t } = useUiPreferences()
   return <header className={css.pageHead}>
@@ -298,6 +327,7 @@ function PageHeader({ title, subtitle, onBack, actions }: { title: string; subti
   </header>
 }
 
+/** 「问题分析」页签：顶部为共享工作区/模型事实行，运行中/失败/受阻以 Alert 呈现，下方渲染分析正文。 */
 export function AnalysisPanel({ state, run, workspace, model, error, onOpenConversation }: {
   state: AnalysisState
   run?: WetrackAnalysisRun
@@ -321,6 +351,7 @@ export function AnalysisPanel({ state, run, workspace, model, error, onOpenConve
   </div>
 }
 
+/** 分析正文：加载骨架/错误/未分析空态之外，渲染受阻与待验证 Alert、状态标签、摘要与 Markdown 结论。 */
 function AnalysisBody({ state, t }: { state: AnalysisState; t: Translate }) {
   if (state.loading) return <Skeleton active className={css.empty} paragraph={{ rows: 8 }} />
   if (state.error !== '') return <Alert type="error" showIcon message={state.error} />
@@ -348,6 +379,7 @@ function AnalysisBody({ state, t }: { state: AnalysisState; t: Translate }) {
   </>
 }
 
+/** 列表中的缺陷卡：编号 + 严重级/状态标签 + 分析状态标签、摘要、项目与提单人；整卡可点开详情。 */
 function DefectCard({ item, analysis, run, onOpen }: { item: WetrackDefectItem; analysis?: WetrackAnalysisSummary; run?: WetrackAnalysisRun; onOpen: (item: WetrackDefectItem) => void }) {
   const { t } = useUiPreferences()
   const severity = fieldText(item.severityName)
@@ -369,6 +401,7 @@ function DefectCard({ item, analysis, run, onOpen }: { item: WetrackDefectItem; 
   </article>
 }
 
+/** 「缺陷详情」页签：头部标签 + 字段表（仅非空项）+ 详细描述 + 处理记录时间线 + 附件与图片。 */
 function DetailPane({ state, t }: { state: DetailState; t: Translate }) {
   if (state.loading) return <Skeleton active className={css.modalLoading} paragraph={{ rows: 8 }} />
   if (state.error !== '') return <Alert type="error" showIcon message={state.error} />
@@ -411,6 +444,7 @@ function DetailPane({ state, t }: { state: DetailState; t: Translate }) {
   </div>
 }
 
+/** 「本地结论」页签：读取约定目录中按缺陷编号命名的分析文档并渲染；未就绪时提示目录与文件名。 */
 function ReportPane({ state, t }: { state: ReportState; t: Translate }) {
   if (state.loading) return <Skeleton active className={css.modalLoading} paragraph={{ rows: 10 }} />
   if (state.error !== '') return <Alert type="error" showIcon message={state.error} />

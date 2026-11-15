@@ -11,6 +11,7 @@ import '../../vendor/dsh-theme/scrollbar.css'
 import '../../vendor/dsh-theme/shiki.css'
 import './styles.css'
 
+// 应用入口：先加载 DSH 主题样式与全局样式，再把 <App /> 挂到 #root。
 const root = document.getElementById('root')
 if (root === null) throw new Error('Missing application root')
 

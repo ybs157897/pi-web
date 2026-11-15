@@ -1,9 +1,7 @@
 /**
- * The conversation engine: creation, configuration, submission, queue-adjacent controls,
- * goals, plans, forks and the live transcription subscription.
+ * 会话引擎：创建、配置、提交、队列相关的控制、目标、计划、分叉与实时转写订阅。
  *
- * Everything that only *reads* app state or projects a conversation lives in the
- * composition root (`index.ts`); this module is the state-changing surface.
+ * 只*读取*应用状态或投影会话的部分放在组合根（index.ts）；本模块是改状态的一面。
  */
 import { randomUUID } from 'node:crypto'
 import type { Draft } from '@earendil-works/chord'
@@ -33,6 +31,7 @@ import {
   type ConversationMetadata,
 } from './helpers.ts'
 
+/** 会话 feature 的依赖注入契约：组合根提供的元数据/投影/策略回调与自动化钩子。 */
 export interface ConversationsDeps {
   appState: AppStateStore
   harness: () => Harness
@@ -62,6 +61,13 @@ export interface ConversationsDeps {
   ): Promise<AgentChange>
 }
 
+/**
+ * 功能：创建会话 feature 服务——会话的创建/配置/提交/停止/压缩/目标/计划/分叉/
+ * 重试/反馈与实时订阅。
+ * @param deps 依赖注入契约见 ConversationsDeps
+ * 职责边界：本工厂拥有改状态的会话操作；读取型投影在 core 与组合根。
+ * 提交统一走 submitWithReferences（requestId 幂等 + 回执 + 记忆提取排程）。
+ */
 export function createConversations(deps: ConversationsDeps) {
   const {
     appState, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
@@ -70,8 +76,15 @@ export function createConversations(deps: ConversationsDeps) {
     defaultWorkspace,
   } = deps
   const harness = (): Harness => deps.harness()
+  /** 活跃的实时订阅关闭函数集合；运行时关闭时统一停止。 */
   const activeWatchStops = new Set<() => Promise<void>>()
 
+  /**
+   * 功能：列出全部无主会话的摘要。
+   * @returns 按 updatedAt 降序（并列按 createdAt 降序）的摘要数组
+   * 内部逻辑：分页扫描会话记录（过滤掉有属主的子会话），逐个读元数据与视图后
+   * 投影；会话中途消失的行直接跳过。
+   */
   const list = async (): Promise<ConversationSummary[]> => {
     assertOpen()
     const records: ConversationRecord[] = []
@@ -96,6 +109,14 @@ export function createConversations(deps: ConversationsDeps) {
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
   }
 
+  /**
+   * 功能：创建一个新会话。
+   * @param input 标题、工作区、访问模式、模型、思考等级与会话种类
+   * @returns 新会话详情
+   * 内部逻辑：无工作区可用时拒绝；缺陷分析会话强制只读并写 kind 文档；
+   * workspaceWrite 需平台支持。agent 配置由 buildAgentChange 构建（含模型/等级
+   * 校验与回退），创建后写元数据（标题、工作区、访问模式）。
+   */
   const create = async (input: CreateConversationInput): Promise<ConversationDetail> => {
     assertOpen()
     const title = safeTitle(input.title)
@@ -131,6 +152,14 @@ export function createConversations(deps: ConversationsDeps) {
     return currentDetail(conversation.id)
   }
 
+  /**
+   * 功能：更新会话（标题、归档、置顶、工作区、访问模式、模型、思考等级）。
+   * @param value 会话 ID 字符串
+   * @param input 部分更新的字段
+   * @returns 更新后的会话详情
+   * 内部逻辑：配置项（工作区/模式/模型/等级）有变化时重新校验并 configure agent；
+   * 显式指定的坏模型报错，未显式指定则校验现有会话模型；元数据仅在有字段变更时写入。
+   */
   const update = async (value: string, input: UpdateConversationInput): Promise<ConversationDetail> => {
     const conversation = await requireConversation(value)
     const id = conversation.id
@@ -174,6 +203,18 @@ export function createConversations(deps: ConversationsDeps) {
     return currentDetail(id)
   }
 
+  /**
+   * 功能：实际执行一次提交：requestId 幂等、回执落盘、自动命名、todo 清空与记忆提取排程。
+   * @param conversation 目标会话
+   * @param input 提交输入（文本/图片/忙碌策略）
+   * @param files 已保存的附件引用
+   * @param actualRequestId 实际使用的请求 ID（排队编辑传入派生 ID）
+   * @param fingerprint 内容指纹（排队编辑复用首次计算的值）
+   * @returns 提交 ID
+   * 内部逻辑：同一 requestId 不同内容报 CONFLICT；已有已接受回执幂等返回。
+   * 提交后写 accepted 回执、排队时间戳（queued 时）、回退标题与 todo 清空
+   * （非 queued 才清，排队输入延后落位时保留列表）；缺陷分析会话跳过自动命名。
+   */
   const submitWithReferences = async (
     conversation: Awaited<ReturnType<typeof requireConversation>>,
     input: SubmitInput,
@@ -210,16 +251,16 @@ export function createConversations(deps: ConversationsDeps) {
         metadata.title = fallbackSessionTitle(input.text) || DEFAULT_TITLE
       }
       metadata.updatedAt = Date.now()
-      // A placed input starts a new turn, and DSH starts a turn without a task list. Queued inputs
-      // are placed later, so their turn keeps the list this commit leaves behind.
+      // 已落位的输入开启新轮次，DSH 开启轮次时不带任务清单。排队输入稍后才落位，
+      // 因此它们的轮次保留本次提交留下的清单。
       if (status.status !== 'queued') {
         const todos = await tx.doc(Todos, conversation.id)
         todos.items = null
         todos.updatedAt = Date.now()
       }
     }, CTX)
-    // A defect analysis conversation is named by the host ("问题分析 · DTS…") and its title is
-    // pinned, so a model title would only be discarded — skip the call instead of spending it.
+    // 缺陷分析会话的标题由宿主命名（"问题分析 · DTS…"）且已钉住，模型标题只会被
+    // 丢弃——跳过调用而不是白花一次。
     const kind = (await harness().snapshot(CONVERSATION_KIND, conversation.id, CTX))?.kind
     if (kind !== 'defectAnalysis' && input.text.trim()) scheduleTitleRevision(conversation.id, input.text)
     memoryExtraction.scheduleAfterSubmission(conversation, request)
@@ -227,19 +268,26 @@ export function createConversations(deps: ConversationsDeps) {
   }
 
   /**
-   * DSH's title provider cadence over pi-web's own run loop: one revision per
-   * submitted prompt, generated off the session's own route so titles cost the
-   * same account, never delaying the response, and a newer revision supersedes
-   * the older one. A user rename flips the source to `user` and pins the title,
-   * so this writes only while the title is still auto.
+   * DSH 的标题供给节奏在 pi-web 自己的运行循环上的对应实现：每次提交一条提示就
+   * 排一次修订，用会话自己的路由生成（标题开销记在同一账号、绝不延迟响应），
+   * 新修订取代旧修订。用户改名把来源切到 `user` 并钉住标题，因此只写仍为 auto
+   * 的标题。
    *
-   * DSH hands its title call a `session-title` purpose that its adapter maps to
-   * thinking-disabled. pi-ai has no such marker, and models declaring
-   * `thinkingLevelMap.off === null` (deepseek) cannot disable thinking, so this
-   * budgets past the reasoning preamble and still accepts only a clean stop with
-   * visible text; anything else keeps the deterministic fallback title.
+   * DSH 给标题调用一个 `session-title` purpose 并由适配器映射为禁用思考。
+   * pi-ai 没有这种标记，且声明 `thinkingLevelMap.off === null` 的模型（deepseek）
+   * 无法关闭思考，因此这里为推理前导留出预算，并只接受干净 stop 且有可见文本的
+   * 结果；其余情况保持确定性回退标题。
    */
+  /** 每会话进行中的标题修订，键为会话 ID；新排程会中止旧的。 */
   const titleRevisions = new Map<string, AbortController>()
+  /**
+   * 功能：异步排程一次自动标题修订。
+   * @param id 会话 ID
+   * @param text 触发修订的用户提示文本
+   * @returns 无返回；任何失败静默，回退标题保持
+   * 内部逻辑：按 TITLE_POLICY 的输入字节上限与输出 token 上限旁路调用模型
+   * （captureSideCall 记录轨迹）；结果归一化非空且标题仍为 auto 时写入。
+   */
   const scheduleTitleRevision = (id: ConversationId, text: string): void => {
     const key = String(id)
     titleRevisions.get(key)?.abort()
@@ -280,13 +328,21 @@ export function createConversations(deps: ConversationsDeps) {
           if (draft.titleSource === 'auto') draft.title = title
         })
       } catch {
-        // An automatic title failure is a warning: the fallback title stays.
+        // 自动标题失败只是警告：回退标题保持不变。
       } finally {
         if (titleRevisions.get(key) === controller) titleRevisions.delete(key)
       }
     })()
   }
 
+  /**
+   * 功能：向会话提交一条用户消息。
+   * @param value 会话 ID 字符串
+   * @param input 提交输入（文本、图片、附件、忙碌策略、requestId）
+   * @returns 提交 ID
+   * 内部逻辑：先做边界校验（assertSubmit），附件按需保存到会话工作区后统一走
+   * submitWithReferences（幂等 + 回执 + 提取排程）。
+   */
   const submit = async (value: string, input: SubmitInput): Promise<{ submissionId: string }> => {
     assertSubmit(input)
     const conversation = await requireConversation(value)
@@ -300,6 +356,7 @@ export function createConversations(deps: ConversationsDeps) {
     return submitWithReferences(conversation, input, files)
   }
 
+  /** 停止会话当前运行：从实时视图取运行任务 ID 后中止；空闲会话为无操作。 */
   const stop = async (value: string): Promise<void> => {
     const conversation = await requireConversation(value)
     const view = await conversation.watch(CTX)
@@ -308,6 +365,14 @@ export function createConversations(deps: ConversationsDeps) {
     if (taskId !== undefined) await harness().abortTask(taskId, CTX)
   }
 
+  /**
+   * 功能：创建或更新会话目标（人类操作入口）。
+   * @param value 会话 ID 字符串
+   * @param input 动作：create / pause / resume / update 等，可带目标文本与轮次上限
+   * @returns 更新后的会话详情
+   * 内部逻辑：create 时新建目标（并发冲突由 applyGoalCreate 裁决）；其余动作要求
+   * 目标已存在，以 actor 'human' 应用更新，规则层拒绝时报 CONFLICT。
+   */
   const goal = async (value: string, input: GoalUpdateRequest): Promise<ConversationDetail> => {
     const conversation = await requireConversation(value)
     const id = conversation.id
@@ -340,17 +405,22 @@ export function createConversations(deps: ConversationsDeps) {
   }
 
   /**
-   * Turn plan mode on or off. The document write is what the `plan-policy` section reads before every
-   * request, so a switch made while a run is going takes effect on the next request (DSH's pending
-   * semantics); an idempotent request only refreshes `updatedAt`.
+   * 功能：开启或关闭计划模式。
+   * @param value 会话 ID 字符串
+   * @param active true 进入计划模式，false 退出
+   * @returns 更新后的会话详情
+   * 内部逻辑：文档写入正是 `plan-policy` section 在每次请求前读取的内容，因此运行
+   * 期间的切换在下一次请求生效（DSH 的 pending 语义）；幂等请求只刷新 updatedAt。
+   * 进入时先把属主树（含已创建、可继续运行或崩溃后续跑的 worker）收集出来，
+   * 一并置入计划模式。
    */
   const setPlan = async (value: string, active: boolean): Promise<ConversationDetail> => {
     if (typeof active !== 'boolean') throw new RuntimeError('INVALID_INPUT', '计划模式开关无效')
     const conversation = await requireConversation(value)
     const id = conversation.id
     await harness().commit(async (tx) => {
-      // Read the ownership tree before document writes; entering Plan must also constrain
-      // already-created workers that can keep running or be resumed after a crash.
+      // 在写文档前先读属主树；进入计划模式必须同时约束已创建的、
+      // 可能仍在运行或崩溃后可续跑的 worker。
       const constrained = [id]
       if (active) {
         for (let index = 0; index < constrained.length; index += 1) {
@@ -374,12 +444,20 @@ export function createConversations(deps: ConversationsDeps) {
     return currentDetail(id)
   }
 
+  /** 触发一次上下文压缩；先校验会话模型可用。 */
   const compact = async (value: string): Promise<void> => {
     const conversation = await requireConversation(value)
     await assertConversationModelAllowed(conversation)
     await conversation.compact(undefined, CTX)
   }
 
+  /**
+   * 功能：从指定消息条目处分叉出一个新会话。
+   * @param value 源会话 ID 字符串
+   * @param entryValue 分叉位置的消息条目 ID 字符串
+   * @returns 新（子）会话详情
+   * 内部逻辑：校验条目属于该会话后调用内核 fork，新会话为无主。
+   */
   const fork = async (value: string, entryValue: string): Promise<ConversationDetail> => {
     const conversation = await requireConversation(value)
     const entryId = parseEntryId(entryValue)
@@ -389,6 +467,16 @@ export function createConversations(deps: ConversationsDeps) {
     return currentDetail(child.id)
   }
 
+  /**
+   * 功能：订阅一个会话的实时详情推送。
+   * @param value 会话 ID 字符串
+   * @param listener 收到每次详情的回调
+   * @returns 取消订阅函数（幂等，等待最后一次投递完成）
+   * 内部逻辑：同时监听会话视图、元数据文档与四个自定义文档（todos/goals/
+   * interactions/plans）——自定义文档不在会话视图里，否则只写文档的人工操作
+   * （暂停目标、清空清单）会隐形到下一条条目才可见。投递经 delivery 链条串行化，
+   * 避免并发详情乱序。
+   */
   const watch = async (value: string, listener: (value: ConversationDetail) => void): Promise<() => Promise<void>> => {
     const conversation = await requireConversation(value)
     const id = conversation.id
@@ -399,8 +487,8 @@ export function createConversations(deps: ConversationsDeps) {
       await viewWatch.stop()
       throw new RuntimeError('CONFLICT', '无法订阅会话元数据')
     }
-    // Custom documents are not part of the conversation view, so a human action that writes only a
-    // document (pause a goal, clear a list) would otherwise stay invisible until the next entry.
+    // 自定义文档不属于会话视图，否则只写文档的人工操作（暂停目标、清空清单）
+    // 要等到下一条条目才可见。
     const docWatches = [
       await harness().watchDoc(Todos, id, CTX),
       await harness().watchDoc(Goals, id, CTX),
@@ -440,6 +528,13 @@ export function createConversations(deps: ConversationsDeps) {
     return unsubscribe
   }
 
+  /**
+   * 功能：记录或清除一条消息的反馈（顶/踩）。
+   * @param value 会话 ID 字符串
+   * @param entryValue 消息条目 ID 字符串
+   * @param rating 'up' | 'down'，null 表示清除
+   * @returns 无返回；条目不属于该会话抛 NOT_FOUND
+   */
   const feedback = async (value: string, entryValue: string, rating: 'up' | 'down' | null): Promise<void> => {
     const conversation = await requireConversation(value)
     const entryId = parseEntryId(entryValue)
@@ -451,7 +546,17 @@ export function createConversations(deps: ConversationsDeps) {
     })
   }
 
-  /** Append one operator feedback entry, capturing the client's user agent when present. */
+  /**
+   * 功能：从指定位置重试：找到该位置之前最近的一条用户输入，分叉出新会话并重放提交。
+   * @param value 源会话 ID 字符串
+   * @param entryValue 重试位置的消息条目 ID 字符串
+   * @param requestId 新提交的幂等请求 ID
+   * @returns 新会话 ID 与提交 ID
+   * 内部逻辑：向后扫描历史（≤5000 条）找最近的用户消息，提取文本/图片/附件；
+   * 位置之前还有条目就 fork 该位置，否则用原会话 agent 配置新建会话；继承标题/
+   * 工作区/访问模式，源会话计划模式开启时新会话同样开启；以 whenBusy 'reject'
+   * 提交重放内容。
+   */
   const retry = async (value: string, entryValue: string, requestId: string): Promise<{ conversationId: string; submissionId: string }> => {
     if (!requestId.trim() || requestId.length > 256) throw new RuntimeError('INVALID_INPUT', 'requestId 无效')
     const source = await requireConversation(value)
@@ -515,18 +620,19 @@ export function createConversations(deps: ConversationsDeps) {
   }
 
   /**
-   * The catalog every model surface reads: filtered to the allowlist, with a
-   * default that fell outside it replaced by the first available allowed model
-   * and written back, so a later start reads the same correction.
+   * 功能：读取会话详情（客户端查看会话的入口），并落定未读标记。
+   * @param value 会话 ID 字符串
+   * @returns 会话详情；繁忙时不做任何写操作
+   * 内部逻辑：非繁忙时以 updatedAt 落定 seenAt；本次响应本身已算已读，因此
+   * 带未读标记的副本会被去掉 unread 字段后返回。
    */
-
   const detail = async (value: string): Promise<ConversationDetail> => {
     const id = parseConversationId(value)
     const current = await currentDetail(id)
     if (current.conversation.busy) return current
     await markConversationSeen(id, current.conversation.updatedAt)
     if (current.conversation.unread !== true) return current
-    // The reader is looking at it right now, so the response itself is already read.
+    // 读者此刻正在看它，因此这次响应本身就算已读。
     const conversation = { ...current.conversation }
     delete conversation.unread
     return { ...current, conversation }

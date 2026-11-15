@@ -7,7 +7,7 @@ import { pickWin32Directory } from '../platform/win32-dialog.ts'
 import type { DirectoryEntry, DirectoryListing } from '../../shared/types.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 
-/** Panel prompt, matching DSH's own picker title. */
+/** 面板标题，与 DSH 自带选择器一致。 */
 const DIALOG_TITLE = 'Select Workspace Directory'
 
 /**
@@ -52,8 +52,12 @@ function run(argv) {
 const PICK_TIMEOUT_MS = 5 * 60 * 1000
 
 /**
- * Run one picker command and read its single-line answer.
- * @returns the selected path, or null when the operator cancelled.
+ * 功能：运行一个选择器命令并读取其单行输出。
+ * @param command 可执行文件（zenity / kdialog）
+ * @param args 命令参数
+ * @param cancelledExitCodes 代表「用户取消」的退出码（这些工具以非零退出码报告取消）
+ * @param signal 中止信号
+ * @returns 所选路径；取消返回 null；命令失败返回 undefined（由调用方尝试下一个候选）
  */
 async function runPicker(command: string, args: readonly string[], cancelledExitCodes: readonly number[], signal: AbortSignal): Promise<string | null> {
   const outcome = await new Promise<{ code: number | undefined; stdout: string }>((resolve) => {
@@ -65,24 +69,25 @@ async function runPicker(command: string, args: readonly string[], cancelledExit
     const picked = outcome.stdout.trim()
     return picked === '' ? null : picked
   }
-  // These tools report a dismissed dialog as a nonzero exit, not as an empty answer.
+  // 这些工具把「对话框被关掉」报告为非零退出码，而不是空输出。
   if (cancelledExitCodes.includes(Number(outcome.code))) return null
   return undefined as never
 }
 
 /**
- * Open the operating system's folder panel and return what the operator picked.
- * macOS uses DSH's own JXA panel; Linux uses the desktop's zenity or kdialog.
- * A host with neither reports UNSUPPORTED, and the caller falls back to the
- * in-app browser (the same split DSH's boot-time picker probe makes).
- * @returns the absolute path, or null when the panel was cancelled.
+ * 功能：打开操作系统的文件夹面板并返回所选目录。
+ * 平台差异：macOS 用 DSH 同款 JXA 面板；Linux 依次尝试 zenity、kdialog；Windows
+ * 走独立的 win32 dialog 宿主进程。两者皆无（或其他平台）抛 UNSUPPORTED，调用方
+ * 据此回退到应用内浏览器（与 DSH 启动时选择器探测的分支一致）。
+ * @param signal 中止信号：中止时必须把面板一起关掉
+ * @returns 绝对路径；用户取消返回 null
  */
 export async function pickNativeDirectory(signal: AbortSignal = new AbortController().signal): Promise<string | null> {
   if (process.platform === 'darwin') {
     const stdout = await new Promise<string>((resolve, reject) => {
-      // The caller's signal closes the panel: an aborted request must not leave it on screen.
+      // 调用方的 signal 负责关面板：中止的请求不能把面板留在屏幕上。
       execFile('osascript', ['-l', 'JavaScript', '-e', MAC_PANEL, DIALOG_TITLE], { timeout: PICK_TIMEOUT_MS, signal }, (error, out) => {
-        // The raw failure carries the whole panel script; keep the client copy short.
+        // 原始失败信息携带整段面板脚本，给客户端的副本要短。
         if (error !== null) { reject(new RuntimeError('PROVIDER_ERROR', '系统目录选择器已中止或不可用')); return }
         resolve(out)
       })
@@ -92,8 +97,8 @@ export async function pickNativeDirectory(signal: AbortSignal = new AbortControl
   }
 
   if (process.platform === 'win32') {
-    // DSH's koffi-backed IFileOpenDialog runs in its own child process so a COM
-    // fault cannot take the host down; the driver closes the dialog on abort.
+    // DSH 的 koffi 版 IFileOpenDialog 跑在独立子进程里，COM 故障不会拖垮宿主；
+    // 驱动在中止时关闭对话框。
     return await pickWin32Directory(signal, DIALOG_TITLE)
   }
 
@@ -105,8 +110,7 @@ export async function pickNativeDirectory(signal: AbortSignal = new AbortControl
     throw new RuntimeError('UNSUPPORTED', '当前系统没有可用的原生目录选择器')
   }
 
-  // Other platforms get the in-app browser, the same surface DSH gives a host
-  // whose picker probe finds no native backend.
+  // 其他平台使用应用内浏览器——与 DSH 给「无原生后端」宿主的界面一致。
   throw new RuntimeError('UNSUPPORTED', '当前系统没有可用的原生目录选择器')
 }
 
@@ -115,11 +119,11 @@ export type { DirectoryEntry, DirectoryListing } from '../../shared/types.ts'
 const MAX_ENTRIES = 1_000
 const NAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
-/** Reject relative and Windows root-relative paths instead of resolving them under the host's cwd. */
+/** 拒绝相对路径与 Windows 的「有根无盘符」路径，而不是把它们解析到宿主 cwd 之下。 */
 function requireAbsolute(requested: string, code: 'directory-unreadable' | 'directory-create-failed'): string {
   const path = requested.trim()
-  // Windows-only: `/foo` and `\foo` are rooted but drive-less there, and would
-  // resolve under the host process's cwd. On POSIX `/foo` is simply absolute.
+  // 仅 Windows：`/foo` 与 `\foo` 有根但无盘符，会解析到宿主进程 cwd 之下；
+  // POSIX 上 `/foo` 就是绝对路径。
   const rootedButDriveLess = process.platform === 'win32'
     && /^[\\/]/u.test(path)
     && !/^[A-Za-z]:/u.test(path)
@@ -129,6 +133,7 @@ function requireAbsolute(requested: string, code: 'directory-unreadable' | 'dire
   return path
 }
 
+/** 从目标目录向上走到根，构造面包屑（每级 name + path，顺序为根→目标）。 */
 function crumbsFor(target: string): { name: string; path: string }[] {
   const chain: { name: string; path: string }[] = []
   let current = target
@@ -141,7 +146,13 @@ function crumbsFor(target: string): { name: string; path: string }[] {
   }
 }
 
-/** List one directory level for the in-app picker, following symlinks to directories. */
+/**
+ * 功能：为应用内目录浏览器列出一层目录。
+ * @param requested 目标目录；空/缺省时用用户主目录，必须是绝对路径
+ * @returns 当前路径、主目录、面包屑与子目录条目（跳过文件），条目超过 1000 截断并置 truncated
+ * 内部逻辑：先 realpath 规范化（含解析到目录的符号链接）；符号链接用 stat 追查
+ * 是否指向目录，损坏或成环的链接被跳过而不是让整层失败；条目按名称自然序排序。
+ */
 export async function listDirectories(requested?: string): Promise<DirectoryListing> {
   const home = homedir()
   const target = requested === undefined || requested.trim() === '' ? home : requireAbsolute(requested, 'directory-unreadable')
@@ -162,7 +173,7 @@ export async function listDirectories(requested?: string): Promise<DirectoryList
     const child = join(resolved, dirent.name)
     let isDirectory = dirent.isDirectory()
     if (!isDirectory && dirent.isSymbolicLink()) {
-      // Broken and cyclic links are skipped rather than failing the whole level.
+      // 损坏与成环的链接被跳过，而不是让整层失败。
       try { isDirectory = (await stat(child)).isDirectory() } catch { isDirectory = false }
     }
     if (!isDirectory) continue
@@ -173,7 +184,12 @@ export async function listDirectories(requested?: string): Promise<DirectoryList
   return { path: resolved, home, crumbs: crumbsFor(resolved), entries: truncated ? entries.slice(0, MAX_ENTRIES) : entries, truncated }
 }
 
-/** Create one child directory under an existing parent, like DSH's browse backend. */
+/**
+ * 功能：在既有父目录下创建一个子文件夹（与 DSH 的浏览后端一致）。
+ * @param parent 父目录（必须是绝对路径）
+ * @param name 文件夹名（不得为空、`.`、`..` 或含分隔符）
+ * 同名已存在抛 CONFLICT；其他创建失败抛 INVALID_INPUT。
+ */
 export async function createDirectory(parent: string, name: string): Promise<void> {
   const base = requireAbsolute(parent, 'directory-create-failed')
   const trimmed = name.trim()

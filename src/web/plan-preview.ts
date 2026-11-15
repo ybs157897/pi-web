@@ -1,18 +1,20 @@
 import type { ChatMessage, InteractionRequest } from '../shared/types.ts'
 
-/** The Markdown a plan preview shows, plus the heading DSH uses as its document title. */
+/** 计划预览展示的 Markdown，外加 DSH 用作文档标题的标题行。 */
 export interface PlanDocument {
   readonly markdown: string
   readonly title?: string
-  /** Identity of the submission (`plan.ts:13-15`), used to decide the one automatic open. */
+  /** 提交身份（host `plan.ts:13-15`），用于判定唯一一次的自动打开。 */
   readonly key?: string
-  /** True while this plan is still waiting for the user's decision (`PlanCard.tsx:72-80`). */
+  /** 该计划仍在等用户决策时为 true（`PlanCard.tsx:72-80`）。 */
   readonly pending?: boolean
 }
 
 /**
- * The plan's first level-1 heading, the same title DSH derives from a submitted plan
- * (`packages/client/ui-plan/src/client/plan.ts:46-47`).
+ * 功能：取计划的第一个一级标题——与 DSH 从已提交计划推导出的标题一致
+ * （`packages/client/ui-plan/src/client/plan.ts:46-47`）。
+ * @param markdown 计划全文
+ * @returns 标题文本；没有 `# ` 行或标题为空时 undefined
  */
 export function planTitle(markdown: string): string | undefined {
   const heading = markdown.split(/\r?\n/u).map(line => line.trim()).find(line => line.startsWith('# '))
@@ -21,10 +23,11 @@ export function planTitle(markdown: string): string | undefined {
 }
 
 /**
- * Every plan this conversation has submitted, newest first — the status panel's plan directory.
- * The transcript's `exit_plan_mode` calls are the durable source; a plan-review interaction whose
- * call was compacted away still names its plan and is appended after the transcript rows. The
- * newest plan keeps the latest review's pending flag so the panel can mark the open question.
+ * 功能：汇总本会话提交过的所有计划（新的在前），即状态面板的计划目录。
+ * @param interactions 会话的 plan-review 交互请求（可能 undefined）
+ * @param messages 会话消息
+ * @returns PlanDocument 数组，最新的 pending 标记会被保留以标出待决问题
+ * 内部逻辑：持久来源是 transcript 里的 `exit_plan_mode` 调用；调用行被压缩掉的 plan-review 交互仍带计划全文，补充在 transcript 行之后。按正文去重（相同计划保留最新时间戳），按时间倒序输出。
  */
 export function sessionPlans(
   interactions: readonly InteractionRequest[] | undefined,
@@ -54,7 +57,7 @@ export function sessionPlans(
       if (typeof value === 'string') add(value, block.id, message.timestamp)
     }
   }
-  // A review whose call was compacted away still names its plan; the timestamp decides the order.
+  // 调用行被压缩掉的评审交互仍指名自己的计划；时间戳决定排序。
   for (const interaction of interactions ?? []) {
     if (interaction.kind !== 'plan-review' || typeof interaction.detail !== 'string') continue
     add(interaction.detail, interaction.id, interaction.createdAt)
@@ -68,10 +71,13 @@ export function sessionPlans(
 }
 
 /**
- * The latest plan of one conversation. DSH reads the immutable plan out of the session log
- * (`plan.ts:32-48`, `plan-resource.ts:37-82`); Pi has the same two sources in one detail:
- * the projected plan-review interaction (newest submission wins, including superseded ones)
- * and, as a fallback, the last `exit_plan_mode` call still present in the transcript.
+ * 功能：取一个会话的最新计划。DSH 从会话日志读不可变计划（`plan.ts:32-48`、
+ * `plan-resource.ts:37-82`）；Pi 把两个来源合成一份：投影出的 plan-review 交互
+ * （最新提交胜出，包括被取代的）优先，transcript 里仍存在的最后一个
+ * `exit_plan_mode` 调用做兜底。
+ * @param interactions 会话的交互请求（可能 undefined）
+ * @param messages 会话消息
+ * @returns 最新 PlanDocument；interaction 来源带 pending 标记，transcript 兜底恒为 false；都没有则 undefined
  */
 export function latestPlan(
   interactions: readonly InteractionRequest[] | undefined,
@@ -92,7 +98,7 @@ export function latestPlan(
       pending: newest.status === 'pending',
     }
   }
-  // The transcript fallback walks backwards so the last submitted plan wins.
+  // transcript 兜底倒着走，保证最后提交的计划胜出。
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const message = messages[messageIndex]
     if (message?.role !== 'assistant') continue

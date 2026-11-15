@@ -9,17 +9,22 @@ import { createWindowsPowerShellTool } from './windows.ts'
 
 export { commandTimeout, DEFAULT_COMMAND_TIMEOUT_SECONDS } from './common.ts'
 
+/** Pi 内置 bash 工具的原始定义，仅作为 bashTool 展开覆盖的基底。 */
 const baseBash = createBashTool()
 
+/** 禁止前台长驻进程的行为规则文本，拼进 bash/pwsh 工具描述。 */
 const FOREGROUND_RULE = '不要在前台运行开发服务器、监听模式或交互式程序；它们会占住调用直到超时。优先使用单次执行方式和非交互参数（例如 `vitest run`、`tsc --noEmit`、`git commit -m`）。'
+/** `timeout` 参数 schema：可选正整数秒数，命令总时限，到点终止进程。 */
 const TIMEOUT_PARAMETER = Type.Optional(Type.Number({ description: `超时秒数（默认 ${DEFAULT_COMMAND_TIMEOUT_SECONDS}），命令的总时限，到点终止进程。长时间构建或测试套件可传更大的值。` }))
+/** `yieldTimeMs` 参数 schema：可选前台等待毫秒数，超过后转入会话轮询。 */
 const YIELD_PARAMETER = Type.Optional(Type.Number({ description: `前台等待毫秒数（默认 ${String(YIELD_TIME_MS)}，范围 ${String(MIN_YIELD_TIME_MS)}–${String(MAX_YIELD_TIME_MS)}）。到点仍未结束会返回 \`sessionId\` 并转入会话轮询。` }))
+/** 让渡（yield）机制的行为规则文本：到点未结束返回 sessionId，命令转入 shell_session 续接。 */
 const YIELD_RULE = `命令默认等待 ${String(YIELD_TIME_MS / 1_000)} 秒（\`yieldTimeMs\` 可调整）；仍未结束时返回 \`sessionId\` 与已有输出，命令继续运行，用 \`shell_session\` 读取增量输出或写入 stdin。\`timeout\` 是总时限，到点终止进程。`
 
 /**
- * Pi's bash tool plus `workdir` and `description`. The local executor keeps the same output
- * contract while adding the workspace write sandbox, codex-style yielding with pollable
- * sessions, and search-friendly exit semantics.
+ * 功能：bash 命令执行工具，基于 Pi 内置 bash 工具扩展出 `workdir`、`description` 参数。
+ * 内部逻辑：输出契约与 Pi 保持一致，新增工作区写沙箱、codex 风格的让让（yield）机制
+ * （超时未结束返回 sessionId 转入可轮询会话）以及对检索友好的退出码语义。
  */
 const bashTool = defineTool({
   ...baseBash,
@@ -39,9 +44,12 @@ const pwshTool = createWindowsPowerShellTool()
 const shellSessionTool = createShellSessionTool()
 
 /**
- * The same tool surface as Pi's `coding-tools`, matching DSH's platform split:
- * Windows gets native `pwsh` only; other platforms get `bash` only. `shell_session`
- * continues commands either shell promoted after its yield budget.
+ * 功能：装配 coding-tools 工具扩展，工具面与 Pi 内置 `coding-tools` 一致，并按 DSH 的平台
+ * 划分：Windows 只装原生 `pwsh`，其他平台只装 `bash`。
+ * 内部逻辑：先装 read/write/edit 三个文件工具，再按平台装 shell 工具，最后统一加上
+ * `shell_session`——它是任一 shell 工具让渡超时后继续命令的入口。本扩展不贡献 section。
+ * @param platform 目标平台标识，默认取当前进程平台；仅 `win32` 会切换到 pwsh。
+ * @returns 名为 `coding-tools` 的扩展，包含 read、write、edit、shell、shell_session 五个工具。
  */
 export function createCodingTools(platform: NodeJS.Platform = process.platform): Extension {
   const tools: ToolRegistration[] = [createReadTool(), createWriteTool(), createEditTool()]
@@ -50,4 +58,5 @@ export function createCodingTools(platform: NodeJS.Platform = process.platform):
   return defineExtension({ name: 'coding-tools', tools })
 }
 
+/** 默认按当前进程平台预装配好的 coding-tools 扩展实例。 */
 export const CodingTools = createCodingTools()

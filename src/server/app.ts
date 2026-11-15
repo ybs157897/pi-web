@@ -11,15 +11,23 @@ import { isDefectNumber } from './automation/wetrack.ts'
 import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugins/ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
 
+/** 应用版本号，/api/health 返回。 */
 const packageVersion: string = packageJson.version
 
+/** JSON 请求体字节上限（16 MB）。 */
 const JSON_BODY_LIMIT = 16 * 1024 * 1024
+/** 单张图片的 base64 解码后字节上限（4 MB）。 */
 const IMAGE_LIMIT = 4 * 1024 * 1024
+/** 一次提交中全部附件（图片+文件）合计字节上限（8 MB）。 */
 const TOTAL_IMAGE_LIMIT = 8 * 1024 * 1024
+/** 允许上传的图片 MIME 类型。 */
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
+/** 合法思考级别枚举值。 */
 const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+/** 合法访问模式枚举值。 */
 const accessModes = ['readOnly', 'workspaceWrite', 'fullAccess'] as const
 
+/** 通用资源 id 校验：1–160 字符，仅字母数字与 `._~-`。 */
 const identifier = z.string().min(1).max(160).regex(/^[a-zA-Z0-9._~-]+$/)
 const pluginNameSchema = z.string().min(1).max(128)
 const pluginIdParam = z.string().min(3).max(200)
@@ -47,6 +55,11 @@ const updateSchema = z.object({
   accessMode: z.enum(accessModes).optional(),
 }).strict().refine(value => Object.keys(value).length > 0)
 
+/**
+ * 构建一个 base64 二进制字段 schema：长度上限按 base64 膨胀率换算，校验字符集与 padding，
+ * 且要求 round-trip 一致（拒绝非规范编码）。
+ * @param limit 解码后允许的最大字节数。
+ */
 function binarySchema(limit: number) {
   return z.string().min(4).max(Math.ceil(limit / 3) * 4 + 4).refine(value => {
     if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return false
@@ -54,6 +67,7 @@ function binarySchema(limit: number) {
     return bytes.length <= limit && bytes.toString('base64') === value
   })
 }
+/** 消息提交中的单张图片：base64 数据 + 允许的 MIME 类型。 */
 const imageSchema = z.object({ data: binarySchema(IMAGE_LIMIT), mimeType: z.enum(IMAGE_TYPES) }).strict()
 const fileSchema = z.object({
   name: z.string().min(1).max(255).refine(value => value !== '.' && value !== '..' && !value.includes('/') && !value.includes('\\') && !value.includes('\0')),
@@ -65,6 +79,7 @@ const submitObject = z.object({
   whenBusy: z.enum(['steer', 'followUp', 'reject']).optional(),
   images: z.array(imageSchema).max(4).optional(), files: z.array(fileSchema).max(8).optional(),
 }).strict()
+/** 校验一次提交的全部附件（图片+文件）base64 解码后总字节不超过 TOTAL_IMAGE_LIMIT。 */
 function withinAttachmentBudget(input: { images?: Array<{ data: string }>; files?: Array<{ data: string }> }): boolean {
   return [...input.images ?? [], ...input.files ?? []].reduce((sum, item) => sum + Buffer.byteLength(item.data, 'base64'), 0) <= TOTAL_IMAGE_LIMIT
 }
@@ -133,6 +148,7 @@ const automationSchema = z.object({
   status: z.enum(['active', 'paused', 'ended']).optional(),
   rrule: automationRuleSchema.optional(),
   // An IANA zone carries a slash (`Asia/Shanghai`), so the identifier pattern does not apply.
+  // IANA 时区带斜杠（如 `Asia/Shanghai`），因此 identifier 的字符模式不适用。
   timeZone: z.string().min(1).max(80).regex(/^[A-Za-z0-9_+\-/]+$/u).optional(),
   target: z.enum(['session', 'new_once', 'new']).optional(), sessionId: identifier.optional(),
   accessMode: z.enum(['readOnly', 'workspaceWrite', 'fullAccess']).optional(),
@@ -148,9 +164,9 @@ const pluginInstallSchema = z.object({ marketplace: identifier, name: pluginName
 const pluginEnabledSchema = z.object({ enabled: z.boolean() }).strict()
 const pluginUpdateSchema = z.object({ pluginId: pluginIdParam }).strict()
 const pluginIdSchema = pluginIdParam.regex(/^[a-z0-9][a-z0-9._-]{0,127}@[a-z0-9][a-z0-9._-]{0,63}$/u)
-/** A namespaced plugin MCP server (`plugin_<name>_<server>`, optionally hash-suffixed). */
+/** 带命名空间的插件 MCP 服务器名（`plugin_<name>_<server>`，可带 hash 后缀）。 */
 const pluginUiServerName = z.string().min(1).max(200).regex(/^[A-Za-z0-9._-]+$/u)
-/** Resource URIs are scheme-qualified and carry no raw whitespace or control characters. */
+/** 资源 URI 必须带 scheme，且不含裸空白或控制字符。 */
 const pluginUiResourceUri = z.string().min(1).max(2_048)
   .regex(/^[A-Za-z][A-Za-z0-9+.-]*:[^\s\u0000-\u001f]*$/u)
 const pluginUiPageQuery = z.object({
@@ -178,6 +194,7 @@ const interactionAnswerSchema = z.object({  answers: z.array(z.object({
   }).strict()).min(1).max(8),
 }).strict()
 
+/** API 层校验失败错误：直接携带 HTTP 状态码与错误码，publicFailure 原样转成响应。 */
 class ApiFault extends Error {
   constructor(readonly status: 400 | 403 | 413 | 415, readonly code: string, message: string) {
     super(message)
@@ -185,9 +202,16 @@ class ApiFault extends Error {
   }
 }
 
+/** 未知来源错误的宽松形态（code/message 均可能是任意类型）。 */
 type RuntimeFailure = { code?: unknown; message?: unknown }
+/** 可直接返回给客户端的失败形态：状态码 + 稳定错误码 + 已脱敏消息。 */
 type PublicFailure = { status: 400 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 502; code: string; message: string }
 
+/**
+ * 校验请求的 Host 是否为本机权威（localhost / 127.0.0.1 / ::1）。
+ * @param authority Host 头或 URL host 原文。
+ * @returns 归一化 host 与 hostname；含凭据、路径、查询、逗号列表或非本机名时返回 undefined。
+ */
 function isLocalAuthority(authority: string): { normalized: string; hostname: string } | undefined {
   const value = authority.trim().toLowerCase()
   if (value.length === 0 || value.includes(',')) return undefined
@@ -202,6 +226,12 @@ function isLocalAuthority(authority: string): { normalized: string; hostname: st
   }
 }
 
+/**
+ * 把任意抛出的错误翻译为可公开返回的失败形态。
+ * @param error 捕获到的错误。
+ * @returns ApiFault 原样映射；RuntimeError 按判别码映射状态码并脱敏消息（压平空白、
+ * 抹掉 Bearer/密钥、限 240 字符）；带 code 的未知错误按有限映射返回固定文案；其余一律 500。
+ */
 function publicFailure(error: unknown): PublicFailure {
   if (error instanceof ApiFault) {
     return { status: error.status, code: error.code, message: error.message }
@@ -238,6 +268,14 @@ function publicFailure(error: unknown): PublicFailure {
   }
 }
 
+/**
+ * 读取并校验 JSON 请求体。
+ * @param request 原始请求。
+ * @param schema zod 校验 schema。
+ * @returns 校验通过的数据。
+ * 内部逻辑：Content-Type 必须 application/json（否则 415）；Content-Length 超 16MB 或流式读取
+ * 累计超限时 413（超限即取消 reader）；非 UTF-8 JSON 或 schema 不过时 400。
+ */
 async function readJson<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
   if (mediaType !== 'application/json') throw new ApiFault(415, 'unsupported_media_type', 'Content-Type must be application/json')
@@ -279,31 +317,46 @@ async function readJson<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   return result.data
 }
 
+/** 校验并返回路径参数中的资源 id；非法抛 400 invalid_id。 */
 function pathId(value: string): string {
   const result = identifier.safeParse(value)
   if (!result.success) throw new ApiFault(400, 'invalid_id', 'Resource id is invalid')
   return result.data
 }
+/** 校验并返回路径参数中的插件 id（形如 name@version）；非法抛 400 PLUGIN_NOT_FOUND。 */
 function pluginId(value: string): string {
   const result = pluginIdSchema.safeParse(value)
   if (!result.success) throw new ApiFault(400, 'PLUGIN_NOT_FOUND', 'Plugin id is invalid')
   return result.data
 }
+/** 校验查询参数中的文件路径：长度限 4096 且不得含空字符；undefined 视为空串。 */
 function filePath(value: string | undefined): string {
   const path = value ?? ''
   if (path.length > 4096 || path.includes('\0')) throw new ApiFault(400, 'invalid_path', 'File path is invalid')
   return path
 }
 
+/** 把会话详情编码为一帧 SSE `snapshot` 事件。 */
 function sseFrame(data: ConversationDetail): Uint8Array {
   return new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(data)}\n\n`)
 }
 
+/** 编码一帧无载荷的 SSE 事件（ready/changed 等）。 */
 function sseEvent(event: string): Uint8Array {
   return new TextEncoder().encode(`event: ${event}\ndata: {}\n\n`)
 }
 
-/** Creates the local JSON API and owns active SSE subscriptions. */
+/**
+ * 功能：创建本地 JSON API（Hono 应用），并持有活跃 SSE 订阅的生命周期。
+ * 贡献：全部 /api 路由（会话、交互、模型、provider、设置、个性化、工作区、文件、Git、
+ * 技能、插件、反馈、自动化、WeTrack），以及三条 SSE 流（会话快照、模型目录、插件概览）。
+ * @param runtime 运行时实现（contracts.ts 的 Runtime）。
+ * @param options.demo 演示模式标记（health 返回）；options.staticRoot 生产静态资源根目录。
+ * @returns Hono 应用对象，附加 shutdown()：中止 SSE（AbortController）并等待全部活跃流结束。
+ * 内部逻辑：全局中间件做本机权威与同源校验（拒绝跨站）、关闭期返回 503，并设置安全响应头；
+ * SSE 流监听 shutdown 信号与请求 abort 信号，脏标记 + 背压等待推快照；插件流按 watchPlugins
+ * 推送最新概览。静态模式挂根级资源、/assets 与 SPA 回退（API 404 除外）。
+ */
 export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoot?: string } = {}) {  const app = new Hono()
   const shutdown = new AbortController()
   const activeStreams = new Set<Promise<void>>()
@@ -398,7 +451,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
             try {
               controller.enqueue(new TextEncoder().encode(`event: error\ndata: ${JSON.stringify({ error: failure.message, code: failure.code })}\n\n`))
             } catch {
-              // The client has already closed the stream.
+              // 客户端已关闭流。
             }
           }
         } finally {
@@ -407,14 +460,14 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
           try {
             await unwatch?.()
           } catch (cleanupError) {
-            // The subscription is ending, so there is no live request to report this cleanup failure to.
+            // 订阅正在结束，没有活跃请求可报告这次清理失败。
             void cleanupError
           }
           if (!isCancelled()) {
             try {
               controller.close()
             } catch {
-              // The client has already closed the stream.
+              // 客户端已关闭流。
             }
           }
         }
@@ -458,7 +511,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
       try {
         await unwatch?.()
       } catch (cleanupError) {
-        // The failed subscription is already being discarded.
+        // 失败的订阅本来就要被丢弃。
         void cleanupError
       }
       throw error
@@ -560,10 +613,9 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   })
   app.get('/api/models', async c => c.json(await runtime.catalog()))
   /**
-   * DSH refreshes its model picker when the host reports a settings or
-   * adapter change. Pi Web does the same over SSE: edits from this window,
-   * another pi-web instance, or a hand-edited global models.json all announce
-   * here, so an open composer never keeps a stale directory.
+   * 模型目录 SSE：宿主报告设置或适配器变化时 DSH 会刷新模型选择器；Pi Web 用 SSE 做同一件事——
+   * 本窗口、另一个 pi-web 实例或手工编辑的全局 models.json 的变更都在此广播，
+   * 打开中的输入框永远不会持有过期的模型目录。
    */
   app.get('/api/models/events', c => {
     let cancelled = false
@@ -590,7 +642,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
         onAbort = () => {
           cleanup()
           try { controller.close() }
-          catch { /* the client has already closed the stream */ }
+          catch { /* 客户端已关闭流 */ }
         }
         shutdown.signal.addEventListener('abort', onAbort, { once: true })
         c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
@@ -620,8 +672,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.get('/api/capabilities', c => c.json(runtime.capabilities()))
   app.get('/api/settings', c => c.json(runtime.settings()))
   app.patch('/api/settings', async c => c.json(await runtime.updateSettings(await readJson(c.req.raw, settingsSchema))))
-  // The personalization editor reads and writes the user-level AGENTS.md; the byte limit is
-  // enforced server-side because that same file also feeds the prompt.
+  // 个性化编辑器读写用户级 AGENTS.md；字节上限在服务端强制，因为同一文件也进入提示词。
   app.get('/api/personalization', async c => c.json(await runtime.personalization()))
   app.put('/api/personalization', async c => {
     const input = await readJson(c.req.raw, z.object({ content: z.string() }).strict())
@@ -660,8 +711,8 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   })
   app.get('/api/plugins/overview', async c => c.json(await runtime.plugins()))
   /**
-   * Install/update run in the background; every store mutation pushes a fresh overview so the
-   * settings panel never has to poll. The panel still refetches on reconnect.
+   * 插件概览 SSE：安装/更新在后台运行；存储每次变更都推送一份新概览，
+   * 设置面板无需轮询。面板在重连时仍会主动重新拉取。
    */
   app.get('/api/plugins/events', c => {
     let cancelled = false
@@ -695,7 +746,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
         onAbort = () => {
           cleanup()
           try { controller.close() }
-          catch { /* the client has already closed the stream */ }
+          catch { /* 客户端已关闭流 */ }
         }
         shutdown.signal.addEventListener('abort', onAbort, { once: true })
         c.req.raw.signal.addEventListener('abort', onAbort, { once: true })
@@ -787,7 +838,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   app.get('/api/workspaces/:id/git/diff', async c => {
     const path = c.req.query('path') ?? ''
     if (path === '') throw new RuntimeError('INVALID_INPUT', '缺少文件路径')
-    // Unknown review sources fall back to the default merged diff instead of failing.
+    // 未知的审阅来源回落到默认的合并 diff，而不是失败。
     const rawSource = c.req.query('sourceId')
     const sourceId = rawSource === 'staged' || rawSource === 'branch' || rawSource === 'unstaged' ? rawSource : undefined
     return c.json(await runtime.gitWorktreeDiff(pathId(c.req.param('id')), path, sourceId))
@@ -884,8 +935,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
 
   if (options.staticRoot) {
     const staticRoot = relative(process.cwd(), options.staticRoot) || '.'
-    // Root-level browser assets are not hashed into /assets; serve them directly
-    // so production keeps the favicon and touch icon.
+    // 根级浏览器资源不参与 /assets 的哈希命名；直接提供它们，保证生产环境保留 favicon 与触屏图标。
     for (const file of ['favicon.ico', 'favicon.svg', 'favicon-32x32.png', 'apple-touch-icon.png']) {
       app.get(`/${file}`, serveStatic({ root: staticRoot, path: file }))
     }

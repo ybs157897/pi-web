@@ -2,26 +2,30 @@ import { defineDoc, defineExtension, defineTool, type Extension } from '@earendi
 import { Type } from '@earendil-works/pi-ai'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem, AskUserQuestionOption } from '../../shared/types.ts'
 
+/** 单次提问调用允许的最大问题数。 */
 export const MAX_QUESTIONS = 8
+/** 单个问题允许的最大选项数。 */
 export const MAX_OPTIONS = 12
 
-/** One answered (or still pending) question call, persisted so compaction cannot lose it. */
+/** 一次提问调用（已答复或仍待答）的持久化记录，压缩（compaction）不会丢失。 */
 export type StoredInteraction = {
   questions: AskUserQuestionItem[]
   askedAt: number
-  /** `cancelled` = the user dismissed the whole set without answering (DSH's ASK_CANCELLED). */
+  /** `cancelled` 表示用户整体放弃作答（对应 DSH 的 ASK_CANCELLED）。 */
   status: 'pending' | 'answered' | 'cancelled'
   answers?: AskUserQuestionAnswerItem[]
   answeredAt?: number
   cancelledAt?: number
 }
 
-/** Conversation-scoped request table keyed by the tool call id, which is also the answer idempotency key. */
+/** 会话作用域的提问表，键为工具调用 id——它同时也是答复的幂等键。 */
 export type InteractionsState = { [callId: string]: StoredInteraction }
 
 /**
- * Answers outlive the assistant entries that asked (compaction removes those from the active view),
- * so the request and its settlement live in a conversation document instead of tool-call arguments.
+ * 功能：会话作用域的提问/答复文档。
+ * 内部逻辑：答复的生命周期长于发出提问的 assistant 条目（压缩会把后者移出活跃视图），
+ * 因此请求与其结算结果存在会话文档里，而不是依赖工具调用参数。history 取 latest，
+ * 不做 fork 与 checkpoint。
  */
 export const Interactions = defineDoc<InteractionsState>({
   kind: 'pi-web.interactions',
@@ -32,15 +36,30 @@ export const Interactions = defineDoc<InteractionsState>({
   initial: () => ({}),
 })
 
+/** 问题对象允许的字段白名单，多余字段一律拒绝。 */
 const QUESTION_KEYS = new Set(['id', 'header', 'question', 'options', 'multiSelect'])
+/** 选项对象允许的字段白名单。 */
 const OPTION_KEYS = new Set(['label', 'description'])
 
+/**
+ * 功能：校验对象的所有键都在白名单内，出现未知字段即抛错。
+ * @param value 待校验对象。
+ * @param allowed 允许的字段名集合。
+ * @param label 报错时用于定位的名称前缀。
+ */
 function assertKnownKeys(value: object, allowed: ReadonlySet<string>, label: string): void {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new Error(`${label} has an unknown field: ${key}`)
   }
 }
 
+/**
+ * 功能：校验字符串非空且不超过上限，返回去首尾空白后的值。
+ * @param value 待校验值（必须为字符串）。
+ * @param label 报错时用于定位的名称。
+ * @param max 允许的最大字符数。
+ * @returns trim 后的字符串。
+ */
 function nonEmpty(value: unknown, label: string, max: number): string {
   if (typeof value !== 'string' || value.trim() === '' || value.length > max) {
     throw new Error(`${label} must be a non-empty string of at most ${max} characters.`)
@@ -48,7 +67,13 @@ function nonEmpty(value: unknown, label: string, max: number): string {
   return value.trim()
 }
 
-/** Validate the model's arguments the way a strict schema would, then return a detached question list. */
+/**
+ * 功能：像严格 schema 一样校验模型传入的提问参数，返回脱附（新建）的问题列表。
+ * 输入校验：问题数 1–MAX_QUESTIONS；未知字段拒绝；id/问题文本/header 非空且限长；
+ * id 不重复；options 数 1–MAX_OPTIONS、label 唯一、description 限长；multiSelect 须为布尔。
+ * @param value 模型传入的原始问题数组。
+ * @returns 校验并规范化后的问题列表（可选字段仅在合法时保留）。
+ */
 export function normalizeQuestions(value: readonly AskUserQuestionInput[]): AskUserQuestionItem[] {
   if (value.length < 1 || value.length > MAX_QUESTIONS) {
     throw new Error(`A question request holds between 1 and ${MAX_QUESTIONS} questions.`)
@@ -83,6 +108,7 @@ export function normalizeQuestions(value: readonly AskUserQuestionInput[]): AskU
   })
 }
 
+/** normalizeQuestions 的输入形状（宽松类型，字段合法性由其运行时校验）。 */
 type AskUserQuestionInput = {
   id: string
   header?: string
@@ -91,6 +117,7 @@ type AskUserQuestionInput = {
   multiSelect?: boolean
 }
 
+/** 单个问题的 JSON schema：id、问题文本必填，header/options/multiSelect 可选。 */
 const QUESTION_PARAMETER = Type.Object({
   id: Type.String(),
   header: Type.Optional(Type.String()),
@@ -103,9 +130,10 @@ const QUESTION_PARAMETER = Type.Object({
 })
 
 /**
- * DSH's ask_user_question, in its timed/pending form: the call settles immediately with a notice,
- * the question lives in `pi-web.interactions`, and the answer arrives later as a steer user message.
- * Blocking inside the tool would make abort join the wait, so this slice never blocks.
+ * 功能：interactions 工具扩展——DSH 的 ask_user_question 以"计时/待答"形式落地：调用立即
+ * 结算并返回提示，问题存入 `pi-web.interactions`，答复稍后以 steer 用户消息送达。
+ * 内部逻辑：工具内绝不阻塞等待——一旦阻塞，中止（abort）也会被卷入等待；本扩展只贡献
+ * `ask_user_question` 一个工具，不贡献 section。
  */
 export const InteractionTools: Extension = defineExtension({
   name: 'interactions',
@@ -125,6 +153,12 @@ export const InteractionTools: Extension = defineExtension({
       parameters: Type.Object({
         questions: Type.Array(QUESTION_PARAMETER, { minItems: 1, maxItems: MAX_QUESTIONS }),
       }),
+      /**
+       * 功能：提交问题集合并立即结束调用（不等待答复）。
+       * 输入校验：经 normalizeQuestions 做严格字段/长度/去重校验。
+       * 内部逻辑：以 api.callId 为键把 pending 记录写入 Interactions 会话文档；输出提示
+       * 模型不要在本轮等待，继续不依赖答复的工作或结束本轮。
+       */
       execute: async (args, api, context) => {
         const questions = normalizeQuestions(args.questions)
         await api.commit(async (tx) => {

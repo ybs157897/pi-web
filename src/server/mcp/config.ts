@@ -1,22 +1,22 @@
 /**
- * Reads the user-level Pi MCP file (`mcp.json`, the `{ mcpServers: { ... } }` shape Pi 1.3.0 imports).
+ * 读取用户级 Pi MCP 文件（`mcp.json`，Pi 1.3.0 导入的 `{ mcpServers: { ... } }` 形状）。
  *
- * The browser never sees this file's secrets: only `view()` crosses the protocol, and it carries no
- * `env`, `headers`, or command lines. Parsing is deliberately forgiving: an invalid file or entry never
- * fails runtime startup, it is reported through `error` while the valid entries stay usable.
+ * 浏览器永远看不到这个文件里的机密：只有 `view()` 跨协议，且不带 `env`、`headers`
+ * 与命令行。解析刻意宽容：无效文件或条目不会让运行时启动失败，而是经 `error`
+ * 上报，有效条目保持可用。
  */
 import { readFile } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'
 import { z } from 'zod'
 import { MCP_EXPOSURES, type McpExposure } from '../../shared/types.ts'
 
-/** One `toolExposure` rule: an exact tool name or a name pattern with `*`, in config order. */
+/** 一条 `toolExposure` 规则：精确工具名或带 `*` 的名称模式，按配置顺序生效。 */
 export interface McpToolExposureRule {
   pattern: string
   exposure: McpExposure
 }
 
-/** One validated `mcpServers` entry, with its transport resolved. */
+/** 一条校验通过的 `mcpServers` 条目，transport 已解析。 */
 export interface McpServerConfig {
   name: string
   transport: 'stdio' | 'http'
@@ -36,7 +36,7 @@ export interface McpServerConfig {
   toolExposure: readonly McpToolExposureRule[]
 }
 
-/** Outcome of reading one MCP config file. Never a rejection: a broken file is an empty catalog plus `error`. */
+/** 读取一个 MCP 配置文件的结果。绝不 reject：坏文件返回空目录加 `error`。 */
 export interface LoadedMcpConfig {
   /** Absolute path of the file that was read (or attempted). */
   configPath: string
@@ -54,8 +54,8 @@ const exposureSchema = z.enum(MCP_EXPOSURES)
 const stringRecord = z.record(z.string(), z.string())
 
 /**
- * Strict entry schema: unknown keys are rejected so a typo (`exposures`, `tool_exposure`) is reported
- * instead of silently ignored. Every field is optional here; transport requirements are checked after.
+ * 严格条目 schema：未知键被拒绝，这样拼写错误（`exposures`、`tool_exposure`）会被
+ * 报告而不是静默忽略。这里每个字段都可选；transport 要求在其后再检查。
  */
 const serverEntrySchema = z.object({
   type: z.enum(['stdio', 'http', 'streamable-http']).optional(),
@@ -75,9 +75,11 @@ const serverEntrySchema = z.object({
 type ServerEntry = z.infer<typeof serverEntrySchema>
 
 /**
- * Read and validate an MCP config file. Missing file → `configExists: false` with an empty catalog and
- * no error; malformed JSON or entries → `error` plus whatever entries validated; a read failure other
- * than "not found" → `error` (the file exists but cannot be used).
+ * 功能：读取并校验 MCP 配置文件。
+ * @param configPath mcp.json 的路径（相对路径按 cwd 解析）
+ * @returns LoadedMcpConfig：文件缺失 → `configExists: false` + 空目录 + 无 error；
+ * JSON 或条目畸形 → `error` 加上校验通过的条目；非 ENOENT 的读取失败 → `error`
+ * （文件存在但不可用）
  */
 export async function loadMcpConfig(configPath: string): Promise<LoadedMcpConfig> {
   const absolute = resolvePath(configPath)
@@ -170,8 +172,8 @@ export async function loadMcpConfig(configPath: string): Promise<LoadedMcpConfig
 }
 
 /**
- * The transport is either declared by `type` or inferred from the presence of `command`/`url`.
- * Returns the resolved transport or a human-readable error.
+ * transport 由 `type` 声明，或按 `command`/`url` 的存在推断。
+ * @returns 解析出的 transport，或人类可读的错误对象
  */
 function resolveTransport(entry: ServerEntry): 'stdio' | 'http' | { error: string } {
   switch (entry.type) {
@@ -188,7 +190,7 @@ function resolveTransport(entry: ServerEntry): 'stdio' | 'http' | { error: strin
   }
 }
 
-/** Expand `${VAR}` references from the process environment; unresolved references stay literal and are reported. */
+/** 从进程环境展开 `${VAR}` 引用；未解析的引用保持字面量并记入 missing 集合供上报。 */
 function expandEnvironment(value: string, missing: Set<string>): string {
   return value.replace(ENV_VARIABLE, (match, variable: string) => {
     const resolved = process.env[variable]
@@ -200,26 +202,31 @@ function expandEnvironment(value: string, missing: Set<string>): string {
   })
 }
 
+/** 对 record 的每个值做环境变量展开。 */
 function expandRecord(record: Readonly<Record<string, string>>, expand: (value: string) => string): Record<string, string> {
   return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, expand(value)]))
 }
 
+/** 把 zod 校验错误拼成一条可读字符串（带字段路径）。 */
 function formatIssues(error: z.ZodError): string {
   return error.issues
     .map(issue => issue.path.length > 0 ? `${issue.path.join('.')}: ${issue.message}` : issue.message)
     .join('; ')
 }
 
+/** 判断值是否为普通对象（非 null、非数组）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+/** 判断错误是否为「路径不存在」（ENOENT / ENOTDIR）。 */
 function isNotFound(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('code' in error)) return false
   const code = (error as { code?: unknown }).code
   return code === 'ENOENT' || code === 'ENOTDIR'
 }
 
+/** 取错误的 message 文本。 */
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }

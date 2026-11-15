@@ -21,15 +21,15 @@ import type { RuntimeConversation } from '../runtime/automations.ts'
 import { CTX, safeFailure } from '../runtime/helpers.ts'
 
 /**
- * The analysis conversation reasons at this level unless the binding pins another one.
- * Measured on DTS006763701: `max` took a 119s median, `high` 113s, `off` 75s — with the
- * same verified conclusion every time. `high` keeps the reasoning trace, so it is the
- * default; `off` is offered for latency, not for correctness.
+ * 问题分析会话的默认思考档位，除非绑定里另行固定。
+ * 实测（DTS006763701）：`max` 中位 119s、`high` 113s、`off` 75s，结论一致。
+ * 默认取 `high`（保留推理痕迹且成本约为 max 的三分之一）；`off` 只为低延迟提供，不以正确性为先。
  */
 export const DEFAULT_ANALYSIS_THINKING_LEVEL: ThinkingLevel = 'high'
 const MISSING_RESULT_ERROR = '分析会话已结束，但没有保存该缺陷的分析结果。请打开会话查看原因后重试。'
 const UNCERTAIN_RESULT_ERROR = '分析会话已结束；近期尝试记录已截断，无法确认本次是否保存结果，请打开会话查看。'
 
+/** 从分析记录的历史尝试中倒序找指定会话发起的那次尝试；找不到时回退比对 latestAttempt。 */
 function attemptForConversation(record: WetrackAnalysisRecord | undefined, conversationId: string): WetrackAnalysisAttempt | undefined {
   const history = record?.attempts
   if (history !== undefined) {
@@ -40,6 +40,7 @@ function attemptForConversation(record: WetrackAnalysisRecord | undefined, conve
   return record?.latestAttempt?.conversationId === conversationId ? record.latestAttempt : undefined
 }
 
+/** 单次分析运行落盘 JSON 的 zod 校验模式；strict 模式拒绝未知字段。 */
 const runSchema = z.object({
   defectNumber: z.string().regex(/^DTS\d{3,16}$/u),
   workspaceId: z.string().min(1).max(160),
@@ -53,6 +54,11 @@ const runSchema = z.object({
   error: z.string().max(2_000).optional(),
 }).strict()
 
+/**
+ * 功能：拼装发起一次缺陷分析会话时的初始提示词。
+ * @param defectNumber 缺陷编号（DTS 前缀）
+ * @returns 标记行 + 任务描述 + 调研规程（delegate 变体）拼接的完整提示词
+ */
 export function wetrackAnalysisRunPrompt(defectNumber: string): string {
   return [
     `[wetrack-analysis:${defectNumber}]`,
@@ -63,16 +69,27 @@ export function wetrackAnalysisRunPrompt(defectNumber: string): string {
   ].join('\n\n')
 }
 
+/** 分析运行文件的存放目录：`<dataDir>/wetrack/analysis-runs`。 */
 function runDir(dataDir: string): string {
   return join(dataDir, 'wetrack', 'analysis-runs')
 }
 
+/** 单个缺陷的运行文件路径；缺陷编号不合法时抛 INVALID_INPUT。 */
 function runPath(dataDir: string, defectNumber: string): string {
   if (!isDefectNumber(defectNumber)) throw new RuntimeError('INVALID_INPUT', '缺陷编号不合法')
   return join(runDir(dataDir), `${defectNumber}.json`)
 }
 
 const runWrites = new Map<string, Promise<void>>()
+/**
+ * 功能：把一次分析运行原子落盘；同一目标文件的写入按 Map 中的前序 Promise 串行排队。
+ * @param dataDir 服务端数据目录
+ * @param run 要写入的运行记录
+ * @param guard 可选的乐观锁基线：传入时先重读磁盘，若记录已不是该基线（createdAt/conversationId/updatedAt 任一不符）则放弃覆盖、返回磁盘上的现状
+ * @returns 写入成功返回 structuredClone(run)；被并发改动抢占时返回磁盘上的最新记录（不存在则返回 run）
+ * 内部逻辑：先挂起排队、await 前序写入；写入用临时文件 + wx 独占创建 + rename 原子替换，失败时清理临时文件；
+ * finally 释放锁并清理 Map 中属于自己的项。
+ */
 async function saveRun(dataDir: string, run: WetrackAnalysisRun, guard?: WetrackAnalysisRun): Promise<WetrackAnalysisRun> {
   const target = runPath(dataDir, run.defectNumber)
   const previous = runWrites.get(target) ?? Promise.resolve()
@@ -101,6 +118,10 @@ async function saveRun(dataDir: string, run: WetrackAnalysisRun, guard?: Wetrack
   }
 }
 
+/**
+ * 功能：从磁盘读取并校验单个缺陷的运行记录。
+ * @returns 校验通过的运行记录；文件不存在、JSON 损坏或 schema 不符时返回 undefined
+ */
 export async function readWetrackAnalysisRun(dataDir: string, defectNumber: string): Promise<WetrackAnalysisRun | undefined> {
   try {
     return runSchema.parse(JSON.parse(await readFile(runPath(dataDir, defectNumber), 'utf8')))
@@ -109,6 +130,7 @@ export async function readWetrackAnalysisRun(dataDir: string, defectNumber: stri
   }
 }
 
+/** 分析运行的运行期依赖：会话生命周期、工作区解析、模型与技能激活均由外部注入。 */
 export interface WetrackAnalysisRunsDeps {
   dataDir: string
   create(input: CreateConversationInput): Promise<ConversationDetail>
@@ -117,16 +139,32 @@ export interface WetrackAnalysisRunsDeps {
   currentDetail(id: string): Promise<ConversationDetail>
   selectedWorkspace(id: string): WorkspaceSummary
   analysisModel(): ModelRef | undefined
-  /** The thinking levels the analysis model honours, so the page can offer only real ones. */
+  /** 分析模型实际支持的思考档位，页面据此只展示真实可选项。 */
   supportedThinkingLevels?(): ThinkingLevel[]
   activateSkills(workspace: WorkspaceSummary): Promise<{ skillIds: string[] }>
 }
 
+/**
+ * 功能：创建 WeTrack 缺陷分析运行的管理器（启动、列出、恢复、绑定工作区）。
+ * @returns 暴露 start/list/recover/bindWorkspace/workspaceBinding/settings/drain 的门面对象
+ * 内部状态：tasks 集合追踪在途的后台等待任务（drain 用）；starts 以缺陷编号去重并发启动；
+ * observed 记录已确认提交过提示词的「缺陷:会话」组合，供 refresh 区分排队与无果。
+ */
 export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
   const tasks = new Set<Promise<void>>()
   const starts = new Map<string, Promise<WetrackAnalysisRun>>()
   const observed = new Set<string>()
 
+  /**
+   * 功能：对照会话当前状态与分析记录，刷新一次运行的 status/outcome/error 并落盘。
+   * @param run 待刷新的运行记录
+   * @param recovering 服务重启后的恢复刷新；true 时对 running/queued 也强制核对（用于标记 interrupted）
+   * @returns 有变化时返回落盘后的新记录；无变化或恢复失败时原样返回
+   * 内部逻辑：无会话或（非恢复且）已终态的记录走「失败但提示未保存结果」的补偿核对分支，
+   * 仅当此前记录为 MISSING_RESULT_ERROR 且实际存在保存结果时纠正状态；在途记录则按
+   * 会话 busy/error 与保存结果存在性推导 running/failed/completed，无果时按是否可能已
+   * 截断区分 UNCERTAIN_RESULT_ERROR 与 MISSING_RESULT_ERROR；任何字段都没变就不落盘。
+   */
   const refresh = async (run: WetrackAnalysisRun, recovering = false): Promise<WetrackAnalysisRun> => {
     if (run.conversationId === undefined) return run
     if (!recovering && run.status !== 'running' && run.status !== 'queued') {
@@ -182,6 +220,15 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     return saveRun(deps.dataDir, next, run)
   }
 
+  /**
+   * 功能：为指定缺陷启动一次只读分析会话并跟踪其生命周期。
+   * @param input 含缺陷编号；工作区与模型来自绑定和 deps
+   * @returns 已登记（queued → running）的运行记录
+   * 内部逻辑：同一缺陷的并发启动经 starts 去重，直接复用在途 Promise；已存在
+   * running/queued 记录时先刷新确认仍活着则直接返回；否则新建记录落盘 → 创建
+   * 只读会话 → 提交分析提示词 → 置 running；会话空闲后由后台任务再 refresh 一次；
+   * 中途任何失败都把「本次 createdAt 匹配的」记录标记为 failed 后原样抛错。
+   */
   const start = async (input: WetrackAnalysisStartInput): Promise<WetrackAnalysisRun> => {
     const defectNumber = input.defectNumber.trim()
     if (!isDefectNumber(defectNumber)) throw new RuntimeError('INVALID_INPUT', '缺陷编号不合法')
@@ -190,9 +237,8 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     const promise = (async () => {
       const binding = await workspaceBinding()
       const workspaceId = binding.workspaceId
-      // The analysis workflow keeps its own thinking default: it is a background evidence
-      // hunt whose latency the operator waits on, and `high` reasons fully while costing
-      // about a third of what `max` does. The binding may pin another level.
+      // 分析流程有自己的思考档位默认值：它是后台证据 hunt，运营者要等结果，
+      // `high` 推理充分且成本约为 `max` 的三分之一；绑定可另行固定。
       const thinkingLevel = binding.thinkingLevel ?? DEFAULT_ANALYSIS_THINKING_LEVEL
       if (workspaceId === undefined) throw new RuntimeError('INVALID_INPUT', '请先在问题清单设置中绑定共享代码工作区')
       const workspace = deps.selectedWorkspace(workspaceId)
@@ -223,11 +269,11 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
         run = await saveRun(deps.dataDir, { ...run, status: 'running', updatedAt: Math.max(Date.now(), run.updatedAt + 1) }, run)
         const conversation = await deps.requireConversation(detail.conversation.id)
         const task = (async () => {
-          try {
-            await conversation.waitForIdle(CTX)
-          } catch {
-            // Refresh projects both provider failures and a missing save result.
-          }
+        try {
+          await conversation.waitForIdle(CTX)
+        } catch {
+          // 等待空闲的失败（含 provider 故障）与「未保存结果」都由随后的 refresh 统一归因。
+        }
           const latest = await readWetrackAnalysisRun(deps.dataDir, defectNumber)
           if (latest?.conversationId === detail.conversation.id) await refresh(latest)
         })()
@@ -250,6 +296,10 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     }
   }
 
+  /**
+   * 功能：列出全部缺陷分析运行，逐个刷新后按 updatedAt 倒序返回。
+   * @returns 运行记录数组；目录不存在时返回空数组；非法文件名直接忽略
+   */
   const list = async (): Promise<WetrackAnalysisRun[]> => {
     let names: string[]
     try {
@@ -263,11 +313,17 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     return refreshed.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /**
+   * 功能：把分析运行绑定到指定共享代码工作区并激活其技能，落盘 workspace.json。
+   * @param workspaceId 目标工作区 ID（必须能被 selectedWorkspace 解析，否则抛错）
+   * @param thinkingLevel 可选的思考档位；缺省沿用既有绑定的档位
+   * @returns 汇总后的分析设置（工作区、模型、档位、支持档位、技能 ID）
+   */
   const bindWorkspace = async (workspaceId: string, thinkingLevel?: ThinkingLevel): Promise<WetrackAnalysisSettings> => {
     const workspace = deps.selectedWorkspace(workspaceId)
     const target = join(deps.dataDir, 'wetrack', 'workspace.json')
     await mkdir(join(deps.dataDir, 'wetrack'), { recursive: true, mode: 0o700 })
-    // Rebinding the workspace keeps the pinned thinking level unless the caller sets one.
+    // 重新绑定工作区时沿用已固定的思考档位，除非调用方显式传入。
     const level = thinkingLevel ?? (await workspaceBinding()).thinkingLevel
     const binding = { workspaceId: workspace.id, ...(level === undefined ? {} : { thinkingLevel: level }) }
     await writeFile(target, JSON.stringify(binding) + '\n', { encoding: 'utf8', mode: 0o600 })
@@ -275,6 +331,10 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     return { workspaceId: workspace.id, model: deps.analysisModel(), thinkingLevel: level ?? DEFAULT_ANALYSIS_THINKING_LEVEL, supportedThinkingLevels: deps.supportedThinkingLevels?.() ?? [], skillIds: skills.skillIds }
   }
 
+  /**
+   * 功能：读取当前工作区绑定（workspace.json），并校验工作区仍可解析。
+   * @returns 绑定内容；文件缺失、损坏、schema 不符或工作区已不可用时返回空对象（未绑定）
+   */
   const workspaceBinding = async (): Promise<{ workspaceId?: string; thinkingLevel?: ThinkingLevel }> => {
     try {
       const value = z.object({ workspaceId: z.string().min(1).max(160), thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional() }).parse(JSON.parse(await readFile(join(deps.dataDir, 'wetrack', 'workspace.json'), 'utf8')))
@@ -285,6 +345,11 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     }
   }
 
+  /**
+   * 功能：服务启动时的恢复流程——把重启前仍在 running/queued 的运行收尾。
+   * 内部逻辑：先对每条在途记录做恢复式 refresh，能判定结果就落盘结果；仍判不
+ * 出来（会话已不在内存）则标记为 interrupted，提示用户打开会话确认或重跑。
+   */
   const recover = async (): Promise<void> => {
     let names: string[]
     try {
@@ -303,6 +368,10 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     }
   }
 
+  /**
+   * 功能：汇总当前分析设置（绑定、模型、思考档位与支持档位、已激活技能）。
+   * @returns WetrackAnalysisSettings；未绑定工作区时省略 workspaceId 且技能为空
+   */
   const settings = async (): Promise<WetrackAnalysisSettings> => {
     const { workspaceId, thinkingLevel } = await workspaceBinding()
     const skills = workspaceId === undefined
@@ -317,5 +386,5 @@ export function createWetrackAnalysisRuns(deps: WetrackAnalysisRunsDeps) {
     }
   }
 
-  return { start, list, recover, bindWorkspace, workspaceBinding, settings, drain: () => Promise.allSettled([...tasks]) }
+  return { start, list, recover, bindWorkspace, workspaceBinding, settings, /** 等待全部在途后台等待任务结束（含失败），用于测试/关停时排空。 */ drain: () => Promise.allSettled([...tasks]) }
 }

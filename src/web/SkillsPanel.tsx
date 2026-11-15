@@ -6,11 +6,21 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './SkillsPanel.module.css'
 
+/** SkillsPanel 的属性定义：初始选中的工作区 id。 */
 interface SkillsPanelProps {
   initialWorkspaceId?: string
 }
 
-/** Read-only workspace skill catalog and source preview. */
+/**
+ * 功能：只读的工作区技能目录与来源预览面板——顶部工作区选择器，选中后展示
+ * 技能下拉、目录诊断、技能详情（来源/可写性/路径/版本）与校验结果、内容预览
+ * （支持多资源文件切换）。
+ * @param props initialWorkspaceId 初始工作区（存在时优先选中）。
+ * 内部逻辑：三级数据各由独立 effect 拉取并携带「请求标识」（workspaceId/skillId/
+ * resource 对比 + validationRequest 票据）丢弃过期响应；工作区或刷新键变化时清空
+ * 全部下游状态；changeWorkspace/changeSkill 同步重置 resource 与校验态；
+ * resources 由当前内容的主文件与附加文件列表合并去重得到。
+ */
 export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
   const { settings } = useUiPreferences()
   const t = useCallback((chinese: string, english: string) => settings.locale === 'en' ? english : chinese, [settings.locale])
@@ -140,6 +150,7 @@ export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
     : null
   const selectedWorkspace = workspaces.find(workspace => workspace.id === workspaceId)
 
+  /** 切换工作区：作废进行中的校验请求并重置技能/资源/校验状态。 */
   const changeWorkspace = (nextWorkspaceId: string) => {
     validationRequest.current += 1
     setWorkspaceId(nextWorkspaceId)
@@ -150,6 +161,7 @@ export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
     setValidationLoading(false)
   }
 
+  /** 切换技能：作废校验请求并重置资源与校验状态。 */
   const changeSkill = (nextSkillId: string) => {
     validationRequest.current += 1
     setSkillId(nextSkillId)
@@ -159,6 +171,7 @@ export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
     setValidationLoading(false)
   }
 
+  /** 校验当前选中技能：票据过期（已切换工作区/技能）的响应直接丢弃。 */
   const validateSelectedSkill = async () => {
     if (!workspaceId || !selectedSkill || validationLoading) return
     const requestId = ++validationRequest.current
@@ -260,6 +273,7 @@ export default function SkillsPanel({ initialWorkspaceId }: SkillsPanelProps) {
   </div>
 }
 
+/** 技能详情区：来源/可写标签、路径与版本元数据、校验结果与内容预览（多资源时可切换文件）。 */
 function SkillDetails({
   skill, content, contentLoading, contentError, resources, resource, onResourceChange,
   validating, validation, validationError, onValidate,
@@ -324,6 +338,7 @@ function SkillDetails({
   </section>
 }
 
+/** 技能来源目录的展示文案；部分目录直接显示原始路径。 */
 function sourceName(source: SkillSummary['source'], t: (chinese: string, english: string) => string): string {
   switch (source) {
     case 'builtin': return t('内置', 'Built in')
@@ -335,6 +350,7 @@ function sourceName(source: SkillSummary['source'], t: (chinese: string, english
   }
 }
 
+/** 提取错误的 message 文本；为空时回退到给定的兜底文案。 */
 function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message !== '' ? cause.message : fallback
 }

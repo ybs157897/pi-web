@@ -23,8 +23,10 @@ import { AutomationDetail } from './AutomationDetail.tsx'
 import { AutomationListPane } from './AutomationListPane.tsx'
 import css from './AutomationsPage.module.css'
 
+/** 列表状态筛选：已开启 / 已暂停 / 已结束 / 全部。 */
 type StatusFilter = 'active' | 'paused' | 'ended' | 'all'
 
+/** 状态筛选页签的值与中英文案。 */
 const STATUS_FILTERS: readonly { value: StatusFilter; zh: string; en: string }[] = [
   { value: 'active', zh: '已开启', en: 'Active' },
   { value: 'paused', zh: '已暂停', en: 'Paused' },
@@ -32,13 +34,27 @@ const STATUS_FILTERS: readonly { value: StatusFilter; zh: string; en: string }[]
   { value: 'all', zh: '全部', en: 'All' },
 ]
 
+/** 运行记录分页大小。 */
 const PAGE_SIZE = 20
 
+/** 某任务已加载的运行记录页：已加载条目与服务端总数。 */
 interface RunPage {
   items: AutomationRun[]
   total: number
 }
 
+/**
+ * 功能：自动化任务主从页面——左侧为状态筛选页签、搜索框与任务列表
+ * （AutomationListPane），右侧为选中任务的详情（AutomationDetail），可从
+ * 「手动创建」面板新建任务。空态提供「新建自动化任务」入口。
+ * @param props workspaceId 当前工作区（创建时作为默认关联）；workspaces 可选工作区；
+ *              onOpenConversation 打开会话（运行产生的会话、查看运行记录）；
+ *              onNewConversation 跳到会话页「在会话中创建」。
+ * 内部逻辑：refresh 拉取全部任务；now 每 30 秒刷新一次用于相对时间；
+ * visible 按 status + query 过滤；选中项始终收敛在可见列表内；选中任务时
+ * loadRuns(id, 0) 拉首页记录，「加载更多」按已加载数量续页；create/save/toggle/
+ * runNow/remove/purgeEnded 各自经 api 调用并以 notice/error 反馈，busy 期间防重入。
+ */
 export default function AutomationsPage({ workspaceId, workspaces, onOpenConversation, onNewConversation }: {
   workspaceId?: string
   workspaces: readonly WorkspaceSummary[]
@@ -62,6 +78,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
+  /** 重新拉取全部自动化任务；失败写入 error 供重试。 */
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const result = await api.listAutomations()
@@ -80,6 +97,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     return () => { clearInterval(timer) }
   }, [])
 
+  /** 分页加载任务运行记录：offset 0 重置该任务页，否则追加到已有条目之后。 */
   const loadRuns = useCallback(async (id: string, offset: number): Promise<void> => {
     setLoadingRuns(true)
     try {
@@ -124,10 +142,12 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     void loadRuns(selectedId, 0)
   }, [selectedId, loadRuns])
 
+  /** 用服务端返回的任务对象原位替换列表中的同 id 项。 */
   const replace = (automation: Automation): void => {
     setItems(current => current.map(item => item.id === automation.id ? automation : item))
   }
 
+  /** 手动创建任务：当前工作区作为默认关联；成功后选中新任务并切到其状态页签。 */
   const create = async (input: CreateAutomationInput): Promise<void> => {
     setBusy(true)
     setNotice('')
@@ -138,7 +158,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
       })
       setItems(current => [result.automation, ...current])
       setSelectedId(result.automation.id)
-      // Land on the tab the new task belongs to, so it is visible either way.
+      // 落到新任务所属的状态页签，无论它是什么状态都可见。
       setStatus(result.automation.status)
       setPanelOpen(false)
       setNotice(t('自动化任务已创建', 'Automation created'))
@@ -150,6 +170,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     }
   }
 
+  /** 保存任务编辑（行内编辑补丁），成功后原位替换列表项。 */
   const save = async (id: string, input: UpdateAutomationInput): Promise<void> => {
     setBusy(true)
     setNotice('')
@@ -165,6 +186,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     }
   }
 
+  /** 暂停或恢复任务，成功后原位替换并提示对应文案。 */
   const toggle = async (automation: Automation, next: 'active' | 'paused'): Promise<void> => {
     setBusy(true)
     setNotice('')
@@ -182,6 +204,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     }
   }
 
+  /** 立即执行任务：刷新其运行记录首；产生会话时直接打开对应会话。 */
   const runNow = async (automation: Automation): Promise<void> => {
     setBusy(true)
     setNotice('')
@@ -199,6 +222,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     }
   }
 
+  /** 确认删除 deleting 指向的任务：从列表移除并清理选中态。 */
   const remove = async (): Promise<void> => {
     if (deleting === null) return
     setBusy(true)
@@ -216,6 +240,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
     }
   }
 
+  /** 清除全部已结束任务并刷新列表，提示移除数量。 */
   const purgeEnded = async (): Promise<void> => {
     setBusy(true)
     try {

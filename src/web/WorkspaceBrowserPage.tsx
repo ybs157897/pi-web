@@ -5,16 +5,26 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './WorkspaceBrowserPage.module.css'
 
+/** WorkspaceBrowserPage 的属性定义：目标工作区、文件打开回调、初始目录与紧凑模式。 */
 interface WorkspaceBrowserPageProps {
   workspace: WorkspaceSummary
   onOpenFile: (path: string) => void
-  /** The directory to open at; empty means the workspace root. */
+  /** 初始打开的目录；空串表示工作区根目录。 */
   path?: string
-  /** Fit the inspector sidebar instead of the full main column. */
+  /** 以 Inspector 侧栏尺寸渲染，而非占满主列。 */
   compact?: boolean
 }
 
-/** Browse one registered workspace using server-validated relative paths. */
+/**
+ * 功能：浏览某个已注册工作区的文件页面（经服务端校验的相对路径）：
+ * 头部为工作区名 + 相对路径面包屑与刷新按钮，主体为目录条目列表（.. 返回上级）。
+ * @param props workspace 目标工作区；onOpenFile 打开文件回调；path 初始目录（空为根）；
+ *              compact 是否以侧栏紧凑尺寸渲染。
+ * 内部逻辑：path/entries/loading/error/reload 状态驱动列表；initialPath 变化（如答案
+ * 指向某目录）时跳转，同值则保留用户已进入的目录；切换工作区时重置到初始目录；
+ * 进入新目录时列表滚动归零；数据经 api.listWorkspaceFiles 拉取，失败时展示错误 + 重试；
+ * crumbs 由 path 按段拆分生成，点击回跳对应层级。
+ */
 export default function WorkspaceBrowserPage({ workspace, onOpenFile, path: initialPath = '', compact = false }: WorkspaceBrowserPageProps) {
   const { t } = useUiPreferences()
   const [path, setPath] = useState(initialPath)
@@ -89,6 +99,7 @@ export default function WorkspaceBrowserPage({ workspace, onOpenFile, path: init
   </div>
 }
 
+/** 单个文件/目录条目行：图标 + 名称 + 类型或大小 + 修改时间；点击经 onOpen 进入或打开。 */
 function FileEntry({ entry, onOpen }: { entry: WorkspaceFileEntry; onOpen: () => void }) {
   const { t, settings } = useUiPreferences()
   return <button type="button" className={css.entry} onClick={onOpen}>
@@ -99,12 +110,14 @@ function FileEntry({ entry, onOpen }: { entry: WorkspaceFileEntry; onOpen: () =>
   </button>
 }
 
+/** 把字节数格式化为 B/KB/MB 文案。 */
 function formatBytes(bytes = 0): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** 按界面语言把时间戳格式化为「月/日 时:分」。 */
 function formatDate(value: number, locale: 'zh' | 'en'): string {
   return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(value)
 }

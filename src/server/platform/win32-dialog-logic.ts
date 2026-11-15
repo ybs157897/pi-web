@@ -1,106 +1,94 @@
 /**
- * Ported from DSH 0.2.1-rc.2 (MIT, see vendor/DSH-LICENSE).
- * Pure sequencing of the Win32 `IFileOpenDialog` folder-picker COM
- * conversation over injectable platform bindings, so every outcome path
- * (selection, cancellation, HRESULT failure, cleanup ordering) is testable on
- * any platform. The koffi-backed bindings live in
- * `win32-dialog-bindings.ts`, which only a real win32 process ever loads.
+ * 移植自 DSH 0.2.1-rc.2（MIT，见 vendor/DSH-LICENSE）。
+ * Win32 `IFileOpenDialog` 文件夹选择器 COM 会话的纯时序编排，平台绑定可注入，
+ * 因此每条结果路径（选中、取消、HRESULT 失败、清理顺序）在任何平台都可测。
+ * koffi 实现的绑定在 `win32-dialog-bindings.ts`，只有真正的 win32 进程才会加载它。
  */
 
-/** `HRESULT_FROM_WIN32(ERROR_CANCELLED)`: the user dismissed the dialog. */
+/** `HRESULT_FROM_WIN32(ERROR_CANCELLED)`：用户关闭了对话框。 */
 export const HRESULT_CANCELLED = 0x800704c7 | 0
 
-/** `FOS_PICKFOLDERS`: the dialog selects directories, not files. */
+/** `FOS_PICKFOLDERS`：对话框选择目录而非文件。 */
 export const FOS_PICKFOLDERS = 0x20
-/** `FOS_FORCEFILESYSTEM`: only results with a filesystem path can be chosen. */
+/** `FOS_FORCEFILESYSTEM`：只允许选有文件系统路径的结果。 */
 export const FOS_FORCEFILESYSTEM = 0x40
-/** `FOS_NOCHANGEDIR`: never mutate the process working directory. */
+/** `FOS_NOCHANGEDIR`：绝不改动进程工作目录。 */
 export const FOS_NOCHANGEDIR = 0x8
 
-/** One created folder dialog: the vtable calls the sequencing needs. */
+/** 一个已创建的文件夹对话框：时序编排所需的虚表调用。 */
 export interface Win32FolderDialog {
   /**
-   * `IFileDialog::SetOptions`.
-   * @param options - the `FOS_*` flag union to apply.
-   * @returns the call's HRESULT.
+   * `IFileDialog::SetOptions`。
+   * @param options - 要应用的 `FOS_*` 标志并集。
+   * @returns 调用的 HRESULT。
    */
   setOptions(options: number): number
   /**
-   * `IFileDialog::SetTitle`.
-   * @param title - the dialog title text.
-   * @returns the call's HRESULT.
+   * `IFileDialog::SetTitle`。
+   * @param title - 对话框标题文本。
+   * @returns 调用的 HRESULT。
    */
   setTitle(title: string): number
   /**
-   * `IModalWindow::Show` with no owner window; blocks the calling thread
-   * until the user selects or dismisses.
-   * @returns the call's HRESULT (`HRESULT_CANCELLED` on dismissal).
+   * 无属主窗口的 `IModalWindow::Show`；阻塞调用线程直到用户选择或关闭。
+   * @returns 调用的 HRESULT（用户关闭时为 `HRESULT_CANCELLED`）。
    */
   show(): number
   /**
-   * `IFileDialog::GetResult` + `IShellItem::GetDisplayName(SIGDN_FILESYSPATH)`,
-   * releasing the shell item and freeing the COM string.
-   * @returns the call chain's HRESULT and, on success, the selected path.
+   * `IFileDialog::GetResult` + `IShellItem::GetDisplayName(SIGDN_FILESYSPATH)`，
+   * 释放 shell item 并释放 COM 字符串。
+   * @returns 调用链的 HRESULT，成功时附带所选路径。
    */
   resultPath(): { hr: number; path?: string }
-  /** Release the dialog's COM reference. */
+  /** 释放对话框的 COM 引用。 */
   release(): void
 }
 
-/** The thread-level native surface the dialog sequencing runs against. */
+/** 对话框时序所依赖的线程级原生表面。 */
 export interface Win32DialogBindings {
   /**
-   * Opt the calling thread into the best supported DPI awareness
-   * (per-monitor-v2, then per-monitor, then system-aware), checking each
-   * call's result. Best-effort on purpose: a host accepting none of them
-   * (or lacking the API, pre-1607) still shows the modern dialog — possibly
-   * blurry above 100 % scaling — because a cosmetic degradation must not
-   * cost the tier.
+   * 让调用线程启用它支持的最佳 DPI 感知（per-monitor-v2，其次 per-monitor，
+   * 再次 system-aware），逐个检查调用结果。刻意做成尽力而为：宿主一个都不接受
+   * （或 API 缺失，1607 之前）时仍显示现代对话框——缩放超 100% 时可能发虚——
+   * 因为外观退化不能换来整层功能缺失。
    */
   setThreadDpiAwareness(): void
   /**
-   * `CoInitializeEx(COINIT_APARTMENTTHREADED)` on the calling thread.
-   * @returns the call's HRESULT (`S_FALSE` re-entry is still a success).
+   * 在调用线程上执行 `CoInitializeEx(COINIT_APARTMENTTHREADED)`。
+   * @returns 调用的 HRESULT（`S_FALSE` 重入仍算成功）。
    */
   coInitializeSta(): number
   /**
-   * `CoUninitialize` on the calling thread — COM requires one pairing call
-   * for every successful (including `S_FALSE`) `CoInitializeEx`, even on a
-   * thread that exits right after the conversation.
+   * 在调用线程上执行 `CoUninitialize` —— COM 要求每次成功的 `CoInitializeEx`
+   * （含 `S_FALSE`）配对一次，即使线程在会话结束后立刻退出。
    */
   coUninitialize(): void
   /**
-   * `CoCreateInstance(CLSID_FileOpenDialog)`.
-   * @returns the created dialog surface; throws when creation fails.
+   * `CoCreateInstance(CLSID_FileOpenDialog)`。
+   * @returns 已创建的对话框表面；创建失败时抛出。
    */
   createFolderDialog(): Win32FolderDialog
   /**
-   * `GetCurrentThreadId` — the native id a driver needs to close this
-   * thread's windows from outside.
-   * @returns the calling thread's native id.
+   * `GetCurrentThreadId` —— 驱动从外部关闭本线程窗口所需的线程 id。
+   * @returns 调用线程的原生 id。
    */
   currentThreadId(): number
   /**
-   * Make the dialog that `Show` is about to create able to take the
-   * foreground. Windows grants activation only to the foreground process,
-   * to a process it started, or to a process that received recent input; a
-   * worker spawned by a background host (the web GUI server) qualifies for
-   * none, so the dialog would open behind every other window. Synthesizing
-   * one Alt press (down, then up) through `keybd_event` counts this process
-   * as the most recent input owner — a community-documented technique with
-   * no documented contract. Call immediately before `Show`. When the
-   * process already holds foreground rights (a console-launched CLI), the
-   * press is inert, but the focused window still receives the lone Alt and
-   * may briefly highlight its menu bar before the dialog activates.
+   * 让 `Show` 即将创建的对话框有能力夺取前台。Windows 只把激活权给前台进程、
+   * 它启动的进程或最近收到输入的进程；后台宿主（web GUI server）spawn 的 worker
+   * 三者都不满足，对话框会开在所有窗口后面。通过 `keybd_event` 合成一次 Alt
+   * 按键（按下再抬起）让本进程算作最近输入者——社区流传的技巧，无文档契约。
+   * 必须在 `Show` 前一刻调用。进程已持有前台权（控制台启动的 CLI）时按键无效果，
+   * 但焦点窗口仍会收到这次 Alt，可能在对话框激活前短暂高亮其菜单栏。
    */
   pressAltForForeground(): void
 }
 
 /**
- * Throw when an HRESULT signals failure.
- * @param hr - the HRESULT to check.
- * @param what - the failing call's name for the error message.
- * @returns the (successful) HRESULT unchanged.
+ * HRESULT 表示失败时抛出。
+ * @param hr - 要检查的 HRESULT。
+ * @param what - 失败调用的名称（进错误消息）。
+ * @returns 成功的 HRESULT 原样返回。
  */
 function check(hr: number, what: string): number {
   if (hr < 0) throw new Error(`${what} failed: HRESULT 0x${(hr >>> 0).toString(16)}`)
@@ -108,14 +96,16 @@ function check(hr: number, what: string): number {
 }
 
 /**
- * Run one modal folder-picker conversation on the calling thread: DPI opt-in,
- * STA init, dialog creation, `Show`, and result extraction, releasing the
- * dialog on every path.
- * @param bindings - the native surface (koffi-backed in production, fakes in tests).
- * @param title - the dialog title text.
- * @param onShowing - called with the native thread id immediately before the
- *   blocking `Show`, so a driver on another thread can close the dialog.
- * @returns the selected filesystem path, or null when the user cancels.
+ * 功能：在调用线程上跑完一次模态文件夹选择会话：DPI 启用、STA 初始化、创建
+ * 对话框、`Show`、提取结果，任何路径都释放对话框。
+ * @param bindings - 原生表面（生产为 koffi 实现，测试为假实现）。
+ * @param title - 对话框标题文本。
+ * @param onShowing - 在阻塞的 `Show` 前一刻以原生线程 id 调用，其他线程上的
+ *   驱动借此关闭对话框。
+ * @returns 所选文件系统路径；用户取消返回 null。
+ * 内部逻辑：COM 配对语义——CoInitializeEx 成功（含 S_FALSE）后每条路径都必须
+ * CoUninitialize 恰好一次；对话框释放挂在内层 finally；HRESULT_CANCELLED 直接
+ * 返回 null，其余负值 HRESULT 转成带调用名的错误。
  */
 export function runFolderDialog(
   bindings: Win32DialogBindings,
@@ -124,8 +114,8 @@ export function runFolderDialog(
 ): string | null {
   bindings.setThreadDpiAwareness()
   check(bindings.coInitializeSta(), 'CoInitializeEx')
-  // From here the apartment is initialized (S_OK or S_FALSE) and must be
-  // uninitialized exactly once on every path.
+  // 从这里起 COM 单元已初始化（S_OK 或 S_FALSE），每条路径都必须恰好
+  // 反初始化一次。
   try {
     const dialog = bindings.createFolderDialog()
     try {

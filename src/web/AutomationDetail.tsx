@@ -1,10 +1,9 @@
 /**
- * The right pane: one task's rule and its delivery history.
+ * 自动化主从页面的右侧详情面板：展示单个任务的规则与投递历史。
  *
- * "任务运行记录" lists what actually happened. A `new`/`new_once` run carries an
- * outcome (`completed`, `failed`, `interrupted`); a `session` delivery only proves
- * arrival, so it reads `delivered`. Both record the occurrence that fired, which is
- * what the time column shows.
+ * 「任务运行记录」列出实际发生的事：`new`/`new_once` 运行带有结果
+ * （completed/failed/interrupted）；`session` 投递只证明送达，显示为 `delivered`。
+ * 两者都记录被触发的发生时刻，即时间列显示的内容。
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -19,8 +18,10 @@ import { relativeText, statusLabel } from './AutomationListPane.tsx'
 import type { Translate } from './render-labels.ts'
 import css from './AutomationsPage.module.css'
 
+/** 详情面板的两个页签：规则（查看/编辑）与任务运行记录。 */
 type DetailTab = 'rule' | 'records'
 
+/** 把单次运行状态映射为展示文案：已完成/失败/已中断/已投递/运行中。 */
 export function runStatusLabel(status: AutomationRun['status'], t: Translate): string {
   switch (status) {
     case 'completed': return t('已完成', 'Completed')
@@ -31,6 +32,20 @@ export function runStatusLabel(status: AutomationRun['status'], t: Translate): s
   }
 }
 
+/**
+ * 功能：单个自动化任务的详情面板（主从页右侧）：头部为任务名 + 状态徽标 +
+ * 编辑/暂停恢复/更多操作；下方「规则」「任务运行记录」两个页签分别展示
+ * 规则事实（重复规则/执行位置/时区/任务内容/下次运行）与投递历史列表。
+ * @param props automation 任务数据；runs 已加载的运行记录；totalRuns 记录总数
+ *              （用于「加载更多」）；loadingRuns 是否在加载记录；now 当前时间戳；
+ *              locale 时间格式化 locale；workspaces 编辑草稿可选的工作区；
+ *              busy 外部忙碌（禁用操作）；onSave/onToggle/onRun/onDelete 分别为
+ *              保存编辑、暂停恢复、立即执行、删除任务回调；onOpenConversation 打开
+ *              关联会话；onLoadMoreRuns 加载更早的运行记录。
+ * 内部逻辑：tab/editing/draft/menuOpen 四个状态驱动视图；automation.id 变化时重置
+ * 全部本地状态回「规则」页查看态；dirty 比较 draft 与 draftOf(automation) 的序列化；
+ * 保存按钮仅在 dirty 且名称/提示词非空时可用；取消编辑回滚草稿。
+ */
 export function AutomationDetail({ automation, runs, totalRuns, loadingRuns, now, locale, workspaces, busy, t, onSave, onToggle, onRun, onDelete, onOpenConversation, onLoadMoreRuns }: {
   automation: Automation
   runs: readonly AutomationRun[]

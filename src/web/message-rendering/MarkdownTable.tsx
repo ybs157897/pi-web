@@ -10,9 +10,18 @@ import './theme.css'
 
 type Geometry = { viewport: number; content: number; left: number; available: number; rightAvailable: number; base: number; offset: number }
 const emptyGeometry: Geometry = { viewport: 0, content: 0, left: 0, available: 0, rightAvailable: 0, base: 0, offset: 0 }
+/**
+ * 功能：从 DOM 表格读出二维文本矩阵（按 innerText 优先，保留单元格内的换行显示）。
+ * @param table `<table>` 元素或 null
+ * @returns 行 → 单元格文本的二维数组；table 为 null 返回空数组
+ */
 export function readTableRows(table: HTMLTableElement | null): string[][] {
   return Array.from(table?.rows ?? [], row => Array.from(row.cells, cell => cell.innerText ?? cell.textContent ?? ''))
 }
+/**
+ * 功能：滚动容器上的键盘横向滚动（Home/End 跳到两端，左右方向键步进 80px）。
+ * 内部逻辑：仅当事件目标就是容器本身才处理（子元素按键不劫持）；内容未溢出时不响应。
+ */
 function keyboardScroll(event: KeyboardEvent<HTMLDivElement>) {
   if (event.target !== event.currentTarget) return
   const element = event.currentTarget
@@ -22,6 +31,13 @@ function keyboardScroll(event: KeyboardEvent<HTMLDivElement>) {
   event.preventDefault(); element.scrollLeft = next
 }
 
+/**
+ * 功能：消息正文中 Markdown 表格的渲染容器（对应 host DTO 的 table 块）：横向滚动、边缘阴影、
+ * 自定义滚动条，并提供复制 Markdown、下载 CSV、大图预览、展开全宽四个操作。
+ * @param children Streamdown 渲染出的 `<table>` 子元素
+ * @param t 双语标签函数
+ * 内部逻辑：layout effect 测量「表格自身宽 / 滚动视口宽 / 外层滚动宿主的可用宽」形成 geometry，配合 ResizeObserver 持续校正；overflow 时在边缘渲染阴影、底部渲染 range 滑条映射 scrollLeft；expanded 允许表格临时突破列宽并外扩到滚动宿主边界（offset 为负外边距）；复制/下载分别走 tableMarkdown/tableCsv（readTableRows 从 DOM 取数，保证所见即所得）。
+ */
 export function MarkdownTable({ children, t }: { children?: ReactNode; t: Translate }) {
   const root = useRef<HTMLDivElement>(null)
   const viewport = useRef<HTMLDivElement>(null)

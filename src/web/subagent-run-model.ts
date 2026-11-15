@@ -3,13 +3,13 @@ import type { ProcessPart, ToolItem } from './render-model.ts'
 import type { Translate } from './render-labels.ts'
 import { buildToolRenderModel, subagentRowModel } from './tool-render-model.ts'
 
-/** Chip palette size; colors cycle by the child's position in the parent's subagent list. */
+/** 子智能体 chip 的调色板大小；颜色按它在父会话子列表中的序号循环取用。 */
 export const SUBAGENT_COLOR_COUNT = 6
 
-/** One chip's state: `creating` means the delegation has not matched a child conversation yet. */
+/** 单个 chip 的状态：`creating` 表示这次委派还没匹配到子会话。 */
 export type SubagentRunStatus = 'creating' | 'running' | 'done' | 'failed'
 
-/** One delegation the strip can show, read from a `subagent` call or a nested codemode call. */
+/** 条带可展示的一次委派，读自顶层 `subagent` 调用或嵌套的 codemode 调用。 */
 export interface SubagentCallItem {
   readonly key: string
   readonly childId?: string
@@ -19,24 +19,27 @@ export interface SubagentCallItem {
   readonly pending: boolean
 }
 
-/** A folded run of subagent calls rendered as one inline strip instead of tool rows. */
+/** 折叠后的一组子智能体调用，渲染成一条内联条带而不是一行行工具卡片。 */
 export interface SubagentRunGroup {
   readonly kind: 'subagentRun'
   readonly key: string
   readonly order: number
-  /** `calls` folds consecutive top-level `subagent` rows; `codemode` lifts nested calls. */
+  /** `calls` 折叠连续的顶层 `subagent` 行；`codemode` 提升嵌套调用。 */
   readonly source: 'calls' | 'codemode'
   readonly items: readonly SubagentCallItem[]
 }
 
-/** The transcript body after folding: ordinary process parts plus subagent strips. */
+/** 折叠后的转录正文：普通过程部件 + 子智能体条带。 */
 export type TranscriptPart = ProcessPart | SubagentRunGroup
 
 /**
- * Fold subagent work into inline strips. Consecutive top-level `subagent` rows fold only
- * when there are two or more — a single call keeps the accepted single-row `ToolCard`. A
- * `codemode` call folds even one nested call, because `ToolCard` already hides those rows
- * and without a strip they would vanish entirely.
+ * 功能：把子智能体工作折叠成内联条带。
+ * @param parts 过程部件序列
+ * @param t 双语标签函数
+ * @param runRunning 父 run 是否仍在运行（影响 chip 状态）
+ * @param summaries 父会话的子智能体投影列表
+ * @returns 折叠后的 TranscriptPart 序列
+ * 内部逻辑：连续顶层 `subagent` 行 ≥ 2 行才成条带，单个调用保留已定的单行 `ToolCard`；`codemode` 调用即使只有一个嵌套调用也折叠——`ToolCard` 本就隐藏那些行，没有条带它们会凭空消失；条带先于脚本卡片输出（order 微调）。
  */
 export function groupSubagentRuns(
   parts: readonly ProcessPart[],
@@ -51,9 +54,8 @@ export function groupSubagentRuns(
   } | undefined
   const flush = (): void => {
     if (current === undefined) return
-    // A single top-level delegation keeps the accepted single-row ToolCard; the strip
-    // starts at two. The original part is flushed back directly — indices into the
-    // source array are unreliable once toolGroup reorders parts.
+    // 单个顶层委派保留已定的单行 ToolCard；条带从两行开始。原始部件直接
+    // 回填——toolGroup 重排后源数组下标不再可靠。
     if (current.items.length >= 2) {
       grouped.push({
         kind: 'subagentRun', key: current.key, order: current.order,
@@ -84,7 +86,7 @@ export function groupSubagentRuns(
         flush()
         const nested = nestedSubagentCalls(part.item, t, runRunning, summaries)
         if (nested.length > 0) {
-          // The strip leads, so the script card follows its own subagents.
+          // 条带在前，脚本卡片跟着自己的子智能体走。
           grouped.push({ kind: 'subagentRun', key: `subagent-run:${part.key}:codemode`, order: part.order - 0.0005, source: 'codemode', items: nested })
           grouped.push(part)
           continue
@@ -98,7 +100,7 @@ export function groupSubagentRuns(
   return grouped
 }
 
-/** One strip chip: label, resolved state, metrics, and its stable palette slot. */
+/** 条带上的一个 chip：标签、解析后的状态、指标，及其稳定的调色板槽位。 */
 export interface SubagentRunEntry {
   readonly key: string
   readonly childId?: string
@@ -112,10 +114,12 @@ export interface SubagentRunEntry {
 }
 
 /**
- * Join a strip's calls with the parent's `SubagentSummary` projection. A settled call
- * whose label no longer matches any child falls back to the newest unmatched summaries —
- * finished delegations are the latest children the parent created — while a call still
- * being created never claims a child, so a chip can never open the wrong conversation.
+ * 功能：把条带里的调用与父会话的 `SubagentSummary` 投影拼成 chip 条目。
+ * @param group 子智能体条带
+ * @param summaries 父会话的子智能体列表（可 undefined）
+ * @param t 双语标签函数
+ * @returns 带状态/指标/颜色的 chip 条目
+ * 内部逻辑：已落定但标签不再匹配任何子会话的调用，回退取「最新且未被占用」的 summaries（已完成委派通常是父会话最新的孩子），按尾部顺序分配；仍在 creating 的调用绝不认领子会话，chip 不可能打开错误的会话。
  */
 export function subagentRunEntries(
   group: SubagentRunGroup,
@@ -124,7 +128,7 @@ export function subagentRunEntries(
 ): SubagentRunEntry[] {
   const taken = new Set(group.items.flatMap(item => item.childId === undefined ? [] : [item.childId]))
   const unmatched = group.items.filter(item => item.childId === undefined && !item.pending).length
-  // Finished delegations are usually the newest children; take them in tail order.
+  // 已完成的委派通常是最新的孩子；按尾部顺序取用。
   const spare = unmatched === 0 ? []
     : (summaries ?? []).filter(row => !taken.has(row.id)).slice(-unmatched)
   return group.items.map(item => {
@@ -148,13 +152,19 @@ export function subagentRunEntries(
   })
 }
 
-/** Tone and caption of a strip: who is still working and how much has settled. */
+/** 条带的基调与标题：谁还在工作、多少已落定。 */
 export interface SubagentRunHeadline {
   readonly tone: SubagentRunStatus
   readonly title: string
   readonly count: string
 }
 
+/**
+ * 功能：推导条带头部文案：有创建中显示「正在创建」，有运行中显示「运行中」，否则按失败/完成汇总。
+ * @param entries chip 条目
+ * @param t 双语标签函数
+ * @returns tone + 双语标题 + 结束计数
+ */
 export function subagentRunHeadline(entries: readonly SubagentRunEntry[], t: Translate): SubagentRunHeadline {
   const total = entries.length
   const creating = entries.filter(entry => entry.status === 'creating').length
@@ -168,8 +178,11 @@ export function subagentRunHeadline(entries: readonly SubagentRunEntry[], t: Tra
 }
 
 /**
- * A running child's elapsed time: the sampled `durationMs` advanced by the time since
- * `metricsAt`, mirroring `StatusPanel`'s tick. A settled child keeps its sampled total.
+ * 功能：计算一个子智能体的耗时：运行中的取采样值 `durationMs` 加上 `metricsAt` 之后的墙钟推进
+ * （对齐 `StatusPanel` 的 tick），已落定的直接用采样总值。
+ * @param entry chip 条目
+ * @param now 当前时刻
+ * @returns 耗时毫秒；无采样值返回 undefined
  */
 export function subagentEntryDurationMs(entry: SubagentRunEntry, now: number): number | undefined {
   if (entry.durationMs === undefined) return undefined
@@ -177,16 +190,18 @@ export function subagentEntryDurationMs(entry: SubagentRunEntry, now: number): n
   return entry.durationMs + Math.max(0, now - entry.metricsAt)
 }
 
-/** Compact elapsed time in the app's wording: 42秒, 3分05秒. */
+/**
+ * 功能：紧凑的耗时文案（应用统一措辞）：42秒、3分05秒。
+ * @param ms 耗时毫秒
+ */
 export function formatSubagentSeconds(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1_000))
   return total < 60 ? `${total}秒` : `${Math.floor(total / 60)}分${String(total % 60).padStart(2, '0')}秒`
 }
 
 /**
- * The palette slot for one child: its index in the parent's subagent list modulo six is
- * stable across turns; a delegation that has not matched a child yet hashes its id
- * (falling back to the label or key) into the same six slots.
+ * 功能：取一个孩子的调色板槽位：在父会话子列表中的序号对六取模，跨回合稳定；
+ * 尚未匹配到孩子的委派对其 id（回退 label/key）做哈希，落到同样六个槽位。
  */
 export function subagentColorIndex(id: string, summaries?: readonly SubagentSummary[]): number {
   const index = summaries?.findIndex(row => row.id === id) ?? -1
@@ -198,7 +213,10 @@ export function subagentColorIndex(id: string, summaries?: readonly SubagentSumm
 
 /* ---------- Call extraction ---------- */
 
-/** Read one top-level `subagent` call into a strip item, reusing the tool row model. */
+/**
+ * 功能：把一个顶层 `subagent` 调用读成条带条目（复用工具行模型）。
+ * @returns 条目；label/task/childId 尽量从工具行模型或参数推断
+ */
 function topLevelSubagentCall(
   item: ToolItem,
   t: Translate,
@@ -221,9 +239,9 @@ function topLevelSubagentCall(
 }
 
 /**
- * Read the `subagent` calls a `codemode` script made. While the script runs they are the
- * live nested tool messages under it; once it settles only `details.calls` remains, whose
- * `args` are a truncated JSON string the field-prefix reader below can still decode.
+ * 功能：读取一个 `codemode` 脚本发起的 `subagent` 调用。脚本运行中时它们是其下层的
+ * 实时嵌套工具消息；落定后只剩 `details.calls`，其 `args` 是被截断的 JSON 字符串，
+ * 由下方的字段前缀读取器兜底解码。
  */
 function nestedSubagentCalls(
   item: ToolItem,
@@ -274,13 +292,12 @@ function nestedSubagentCalls(
 }
 
 /**
- * Parse a nested call's arguments. Settled projections serialize them to JSON but cut the
- * string to a character budget (ending in `…`), so a failed `JSON.parse` falls back to
- * reading the `label` and `task` fields straight out of the raw prefix.
+ * 功能：解析嵌套调用的参数。落定投影把参数序列化成 JSON 但按字符预算截断（以 `…` 结尾），
+ * `JSON.parse` 失败时回退到从原始前缀直接读 `label` 与 `task` 字段。
  */
 function parseArgsOrPrefix(value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') return recordOf(value) ?? {}
-  try { return recordOf(JSON.parse(value)) ?? {} } catch { /* The projection truncated the JSON; read the prefix. */ }
+  try { return recordOf(JSON.parse(value)) ?? {} } catch { /* 投影截断了 JSON；读取前缀。 */ }
   const label = rawStringField(value, 'label')
   const task = rawStringField(value, 'task')
   return {
@@ -289,7 +306,10 @@ function parseArgsOrPrefix(value: unknown): Record<string, unknown> {
   }
 }
 
-/** Read one string field out of a truncated JSON prefix, honoring escapes. */
+/**
+ * 功能：从截断的 JSON 前缀中读一个字符串字段，正确处理转义。
+ * @returns 字段值；字段不存在或为空返回 undefined
+ */
 function rawStringField(raw: string, key: 'label' | 'task'): string | undefined {
   const marker = `"${key}"`
   const at = raw.indexOf(marker)
@@ -327,7 +347,7 @@ function taskFromArgs(args: Readonly<Record<string, unknown>>): string | undefin
   return task === '' ? undefined : task
 }
 
-/** Matches the server's `normalizeLabel`: the explicit label, else the task's first line, capped at 60 characters. */
+/** 与服务端 `normalizeLabel` 一致：显式 label 优先，否则取 task 首个非空行，60 字符封顶。 */
 function labelFromArgs(args: Readonly<Record<string, unknown>>): string | undefined {
   const explicit = typeof args.label === 'string' ? args.label.trim() : ''
   const raw = explicit === '' ? taskFromArgs(args)?.split('\n').find(line => line.trim() !== '')?.trim() ?? '' : explicit
@@ -335,9 +355,8 @@ function labelFromArgs(args: Readonly<Record<string, unknown>>): string | undefi
 }
 
 /**
- * Match a delegation label to a child conversation: exact first, then a prefix match in
- * either direction — a label truncated at 60 characters or normalized differently still
- * finds its child. Repeated labels take the first match.
+ * 功能：把委派标签匹配到子会话：先精确匹配，再双向前缀匹配——被截到 60 字符或
+ * 归一化方式不同的标签也能找到自己的孩子。重复标签取第一个匹配。
  */
 function matchChildId(label: string | undefined, summaries?: readonly SubagentSummary[]): string | undefined {
   if (label === undefined) return undefined

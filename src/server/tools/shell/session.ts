@@ -11,9 +11,12 @@ import {
 } from './runner.ts'
 
 /**
- * The continuation of commands that outlived their `bash`/`pwsh` call: codex's `write_stdin`
- * surface with pi-web naming. Polling reads incremental output since the last read; an omitted
- * `stdin` polls without writing.
+ * 功能：创建 `shell_session` 工具——在 `bash`/`pwsh` 调用让渡超时后继续命令的入口，
+ * 即 codex `write_stdin` 面板在 pi-web 下的命名版本。
+ * 输入校验：`sessionId` 必须对应仍存在的会话；无效（从未运行、已退出回收或服务重启）
+ * 抛 NOT_FOUND RuntimeError，并提示改读原结果里的 `fullOutputPath`。
+ * 边界：省略 `stdin` 即纯轮询不写入；增量输出受 outputLimits（字节/行数上限，保留尾部）约束。
+ * @returns 可注册的 `shell_session` 工具定义。
  */
 export function createShellSessionTool(): ToolRegistration {
   return defineTool({
@@ -26,6 +29,13 @@ export function createShellSessionTool(): ToolRegistration {
     }),
     structuredOutputSchema: SESSION_OUTPUT_SCHEMA,
     outputLimits: { maxBytes: MAX_OUTPUT_BYTES, maxLines: MAX_OUTPUT_LINES, retain: 'tail' },
+    /**
+     * 功能：续读/续写 shell 会话。
+     * 内部逻辑：经 readShellSession 读取增量（可先写 stdin）；会话不存在抛 NOT_FOUND。
+     * 增量经 api.output 流式给模型（调用可能已结算或中止，静默吞错）；structuredOutput
+     * 只供 codemode 程序使用。进程已结束时带最终退出码、isError 与 session_reclaimed
+     * 诊断——最终状态只送一次，因为读取即回收会话。
+     */
     execute: async (args, api, context) => {
       const read = await readShellSession(args.sessionId, args.stdin, args.yieldTimeMs, context)
       if (read === undefined) {
@@ -35,16 +45,16 @@ export function createShellSessionTool(): ToolRegistration {
         )
       }
       const { session, delta } = read
-      // The model only sees what `api.output()` retained; `structuredOutput` reaches codemode
-      // programs only. Stream the delta there, mirroring how bash/pwsh stream their output.
+      // 模型只能看到 `api.output()` 保留的内容；structuredOutput 只触达 codemode
+      // 程序。增量在那里流式输出，与 bash/pwsh 流式输出的方式保持一致。
       if (delta !== '') {
         try {
           api.output(delta)
         } catch {
-          // The call may already be settled or aborted.
+          // 调用可能已经结算或中止。
         }
       }
-      // The final state is delivered exactly once: the session was reclaimed on read.
+      // 最终状态只送达一次：读取即回收会话。
       const diagnostics = session.exited
         ? [
             ...(sessionDiagnostics(session) ?? []),

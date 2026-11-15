@@ -2,6 +2,7 @@ import { isInteractionPayloadText } from './interaction-payload.ts'
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, MessageUsage } from '../shared/types.ts'
 import { groupProcessParts, type ProcessToolGroupKind } from './process-grouping.ts'
 
+/** 一条工具调用渲染项：调用块、配对结果、父子嵌套与排序。 */
 export interface ToolItem {
   readonly key: string
   readonly message: ChatMessage
@@ -12,6 +13,7 @@ export interface ToolItem {
   readonly order: number
 }
 
+/** 过程区的部件：交错用户行、思考、正文、工具行与工具分组（toolGroup 由 process-grouping 合成）。 */
 export type ProcessPart =
   | { readonly kind: 'user'; readonly key: string; readonly message: ChatMessage; readonly order: number }
   | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly streaming: boolean; readonly order: number }
@@ -25,20 +27,25 @@ export type ProcessPart =
       readonly order: number
     }
 
+/** 答案区的一段响应：一条助手消息的全部内容块。 */
 export interface ResponsePart {
   readonly key: string
   readonly message: ChatMessage
   readonly blocks: readonly ContentBlock[]
 }
 
-/** DSH's tool categories, ranked and joined into one process-group title. */
+/** DSH 的工具分类，按调用数排序后拼成过程分组标题。 */
 export type ToolActivity = 'read' | 'readImage' | 'search' | 'write' | 'edit' | 'commands' | 'code'
   | 'webSearch' | 'webFetch' | 'subagents' | 'plan' | 'questions' | 'tools'
 
-/** The team family renders under the subagent activity: same multi-agent work, friendlier rows. */
+/** 团队家族工具归入 subagent 活动类：同属多智能体工作，行展示更友好。 */
 const TEAM_TOOL_NAMES = new Set(['spawn_teammate', 'wait_agent', 'send_message', 'list_agents', 'interrupt_agent', 'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update'])
 
-/** DSH's tool-name to category map; the row's own title stays separate. */
+/**
+ * 功能：工具名 → DSH 分类映射（行自身的标题另出）。
+ * @param name 工具名（大小写不敏感）
+ * @returns ToolActivity 之一；未收录归 'tools'
+ */
 export function toolActivity(name: string): ToolActivity {
   const id = name.toLocaleLowerCase()
   if (id === 'read') return 'read'
@@ -56,28 +63,30 @@ export function toolActivity(name: string): ToolActivity {
   return 'tools'
 }
 
+/** 某类活动的调用计数。 */
 export interface ActivityCount {
   readonly kind: ToolActivity
   readonly count: number
 }
 
-/** A system row no run owns; the transcript renders it between the runs it separates. */
+/** 不属于任何 run 的系统行；转录区把它渲染在所分隔的 run 之间。 */
 export interface RenderSystemRow {
   readonly key: string
   readonly message: ChatMessage
 }
 
-/** A system row recorded inside a run; the transcript renders it inside that run. */
+/** 记录在 run 内部的系统行；转录区把它渲染在该 run 里。 */
 export interface RenderRunSystemRow extends RenderSystemRow {
-  /** The run's answer comes after this row, so the row belongs above the answer. */
+  /** run 的答案在这行之后，所以该行归属答案上方。 */
   readonly beforeAnswer: boolean
 }
 
-/** One transcript entry: a run, or a system row that no run owns. */
+/** 转录时间线的一个条目：一个 run，或一条无主系统行。 */
 export type RenderTimelineEntry =
   | { readonly kind: 'run'; readonly run: RenderRun }
   | { readonly kind: 'system'; readonly row: RenderSystemRow }
 
+/** 一个回合（run）的完整渲染模型：用户行、过程、答案、系统行、产物与状态。 */
 export interface RenderRun {
   readonly key: string
   readonly runId?: string
@@ -85,19 +94,20 @@ export interface RenderRun {
   readonly messages: readonly ChatMessage[]
   readonly process: readonly ProcessPart[]
   readonly responses: readonly ResponsePart[]
-  /** System rows recorded inside this run, in the order the log recorded them. */
+  /** 记录在本 run 内的系统行，按日志记录顺序。 */
   readonly systemRows: readonly RenderRunSystemRow[]
   readonly artifacts: readonly FileArtifact[]
-  /** Tool categories ranked by distinct call count, ties broken by first appearance (DSH's rule). */
+  /** 工具分类按去重调用数排序，平手按首次出现（DSH 规则）。 */
   readonly activityCounts: readonly ActivityCount[]
   readonly status: 'running' | 'completed' | 'error' | 'cancelled'
   readonly durationMs?: number
   readonly usage?: MessageUsage
 }
 
+/** 整个会话的渲染模型：run 列表 + 转录时间线。 */
 export interface RenderModel {
   readonly runs: readonly RenderRun[]
-  /** The runs and the system rows no run owns, in transcript order. */
+  /** run 与无主系统行，按转录顺序。 */
   readonly timeline: readonly RenderTimelineEntry[]
 }
 
@@ -120,20 +130,26 @@ interface MutableToolItem {
   messageIndex: number
 }
 
-/** One recorded system message and where it sits in the durable log. */
+/** 一条已记录的系统消息及其在持久日志中的位置。 */
 interface SystemEntry {
   readonly message: ChatMessage
   readonly index: number
 }
 
-/** A system row that no run owns, with the run it follows in the message stream. */
+/** 一条无主系统行，及其在消息流中跟随的 run。 */
 interface LooseSystemRow {
   readonly row: RenderSystemRow
-  /** The position of the run the row follows, or -1 when it precedes every run. */
+  /** 所跟随 run 的位置；先于所有 run 时为 -1。 */
   readonly anchor: number
 }
 
-/** Group durable messages into user runs while preserving their recorded order. */
+/**
+ * 功能：把持久消息日志按用户输入切分成 run 并保持记录顺序，构建整个转录的渲染模型。
+ * @param messages 会话消息（用户/助手/工具/系统混合）
+ * @param interactions 交互投影记录（pending 的提问/计划评审会暂停 run）
+ * @returns RenderModel：runs + timeline
+ * 内部逻辑：用户消息按 runId 归并或新开 run（requestId 兜底）；answer/dismissal 机器载荷开 run 但不产生气泡；无 runId 的助手消息并入当前 active run；系统行带 runId 的挂在 run 内（答案前/后），无 runId 的作为 loose 行锚定到「已开始的最后一个 run」之后。
+ */
 export function buildRenderModel(messages: readonly ChatMessage[], interactions?: readonly InteractionRequest[]): RenderModel {
   const pendingInteractionCalls = new Set((interactions ?? [])
     .filter(interaction => interaction.status === 'pending').map(interaction => interaction.id))
@@ -150,8 +166,8 @@ export function buildRenderModel(messages: readonly ChatMessage[], interactions?
       continue
     }
     if (message.role === 'user') {
-      // Answer/dismissal payloads start a run but have no bubble: the ask_user_question row
-      // carries their content, so they must not become a user row or an interleaved part.
+      // 应答/关闭类机器载荷会开启 run 但没有气泡：内容归属 ask_user_question 行，
+      // 因此不能变成用户行或交错部件。
       const hidden = isInteractionPayloadText(messageText(message))
       const existing = message.runId === undefined ? undefined : byRunId.get(message.runId)
       if (existing !== undefined) {
@@ -207,9 +223,8 @@ export function buildRenderModel(messages: readonly ChatMessage[], interactions?
     const row: RenderSystemRow = { key: `system:${entry.message.id}`, message: entry.message }
     const position = entry.message.runId === undefined ? undefined : runPositions.get(entry.message.runId)
     if (position === undefined) {
-      // Without a run the row keeps its place in the message stream: it follows the
-      // last run that had already started, so a row that replaced earlier history
-      // stays above the content that replaced it.
+      // 无 run 的行保持在消息流中的位置：跟随「已开始的最后一个 run」，
+      // 替换更早历史的行于是留在替换它的内容上方。
       let anchor = -1
       for (const [runPosition, run] of orderedRuns.entries()) {
         if (run.firstIndex < entry.index) anchor = runPosition
@@ -228,7 +243,13 @@ export function buildRenderModel(messages: readonly ChatMessage[], interactions?
   return { runs, timeline: buildTimeline(runs, looseRows) }
 }
 
-/** Interleave the runs with the system rows that no run owns. */
+/**
+ * 功能：把 run 序列与无主系统行交织成转录时间线。
+ * @param runs 渲染 run（按日志顺序）
+ * @param looseRows 无主系统行（带锚点）
+ * @returns 时间线条目序列
+ * 内部逻辑：行按 anchor 分桶，anchor=-1 的在最前，其余排在自己跟随的 run 之后。
+ */
 function buildTimeline(runs: readonly RenderRun[], looseRows: readonly LooseSystemRow[]): RenderTimelineEntry[] {
   const anchors = new Map<number, RenderSystemRow[]>()
   for (const loose of looseRows) {
@@ -248,10 +269,19 @@ function buildTimeline(runs: readonly RenderRun[], looseRows: readonly LooseSyst
   return timeline
 }
 
+/** run 的稳定 key：requestId 优先，无则用消息 id。 */
 function stableRunKey(message: ChatMessage): string {
   return `run:${message.requestId ?? message.id}`
 }
 
+/**
+ * 功能：把一个可变 run 骨架展开成完整 RenderRun：配对工具调用与结果、建工具树、
+ * 划分过程/答案、推导状态与指标。
+ * @param run 可变 run 骨架（users/messages/firstIndex）
+ * @param systemRows 归属该 run 的系统行
+ * @param pendingInteractionCalls 仍 pending 的交互调用 id 集合
+ * 内部逻辑：工具树由 parentToolCallId 挂接（环状的父链会把首条成员提升为根，保证所有持久工具结果可见）；「活」的工具结果行（调用块尚未持久化）按已携带的 callId 命名 key，落定配对时 DOM 不重挂；pending 交互或其后 reply 之前的正文归过程区，最后一个流式中的助手回合独占答案区。
+ */
 function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRow[], pendingInteractionCalls: ReadonlySet<string>): RenderRun {
   const callItems = new Map<string, MutableToolItem>()
   const toolResults = new Map<string, ChatMessage>()
@@ -283,9 +313,9 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
   const claimedCallIds = new Set<string>()
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role !== 'tool' || message.toolCallId !== undefined && callItems.has(message.toolCallId)) continue
-    // A live tool row precedes its durable call block. Key it by the call id it already
-    // carries so the row keeps its DOM when the settled call block pairs with that id;
-    // a message id would change at exactly that boundary and remount the row.
+    // 「活」的工具结果行先于其持久调用块出现。用已携带的 callId 命名 key，落定的
+    // 调用块配到该 id 时行保持 DOM 不变；若用消息 id，恰好在那个边界上 key 会变、
+    // 行被重挂。
     const key = message.toolCallId !== undefined && !claimedCallIds.has(message.toolCallId)
       ? `tool:${message.toolCallId}`
       : `tool-result:${message.id}`
@@ -316,8 +346,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     for (const child of item.children) markReachable(child)
   }
   for (const root of roots) markReachable(root)
-  // Malformed parent links can form a closed cycle; promote the first recorded
-  // member so every durable tool result remains visible.
+  // 畸形的父链可能形成闭环；把第一个记录的成员提升为根，保证每个持久工具结果都可见。
   for (const item of allTools) {
     if (reachable.has(item)) continue
     roots.push(item)
@@ -333,34 +362,29 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
 
   const process: ProcessPart[] = []
   const responses: ResponsePart[] = []
-  // An interaction that still waits for the user pauses the run mid-turn, so the prose the
-  // model wrote around the pending call is intermediate work, never the answer: promoting it
-  // would let the reader settle on a paragraph that then has to jump into the work group the
-  // moment the reply resumes the run. The durable tool result freezes `details.status` at
-  // write time, so "pending" is read from the interaction records instead.
+  // 仍在等用户的交互会把 run 停在回合中段，因此模型围绕 pending 调用写的正文是中间
+  // 工作而绝非答案：把它提升成答案会让读者停在那段话上，回复一恢复 run 它就得跳进
+  // 工作分组。持久工具结果在写入时冻结了 `details.status`，所以 pending 从交互记录读取。
   const interactionPending = hasPendingInteractionCall(run.messages, pendingInteractionCalls)
-  // After the interaction resolves, the reply payload is the in-log boundary: content written
-  // behind it belongs to the paused turn and stays in the work group, so the gap frames
-  // between "answered" and the continuation's first token cannot resurrect the old prose.
+  // 交互解决后，reply 载荷是日志内的分界：其后写入的内容属于被暂停的回合、留在工作
+  // 分组里，「已应答」到续写首 token 之间的空帧就不会复活旧正文。
   const answerBarrier = interactionPending ? run.messages.length : lastInteractionReplyIndex(run.messages) + 1
   const candidates = run.messages.slice(answerBarrier)
   const finalResponse = interactionPending ? undefined : finalResponseOf(candidates)
-  // A generation that is still streaming displaces the settled answer: until it writes its own
-  // text, the previous answer demotes to process content so the timeline stays chronological —
-  // the live reasoning row must read after the body it was written after (ZCode's strict
-  // order), not float above a finished paragraph.
+  // 仍在流式的生成会顶替已落定的答案：它写出自己的文本之前，上一个答案降级为过程内容，
+  // 时间线保持时序——直播思考行必须排在其正文之后（ZCode 的严格顺序），
+  // 而不是飘在一段已完成段落上方。
   const liveAnswer = candidates.findLast(message => isLiveAnswer(message))
   for (const [messageIndex, message] of run.messages.entries()) {
     if (message.role === 'user' && message.id !== run.users[0]?.id && !isInteractionPayloadText(messageText(message))) {
       process.push({ kind: 'user', key: `${message.id}:interleaved`, message, order: messageIndex })
     }
-    // A turn that is still streaming owns the answer area: it has not settled yet, and a
-    // block that moved between the two areas mid-stream would jump on screen.
+    // 仍在流式的回合独占答案区：尚未落定，块在两区之间移动会造成画面跳动。
     const answer = message.role === 'assistant'
       && (liveAnswer !== undefined
         ? message.id === liveAnswer.id
         : message.id === finalResponse?.id)
-    // The model writes the tail of its message last, so only that block is still streaming.
+    // 模型最后写消息的尾部，所以只有那个块还在流式。
     const tail = liveTailIndex(message.blocks)
     for (const [blockIndex, block] of message.blocks.entries()) {
       const slot = block.slot ?? blockIndex
@@ -379,7 +403,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
       if (blocks.length > 0) responses.push({ key: `${message.id}:response`, message, blocks })
     }
     if (message.role === 'tool' && message.toolCallId === undefined) {
-      // A result without a durable call id remains visible as its own process row.
+      // 没有持久调用 id 的结果仍作为独立过程行显示。
       for (const item of toolRootAt.get(messageIndex) ?? []) {
         process.push({ kind: 'tool', key: item.key, item: freezeToolItem(item, new Set()), order: item.order })
       }
@@ -416,7 +440,10 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
   }
 }
 
-/** The run's settled answer: the last assistant turn that carries content and no tool call. */
+/**
+ * 功能：找 run 的已落定答案：最后一个带内容且不含工具调用的顶层助手回合。
+ * @returns 该消息；没有返回 undefined
+ */
 function finalResponseOf(messages: readonly ChatMessage[]): ChatMessage | undefined {
   return [...messages].reverse().find(message => message.role === 'assistant'
     && message.parentToolCallId === undefined
@@ -425,10 +452,9 @@ function finalResponseOf(messages: readonly ChatMessage[]): ChatMessage | undefi
 }
 
 /**
- * Whether the run still waits on an interaction call (a question or a plan review the user
- * has not answered). The projected interaction records are the only live source: a durable
- * tool result keeps the `pending` status it was written with forever, because the answer
- * lands as a separate reply entry instead of rewriting it.
+ * 功能：判断 run 是否仍在等待交互调用（用户未回答的提问或计划评审）。
+ * 投影的交互记录是唯一活来源：持久工具结果永远保留写入时的 `pending` 状态——
+ * 因为答复以独立 reply 条目落盘，不改写它。
  */
 function hasPendingInteractionCall(messages: readonly ChatMessage[], pendingInteractionCalls: ReadonlySet<string>): boolean {
   if (pendingInteractionCalls.size === 0) return false
@@ -436,7 +462,7 @@ function hasPendingInteractionCall(messages: readonly ChatMessage[], pendingInte
     && message.blocks.some(block => block.type === 'toolCall' && pendingInteractionCalls.has(block.id)))
 }
 
-/** The newest interaction reply payload in the run; content before it belongs to the paused turn. */
+/** run 内最新的交互 reply 载荷位置；它之前的内容属于被暂停的回合。 */
 function lastInteractionReplyIndex(messages: readonly ChatMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
@@ -446,22 +472,20 @@ function lastInteractionReplyIndex(messages: readonly ChatMessage[]): number {
 }
 
 /**
- * A streaming assistant turn is the run's live answer. It owns the answer area until it
- * settles, so a text block never hops between the process area and the answer area while
- * the model is still writing it.
+ * 功能：判断一条流式中的助手回合是否是 run 的「直播答案」：它独占答案区直到落定，
+ * 保证模型还在写时文本块不会在过程区与答案区之间来回跳。
  */
 function isLiveAnswer(message: ChatMessage): boolean {
   return message.role === 'assistant' && message.streaming === true && message.parentToolCallId === undefined
 }
 
-/** The blocks that answer the user: text, images, and files. */
+/** 回答用户的块类型：文本、图片与文件。 */
 function isContentBlock(block: ContentBlock): boolean {
   return block.type === 'text' || block.type === 'image' || block.type === 'file'
 }
 
 /**
- * Whether a block shows something. The projection keeps the blocks the model has not
- * written yet, so the render layer is where an empty block is dropped.
+ * 功能：判断一个块是否显示了东西。投影会保留模型尚未写出的块，所以空块在渲染层丢弃。
  */
 function blockCarriesContent(block: ContentBlock): boolean {
   if (block.type === 'text') return block.text !== ''
@@ -470,9 +494,8 @@ function blockCarriesContent(block: ContentBlock): boolean {
 }
 
 /**
- * The block the model is still writing: the last block of the message that carries
- * content. DSH marks the same tail as running (`AssistantMarkdown.tsx:103`), so a
- * reasoning block stops shimmering as soon as the answer follows it.
+ * 功能：找出模型仍在写的块：消息中最后一个携带内容的块。DSH 把同一条尾部标为
+ * running（`AssistantMarkdown.tsx:103`），因此答案一接上，思考块就停止闪烁。
  */
 function liveTailIndex(blocks: readonly ContentBlock[]): number {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
@@ -482,7 +505,10 @@ function liveTailIndex(blocks: readonly ContentBlock[]): number {
   return -1
 }
 
-/** Rank this run's tool categories the way DSH titles a settled process group. */
+/**
+ * 功能：按 DSH 给落定过程组命名的方式统计排序本 run 的工具分类。
+ * @returns 按调用数降序的分类计数（Map 保序 + 稳定排序，平手保持首次出现序）
+ */
 function rankActivities(roots: readonly MutableToolItem[]): ActivityCount[] {
   const counts = new Map<ToolActivity, number>()
   const visit = (item: MutableToolItem): void => {
@@ -494,10 +520,14 @@ function rankActivities(roots: readonly MutableToolItem[]): ActivityCount[] {
     for (const child of item.children) visit(child)
   }
   for (const root of roots) visit(root)
-  // Map preserves first-appearance order, and a stable sort keeps it for tied counts.
+  // Map 保留首次出现顺序，稳定排序让平手计数也保持该顺序。
   return [...counts].map(([kind, count]) => ({ kind, count })).sort((left, right) => right.count - left.count)
 }
 
+/**
+ * 功能：把可变工具树冻结成不可变 ToolItem，子项按 order 排序；环路上遇到已访问
+ * 的节点直接截断 children，防无限递归。
+ */
 function freezeToolItem(item: MutableToolItem, ancestors: Set<string>): ToolItem {
   const visited = new Set(ancestors)
   if (visited.has(item.key)) return { ...item, children: [] }
@@ -514,6 +544,11 @@ function freezeToolItem(item: MutableToolItem, ancestors: Set<string>): ToolItem
   }
 }
 
+/**
+ * 功能：由 run 的消息推导状态：任一消息流式/running 即 running；否则按最后一条
+ * 助手消息的 status（error/cancelled/completed），再退到带内容的末条助手与全局
+ * 状态兜底；有助手消息视为 completed，否则 running。
+ */
 function runStatus(messages: readonly ChatMessage[]): RenderRun['status'] {
   if (messages.some(message => message.streaming === true || message.status === 'running')) return 'running'
   const lastAssistant = messages.findLast(message => message.role === 'assistant')
@@ -526,6 +561,7 @@ function runStatus(messages: readonly ChatMessage[]): RenderRun['status'] {
   return messages.some(message => message.role === 'assistant') ? 'completed' : 'running'
 }
 
+/** 逐项累加各消息的 usage；无任何 usage 返回 undefined。 */
 function sumUsage(messages: readonly ChatMessage[]): MessageUsage | undefined {
   const usage = messages.flatMap(message => message.usage === undefined ? [] : [message.usage])
   if (usage.length === 0) return undefined
@@ -547,6 +583,7 @@ function sumUsage(messages: readonly ChatMessage[]): MessageUsage | undefined {
   }), zero)
 }
 
+/** 按产物内容（kind/path/before/after/diff）去重。 */
 function uniqueArtifacts(artifacts: readonly FileArtifact[]): FileArtifact[] {
   const seen = new Set<string>()
   return artifacts.filter(artifact => {
@@ -558,18 +595,30 @@ function uniqueArtifacts(artifacts: readonly FileArtifact[]): FileArtifact[] {
   })
 }
 
-/** Turn a message key into the stable DOM target used by chat and trajectory navigation. */
+/**
+ * 功能：把消息 id 转成稳定的 DOM 目标 id，供会话内跳转与轨迹导航共用。
+ */
 export function transcriptMessageDomId(messageId: string): string {
   return `chat-message-${encodeURIComponent(messageId)}`
 }
 
-/** Provide a display-safe summary and body for a reasoning block. */
+/**
+ * 功能：给思考块提供展示安全的摘要与正文。
+ * @param text 思考全文
+ * @param redacted 是否被模型隐藏
+ * @param hiddenLabel 隐藏时的占位文案
+ * @returns summary 为第一个非空行（或占位文案），text 原样（隐藏时为空串）
+ */
 export function reasoningDisplay(text: string, redacted: boolean, hiddenLabel: string): { summary: string; text: string } {
   if (redacted) return { summary: hiddenLabel, text: '' }
   return { summary: text.split(/\r?\n/u).find(line => line.trim() !== '')?.trim() ?? '', text }
 }
 
-/** Plain text used by copy controls and compact trajectory summaries. */
+/**
+ * 功能：取消息的纯文本（复制控件与紧凑轨迹摘要用）：text/thinking 原文（redacted 除外），
+ * 工具调用序列化为 `{ tool, arguments }` JSON。
+ * @returns 换行拼接的文本
+ */
 export function messageText(message: ChatMessage): string {
   return message.blocks.flatMap(block => {
     if (block.type === 'text') return block.text === '' ? [] : [block.text]
@@ -579,14 +628,19 @@ export function messageText(message: ChatMessage): string {
   }).join('\n')
 }
 
-/** Read a possibly malformed detail value as a record without trusting its fields. */
+/**
+ * 功能：把可能畸形的 details 值窄化为 record，不信任其内部字段。
+ */
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
 }
 
-/** Safely summarize unknown tool details for a trajectory row. */
+/**
+ * 功能：把未知结构的工具详情安全摘要成字符串（轨迹行兜底展示）。
+ * @returns 字符串原样、JSON 美化输出；序列化失败给出中文错误说明
+ */
 export function formatUnknownDetails(value: unknown): string {
   if (value === undefined || value === null) return ''
   if (typeof value === 'string') return value
@@ -594,12 +648,15 @@ export function formatUnknownDetails(value: unknown): string {
   catch (error) { return `无法读取工具详情：${error instanceof Error ? error.message : String(error)}` }
 }
 
-/** Keep output extraction safe for future non-text content blocks. */
+/**
+ * 功能：取消息输出文本（只收 text 块），对未来可能出现的非文本内容块保持安全。
+ */
 export function messageOutput(message: ChatMessage | undefined): string {
   if (message === undefined) return ''
   return message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
 
+/** 会话级统计：run 数、步数、token 明细与上下文窗口占用。 */
 export interface ConversationStats {
   readonly runCount: number
   readonly stepCount: number
@@ -609,11 +666,16 @@ export interface ConversationStats {
   readonly cacheWrite: number
   readonly totalTokens: number
   readonly contextTokens: number
-  /** Session-level output rate: output tokens over active run time. Undefined while no run has a duration. */
+  /** 会话级输出速率：输出 token 除以活跃 run 时间；没有任何 run 记录时长时 undefined。 */
   readonly tokensPerSecond?: number
 }
 
-/** Fold the durable message log into the numbers shown by the composer status pills. */
+/**
+ * 功能：把持久消息日志折叠成输入框状态胶囊展示的数字。
+ * @param messages 全部会话消息
+ * @returns ConversationStats
+ * 内部逻辑：stepCount 计 assistant+tool 消息；contextTokens 取最近一轮的窗口占用；tokensPerSecond 是 DSH 的解码速度折法（StatsPills.tsx:172-176）——输出 token 与每请求模型时间配对累计，工具时间与无时长 run 不稀释速率。
+ */
 export function conversationStats(messages: readonly ChatMessage[]): ConversationStats {
   const { runs } = buildRenderModel(messages)
   let stepCount = 0
@@ -623,8 +685,8 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
   let cacheWrite = 0
   let totalTokens = 0
   let contextTokens = 0
-  // DSH's decode-speed fold (StatsPills.tsx:172-176): output tokens and per-request model time
-  // accumulate together, so tool time and runs without a recorded duration never dilute the rate.
+  // DSH 的解码速度折法（StatsPills.tsx:172-176）：输出 token 与每请求模型时间一起累计，
+  // 工具时间与无时长记录的 run 永远不稀释速率。
   let rateTokens = 0
   let rateMs = 0
   for (const message of messages) {
@@ -636,7 +698,7 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
     cacheRead += usage.cacheRead
     cacheWrite += usage.cacheWrite
     totalTokens += usage.totalTokens
-    // The most recent turn prices the window the next request will carry.
+    // 最近一轮决定下一次请求要携带的窗口价格。
     contextTokens = usage.input + usage.cacheRead + usage.cacheWrite + usage.output
     if (message.role === 'assistant' && message.requestDurationMs !== undefined) {
       rateTokens += usage.output
@@ -658,33 +720,37 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
 }
 
 
-/** While a new compaction runs, hide older completed markers so only the live state is shown. */
+/**
+ * 功能：新一轮压缩进行中时隐藏旧的「压缩完成」系统标记，只显示进行中的那份。
+ * @param messages 全部消息
+ * @param compactionRunning 是否有压缩在跑
+ * @returns 可见的消息列表（不压缩时原样返回）
+ */
 export function visibleTranscriptMessages(messages: readonly ChatMessage[], compactionRunning: boolean): readonly ChatMessage[] {
   return compactionRunning
     ? messages.filter(message => !(message.role === 'system' && message.systemKind === 'compaction'))
     : messages
 }
 
+/** 尾部加载 spinner 的三个输入事实。 */
 export interface TurnChatLoadingState {
-  /** The conversation has a live run. */
+  /** 会话存在进行中的 run。 */
   readonly isRunning: boolean
-  /** A permission prompt or a question card is waiting for the user. */
+  /** 权限确认或提问卡片正在等用户。 */
   readonly blockedByInteraction: boolean
-  /** Context compaction (or another maintenance task) is running. */
+  /** 上下文压缩（或其他维护任务）在跑。 */
   readonly blockedByActiveWork: boolean
 }
 
 /**
- * ZCode's `shouldShowTurnChatLoading` (`packages/ui/src/v4/chatLoadingVisibility.ts`): the
- * tail spinner belongs to the live turn only, and it steps aside while the turn waits for
- * the user or for a maintenance task — the prompt then is the only progress signal.
- * Running is the authoritative fact, so there is no debounce: an extra quiet period
- * would restart the visibility on every projection update and lag the real state.
+ * 功能：ZCode 的 `shouldShowTurnChatLoading`（`packages/ui/src/v4/chatLoadingVisibility.ts`）：
+ * 尾部 spinner 只属于直播回合；回合在等用户或维护任务时让位——此时提示框就是唯一的
+ * 进度信号。running 是权威事实，因此不做防抖：多一段静默期会在每次投影更新时重启
+ * 可见性并滞后真实状态。
  *
- * The running fact comes from the conversation, not from the last run's status: a run's
- * status is derived from the messages it recorded, so it drops to `completed` between two
- * tool rounds and the spinner would blink out of a turn that never stopped. ZCode reads
- * the same session-level fact for the same reason.
+ * running 事实来自会话而不是最后一个 run 的状态：run 状态从其记录的消息推导，
+ * 两次工具轮之间会短暂回落为 `completed`，spinner 会在从未停止的回合里闪烁。
+ * ZCode 出于同样的原因读取同样的会话级事实。
  */
 export function turnChatLoadingVisible(state: TurnChatLoadingState): boolean {
   if (!state.isRunning) return false
@@ -692,10 +758,9 @@ export function turnChatLoadingVisible(state: TurnChatLoadingState): boolean {
 }
 
 /**
- * A pending interaction stops the turn until the user answers, so the tail spinner would
- * only add noise next to the prompt. Every pending kind blocks — `approval` (permission),
- * `question` (AskUserQuestion) and `plan-review` all need the user to move on; a settled
- * interaction (`continued`, `answered`, …) does not, because the model already moved on.
+ * 功能：pending 的交互会停住回合直到用户应答，尾部 spinner 只会在提示框旁边添乱。
+ * 所有 pending 类型都阻塞——`approval`（权限）、`question`（提问）与 `plan-review`
+ * 都需要用户放行；已结算的交互（`continued`、`answered` 等）不阻塞，模型已经继续了。
  */
 export function interactionBlocksTurnLoading(interactions: readonly InteractionRequest[] | undefined): boolean {
   return (interactions ?? []).some(interaction => interaction.status === 'pending')

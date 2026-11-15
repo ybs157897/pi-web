@@ -1,8 +1,8 @@
 /**
- * Answering or dismissing the human-in-the-loop calls a run is waiting on.
+ * 回答或放弃一次运行正在等待的人机交互请求。
  *
- * The reply is submitted before the stored call is settled, so a rejected submission
- * leaves the call answerable; a retry after a restart reuses the call-derived request id.
+ * 回复消息先于存储的交互请求落定而提交，因此提交被拒时该请求仍可回答；
+ * 重启后的重试复用由 call 派生的 request id。
  */
 import { createHash } from 'node:crypto'
 import type { Conversation, ConversationId, Harness, InputSubmissionDraft } from '@earendil-works/pi-durable'
@@ -13,6 +13,7 @@ import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
 import { CTX, META } from './helpers.ts'
 
+/** 交互回复 feature 的依赖注入契约：会话句柄获取、会话校验、详情读取与模型策略。 */
 export interface InteractionsDeps {
   harness: () => Harness
   requireConversation(value: string): Promise<Conversation>
@@ -20,17 +21,26 @@ export interface InteractionsDeps {
   assertConversationModelAllowed(conversation: Conversation): Promise<void>
 }
 
+/**
+ * 功能：创建交互回复 feature 服务——回答/放弃 ask_user_question 与计划审阅。
+ * @param deps 依赖注入契约见 InteractionsDeps
+ * 职责边界：只负责交互的答复侧；交互请求的产生在工具层。回复先提交再落定存储，
+ * 保证提交被拒时请求仍可重试回答。
+ */
 export function createInteractionReplies(deps: InteractionsDeps) {
   const { requireConversation, currentDetail, assertConversationModelAllowed } = deps
   const harness = (): Harness => deps.harness()
 
   /**
-   * Submit one reply and record the same request receipt a typed message gets.
-   *
-   * The receipt is what the live projection reads to give in-flight messages the same run
-   * id as the settled entries (`runIdForLive`); without it, an answer looked like a second
-   * run while it streamed. The entry also carries `requestId` so the durable side computes
-   * that id from the request rather than from the entry's row number.
+   * 功能：提交一条回复消息，并记下与手打消息相同的请求回执。
+   * @param conversation 目标会话
+   * @param requestId 幂等请求 ID（由 call 派生）
+   * @param content 回复 JSON 文本
+   * @param entry 随消息附带的 entry 数据
+   * @returns 无返回；已有已接受回执时幂等返回
+   * 内部逻辑：回执是实时投影把流式消息归到与落定条目相同 run id（runIdForLive）
+   * 的依据，没有它回答会被当成第二条运行；entry 同时携带 requestId，让持久层
+   * 按请求而不是按行号计算 id。
    */
   const submitReply = async (
     conversation: Conversation,
@@ -62,6 +72,18 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
 
+  /**
+   * 功能：回答一次计划审阅（批准或要求修改）。
+   * @param conversation 目标会话
+   * @param callId 交互请求 ID
+   * @param review 存储的计划审阅
+   * @param answers 用户的选择（含自定义补充）
+   * @returns 回答后的会话详情
+   * 内部逻辑：非 pending 的审阅已落定，幂等返回；先校验会话模型可用，再由
+   * decidePlanReview 计算决定。批准且会话为只读时按只读措辞收尾。回复以
+   * `plan-review-reply:<callId>` 提交（重启重试幂等），随后把审阅标为 answered，
+   * 批准时一并关闭计划模式。
+   */
   const answerPlanReview = async (
     conversation: Awaited<ReturnType<typeof requireConversation>>,
     callId: string,
@@ -69,7 +91,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     answers: AskUserQuestionAnswerItem[],
   ): Promise<ConversationDetail> => {
     const id = conversation.id
-    // A superseded or already answered review is settled: nothing is waiting and plan mode stays as it is.
+    // 被替换或已回答的审阅已经落定：没有东西在等待，计划模式保持原状。
     if (review.status !== 'pending') return currentDetail(id)
     await assertConversationModelAllowed(conversation)
     const decision = decidePlanReview(review, answers)
@@ -122,10 +144,14 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
   /**
-   * Dismiss a plan review the way ZCode's elicitation decline does: no decision is made, the
-   * plan was not approved, and plan mode stays on. The dismissal is steered first with a
-   * call-derived request id (idempotent across restarts), then the stored review settles as
-   * `cancelled`; a review that already settled is idempotent.
+   * 功能：关闭一次计划审阅，行为对齐 ZCode 的 elicitation decline：不作决定、
+   * 计划未获批、计划模式保持开启。
+   * @param conversation 目标会话
+   * @param callId 交互请求 ID
+   * @param review 存储的计划审阅
+   * @returns 关闭后的会话详情
+   * 内部逻辑：关闭回复先以 call 派生的 request id 投递（跨重启幂等），随后存储的
+   * 审阅落定为 cancelled；已落定的审阅幂等返回。
    */
   const dismissPlanReview = async (
     conversation: Awaited<ReturnType<typeof requireConversation>>,
@@ -155,9 +181,15 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
   /**
-   * Settle one pending interaction. The reply is submitted first, so a rejected submission leaves the
-   * call answerable; the document is marked answered afterwards. The reply entry carries the call id
-   * and `requestId` is derived from it, so a retry after a restart never injects the message twice.
+   * 功能：回答一条 pending 的交互请求（计划审阅之外的问答）。
+   * @param value 会话 ID 字符串
+   * @param callId 交互请求 ID
+   * @param answers 各问题的选择与自定义补充
+   * @returns 回答后的会话详情
+   * 内部逻辑：先校验 callId 与请求存在；计划审阅转 answerPlanReview，已回答幂等
+   * 返回、已取消报 CONFLICT；validateAnswers 校验选项合法。回复先以
+   * `question-reply:<callId>` 提交再落定文档——提交被拒时请求仍可回答，重试
+   * 也不会重复注入消息。
    */
   const answerInteraction = async (value: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail> => {
     const conversation = await requireConversation(value)
@@ -197,8 +229,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     await harness().commit(async (tx) => {
       const doc = await tx.doc(Interactions, id)
       const stored = doc[callId]
-      // Only a pending call settles here: an answer that lost the race against a
-      // dismissal must not resurrect the question.
+      // 只有 pending 的请求在这里落定：输给放弃操作的回答不得复活该问题。
       if (!stored || stored.status !== 'pending') return
       stored.status = 'answered'
       stored.answers = settledAnswers
@@ -208,11 +239,14 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
   /**
-   * Dismiss one pending question set the way DSH's `ASK_CANCELLED` does: nobody answers,
-   * the model is told, and the row can no longer take an answer. The dismissal reply is
-   * steered first with a call-derived `requestId`, so a retry after a restart never tells
-   * the model twice; already-cancelled calls are idempotent, and an answered call is a
-   * conflict because its answers are already on their way.
+   * 功能：放弃一条 pending 的问答组，行为对齐 DSH 的 `ASK_CANCELLED`：无人回答、
+   * 告知模型、该行不再接受回答。
+   * @param value 会话 ID 字符串
+   * @param callId 交互请求 ID
+   * @returns 放弃后的会话详情
+   * 内部逻辑：计划审阅转 dismissPlanReview；已回答报 CONFLICT（答案已在路上），
+   * 已取消幂等返回。放弃回复先以 call 派生的 requestId 投递，重启重试不会重复
+   * 告知模型。
    */
   const cancelInteraction = async (value: string, callId: string): Promise<ConversationDetail> => {
     const conversation = await requireConversation(value)

@@ -22,16 +22,19 @@ import {
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './PluginsPanel.module.css'
 
+/** 插件筛选页签的值与中英文案。 */
 const FILTERS: Array<{ id: PluginFilter; zh: string; en: string }> = [
   { id: 'all', zh: '全部', en: 'All' },
   { id: 'available', zh: '可安装', en: 'Available' },
   { id: 'installed', zh: '已安装', en: 'Installed' },
 ]
 
+/** 提取错误的 message 文本；为空时回退到给定的兜底文案。 */
 function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message !== '' ? cause.message : fallback
 }
 
+/** 按界面语言把时间戳格式化为「月/日 时:分」；格式化失败回退 ISO 字符串。 */
 function timestamp(value: number, locale: string): string {
   try {
     return new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(value)
@@ -40,6 +43,16 @@ function timestamp(value: number, locale: string): string {
   }
 }
 
+/**
+ * 功能：插件市场面板——顶部为刷新/创建插件/添加市场操作与市场来源卡；
+ * 中部为筛选页签、搜索框与插件卡片网格（安装/更新/启停/卸载）；底部为
+ * 诊断列表与安装/更新确认弹窗（展示插件将运行的 MCP 命令与能力清单）。
+ * @param props onCreatePlugin 打开「创建插件」流程的回调（缺省时按钮不渲染）。
+ * 内部逻辑：overview 经 load 拉取并以请求序号丢弃过期响应；api.watchPlugins 订阅
+ * 服务端推送的完整概览（有变更即全量推送，无需轮询）；存在运行中操作时每 800ms
+ * 静默刷新；act 以 busy[key] 防重入；install/update 先 describePlugin 拉详情弹确认框
+ * （安装等于信任其 MCP 命令以当前用户权限运行），确认后才真正执行。
+ */
 export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () => void }) {
   const { settings } = useUiPreferences()
   const t = useCallback((zh: string, en: string) => settings.locale === 'en' ? en : zh, [settings.locale])
@@ -55,6 +68,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
   const [describing, setDescribing] = useState<string | undefined>(undefined)
   const requestSequence = useRef(0)
 
+  /** 拉取插件概览：quiet 为 true 时不进入加载态（用于后台轮询）；序号防过期响应。 */
   const load = useCallback(async (quiet = false) => {
     const request = ++requestSequence.current
     if (!quiet) setLoading(true)
@@ -73,7 +87,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
 
   useEffect(() => { void load() }, [load])
 
-  // Every store mutation pushes a full overview; the panel never needs to poll for progress.
+  // 每次插件库变更服务端都会推送完整概览；面板无需为进度轮询。
   useEffect(() => {
     const source = api.watchPlugins((next) => {
       setOverview(next)
@@ -90,6 +104,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
     return () => clearInterval(timer)
   }, [running, load])
 
+  /** 执行单个插件操作：busy[key] 防重入，成功应用返回的概览，失败写 error。 */
   const act = async (key: string, action: () => Promise<PluginOverview>) => {
     if (busy[key]) return
     setBusy(value => ({ ...value, [key]: true }))
@@ -108,7 +123,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
     }
   }
 
-  /** Installing runs a plugin's MCP commands, so the user sees them before anything is written. */
+  /** 安装/更新前先读取插件详情弹确认框：安装会运行其 MCP 命令，先让用户看清再写盘。 */
   const requestAction = async (item: PluginStoreItem, mode: 'install' | 'update') => {
     if (describing !== undefined) return
     setDescribing(item.id)
@@ -122,6 +137,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
     }
   }
 
+  /** 确认弹窗点击后真正执行安装/更新，随后重新拉取概览。 */
   const confirmAction = async () => {
     const target = confirm
     if (target === null) return
@@ -134,6 +150,7 @@ export default function PluginsPanel({ onCreatePlugin }: { onCreatePlugin?: () =
     })
   }
 
+  /** 添加市场来源（本地目录或 HTTPS 地址）：成功清空输入并收起表单。 */
   const addSource = async () => {
     const value = source.trim()
     if (value === '' || busy['add-source']) return

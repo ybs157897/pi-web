@@ -15,15 +15,17 @@ import {
   type NormalizedPluginSource,
 } from './types.ts'
 
+/** 市场来源：本地绝对目录或指向 marketplace.json 的 HTTPS URL。 */
 export interface MarketplaceSource {
   kind: 'directory' | 'url'
   source: string
-  /** Absolute local directory for `kind: 'directory'`. */
+  /** `kind: 'directory'` 时的绝对本地目录。 */
   root?: string
-  /** HTTPS URL for `kind: 'url'`. */
+  /** `kind: 'url'` 时的 HTTPS URL。 */
   url?: string
 }
 
+/** 一次物化的结果：来源指纹、来源类型与总字节数。 */
 export interface MaterializedPlugin {
   fingerprint: string
   sourceType: 'directory' | 'zip' | 'github' | 'git'
@@ -34,11 +36,16 @@ const GITHUB_ARCHIVE = 'https://codeload.github.com'
 const GIT_TIMEOUT_MS = 120_000
 const execFileAsync = promisify(execFile)
 
+/** 判断主机名是否为环回地址（localhost / 127.0.0.1 / ::1 / *.localhost）。 */
 function isLoopback(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/gu, '').toLowerCase()
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')
 }
 
+/**
+ * 功能：校验来源 URL：必须是 https（http 仅限环回），且不得带凭据或 fragment。
+ * @returns 解析后的 URL 对象；非法时抛 PLUGIN_SOURCE_INVALID
+ */
 function checkedUrl(raw: string): URL {
   let url: URL
   try {
@@ -52,6 +59,7 @@ function checkedUrl(raw: string): URL {
   throw new RuntimeError('PLUGIN_SOURCE_INVALID', 'Sources must use HTTPS (HTTP is allowed only for loopback)')
 }
 
+/** 流式读取响应体并实时累计字节，超过 limit 立即取消读取并抛错。 */
 async function readBoundedResponse(response: Response, limit: number): Promise<Buffer> {
   const reader = response.body?.getReader()
   if (reader === undefined) return Buffer.alloc(0)
@@ -70,7 +78,7 @@ async function readBoundedResponse(response: Response, limit: number): Promise<B
   return Buffer.concat(chunks)
 }
 
-/** Fetch one URL with the source rules; `undefined` means HTTP 404, other failures throw. */
+/** 按来源规则抓取一个 URL；HTTP 404 返回 undefined，其余失败抛错（PROVIDER_ERROR / PLUGIN_SOURCE_INVALID）。 */
 async function fetchBoundedOrMissing(raw: string, limit: number): Promise<Buffer | undefined> {
   const url = checkedUrl(raw)
   let response: Response
@@ -90,12 +98,14 @@ async function fetchBoundedOrMissing(raw: string, limit: number): Promise<Buffer
   return await readBoundedResponse(response, limit)
 }
 
+/** fetchBoundedOrMissing 的必得版本：404 也抛 PROVIDER_ERROR。 */
 async function fetchBounded(raw: string, limit: number): Promise<Buffer> {
   const bytes = await fetchBoundedOrMissing(raw, limit)
   if (bytes === undefined) throw new RuntimeError('PROVIDER_ERROR', 'Plugin source returned HTTP 404')
   return bytes
 }
 
+/** 校验 git 仓库 URL：必须是 https 且不得带凭据或 fragment；返回规范化的 URL 字符串。 */
 function checkedGitUrl(raw: string): string {
   let url: URL
   try {
@@ -108,7 +118,7 @@ function checkedGitUrl(raw: string): string {
   return url.toString()
 }
 
-/** A GitHub zipball wrapper holds one top-level directory; a plain zip may not. */
+/** GitHub zipball 外面套一层顶层目录，普通 zip 未必；只有一个子目录时穿透进它。 */
 async function extractedRoot(directory: string): Promise<string> {
   const items = (await readdir(directory, { withFileTypes: true }))
     .filter(item => item.name !== '__MACOSX' && item.name !== '.DS_Store')
@@ -116,6 +126,7 @@ async function extractedRoot(directory: string): Promise<string> {
   return directory
 }
 
+/** 取仓库内的插件子目录：未声明 subpath 用根；声明了则校验在根内、真实存在且非符号链接目录。 */
 async function packageSubtree(root: string, subpath: string | undefined): Promise<string> {
   if (subpath === undefined) return root
   const target = resolve(root, subpath)
@@ -130,6 +141,16 @@ async function packageSubtree(root: string, subpath: string | undefined): Promis
   return target
 }
 
+/**
+ * 功能：把 zip 字节流物化到 staging 目标目录（zip / github 来源共用）。
+ * @param bytes 压缩包字节
+ * @param destination staging 目标目录
+ * @param subpath 包内插件子目录（可选）
+ * @param sourceType 来源类型，写入结果
+ * @param fingerprint 预计算指纹（zip 来源带下载内容的 sha256；github 不带）
+ * 内部逻辑：先解压到独立 `.unpack-*` 临时目录，穿透 zipball 包装目录、定位子树
+ * 后复制到 destination；无论成败 finally 都清理临时目录。
+ */
 async function materializeArchive(
   bytes: Buffer,
   destination: string,
@@ -149,6 +170,11 @@ async function materializeArchive(
   }
 }
 
+/**
+ * 功能：从 codeload.github.com 下载 zipball 并物化 github 来源。
+ * 内部逻辑：ref 为空取 HEAD；ref 是 7–40 位十六进制当作提交直接用，否则依次
+ * 尝试 refs/heads/ 与 refs/tags/ 前缀；全部 404 报 PROVIDER_ERROR。
+ */
 async function materializeGithub(
   source: Extract<NormalizedPluginSource, { kind: 'github' }>,
   destination: string,
@@ -168,6 +194,11 @@ async function materializeGithub(
   return await materializeArchive(bytes, destination, source.path, 'github')
 }
 
+/**
+ * 功能：git clone（浅克隆单分支、禁终端交互、限时 120s）后物化 git 来源。
+ * 内部逻辑：克隆到独立 `.clone-*` 临时目录，删除 .git 后按 subpath 定位子树并
+ * 复制到 destination；clone 失败抛 PLUGIN_SOURCE_INVALID；finally 清理临时目录。
+ */
 async function materializeGit(
   source: Extract<NormalizedPluginSource, { kind: 'git' }>,
   destination: string,
@@ -197,7 +228,7 @@ async function materializeGit(
   }
 }
 
-/** Accept an absolute local marketplace directory or an HTTPS URL to its marketplace.json. */
+/** 解析市场来源声明：接受本地绝对目录路径或指向 marketplace.json 的 HTTPS URL。 */
 export function parseMarketplaceSource(source: string): MarketplaceSource {
   if (/^https?:\/\//iu.test(source)) {
     const url = checkedUrl(source)
@@ -207,6 +238,14 @@ export function parseMarketplaceSource(source: string): MarketplaceSource {
   return { kind: 'directory', source, root: resolve(source) }
 }
 
+/**
+ * 功能：加载市场目录并归一化。
+ * @param source parseMarketplaceSource 的结果
+ * @returns NormalizedCatalog（按市场 kind 归一化各条目来源）
+ * 内部逻辑：URL 来源走受限下载 + normalizeCatalog；本地目录要求 realpath 后仍是
+ * 普通目录、marketplace.json 是常规文件且不超 4 MB，再 JSON 解析并归一化；
+ * 目录/文件缺失抛 MARKETPLACE_NOT_FOUND。
+ */
 export async function loadMarketplace(source: MarketplaceSource): Promise<NormalizedCatalog> {
   if (source.kind === 'url') {
     if (source.url === undefined) throw new RuntimeError('PLUGIN_SOURCE_INVALID', 'Marketplace URL is missing')
@@ -249,11 +288,19 @@ export async function loadMarketplace(source: MarketplaceSource): Promise<Normal
   return normalizeCatalog(value, 'directory')
 }
 
+/** 判断 target 是否位于 root 内（含等于 root），防路径逃逸。 */
 function within(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/**
+ * 功能：把本地插件目录递归复制到目标目录并计算来源指纹。
+ * @returns `{ fingerprint, sourceType: 'directory', bytes }`
+ * 内部逻辑：realpath 后必须是普通目录；遍历按名称排序，条目数/单文件/总量均受
+ * 上限约束；符号链接与非常规文件直接拒绝；指纹 = 对「相对路径\0文件内容sha256」
+ * 序列再取 sha256；可执行位保留（0o700），否则 0o600。
+ */
 async function copyDirectory(source: string, destination: string): Promise<MaterializedPlugin> {
   let root: string
   try {
@@ -298,16 +345,19 @@ async function copyDirectory(source: string, destination: string): Promise<Mater
   return { fingerprint: `sha256:${digest.digest('hex')}`, sourceType: 'directory', bytes: total }
 }
 
+/** 读小端 16 位；越界抛「ZIP 已截断」。 */
 function u16(buffer: Buffer, offset: number): number {
   if (offset + 2 > buffer.length) throw new RuntimeError('PLUGIN_SOURCE_INVALID', 'ZIP archive is truncated')
   return buffer.readUInt16LE(offset)
 }
 
+/** 读小端 32 位；越界抛「ZIP 已截断」。 */
 function u32(buffer: Buffer, offset: number): number {
   if (offset + 4 > buffer.length) throw new RuntimeError('PLUGIN_SOURCE_INVALID', 'ZIP archive is truncated')
   return buffer.readUInt32LE(offset)
 }
 
+/** 中央目录中的一个条目。 */
 interface ZipEntry {
   name: string
   method: number
@@ -318,6 +368,7 @@ interface ZipEntry {
   flags: number
 }
 
+/** 从尾部倒序扫描 EOCD 魔数（含可能的 zip 注释），返回其偏移；找不到抛错。 */
 function findEndOfCentralDirectory(buffer: Buffer): number {
   const minimum = Math.max(0, buffer.length - 22 - 0xffff)
   for (let offset = buffer.length - 22; offset >= minimum; offset -= 1) {
@@ -328,6 +379,7 @@ function findEndOfCentralDirectory(buffer: Buffer): number {
   throw new RuntimeError('PLUGIN_SOURCE_INVALID', 'ZIP archive has no central directory')
 }
 
+/** 解析中央目录：拒绝 ZIP64、越界与超量条目，逐条校验魔数与名称长度后返回条目列表。 */
 function zipEntries(buffer: Buffer): ZipEntry[] {
   const end = findEndOfCentralDirectory(buffer)
   const count = u16(buffer, end + 10)
@@ -360,6 +412,7 @@ function zipEntries(buffer: Buffer): ZipEntry[] {
   return entries
 }
 
+/** 条目名安全化：拒绝 NUL/反斜杠/盘符/绝对路径与 `..` 上跳（防 Zip Slip）；返回归一化路径。 */
 function zipEntryName(name: string): string {
   if (name.includes('\0') || name.includes('\\') || /^[A-Za-z]:/u.test(name) || name.startsWith('/')) {
     throw new RuntimeError('PLUGIN_SOURCE_INVALID', `ZIP entry path is unsafe: ${name}`)
@@ -369,6 +422,13 @@ function zipEntryName(name: string): string {
   return segments.join('/')
 }
 
+/**
+ * 功能：把 zip 字节流安全解包到 destination（自研解析，不依赖 zip 库）。
+ * @returns `{ fingerprint, sourceType: 'zip', bytes }`；指纹是整个压缩包字节的 sha256
+ * 内部逻辑：逐条目校验——符号链接/特殊文件/加密/不支持的压缩方法/ZIP64/重复
+ * 条目/条目数与大小超限全部拒绝；解压（仅 store 与 deflate）后核对解压尺寸，
+ * 再用 within 复核落点在 destination 内（防 Zip Slip）；目录条目跳过。
+ */
 async function extractZip(buffer: Buffer, destination: string): Promise<MaterializedPlugin> {
   const entries = zipEntries(buffer)
   await mkdir(destination, { recursive: true, mode: 0o700 })
@@ -431,7 +491,16 @@ async function extractZip(buffer: Buffer, destination: string): Promise<Material
   }
 }
 
-/** Copy or download one plugin package into a staging directory. */
+/**
+ * 功能：把一个目录来源的插件复制、或下载远端包并物化，统一送入 staging 目录。
+ * @param source 归一化后的插件来源
+ * @param options.marketplaceRoot 本地市场根（directory 来源必填）
+ * @param options.destination staging 目标目录
+ * @returns MaterializedPlugin（含指纹与类型）
+ * 内部逻辑（各来源物化规则）：directory 从市场根内解析相对路径并复制；zip 下载
+ * 后先核 sha256 校验和（不符抛 PLUGIN_CHECKSUM_MISMATCH）再解压；github 下载
+ * zipball；git 浅克隆；unsupported 抛 PLUGIN_UNSUPPORTED_SOURCE。
+ */
 export async function materializePluginSource(
   source: NormalizedPluginSource,
   options: { marketplaceRoot?: string; destination: string },
@@ -457,7 +526,7 @@ export async function materializePluginSource(
   throw new RuntimeError('PLUGIN_UNSUPPORTED_SOURCE', source.reason)
 }
 
-/** Best-effort staging directory name so a crash cannot collide with the next attempt. */
+/** 生成 staging 目录名：`<root>/<事务ID>/<名称>-<随机后缀>`，崩溃后不会与下次尝试相撞。 */
 export function stagingDirectory(root: string, transactionId: string, name: string): string {
   return join(root, transactionId, `${name}-${randomUUID().slice(0, 8)}`)
 }

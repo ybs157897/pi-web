@@ -9,9 +9,10 @@ import {
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './GoalBar.module.css'
 
+/** 目标所处阶段：进行中 / 已暂停 / 受阻 / 已完成。 */
 export type GoalBarPhase = 'active' | 'paused' | 'blocked' | 'complete'
 
-/** The goal as `ConversationDetail.goal` carries it; same shape as the server's `pi-web.goal` document. */
+/** `ConversationDetail.goal` 携带的目标状态，与服务端 `pi-web.goal` 文档同构。 */
 export type GoalBarState = {
   id: string
   revision: number
@@ -22,9 +23,10 @@ export type GoalBarState = {
   blockedReason?: string
 }
 
-/** Requests the bar raises; App maps them onto `POST /api/conversations/:id/goal`. */
+/** 目标栏发起的请求；App 将其映射到 `POST /api/conversations/:id/goal`。 */
 export type GoalBarAction = 'pause' | 'resume' | 'edit' | 'clear'
 
+/** 各阶段的展示文案（中/英双语对）。 */
 const PHASE_LABEL: Record<Exclude<GoalBarPhase, 'complete'>, [chinese: string, english: string]> = {
   active: ['进行中的目标', 'Active goal'],
   paused: ['已暂停的目标', 'Paused goal'],
@@ -32,9 +34,14 @@ const PHASE_LABEL: Record<Exclude<GoalBarPhase, 'complete'>, [chinese: string, e
 }
 
 /**
- * DSH's goal dock: sits above the composer card like `TodoPanel`, shows the phase, the truncated
- * objective and the round budget, and raises pause/resume/edit/clear for the hosting route. A
- * completed goal hides the bar; editing happens inline and an empty objective cannot be saved.
+ * 功能：DSH 的目标停靠栏（goal dock）——像 `TodoPanel` 一样位于输入卡上方，
+ * 展示阶段标签、截断的目标内容与轮次预算，并向宿主路由发起暂停/恢复/编辑/清除。
+ * 已完成的目标整体隐藏；编辑为行内输入，空目标不可保存。
+ * @param props goal 目标状态（null/undefined 或 phase=complete 时不渲染）；
+ *              onSetState 以动作名与可选 payload 回调（edit 附 objective）。
+ * 内部逻辑：editing/draft 控制行内编辑；进入编辑时自动聚焦并全选输入框，
+ * goalId 变化时退出编辑；blocked 阶段的悬浮提示显示 blockedReason，否则显示目标内容；
+ * submitEdit 校验 trim 非空后回调 edit 并退出编辑；暂停/恢复按钮按 phase 二选一渲染。
  */
 export default function GoalBar({ goal, onSetState }: {
   goal?: GoalBarState | null
@@ -55,6 +62,7 @@ export default function GoalBar({ goal, onSetState }: {
   const label = t(...PHASE_LABEL[goal.phase])
   const rounds = t(`轮次 ${goal.roundsStarted}/${goal.maxGoalRounds}`, `Round ${goal.roundsStarted}/${goal.maxGoalRounds}`)
   const objective = goal.objective
+  /** 提交行内编辑：trim 后非空才回调 onSetState('edit')，随后退出编辑态。 */
   const submitEdit = () => {
     const next = draft.trim()
     if (next === '') return

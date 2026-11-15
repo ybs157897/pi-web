@@ -1,5 +1,6 @@
 import type { GitWorktreeStatus } from '../../../shared/types.ts'
 
+/** 生成提交说明所需的上下文输入：分支、改动文件、文本差异与语言。 */
 export interface CommitContextInput {
   branchName: string | null
   files: GitWorktreeStatus['files']
@@ -9,7 +10,7 @@ export interface CommitContextInput {
 
 const MAX_MESSAGE_CHARS = 4_000
 
-/** One clean commit message: no fences, labels, surrounding quotes or runaway blank lines. */
+/** 清洗出一条干净的提交说明：去掉代码围栏、标签前缀、首尾引号与失控的连续空行。 */
 export function normalizeCommitMessage(input: string): string {
   let text = input.replace(/\r\n?/gu, '\n').trim()
   text = text.replace(/^```[a-zA-Z]*\n?/u, '').replace(/\n?```$/u, '').trim()
@@ -22,6 +23,7 @@ export function normalizeCommitMessage(input: string): string {
   return text.slice(0, MAX_MESSAGE_CHARS)
 }
 
+/** 提交说明生成的系统提示词：祈使句首行 ≤ 72 字符、只返回说明本身、按 locale 定语言。 */
 export function commitMessageSystemPrompt(locale: 'zh' | 'en'): string {
   return [
     '为提供的工作区改动编写一条 Git 提交说明。',
@@ -32,7 +34,7 @@ export function commitMessageSystemPrompt(locale: 'zh' | 'en'): string {
   ].join('\n')
 }
 
-/** Frame the branch, file stats and diff as plain text; delimit the diff so file text cannot be mistaken for instructions. */
+/** 把分支、文件统计与差异拼成纯文本上下文；差异用 `<<<DIFF…DIFF>>>` 包住，文件文本不会被误当成指令。 */
 export function frameCommitContext(input: CommitContextInput): string {
   const fileLines = input.files.slice(0, 120).map(file => {
     const counts = file.added + file.removed > 0 ? ` +${file.added} -${file.removed}` : ''

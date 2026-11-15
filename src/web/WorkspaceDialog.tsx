@@ -4,6 +4,7 @@ import type { AddWorkspaceInput, WorkspaceSummary } from '../shared/types.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './WorkspaceDialog.module.css'
 
+/** WorkspaceDialog 的属性定义：开关态、工作区列表与选择/创建回调。 */
 interface WorkspaceDialogProps {
   open: boolean
   workspaces: readonly WorkspaceSummary[]
@@ -14,7 +15,16 @@ interface WorkspaceDialogProps {
   onCreate: (input: AddWorkspaceInput) => Promise<WorkspaceSummary>
 }
 
-/** Select a registered workspace or register an existing local directory. */
+/**
+ * 功能：工作区对话框——Modal 浮层，上半部分为已注册工作区的选择列表，
+ * 下半部分为「添加已有目录」表单，把本地目录注册为工作区。
+ * @param props open 是否打开；workspaces 已注册工作区列表；currentWorkspaceId 当前选中工作区；
+ *              busy 外部是否忙碌（禁用交互）；onClose 关闭回调；onSelect 选中已有工作区回调；
+ *              onCreate 注册新目录（返回新建的 WorkspaceSummary）。
+ * 内部逻辑：path/name/error/creating 四个状态驱动添加表单；addWorkspace 校验路径非空后
+ * 调 onCreate，成功则清空表单并自动选中新工作区，失败把错误信息写入 error 展示；
+ * 表单 submit 与按钮共用 addWorkspace，creating/busy 期间禁用全部交互。
+ */
 export default function WorkspaceDialog({ open, workspaces, currentWorkspaceId, busy = false, onClose, onSelect, onCreate }: WorkspaceDialogProps) {
   const { t } = useUiPreferences()
   const [path, setPath] = useState('')
@@ -22,6 +32,7 @@ export default function WorkspaceDialog({ open, workspaces, currentWorkspaceId, 
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
 
+  /** 提交「添加已有目录」表单：校验路径、调用 onCreate 注册、成功后自动选中新工作区。 */
   const addWorkspace = async (): Promise<void> => {
     const normalizedPath = path.trim()
     if (normalizedPath === '') {

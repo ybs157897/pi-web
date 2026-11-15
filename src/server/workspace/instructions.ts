@@ -3,9 +3,12 @@ import { constants } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 
+/** 工作区根的项目指令文件名。 */
 export const PROJECT_INSTRUCTIONS_FILE = 'AGENTS.md'
+/** 项目指令文件的大小上限（32 KB）。 */
 export const MAX_PROJECT_INSTRUCTIONS_BYTES = 32 * 1024
 
+/** 加载失败的归因码（进入诊断与提示词的安全措辞）。 */
 export type ProjectInstructionsReason =
   | 'workspace-not-provided'
   | 'workspace-not-absolute'
@@ -21,6 +24,7 @@ export type ProjectInstructionsReason =
   | 'source-invalid-utf8'
   | 'source-read-failed'
 
+/** 项目指令加载结果：状态、来源、指纹与内容（或归因码）。 */
 export interface ProjectInstructionsRecord {
   status: 'loaded' | 'missing' | 'error' | 'unavailable'
   workspaceRoot: string | null
@@ -32,17 +36,20 @@ export interface ProjectInstructionsRecord {
   reason?: ProjectInstructionsReason
 }
 
+/** 判断 target 是否位于 root 内（含等于 root），防路径逃逸。 */
 function isWithin(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/** 取 Node 错误对象的 code 字符串。 */
 function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
     ? error.code
     : undefined
 }
 
+/** 构造「工作区本身不可用」的记录（未进入读取阶段）。 */
 function unavailable(reason: ProjectInstructionsReason): ProjectInstructionsRecord {
   return {
     status: 'unavailable',
@@ -55,6 +62,7 @@ function unavailable(reason: ProjectInstructionsReason): ProjectInstructionsReco
   }
 }
 
+/** 构造「已定位到文件但读取失败」的记录。 */
 function failed(workspaceRoot: string, source: string, reason: ProjectInstructionsReason): ProjectInstructionsRecord {
   return {
     status: 'error',
@@ -67,10 +75,12 @@ function failed(workspaceRoot: string, source: string, reason: ProjectInstructio
   }
 }
 
+/** 两个 stat 结果是否指向同一文件（dev + inode 比较）。 */
 function sameFile(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
+/** 逐段检查路径上是否存在符号链接组件（从根走到底）。 */
 async function containsSymlinkComponent(path: string): Promise<boolean> {
   const pathRoot = parse(path).root
   let current = pathRoot
@@ -81,7 +91,15 @@ async function containsSymlinkComponent(path: string): Promise<boolean> {
   return false
 }
 
-/** Read only the selected workspace's root AGENTS.md. No parent or descendant discovery is performed. */
+/**
+ * 功能：只读取所选工作区根的 AGENTS.md，不做任何父目录或后代目录发现。
+ * @param workspacePath 工作区路径（必须绝对、非符号链接、canonical）
+ * @returns ProjectInstructionsRecord：loaded / missing / error / unavailable 四态
+ * 内部逻辑：工作区先经 lstat + 逐段符号链接检查 + realpath 校验（路径非 canonical
+ * 时按 unavailable 处理）；文件必须是非链接常规文件且 ≤ 32 KB；读取用 O_NOFOLLOW
+ * （Windows 缺失时以打开前后两次 lstat + dev/ino/mtime/ctime 比对近似替代），读完
+ * 再核对文件未被换走；最后严格 UTF-8 解码并拒绝 NUL。
+ */
 export async function loadProjectInstructions(workspacePath: string | undefined): Promise<ProjectInstructionsRecord> {
   if (typeof workspacePath !== 'string' || workspacePath.trim() === '') {
     return unavailable('workspace-not-provided')
@@ -156,9 +174,9 @@ export async function loadProjectInstructions(workspacePath: string | undefined)
     if (!sameFile(sourceInfo, before)) return failed(root, source, 'source-changed-during-read')
     if (before.size > MAX_PROJECT_INSTRUCTIONS_BYTES) return failed(root, source, 'source-too-large')
 
-    // Windows may not provide O_NOFOLLOW. In that case, verify the opened handle
-    // matches the checked regular path before reading any bytes, then check it again after.
-    // This detects path swaps around the read but cannot make path lookup atomic without kernel support.
+    // Windows 可能没有 O_NOFOLLOW。此时在真正读字节前先验证打开的句柄与已检查的
+    // 常规路径一致，读完后再核对一次。这能发现读取前后的路径替换，但没有内核
+    // 支持就无法让路径查找完全原子。
     let pathBeforeRead
     try {
       pathBeforeRead = await lstat(source)
@@ -226,9 +244,10 @@ export async function loadProjectInstructions(workspacePath: string | undefined)
 const BODY_TAG = 'project_instructions'
 
 /**
- * Render the record as one status line plus the Markdown body inside a delimiter tag. A literal
- * closing tag inside the body is escaped so quoted content cannot end the block early. Provenance
- * internals (sha256, byte count) stay in the record and out of the prompt.
+ * 功能：把记录渲染为一行状态说明加分隔标签包住的 Markdown 正文。
+ * @returns loaded：适用范围声明 + 标签包裹的正文（正文里出现字面 `</project_instructions`
+ * 会被转义，防止引用内容提前结束块）；missing：未找到提示；其余：无法加载说明，
+ * 明确「规则未知、不要声称已遵循」。sha256 与字节数等溯源细节只留在记录里，不进提示词。
  */
 export function renderProjectInstructions(record: ProjectInstructionsRecord): string {
   const source = record.source ?? PROJECT_INSTRUCTIONS_FILE

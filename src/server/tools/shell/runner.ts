@@ -10,17 +10,22 @@ import type { Context } from '@earendil-works/chord/context'
 import { withNoMatchSuccess } from './common.ts'
 import { LegacyAwareDecoder } from '../shared/text-decode.ts'
 
+/** 单次 shell 工具输出的最大字节数（保留尾部）。 */
 export const MAX_OUTPUT_BYTES = 50 * 1_024
+/** 单次 shell 工具输出的最大行数。 */
 export const MAX_OUTPUT_LINES = 2_000
-/** Foreground budget before a command is promoted to a pollable session (codex `yield_time_ms`). */
+/** 前台等待预算：超过后命令让渡为可轮询会话（对应 codex 的 `yield_time_ms`）。 */
 export const YIELD_TIME_MS = 10_000
+/** 模型可传的最小让渡毫秒数。 */
 export const MIN_YIELD_TIME_MS = 250
+/** 模型可传的最大让渡毫秒数。 */
 export const MAX_YIELD_TIME_MS = 30_000
-/** Per-session output-buffer cap; the spill file keeps the full output beyond it. */
+/** 单会话内存输出缓冲上限；超限部分由落盘 spill 文件保存完整输出。 */
 export const MAX_SESSION_BUFFER_BYTES = 1_024 * 1_024
-/** Live command sessions; a real resource, so the container bounds it. */
+/** 同时存活的 shell 会话上限；会话是真实资源（进程 + 文件句柄），必须限流。 */
 export const MAX_SHELL_SESSIONS = 20
 
+/** bash/pwsh 工具的 structuredOutput schema：增量/累计输出、截断标记、退出码及让渡后的会话信息。 */
 export const SHELL_OUTPUT_SCHEMA = Type.Object({
   output: Type.String(),
   truncated: Type.Boolean(),
@@ -30,6 +35,7 @@ export const SHELL_OUTPUT_SCHEMA = Type.Object({
   sessionId: Type.Optional(Type.String()),
 })
 
+/** shell_session 工具的 structuredOutput schema：增量输出、运行/退出状态、退出码与会话信息。 */
 export const SESSION_OUTPUT_SCHEMA = Type.Object({
   output: Type.String(),
   status: Type.Union([Type.Literal('running'), Type.Literal('exited')]),
@@ -39,7 +45,7 @@ export const SESSION_OUTPUT_SCHEMA = Type.Object({
   fullOutputPath: Type.Optional(Type.String()),
 })
 
-/** One command that outlived its caller and is kept pollable across tool calls. */
+/** 一条比调用方活得久、可跨工具调用轮询的命令会话。 */
 export interface ShellSession {
   id: string
   child: ChildProcess | undefined
@@ -49,11 +55,11 @@ export interface ShellSession {
   timeoutTimer: NodeJS.Timeout | undefined
   outputPath: string
   outputStream: WriteStream | undefined
-  /** Decoded output accumulated while the session is live; the spill file keeps everything. */
+  /** 会话存活期间累计的已解码输出；完整内容始终由 spill 文件保存。 */
   buffer: string
   bufferTruncated: boolean
   outputBytes: number
-  /** Consumed-character cursor of the last `shell_session` read. */
+  /** 上一次 `shell_session` 读取已消费到的字符游标。 */
   cursor: number
   exited: boolean
   exitCode: number | null
@@ -61,9 +67,13 @@ export interface ShellSession {
   listeners: Set<() => void>
 }
 
+/** 模块级会话表：sessionId → 会话。服务进程生命周期内共享。 */
 const shellSessions = new Map<string, ShellSession>()
 
-/** Stop every live command session. Called when the server closes. */
+/**
+ * 功能：停止所有存活的命令会话（服务关闭时调用）。
+ * 内部逻辑：逐个清掉超时定时器、关闭输出流；未退出的会话杀掉进程树，最后清空会话表。
+ */
 export function disposeShellSessions(): void {
   for (const session of shellSessions.values()) {
     if (session.timeoutTimer !== undefined) clearTimeout(session.timeoutTimer)
@@ -73,15 +83,24 @@ export function disposeShellSessions(): void {
   shellSessions.clear()
 }
 
+/**
+ * 功能：返回当前存活 shell 会话的数量（供监控/诊断用）。
+ * @returns 会话表大小。
+ */
 export function activeShellSessionCount(): number {
   return shellSessions.size
 }
 
+/**
+ * 功能：唤醒并清空会话的所有等待者（新输出或退出时通知轮询方）。
+ * @param session 目标会话。
+ */
 function notifySession(session: ShellSession): void {
   for (const listener of session.listeners) listener()
   session.listeners.clear()
 }
 
+/** runShellCommand 的运行参数包：平台适配器提供可执行文件、环境、旧编码与进程树终止器。 */
 export interface ShellRunSpec {
   command: string
   program: string
@@ -90,13 +109,18 @@ export interface ShellRunSpec {
   env: NodeJS.ProcessEnv
   legacyEncoding: string | null
   timeoutSeconds: number
-  /** Embedding/tests may shorten the foreground budget; tools keep the 10s default. */
+  /** 嵌入方/测试可缩短前台等待预算；工具保持默认 10 秒。 */
   yieldTimeMs?: number
   kill: (child: ChildProcess | undefined) => void
   api: ToolExecutionApi
   context: Context
 }
 
+/**
+ * 功能：生成 shell 完整输出的落盘文件路径。
+ * 内部逻辑：在系统临时目录下建 `pi-web-shell` 目录，文件名含时间戳与 UUID，避免并发冲突。
+ * @returns 日志文件绝对路径。
+ */
 function outputFilePath(): string {
   const directory = resolve(tmpdir(), 'pi-web-shell')
   mkdirSync(directory, { recursive: true })
@@ -104,10 +128,14 @@ function outputFilePath(): string {
 }
 
 /**
- * Run one shell command with streaming output, a retained tail, a full-output log, and codex-style
- * yielding: after `yieldTimeMs` a still-running command is promoted to a pollable session that
- * survives this call, and later turns read it through `shell_session`. Platform adapters supply the
- * executable, environment, legacy encoding, and process-tree killer.
+ * 功能：执行一条 shell 命令：流式输出、保留尾部、完整输出落盘日志，以及 codex 风格的
+ * 让渡——`yieldTimeMs` 后仍在运行的命令被提升为可轮询会话，跨调用存活，由后续回合经
+ * `shell_session` 读取。平台适配器提供可执行文件、环境、旧编码与进程树终止器。
+ * 边界：超时定时器到点杀进程并报 timeout；abort 时杀进程并 reject；会话数达
+ * MAX_SHELL_SESSIONS 上限时杀进程并报 session_limit；输出超过 MAX_OUTPUT_BYTES 时提示
+ * 完整输出路径。
+ * @param spec 命令与运行参数（ShellRunSpec）。
+ * @returns 标准 shell 工具结果；让渡时 status=running 并带 sessionId。
  */
 export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecutionResult> {
   const { api, context, command, kill } = spec
@@ -125,6 +153,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
   let yieldTimer: NodeJS.Timeout | undefined
 
   return await new Promise<ToolExecutionResult>((resolvePromise, rejectPromise) => {
+    /** 惰性创建完整输出日志文件（追加写、权限 0600），保证路径只建一次。 */
     const ensureOutput = (): string => {
       if (outputPath !== undefined) return outputPath
       outputPath = outputFilePath()
@@ -133,13 +162,18 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       return outputPath
     }
 
+    /**
+     * 输出的统一出口：未结算时流给 api.output（调用可能已结算/中止，静默吞错）；
+     * 会话存活时累计进缓冲（超过 MAX_SESSION_BUFFER_BYTES 即停止缓冲，落盘兜底）；
+     * 始终追加写入完整输出文件。
+     */
     const writeOutput = (text: string): void => {
       if (text === '') return
       if (!settled) {
         try {
           api.output(text)
         } catch {
-          // The call may already be settled or aborted.
+          // 调用可能已经结算或中止。
         }
       }
       if (session !== undefined && !session.exited) {
@@ -165,6 +199,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       if (outputStream !== undefined && !outputStream.writableEnded) outputStream.end()
     }
 
+    /** abort 处理：杀掉进程树；未结算时清理定时器/监听并 reject。 */
     const onAbort = (): void => {
       kill(child)
       if (settled) return
@@ -175,6 +210,10 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       rejectPromise(new Error('Command aborted'))
     }
 
+    /**
+     * 前台收尾：结算 promise；输出被裁剪（保留尾部截断或超字节上限）时提示完整输出路径；
+     * 未产生裁剪且日志未满时删除临时日志文件，避免垃圾残留。
+     */
     const finishForeground = (result: ToolExecutionResult): void => {
       if (settled) return
       settled = true
@@ -198,8 +237,8 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
     }
 
     /**
-     * Promote the still-running command into a session: it outlives this call, keeps streaming
-     * into the spill file, and later turns poll it through `shell_session`.
+     * 让渡收尾：把仍在运行的命令提升为会话——它跨本次调用存活，继续把输出流入
+     * spill 文件，后续回合经 `shell_session` 轮询。会话数达上限时改为杀进程并报错。
      */
     const promoteSession = (): void => {
       if (settled) return
@@ -224,7 +263,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       }
       const path = ensureOutput()
       settled = true
-      // A promoted command outlives this run; only the explicit timeout still bounds it.
+      // 被提升的命令比本次运行活得久；此后只有显式 timeout 还在约束它。
       context.abortSignal?.removeEventListener('abort', onAbort)
       session = {
         id: `sh_${randomUUID().slice(0, 8)}`,
@@ -237,8 +276,8 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
         outputStream,
         buffer: '',
         bufferTruncated: false,
-        // The buffer only carries post-promotion output, but the byte budget counts the whole
-        // command so a chatty first phase still spills instead of growing the buffer forever.
+        // 缓冲只承载提升之后的输出，但字节预算统计整条命令，让多话的前半程也触发
+        // 落盘，而不是让缓冲无限增长。
         outputBytes,
         cursor: 0,
         exited: false,
@@ -251,7 +290,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       try {
         api.output(note)
       } catch {
-        // The call may already be settled.
+        // 调用可能已经结算。
       }
       resolvePromise({
         structuredOutput: {
@@ -268,6 +307,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       })
     }
 
+    /** spawn 失败收尾：未结算时清理并 reject，报出底层错误信息。 */
     const resolvedSpawnError = (error: unknown): void => {
       if (settled) return
       settled = true
@@ -281,8 +321,8 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       child = spawn(spec.program, [...spec.args], {
         cwd: spec.cwd,
         env: spec.env,
-        // stdin is a pipe so a promoted session can receive text through `shell_session`;
-        // nothing is written by the runner itself, and non-interactive commands unaffected.
+        // stdin 用管道，让提升后的会话能经 `shell_session` 接收文本；runner 自身不写
+        // stdin，非交互命令不受影响。
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: process.platform === 'win32',
         detached: process.platform !== 'win32',
@@ -298,6 +338,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       return
     }
 
+    /** 会话终态结算：标记退出码/超时，清定时器、关输出流并唤醒所有轮询等待者。 */
     const settleSession = (exitCode: number, timedOut: boolean): void => {
       const target = session
       if (target === undefined || target.exited) return
@@ -312,6 +353,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       notifySession(target)
     }
 
+    /** 总时限定时器：到点杀进程。已让渡的会话记 timedOut 终态；前台则报 timeout 错误。 */
     timeoutTimer = setTimeout(() => {
       kill(spawned)
       if (session !== undefined) {
@@ -333,11 +375,13 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       })
     }, timeoutMs)
 
+    // 前台预算小于总时限时安排让渡定时器；abort 事件一次性挂接。
     if (timeoutMs > yieldTimeMs) {
       yieldTimer = setTimeout(promoteSession, yieldTimeMs)
     }
     context.abortSignal?.addEventListener('abort', onAbort, { once: true })
 
+    // stdout/stderr 各用一个旧编码感知解码器，解出的文本走统一的输出出口。
     spawned.stdout?.on('data', (chunk: Buffer) => {
       writeOutput(stdoutDecoder.write(chunk))
     })
@@ -349,6 +393,7 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       resolvedSpawnError(error)
     })
 
+    /** 进程退出收尾：已让渡的会话写退出码尾注并结算终态；前台则冲刷残留解码、按退出码成/败结算。 */
     spawned.on('close', (code) => {
       const exitCode = code ?? -1
       if (settled && session !== undefined) {
@@ -358,21 +403,21 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
       }
       if (settled) return
 
-      // Flush a clipped multi-byte character before the retained output is read.
+      // 在读取保留输出之前，冲刷可能被裁断的多字节字符残余。
       const tailStdout = stdoutDecoder.end()
       const tailStderr = stderrDecoder.end()
       if (tailStdout !== '') {
         try {
           api.output(tailStdout)
         } catch {
-          // The call may already be settled.
+          // 调用可能已经结算。
         }
       }
       if (tailStderr !== '') {
         try {
           api.output(tailStderr)
         } catch {
-          // The call may already be settled.
+          // 调用可能已经结算。
         }
       }
 
@@ -402,16 +447,29 @@ export async function runShellCommand(spec: ShellRunSpec): Promise<ToolExecution
   })
 }
 
-/** Clamp a model-provided yield budget into the supported range; undefined keeps the default. */
+/**
+ * 功能：把模型传入的让渡毫秒数夹取到支持的范围内。
+ * 内部逻辑：undefined/非有限值用默认 YIELD_TIME_MS；否则四舍五入后夹在
+ * MIN_YIELD_TIME_MS 与 MAX_YIELD_TIME_MS 之间。
+ * @param value 模型传入的让渡毫秒数。
+ * @returns 规范化后的让渡毫秒数。
+ */
 export function clampYieldTime(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return YIELD_TIME_MS
   return Math.min(Math.max(Math.round(value), MIN_YIELD_TIME_MS), MAX_YIELD_TIME_MS)
 }
 
 /**
- * Wait until the session reports new output, exits, or the budget expires. Returns the incremental
- * text since the last read plus the terminal state; abort resolves with whatever is available
- * instead of killing the session, which outlives this call.
+ * 功能：轮询一个 shell 会话：等到有新输出、进程退出或预算到期为止。
+ * 内部逻辑：可选先写 stdin（进程可能恰好在轮询与写入之间退出，写失败静默忽略）；
+ * 未退出的会话等预算到期或被 notify/abort 唤醒；abort 只是提前返回可用数据，不杀会话
+ * （会话跨调用存活）。返回自上次游标以来的增量文本并把游标推进到末尾；已退出的会话
+ * 在无等待者时从会话表回收。
+ * @param sessionId 会话 id；不存在时返回 undefined。
+ * @param stdin 要写入进程 stdin 的文本；省略或空串则只轮询。
+ * @param yieldTimeMs 本轮等待预算（经 clampYieldTime 规范化）。
+ * @param context 执行上下文（提供 abortSignal）。
+ * @returns 会话对象与增量文本；会话不存在时 undefined。
  */
 export async function readShellSession(
   sessionId: string,
@@ -426,7 +484,7 @@ export async function readShellSession(
     try {
       session.child?.stdin?.write(stdin)
     } catch {
-      // The process may have exited between the poll and the write.
+      // 进程可能在轮询与写入之间退出。
     }
   }
 
@@ -453,7 +511,13 @@ export async function readShellSession(
   return { session, delta }
 }
 
-/** Final state of a session as diagnostics, shared by the `shell_session` tool result. */
+/**
+ * 功能：把会话终态转成诊断条目，供 `shell_session` 工具结果复用。
+ * 内部逻辑：超时返回 error 级 timeout 诊断；非 0 退出返回 error 级 exit_code 诊断；
+ * 其余（正常退出）返回 undefined。
+ * @param session 目标会话。
+ * @returns 诊断数组或 undefined。
+ */
 export function sessionDiagnostics(session: ShellSession): ToolExecutionResult['diagnostics'] {
   if (session.timedOut) {
     return [{ severity: 'error', code: 'timeout', message: `Command timed out after ${String(session.timeoutSeconds)} seconds` }]

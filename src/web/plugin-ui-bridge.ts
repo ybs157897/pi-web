@@ -5,26 +5,27 @@ import type {
 import { truncatePluginContext } from '../shared/plugin-ui.ts'
 import { api } from './api.ts'
 
-/** The conversation a transcript is rendering; inline plugin pages use it for policy-checked calls. */
+/** 转录区正在渲染的会话 id；内联插件页用它发起经过策略校验的调用。 */
 export const PluginUiConversationContext = createContext<string | undefined>(undefined)
 
-/** Cap every page → host frame; a larger JSON payload is dropped, not parsed. */
+/** 每条「页面 → 宿主」消息的大小上限；超限的 JSON 载荷直接丢弃，不解析。 */
 const MAX_BRIDGE_MESSAGE_BYTES = 256 * 1024
 
-/** Cap for a durable `details` value the transcript tries to read a UI descriptor from. */
+/** 转录区尝试读 UI 描述符的持久化 `details` 值的大小上限。 */
 const MAX_DETAILS_BYTES = 1_000_000
 
-/** The JSON-RPC id a request carries; notifications have none and get no response. */
+/** 请求携带的 JSON-RPC id；通知没有 id，也不会得到响应。 */
 export type PluginUiBridgeId = string | number
 
+/** 一个文本内容块（ui/message、ui/update-model-context 的载荷单元）。 */
 export interface PluginUiTextPart {
   type: 'text'
   text: string
 }
 
 /**
- * One whitelisted page → host call. Only the five documented methods parse; every
- * other method (and every malformed or oversized frame) is rejected by `parseBridgeMessage`.
+ * 白名单内的「页面 → 宿主」调用。只有这五个已文档化的方法会解析；其余方法
+ * （以及任何格式错误或超限的帧）都被 `parseBridgeMessage` 拒绝。
  */
 export type PluginUiBridgeMessage =
   | { method: 'tools/call'; id?: PluginUiBridgeId; params: { name: string; arguments?: unknown } }
@@ -37,12 +38,12 @@ export type PluginUiBridgeMessage =
   | { method: 'ui/message'; id?: PluginUiBridgeId; params: { content?: PluginUiTextPart[] } }
   | { method: 'ui/open-link'; id?: PluginUiBridgeId; params: { url: string } }
 
-/** The host's answer to one request; notifications (no id) produce no response. */
+/** 宿主对一个请求的回答；通知（无 id）不产生响应。 */
 export type PluginUiBridgeResponse =
   | { jsonrpc: '2.0'; id: PluginUiBridgeId; result: unknown }
   | { jsonrpc: '2.0'; id: PluginUiBridgeId | null; error: { code: number; message: string } }
 
-/** What the host does with a bridged call; the inspector and inline card supply their own. */
+/** 宿主处理桥接调用的回调集合；inspector 与内联卡片各自提供自己的实现。 */
 export interface PluginUiBridgeHandlers {
   onContext: (entry: PluginContextEntry) => void
   onMessage: (text: string) => void
@@ -63,12 +64,12 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   }
 }
 
-/** A required non-empty string, or undefined when the value is anything else. */
+/** 必填的非空字符串；其他任何取值返回 undefined。 */
 function requiredString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
-/** Optional string field: absent stays absent, a present non-string rejects the object. */
+/** 可选字符串字段：缺席保持缺席；出现但类型不对则整个对象拒绝。 */
 function optionalString(value: unknown): { ok: true; value?: string } | { ok: false } {
   if (value === undefined) return { ok: true }
   return typeof value === 'string' ? { ok: true, value } : { ok: false }
@@ -86,7 +87,7 @@ function readId(record: Record<string, unknown>): { ok: true; id?: PluginUiBridg
   return { ok: false }
 }
 
-/** `params.content` is an array of text parts; absent means an empty list, malformed rejects. */
+/** `params.content` 是文本块数组；缺席视为空列表，格式错误则拒绝。 */
 function parseTextContent(value: unknown): PluginUiTextPart[] | undefined {
   if (value === undefined) return []
   if (!Array.isArray(value)) return undefined
@@ -99,9 +100,11 @@ function parseTextContent(value: unknown): PluginUiTextPart[] | undefined {
 }
 
 /**
- * Validate one `message` event payload. Only JSON-RPC 2.0 objects carrying one of the
- * whitelisted methods survive; unknown methods, malformed params and frames over
- * 256 KiB return null so the host never acts on a partial payload.
+ * 功能：校验一条 `message` 事件载荷。只有携带白名单方法的 JSON-RPC 2.0 对象能通过；
+ * 未知方法、参数畸形、超过 256 KiB 的帧都返回 null，宿主绝不处理不完整载荷。
+ * @param data postMessage 事件的 data
+ * @returns 解析后的强类型消息；不合规返回 null
+ * 内部逻辑：先验 jsonrpc/method/id/params 形状与字节预算，再按方法逐个校验必填参数（name/uri/url 必须是非空字符串，content 逐块校验）。
  */
 export function parseBridgeMessage(data: unknown): PluginUiBridgeMessage | null {
   if (!isRecord(data) || data.jsonrpc !== '2.0' || typeof data.method !== 'string') return null
@@ -174,7 +177,7 @@ function fail(message: PluginUiBridgeMessage, code: number, text: string): Plugi
   return message.id === undefined ? null : { jsonrpc: '2.0', id: message.id, error: { code, message: text } }
 }
 
-/** `ui/open-link` may only navigate to an https destination. */
+/** `ui/open-link` 只允许导航到 https 目的地。 */
 function httpsLink(value: string): string | undefined {
   try {
     return new URL(value).protocol === 'https:' ? value : undefined
@@ -184,10 +187,12 @@ function httpsLink(value: string): string | undefined {
 }
 
 /**
- * Execute one parsed page call against the host API and return the JSON-RPC answer.
- * The page's plugin/server binding always wins over anything it puts in params, so a
- * page cannot call another plugin's MCP server. Notifications (no id) perform their
- * side effect but never produce a response.
+ * 功能：把一条解析后的页面调用执行到宿主 API 上，返回 JSON-RPC 应答。
+ * @param message 已解析的桥接消息
+ * @param page 页面身份（pluginId/serverName 由宿主侧确定）
+ * @param handlers 三个宿主回调（onContext/onMessage/onOpenLink）
+ * @returns 应答对象；通知（无 id）只执行副作用不返回应答；执行异常返回 -32603
+ * 内部逻辑：页面绑定的 plugin/server 永远覆盖 params 里带的值，页面因此无法调用其他插件的 MCP 服务器；ui/open-link 仅放行 https（否则 -32602）；资源读取直接回传服务端已返回的 MCP ReadResourceResult。
  */
 export async function handleBridgeMessage(
   message: PluginUiBridgeMessage,
@@ -214,7 +219,7 @@ export async function handleBridgeMessage(
           uri: message.params.uri,
         }
         const { resource } = await api.pluginUiReadResource(input)
-        // The server already returns the MCP `ReadResourceResult` (`{ contents: [...] }`).
+        // 服务端返回的已经是 MCP `ReadResourceResult`（`{ contents: [...] }`）。
         return respond(message, resource)
       }
       case 'ui/update-model-context': {
@@ -244,11 +249,15 @@ export async function handleBridgeMessage(
 }
 
 function postToFrame(frame: HTMLIFrameElement, payload: unknown): void {
-  // The sandbox has no same-origin access, so its origin is opaque and the target must be `*`.
+  // 沙箱没有同源访问权，origin 是不透明的，目标 origin 只能是 `*`。
   frame.contentWindow?.postMessage(payload, '*')
 }
 
-/** Handshake after `load`: the page answers `ui/initialized` when it is ready. */
+/**
+ * 功能：iframe `load` 后的握手：向页面发送 `ui/initialize` 请求，页面就绪时以 `ui/initialized` 应答。
+ * @param frame 插件页 iframe
+ * @param page 页面身份（id 用于构造请求 id）
+ */
 export function sendInitialize(frame: HTMLIFrameElement, page: PluginUiPage): void {
   postToFrame(frame, {
     jsonrpc: '2.0',
@@ -261,7 +270,11 @@ export function sendInitialize(frame: HTMLIFrameElement, page: PluginUiPage): vo
   })
 }
 
-/** Deliver the tool result a mounted page renders, as an MCP Apps `tool-result` notification. */
+/**
+ * 功能：以 MCP Apps 的 `tool-result` 通知向已挂载页面投递它要渲染的工具结果。
+ * @param frame 插件页 iframe
+ * @param page 页面身份（content/structuredContent 来自工具结果的 details.ui）
+ */
 export function sendToolResult(frame: HTMLIFrameElement, page: PluginUiPage): void {
   postToFrame(frame, {
     jsonrpc: '2.0',
@@ -274,11 +287,11 @@ export function sendToolResult(frame: HTMLIFrameElement, page: PluginUiPage): vo
 }
 
 /**
- * Strictly validate a tool result's `details.ui` into a descriptor. A wrong field type or a
- * missing `pluginId`/`serverName`/`resourceUri` rejects the whole descriptor, so the row falls
- * back to its generic presentation instead of mounting a broken page.
+ * 功能：判断一个已落定的工具结果是否渲染内联页面（而非只提供侧栏表面）。
+ * @param details 工具结果的 details
+ * @param state 工具行状态（streaming/status/isError）
+ * @returns 流式中、运行中、出错取消一律 false；descriptor 有效且非 fullscreen、未显式关内联时 true
  */
-/** Whether one settled tool result renders an inline page rather than only a side-pane surface. */
 export function showsInlinePluginUi(details: unknown, state: { streaming?: boolean; status?: string; isError?: boolean } | undefined): boolean {
   if (state === undefined || state.streaming === true || state.status === 'running'
     || state.status === 'error' || state.status === 'cancelled' || state.isError === true) return false
@@ -286,6 +299,12 @@ export function showsInlinePluginUi(details: unknown, state: { streaming?: boole
   return ui !== undefined && ui.preferredDisplayMode !== 'fullscreen' && ui.showInline !== false
 }
 
+/**
+ * 功能：严格校验工具结果 `details.ui` 并解析成插件页描述符。任何字段类型错误或缺
+ * `pluginId`/`serverName`/`resourceUri` 都整体拒绝——工具行回退到通用展示，而不是挂载一个坏页面。
+ * @param details 对象或 JSON 字符串（超 1MB 不解析）
+ * @returns 合法的 PluginUiDescriptor；不合法返回 undefined
+ */
 export function pluginUiDescriptor(details: unknown): PluginUiDescriptor | undefined {
   const record = isRecord(details) ? details : typeof details === 'string' ? parseJsonRecord(details) : undefined
   if (record === undefined || !isRecord(record.ui)) return undefined

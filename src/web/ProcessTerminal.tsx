@@ -6,6 +6,7 @@ import { parseAnsiLines } from './message-rendering/terminal-ansi.ts'
 import './message-rendering/theme.css'
 import css from './ProcessTerminal.module.css'
 
+/** 输出视口被遮蔽的边缘集合：决定上下 24px 渐隐遮罩的方向。 */
 type ScrollEdges = 'none' | 'top' | 'bottom' | 'both'
 
 /** 内容还有多少被视口上下边缘遮住：决定 24px 渐隐方向。 */
@@ -17,7 +18,17 @@ function scrollEdges(element: HTMLElement): ScrollEdges {
   return hiddenTop ? (hiddenBottom ? 'both' : 'top') : hiddenBottom ? 'bottom' : 'none'
 }
 
-/** Own command/output scrollports: no selectors or mutations inside third-party components. */
+/**
+ * 功能：消息流中的终端卡片——渲染一条命令（$ 提示符）与其输出，供 shell 类工具行
+ * 展开时使用。命令区可展开/收起，输出区支持跟随滚动与手动冻结查看。
+ * @param props command 命令文本；cwd 工作目录（悬浮提示）；output 命令输出原文
+ *              （含 ANSI/回车/退格控制符）；exitCode/signal 退出码与终止信号；
+ *              running 是否仍在运行；t 双语翻译函数。
+ * 内部逻辑：frozen 非 null 时展示冻结快照（用户上滚离开底部即冻结），回到底部恢复
+ * 跟随（following = frozen === null）；display 经 parseAnsiLines 解析 ANSI 着色，
+ * 无控制符时纯文本显示；命令溢出用 ResizeObserver 检测，展开时视口可滚动；
+ * edges 记录视口上下遮蔽状态用于渐隐；键盘 Home/End/方向键滚动并复用 handleScroll 逻辑。
+ */
 export function ProcessTerminal({ command, cwd, output, exitCode, signal, running, t }: {
   command: string; cwd?: string; output: string; exitCode?: number | null; signal?: string
   running: boolean; t: Translate
@@ -46,6 +57,7 @@ export function ProcessTerminal({ command, cwd, output, exitCode, signal, runnin
     const observer = new ResizeObserver(measure); observer.observe(element)
     return () => observer.disconnect()
   }, [command, commandExpanded])
+  /** 重新测量输出视口的边缘遮蔽状态，状态不变时不触发渲染。 */
   function updateEdges(element: HTMLDivElement) {
     const next = scrollEdges(element)
     setEdges(current => current === next ? current : next)
@@ -70,6 +82,7 @@ export function ProcessTerminal({ command, cwd, output, exitCode, signal, runnin
     if (outputContent.current) observer.observe(outputContent.current)
     return () => observer.disconnect()
   }, [display !== ''])
+  /** 滚动处理：跟随中上滚（未到底）即冻结当前输出；冻结状态下回到底部恢复跟随。 */
   function handleScroll() {
     const element = outputView.current
     if (!element) return
@@ -79,6 +92,7 @@ export function ProcessTerminal({ command, cwd, output, exitCode, signal, runnin
     previousTop.current = element.scrollTop
     updateEdges(element)
   }
+  /** 键盘滚动：Home/End/上下方向键直接调整 scrollTop，并复用 handleScroll 的冻结判定。 */
   function scrollByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
     if (event.target !== event.currentTarget) return
     const element = event.currentTarget

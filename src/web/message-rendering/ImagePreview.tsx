@@ -4,7 +4,18 @@ import { MessageDialog } from './Dialog.tsx'
 import type { Translate } from '../render-labels.ts'
 import css from './ImagePreview.module.css'
 import { useBrowserLayoutEffect } from './hooks.ts'
+/** 可预览图片的最小描述：加载地址与无障碍文案。 */
 export type PreviewImage = { src: string; alt: string }
+
+/**
+ * 功能：消息里的图片灯箱（lightbox）：多张切换、0.5x–3x 缩放、拖拽平移、键盘操作。
+ * @param open 是否打开
+ * @param onClose 关闭回调（Esc / 点遮罩 / 关闭按钮）
+ * @param images 预览图列表（来自消息块解析出的图片集合）
+ * @param initial 打开时定位的图片下标
+ * @param t 双语标签函数
+ * 内部逻辑：open/initial 变化时重置视图；navigate 取模循环切换并复位缩放；clamp 把平移偏移限制在「放大后图片超出视口的部分」内，缩放变化后经 layout effect 重新收敛；方向键平移、+/- 缩放均在视口 onKeyDown 处理并 preventDefault。
+ */
 export function ImagePreview({ open, onClose, images, initial, t }: { open: boolean; onClose: () => void; images: PreviewImage[]; initial: number; t: Translate }) {
   const [index, setIndex] = useState(initial)
   const [scale, setScale] = useState(1)

@@ -13,25 +13,28 @@ import {
 
 const MAX_SKILL_DIRECTORIES = 500
 
+/** 已加载并校验通过的插件包：manifest 与声明的技能根目录均已物化。 */
 export interface LoadedPluginPackage {
   root: string
   manifestPath: string
   manifest: PluginManifest
-  /** Declared skill roots that actually exist, each with the skill directory names found under it. */
+  /** 真实存在的声明技能根，每个根下附带找到的技能目录名。 */
   skillRoots: Array<{ path: string; names: string[] }>
   capabilities: PluginCapabilities
 }
 
+/** 判断 target 是否位于 root 内（含等于 root 自身），用于防路径逃逸。 */
 function within(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/** 抛出插件来源非法错误（错误码 PLUGIN_SOURCE_INVALID）。 */
 function invalid(message: string): never {
   throw new RuntimeError('PLUGIN_SOURCE_INVALID', message)
 }
 
-/** Read one bounded regular file; plugin packages never get to follow a symlink. */
+/** 读取一个有大小上限的常规文件；插件包内一律不允许跟随符号链接。 */
 async function readRegularFile(path: string, limit: number): Promise<Buffer> {
   let info
   try {
@@ -45,6 +48,7 @@ async function readRegularFile(path: string, limit: number): Promise<Buffer> {
   return await readFile(path)
 }
 
+/** 列出目录下的子目录名（跳过文件），上限 MAX_SKILL_DIRECTORIES；子目录是符号链接即报错；结果按名称排序。 */
 async function directoryNames(path: string): Promise<string[]> {
   const names: string[] = []
   for (const item of await readdir(path, { withFileTypes: true })) {
@@ -55,7 +59,15 @@ async function directoryNames(path: string): Promise<string[]> {
   return names.sort()
 }
 
-/** Load and validate a materialized plugin package (manifest + declared skill roots). */
+/**
+ * 功能：加载并校验一个已物化的插件包（manifest + 声明的技能根目录）。
+ * @param root 插件包根目录（staging 或最终安装位置）
+ * @param pluginId 插件 ID，用于拼装能力名（如技能 ID `pluginId:技能名`）
+ * @returns LoadedPluginPackage；任何非法情况（缺 manifest、符号链接、路径逃逸、声明技能不存在）都抛 PLUGIN_SOURCE_INVALID
+ * 内部逻辑：按兼容目录顺序（.pi-plugin/.zcode-plugin/.claude-plugin）找 plugin.json，
+ * 符号链接跳过；manifest 经 parsePluginManifest 校验；声明的每个技能根必须真实存在、
+ * 非符号链接、且是根内目录，其中含非链接 SKILL.md 文件的子目录才算可用技能。
+ */
 export async function loadPluginPackage(root: string, pluginId: string): Promise<LoadedPluginPackage> {
   const canonicalRoot = resolve(root)
   let manifestPath: string | undefined
@@ -69,7 +81,7 @@ export async function loadPluginPackage(root: string, pluginId: string): Promise
         break
       }
     } catch {
-      // Keep looking in the next compatible manifest directory.
+      // 继续找下一个兼容的 manifest 目录。
     }
   }
   if (manifestPath === undefined) invalid('plugin.json was not found in .pi-plugin, .zcode-plugin, or .claude-plugin')
@@ -104,7 +116,7 @@ export async function loadPluginPackage(root: string, pluginId: string): Promise
         const skillFile = await lstat(join(directory, name, 'SKILL.md'))
         if (skillFile.isFile() && !skillFile.isSymbolicLink()) usable.push(name)
       } catch {
-        // A directory without SKILL.md is not a skill.
+        // 没有 SKILL.md 的目录不算技能。
       }
     }
     skillRoots.push({ path: directory, names: usable })

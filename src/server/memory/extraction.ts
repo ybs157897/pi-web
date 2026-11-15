@@ -31,34 +31,56 @@ import {
 
 const CTX: Context = BACKGROUND_CONTEXT
 const MEMORY_DEBUG = process.env.PI_WEB_MEMORY_DEBUG === '1'
-/** Opt-in diagnostics for a background task that is otherwise silent by design. */
+/** 后台任务按设计保持安静，诊断日志由环境变量显式开启。 */
 function debugLog(...values: unknown[]): void {
   if (MEMORY_DEBUG) console.info('[memory]', ...values)
 }
+/** 提取循环的最大轮次。 */
 export const MEMORY_EXTRACTION_MAX_TURNS = 5
+/** 提取请求的输出 token 上限。 */
 export const MEMORY_EXTRACTION_MAX_OUTPUT_TOKENS = 5_000
+/** 单次提取请求的超时。 */
 export const MEMORY_EXTRACTION_TIMEOUT_MS = 120_000
+/** 运行时关闭时等待提取完成的时长上限。 */
 export const MEMORY_EXTRACTION_DRAIN_MS = 60_000
+/** 记忆清单最多收录的文件数。 */
 export const MEMORY_MANIFEST_LIMIT = 200
+/** 清单读取每个文件的前几行作为 frontmatter 预览。 */
 const MANIFEST_PREVIEW_LINES = 30
+/** 提取工具 read 的字节上限。 */
 const MAX_READ_BYTES = 256 * 1024
+/** list_files 最多列出的条目数。 */
 const MAX_LIST_ENTRIES = 2_000
+/** search_files 单文件读取上限。 */
 const MAX_SEARCH_FILE_BYTES = 1024 * 1024
+/** search_files 最多返回的匹配数。 */
 const MAX_SEARCH_MATCHES = 200
+/** 列目录/搜索时跳过的目录名。 */
 const OMITTED_DIRECTORIES = new Set(['.git', 'node_modules', '.data'])
 
 /* ------------------------------------------------------------------ */
 /* Run decision                                                        */
 /* ------------------------------------------------------------------ */
 
+/** 跳过一次提取的理由：主会话直接写了记忆 / 没有值得分析的用户散文。 */
 export type MemorySkipReason = 'direct-memory-write' | 'no-user-prose'
 
+/** 把消息内容（字符串或多模态分块）收敛为纯文本。 */
 function textOfContent(content: string | readonly { type: string; text?: string }[]): string {
   if (typeof content === 'string') return content
   return content.flatMap(part => part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n')
 }
 
-/** The two skips ZCode applies before spending a model call. */
+/**
+ * 功能：决定本次提取是否可以跳过（在花模型调用之前）。
+ * @param messages 本次新增的消息切片
+ * @param root 记忆根目录
+ * @param cwd 会话工作区
+ * @returns 跳过理由；不跳过返回 undefined
+ * 内部逻辑：助手消息里有指向记忆根内路径的 write/edit 调用 → 主会话已直接写
+ * 记忆，跳过；没有任何一条 ≥3 词的用户散文 → 无内容可提取，跳过（对齐 ZCode
+ * 的两条前置判断）。
+ */
 export function memorySkipReason(messages: readonly Message[], root: string, cwd: string): MemorySkipReason | undefined {
   for (const message of messages) {
     if (message.role !== 'assistant') continue
@@ -82,17 +104,23 @@ export function memorySkipReason(messages: readonly Message[], root: string, cwd
 /* Scheduler                                                           */
 /* ------------------------------------------------------------------ */
 
+/** 一次提取运行的结局。 */
 export type ExtractionOutcome = 'success' | 'skip' | 'error' | 'aborted'
 
+/** 一次提取运行的结果。 */
 export interface ExtractionRunResult {
   outcome: ExtractionOutcome
-  /** Cursor to store after a success or a skip; an error or abort keeps the previous one. */
+  /** success 或 skip 后要保存的游标；error 或 abort 保留原游标。 */
   cursor?: EntryId
 }
 
 /**
- * One running slot plus one latest-pending slot per conversation. `schedule()` is synchronous:
- * the running flag is set in the same turn, so two schedules cannot start two runners.
+ * 功能：创建每会话一个的提取调度器。
+ * @param run 实际执行一次提取的函数（游标 + 中止信号）
+ * @returns schedule/shutdown/drain/cursor 控制面
+ * 内部逻辑：每会话一个运行槽加一个最新待处理槽。`schedule()` 同步置位 pending
+ * 并在未运行时启动循环，因此两次排程不会开出两个运行器；循环串行消化 pending，
+ * 结束时唤醒 drain 的等待者。
  */
 export function createExtractionScheduler(
   run: (cursor: EntryId | undefined, signal: AbortSignal) => Promise<ExtractionRunResult>,
@@ -135,20 +163,24 @@ export function createExtractionScheduler(
   }
 
   return {
+    /** 排一次提取：已关闭则忽略；未运行则启动循环。 */
     schedule() {
       if (stopped) return
       pending = true
       if (!running) void loop()
     },
+    /** 停止接收并中止在途请求；循环自然退出。 */
     shutdown() {
       stopped = true
       pending = false
       controller?.abort()
     },
+    /** 等待当前循环跑完空闲；未运行立即返回。 */
     async drain() {
       if (!running) return
       await new Promise<void>(resolveIdle => idle.add(resolveIdle))
     },
+    /** 读取当前游标（上次成功/跳过处理到的条目 ID）。 */
     cursor() {
       return cursor
     },
@@ -159,14 +191,16 @@ export function createExtractionScheduler(
 /* Manifest and prompt                                                 */
 /* ------------------------------------------------------------------ */
 
+/** 记忆清单条目。 */
 export interface MemoryManifestEntry {
-  /** Path relative to the memory root, with forward slashes. */
+  /** 相对记忆根的路径，统一使用正斜杠。 */
   file: string
   type?: string
   description?: string
   modifiedAt: number
 }
 
+/** 从 frontmatter 预览中读取 description 与 metadata.type；解析失败返回空。 */
 function frontmatterFields(content: string): { type?: string; description?: string } {
   const match = /^(\uFEFF?)---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u.exec(content)
   if (match === null) return {}
@@ -183,7 +217,14 @@ function frontmatterFields(content: string): { type?: string; description?: stri
   return result
 }
 
-/** Scan the memory root for fact files, newest first, reading only each file's frontmatter. */
+/**
+ * 功能：扫描记忆根收集事实文件清单。
+ * @param root 记忆根目录
+ * @param limit 最多收录的文件数，默认 MEMORY_MANIFEST_LIMIT
+ * @returns 按修改时间倒序的清单条目
+ * 内部逻辑：递归遍历（跳过软链、OMITTED_DIRECTORIES 与 MEMORY.md），每个文件只读
+ * 前 MANIFEST_PREVIEW_LINES 行解析 frontmatter；读取失败的文件跳过。
+ */
 export async function scanMemoryManifest(root: string, limit = MEMORY_MANIFEST_LIMIT): Promise<MemoryManifestEntry[]> {
   const entries: MemoryManifestEntry[] = []
   const walk = async (directory: string): Promise<void> => {
@@ -225,6 +266,7 @@ export async function scanMemoryManifest(root: string, limit = MEMORY_MANIFEST_L
   return entries.sort((left, right) => right.modifiedAt - left.modifiedAt)
 }
 
+/** 把清单条目格式化为 `- [type] file (时间): 描述` 的行列表。 */
 function formatManifest(entries: readonly MemoryManifestEntry[]): string {
   return entries.map((entry) => {
     const type = entry.type ?? 'unknown'
@@ -233,7 +275,15 @@ function formatManifest(entries: readonly MemoryManifestEntry[]): string {
   }).join('\n')
 }
 
-/** The extraction prompt. `Nothing to save.` stays verbatim: it is a contract marker, not prose. */
+/**
+ * 功能：构造提取指令（作为最后一轮用户消息）。
+ * @param root 记忆根目录
+ * @param messageCount 本次附带的消息条数
+ * @param manifest 已有记忆清单
+ * @returns 指令文本；`Nothing to save.` 逐字保留——它是契约标记而不是散文
+ * 内部逻辑：指明只读工具与仅限记忆目录的写工具、5 轮预算与「先并行读再并行写」
+ * 的策略；带清单时附「先查清单再写」；禁止用轮次去调查仓库。
+ */
 export function extractionPrompt(root: string, messageCount: number, manifest: readonly MemoryManifestEntry[]): string {
   const lines = [
     '# 记忆提取',
@@ -271,9 +321,11 @@ export function extractionPrompt(root: string, messageCount: number, manifest: r
 /* Extraction tool catalog                                             */
 /* ------------------------------------------------------------------ */
 
+/** 提取子代理可用的全部工具名。 */
 export const MEMORY_EXTRACTION_TOOL_NAMES = ['read', 'list_files', 'search_files', 'write', 'edit', 'delete'] as const
 const EXTRACTION_TOOL_NAMES = new Set<string>(MEMORY_EXTRACTION_TOOL_NAMES)
 
+/** 构造提取子代理的六工具目录（含中文描述与参数 schema）。 */
 export function memoryExtractionTools(): Tool[] {
   return [
     {
@@ -318,6 +370,7 @@ export function memoryExtractionTools(): Tool[] {
 export const MEMORY_EXTRACTION_POLICY_MESSAGE = (root: string): string =>
   `此上下文只允许 read、list_files、search_files，以及 ${root} 内 .md 的 write/edit/delete`
 
+/** 工具执行器的上下文：记忆根、工作区、来源会话与中止信号。 */
 interface ExtractionExecutorOptions {
   root: string
   cwd: string
@@ -325,16 +378,19 @@ interface ExtractionExecutorOptions {
   signal: AbortSignal
 }
 
+/** target 是否落在基准目录内（含等于基准本身）。 */
 function within(root: string, target: string): boolean {
   const path = relative(root, target)
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
+/** 解析相对/绝对路径；必须落在 cwd 或记忆根内才放行。 */
 function resolveAllowed(raw: string, base: string, root: string): string | undefined {
   const candidate = isAbsolute(raw) ? resolve(raw) : resolve(base, raw)
   return within(base, candidate) || within(root, candidate) ? candidate : undefined
 }
 
+/** 原子写记忆文件：同目录临时文件（0600）+ rename，失败清理临时文件。 */
 async function writeMemoryText(path: string, content: string): Promise<void> {
   const directory = dirname(path)
   await mkdir(directory, { recursive: true })
@@ -348,7 +404,15 @@ async function writeMemoryText(path: string, content: string): Promise<void> {
   }
 }
 
-/** Host-side tool executor for extraction: it never touches the conversation's env or transcript. */
+/**
+ * 功能：提取子代理的宿主侧工具执行器。
+ * @param call 模型发出的工具调用
+ * @param options 记忆根、工作区、来源会话与中止信号
+ * @returns 工具结果文本与 isError 标记；永不抛出
+ * 内部逻辑：read/list/search 只放行 cwd 与记忆根内的路径，统一走有界防篡改读取；
+ * write/edit/delete 只放行 resolveSafeMemoryPath 通过的记忆 .md 路径，写入前打
+ * 来源会话戳（delete 额外禁止 MEMORY.md）；write/edit 经临时文件原子落盘。
+ */
 export async function executeExtractionTool(call: ToolCall, options: ExtractionExecutorOptions): Promise<{ content: string; isError: boolean }> {
   options.signal.throwIfAborted()
   const args = (typeof call.arguments === 'object' && call.arguments !== null ? call.arguments : {}) as Record<string, unknown>
@@ -493,6 +557,7 @@ export async function executeExtractionTool(call: ToolCall, options: ExtractionE
 /* Restricted loop                                                     */
 /* ------------------------------------------------------------------ */
 
+/** 构造全零的用量记录。 */
 function emptyUsage(): Usage {
   return {
     input: 0,
@@ -504,6 +569,7 @@ function emptyUsage(): Usage {
   }
 }
 
+/** 累加一次用量（含 1h 缓存写与推理 token 的可选字段）。 */
 function addUsage(total: Usage, usage: Usage): void {
   total.input += usage.input
   total.output += usage.output
@@ -519,6 +585,7 @@ function addUsage(total: Usage, usage: Usage): void {
   total.cost.total += usage.cost.total
 }
 
+/** 提取循环的运行参数：提示词、初始消息、工具目录、预算与超时。 */
 export interface ExtractionLoopOptions {
   systemPrompt: string
   messages: Message[]
@@ -531,6 +598,7 @@ export interface ExtractionLoopOptions {
   maxTurns?: number
 }
 
+/** 提取循环的依赖：完成一次模型请求与执行一个工具调用，外加路径约束。 */
 export interface ExtractionLoopDeps {
   complete: (context: { systemPrompt: string; messages: Message[]; tools: Tool[] }, options: {
     maxTokens: number
@@ -544,12 +612,14 @@ export interface ExtractionLoopDeps {
   cwd: string
 }
 
+/** 提取循环的结果：实际轮次、总用量与完整消息序列。 */
 export interface ExtractionLoopResult {
   turns: number
   usage: Usage
   messages: Message[]
 }
 
+/** 把最后一条消息压缩为 ≤1500 字符的调试摘要（截断正文与参数）。 */
 function summarizeExtractionAnswer(messages: readonly Message[]): string {
   const last = messages.at(-1)
   if (last === undefined) return 'none'
@@ -571,9 +641,13 @@ function summarizeExtractionAnswer(messages: readonly Message[]): string {
 }
 
 /**
- * The extraction agent loop. Tool calls run as issued; a rejected call becomes an `isError` tool
- * result without reaching the executor. The last permitted round still executes its calls, but no
- * sixth request is sent.
+ * 功能：提取子代理的多轮 agent 循环。
+ * @param options 运行参数（提示词、消息、工具、预算）
+ * @param deps complete 模型请求与 execute 工具执行
+ * @returns 轮次、总用量与完整消息序列
+ * 内部逻辑：工具调用按模型发出顺序原样执行；被拒调用在进入执行器前变成 isError
+ * 工具结果。Provider 级失败抛错（游标保持不变，下次重试同一区间）。最后一轮仍会
+ * 执行其调用，但不再发出下一次请求。
  */
 export async function runExtractionLoop(
   options: ExtractionLoopOptions,
@@ -599,7 +673,7 @@ export async function runExtractionLoop(
     )
     addUsage(usage, answer.usage)
     if (MEMORY_DEBUG) debugLog('turn', turns, summarizeExtractionAnswer([answer]))
-    // A provider-level failure must leave the cursor unchanged so the next run retries the range.
+    // Provider 级失败必须让游标保持不变，下一次运行重试同一区间。
     if (answer.stopReason === 'error' || answer.stopReason === 'aborted') {
       throw new Error(answer.errorMessage ?? `extraction request stopped with ${answer.stopReason}`)
     }
@@ -643,6 +717,7 @@ export async function runExtractionLoop(
 /* Runtime integration                                                 */
 /* ------------------------------------------------------------------ */
 
+/** 记忆提取服务的依赖注入契约：harness、模型、开关与用量记账回调。 */
 export interface MemoryExtractionDeps {
   harness: () => Harness
   models: () => Models
@@ -654,12 +729,14 @@ export interface MemoryExtractionDeps {
   recordUsage: (conversationId: ConversationId, model: ModelRef, usage: Usage) => Promise<void>
 }
 
+/** 记忆提取服务的控制面：提交后排程、停止与有界等待。 */
 export interface MemoryExtraction {
   scheduleAfterSubmission(conversation: Conversation, submission: Submission): void
   shutdown(): void
   drain(timeoutMs: number): Promise<void>
 }
 
+/** 一次提取运行的输入快照：会话、路径、模型、消息切片与本次游标。 */
 interface ExtractionInput {
   conversationId: ConversationId
   cwd: string
@@ -670,10 +747,18 @@ interface ExtractionInput {
   cursor: EntryId | undefined
 }
 
+/**
+ * 功能：创建记忆提取服务：提交落定后按会话排后台提取，受限工具循环写入记忆文件。
+ * @param deps 依赖注入契约见 MemoryExtractionDeps
+ * 文件协议：只写记忆根内的 .md 文件（来源会话戳幂等），游标按「上次成功/跳过
+ * 处理到的条目」推进，error/abort 保留游标以便重试同一区间。
+ */
 export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtraction {
+  /** 每会话一个调度器，键为会话 ID 字符串。 */
   const schedulers = new Map<string, ReturnType<typeof createExtractionScheduler>>()
   let shuttingDown = false
 
+  /** 取（或懒创建）一个会话的提取调度器。 */
   const schedulerFor = (conversationId: ConversationId) => {
     const key = String(conversationId)
     let scheduler = schedulers.get(key)
@@ -684,6 +769,15 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
     return scheduler
   }
 
+  /**
+   * 功能：构造一次提取的输入快照。
+   * @param conversationId 会话 ID
+   * @param cursor 上次处理到的游标
+   * @returns 输入快照；会话消失、无 cwd、无可用路由或模型时返回 undefined
+   * 内部逻辑：从游标之后切片消息（剔除 system 消息——主会话的 section 与工具表
+   * 不能混入提取请求）；快照按模型上下文窗口一半封顶，再丢掉开头孤儿 toolResult，
+   * 保证请求不会以「没有对应调用的结果」开头。游标取切片末条目。
+   */
   const buildInput = async (conversationId: ConversationId, cursor: EntryId | undefined): Promise<ExtractionInput | undefined> => {
     const harness = deps.harness()
     const conversation = await harness.conversation(conversationId, CTX)
@@ -700,15 +794,15 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
     const start = index < 0 ? 0 : index + 1
     const messages: Message[] = []
     for (let position = start; position < view.entries.length; position += 1) {
-      // The transcript's system message carries the main session's sections and tool list.
-      // Extraction supplies its own prompt and its five-tool catalog, so it must not be replayed.
+      // 记录里的 system 消息携带主会话的 section 与工具表。提取自带提示词与
+      // 六工具目录，因此绝不能重放它。
       for (const message of view.contributions[position] ?? []) {
         if (message.role !== 'system') messages.push(message)
       }
     }
 
-    // Bound the snapshot to half the context window, then drop orphaned tool results so the
-    // extraction request never starts with a result whose call was trimmed away.
+    // 快照封顶在上下文窗口的一半，然后丢弃开头的孤儿 toolResult，
+    // 保证提取请求不会以「调用已被裁掉的结果」开头。
     const budget = Math.max(1, Math.floor(model.contextWindow / 2))
     let trimmed = messages
     while (trimmed.length > 0 && estimateMessagesTokens(trimmed) > budget) trimmed = trimmed.slice(1)
@@ -725,6 +819,16 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
     }
   }
 
+  /**
+   * 功能：执行一次提取：构造输入、按前置条件跳过、跑受限循环、记账并返回游标结果。
+   * @param conversationId 会话 ID
+   * @param cursor 上次游标
+   * @param signal 中止信号
+   * @returns success（带新游标）/ skip（带新游标）/ error / aborted
+   * 内部逻辑：直写记忆或无用户散文直接 skip；指令作为最后一轮用户消息注入（只在
+   * system 提示词里时，把助手回答视为末条消息的模型会返回空文本而不调用记忆工具）；
+   * 推理等级取支持表首项（off 不传）；经 captureSideCall 记录轨迹，用量记账失败不影响结果。
+   */
   const runExtraction = async (conversationId: ConversationId, cursor: EntryId | undefined, signal: AbortSignal): Promise<ExtractionRunResult> => {
     const input = await buildInput(conversationId, cursor)
     if (input === undefined) return { outcome: 'skip' }
@@ -735,9 +839,8 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
     try {
       await ensureMemoryDirectory(input.root)
       const manifest = await scanMemoryManifest(input.root)
-      // The instruction must be the last user turn. With it only in the system prompt, a model
-      // that sees an assistant answer as the final message treats the conversation as complete
-      // and returns empty text instead of calling the memory tools.
+      // 指令必须是最后一轮用户消息。只放进 system 提示词的话，把助手回答看作末条
+      // 消息的模型会把会话当成已完成，返回空文本而不调用记忆工具。
       const systemPrompt = memoryInstructions(input.root)
       const instruction = extractionPrompt(input.root, input.messages.length, manifest)
       const messages: Message[] = [
@@ -789,6 +892,7 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
   }
 
   return {
+    /** 提交落定后按条件排程提取：非 done / 未开启 / 只读会话都不排。 */
     scheduleAfterSubmission(conversation, submission) {
       void submission.wait(CTX).then(async (settled) => {
         if (shuttingDown) return
@@ -801,10 +905,12 @@ export function createMemoryExtraction(deps: MemoryExtractionDeps): MemoryExtrac
         schedulerFor(conversation.id).schedule()
       }).catch(() => undefined)
     },
+    /** 停止全部调度器并中止在途提取。 */
     shutdown() {
       shuttingDown = true
       for (const scheduler of schedulers.values()) scheduler.shutdown()
     },
+    /** 有界等待全部调度器空闲（超时后运行时关闭流程继续）。 */
     async drain(timeoutMs) {
       const pending = [...schedulers.values()].map(scheduler => scheduler.drain())
       if (pending.length === 0) return

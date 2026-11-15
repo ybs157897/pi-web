@@ -1,48 +1,43 @@
-// Adapted from DeepSeek Harness ui-primitives/ansi.ts (687f282e86).
-// Copyright (c) 2026 DeepSeek. MIT; see third-party/dsh-terminal-parser-LICENSE.txt.
-// Strip control sequences that anser does not consume before resolving SGR
-// runs, so they cannot reach the DOM as literal characters.
+// 改编自 DeepSeek Harness ui-primitives/ansi.ts (687f282e86)。
+// Copyright (c) 2026 DeepSeek. MIT; 许可见 third-party/dsh-terminal-parser-LICENSE.txt。
+// 在解析 SGR 着色 run 之前，先剥掉 anser 不会消费的控制序列，
+// 避免它们以字面字符的形式漏进 DOM。
 
 import Anser from 'anser'
 import type { CSSProperties } from 'react'
 
 /**
- * The subset of one anser JSON chunk this module reads. anser's own types
- * declare `fg`/`bg` as `string`, but its parser leaves them `null` for a run
- * that sets no color, so the null is spelled out here.
+ * 本模块用到的 anser JSON chunk 字段子集。anser 自己的类型把 `fg`/`bg`
+ * 声明为 `string`，但它的解析器对未设颜色的 run 留的是 `null`，所以这里如实写成 null。
  */
 interface AnsiChunk {
-  /** Run text with its SGR codes already removed. */
+  /** run 的文本，SGR 码已被移除。 */
   content: string
-  /** Foreground as an `r, g, b` triple, or null when the run sets none. */
+  /** 前景色，`r, g, b` 三元组字符串；run 未设前景色时为 null。 */
   fg: string | null
-  /** Background as an `r, g, b` triple, or null when the run sets none. */
+  /** 背景色，`r, g, b` 三元组字符串；run 未设背景色时为 null。 */
   bg: string | null
-  /** SGR attributes in effect for the run, in the order they were declared. */
+  /** 该 run 生效中的 SGR 属性，按声明顺序排列。 */
   decorations: readonly string[]
 }
 
-/** One run of terminal text; `style` is undefined for text that carries no SGR state. */
+/** 一段终端文本 run；不带任何 SGR 状态的文本 `style` 为 undefined。 */
 export interface AnsiSpan {
-  /** The run's plain text, free of escape sequences and newlines. */
+  /** run 的纯文本，不含转义序列与换行。 */
   text: string
-  /** Resolved inline style, or undefined when the run needs no wrapper. */
+  /** 解析出的内联样式；run 无需包装时为 undefined。 */
   style: CSSProperties | undefined
 }
 
-/** The spans of one output line, in order. */
+/** 一行输出的全部 span，按序排列。 */
 export type AnsiLine = readonly AnsiSpan[]
 
 /**
- * The 8/16 basic ANSI colors, keyed by the whitespace-free `r,g,b` triple
- * anser emits for them, mapped onto the theme tokens that carry the same
- * semantic. Black and white both resolve to the primary label color so text
- * stays legible under either theme instead of matching the surface it sits
- * on; bright black takes the tertiary label color (the muted-gray role).
- * Cyan and bright cyan take two static blues: the design system has no cyan,
- * and anser's literal bright cyan is unreadable on the light theme's code
- * surface. Magenta has no token equivalent and falls through to anser's
- * literal rgb, as do all 256-palette and truecolor values.
+ * ANSI 8/16 基本色映射表：键是 anser 为这些颜色输出的无空白 `r,g,b` 三元组，
+ * 值是语义对应的 DSW 主题 token。黑与白都落到主标签色，保证两种主题下文字都清晰
+ * 而不是隐进底色；亮黑取三级标签色（弱化灰的角色）。青色与亮青取两个静态蓝：
+ * 设计系统没有青色，且 anser 的字面亮青在浅色代码底上不可读。品红没有对应 token，
+ * 连同 256 色板与 truecolor 的所有取值一起，回退到 anser 的字面 rgb。
  */
 const TOKEN_BY_BASIC_RGB: Record<string, string> = {
   '0,0,0': 'var(--dsw-alias-label-primary)',
@@ -61,11 +56,9 @@ const TOKEN_BY_BASIC_RGB: Record<string, string> = {
 }
 
 /**
- * CSS for each SGR attribute anser reports. `blink` is deliberately absent —
- * animated text is not reproduced. `reverse` never arrives here: anser
- * consumes it by swapping the run's foreground and background. Underline and
- * strikethrough share `textDecoration`, so in a run declaring both, the
- * later declaration wins.
+ * 每个 SGR 属性对应的 CSS。刻意不放 `blink`——闪烁文字不还原。
+ * `reverse` 永远不会到达这里：anser 会消费它，交换 run 的前景/背景色。
+ * 下划线与删除线共用 `textDecoration`，同一 run 同时声明两者时后声明者生效。
  */
 const STYLE_BY_DECORATION: Record<string, CSSProperties | undefined> = {
   bold: { fontWeight: 700 },
@@ -76,63 +69,57 @@ const STYLE_BY_DECORATION: Record<string, CSSProperties | undefined> = {
   hidden: { visibility: 'hidden' },
 }
 
-/** OSC strings (window title, hyperlinks), with or without their terminator. */
+/** OSC 序列（窗口标题、超链接等），带或不带终止符都匹配。 */
 const OSC_SEQUENCE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g
 
-/** Escape sequences other than CSI: charset selection, single-shift, reset. */
+/** CSI 以外的转义序列：字符集切换、单移、重置等。 */
 const NON_CSI_ESCAPE = /\u001b(?!\[)[\u0020-\u002f]*[\u0030-\u007e]?/g
 
 /**
- * C0 controls with no display meaning here. Tab, newline, backspace and ESC
- * survive: the first two for layout, backspace for the cursor replay, ESC
- * for anser's CSI split.
+ * 无显示含义的 C0 控制字符。Tab、换行、退格与 ESC 保留：前两个管排版，
+ * 退格参与光标重放，ESC 是 anser 切分 CSI 的依据。
  */
 const INERT_CONTROL = /[\u0000-\u0007\u000b-\u001a\u001c-\u001f\u007f]/g
 
 /**
- * Lines whose cursor movements have to be replayed: a carriage return, a
- * backspace, or an erase-in-line. The erase pattern matches the SAME CSI shape
- * `replayLine` parses (parameters may carry `;` and intermediate bytes), so a
- * form like `\x1b[1;2K` cannot slip past this guard and skip its own erase.
+ * 需要重放光标移动的行：含回车、退格或行内擦除。擦除分支的正则与 `replayLine`
+ * 解析的 CSI 形状完全一致（参数可带 `;` 与中间字节），保证 `\x1b[1;2K`
+ * 这类形式不会绕过这个守卫漏掉自己的擦除。
  */
 const NEEDS_REPLAY = /\r|\u0008|\u001b\[[\u0030-\u003f]*[\u0020-\u002f]*K/
 
-/** SGR sequences alone, for folding state through a line that needs no replay. */
+/** 仅 SGR 序列，用于在无需重放的行上继续折叠状态。 */
 const SGR_SEQUENCE = /\u001b\[([\u0030-\u003f]*)[\u0020-\u002f]*m/g
 
-/** Terminal tab stop width; a tab advances to the next multiple of this. */
+/** 终端制表位宽度；Tab 前进到下一处 8 的倍数列。 */
 const TAB_WIDTH = 8
 
 /**
- * Combining marks and other zero-width code points: a terminal advances no
- * column for them, so `e` + U+0301 occupies one cell and a two-column redraw
- * covers both code points.
+ * 组合记号及其他零宽码点：终端不为它们推进列，`e` + U+0301 占一格，
+ * 覆盖该格的整列重绘会连着两个码点一起覆盖。
  */
 const ZERO_WIDTH = /^[\p{Mn}\p{Me}\p{Cf}\u200b-\u200f\u2060]$/u
 
 /**
- * Characters a terminal advances two columns for: CJK scripts, fullwidth forms,
- * CJK punctuation, and characters with emoji presentation. Text-presentation
- * symbols (`\u2713`, `\u26a0` and the rest of U+2600-U+27BF) are ONE column and
- * must stay out of this set.
+ * 终端按两列宽推进的字符：CJK 各文字、全角形式、CJK 标点，以及带 emoji 呈现的字符。
+ * 文本呈现的符号（`\u2713`、`\u26a0` 等 U+2600-U+27BF 一段）只占一列，
+ * 必须排除在本集合之外。
  */
 const WIDE_CHAR = new RegExp(
   '\\p{Script=Han}|\\p{Script=Hiragana}|\\p{Script=Katakana}|\\p{Script=Hangul}'
-  // Emoji presentation only: the U+2600-U+27BF symbol block is mostly SINGLE
-  // width — `\u2713` (the check every progress line writes, this fixture
-  // included) advances one column, verified against a real terminal, so taking
-  // the whole block as wide misaligned exactly the output this card exists for.
+  // 仅限 emoji 呈现：U+2600-U+27BF 符号段大多是单列——`\u2713`（进度行必写的
+  // 对勾，本用例也在内）只推进一列，已对照真实终端验证；若整段按宽字符处理，
+  // 恰好会错位这张卡片要保真展示的输出。
   + '|\\p{Emoji_Presentation}'
   + '|[\\uff01-\\uff60\\u3000-\\u303e]',
   'u',
 )
 
 /**
- * Whether a character occupies two terminal columns (CJK, fullwidth forms,
- * emoji). Covers the ranges a command's output realistically carries; a
- * narrower guess would misalign the columns this card exists to preserve.
- * @param char - one character from the output.
- * @returns true when the terminal advances two columns for it.
+ * 判断字符是否占两个终端列（CJK、全角形式、emoji）。
+ * 覆盖命令输出实际会出现的区间；更保守的判断会让这张卡片要保真的列对不齐。
+ * @param char 输出中的一个字符
+ * @returns 终端按两列推进时返回 true
  */
 function isWide(char: string): boolean {
   const code = char.codePointAt(0)
@@ -141,34 +128,32 @@ function isWide(char: string): boolean {
 }
 
 /**
- * A cell's graphic state, normalized. Held as fields rather than as the raw
- * sequence history because a terminal tracks CURRENT state, not a transcript:
- * accumulating sequences made each state boundary re-emit the whole chain, so
- * output that switches color without a full reset emitted O(n^2) characters
- * (3200 such cells produced 25 MB and eventually a `RangeError`). It also makes
- * the attribute closers every chalk-based tool writes — `39`, `49`, `22`, `23`,
- * `24`, `27`, `29` — actually close their attribute instead of appending to it.
+ * 单元格图形状态的规范化表示。用字段而不是原始序列历史来保存：终端追踪的是
+ * 「当前状态」，不是流水账——累积序列曾让每个状态边界都重发整条链，不带完整
+ * reset 的换色输出因此呈 O(n^2) 字符增长（3200 个这样的格子产出 25 MB 并最终
+ * 抛 `RangeError`）。字段化也让 chalk 系工具都会写的属性关闭码——`39`、`49`、
+ * `22`、`23`、`24`、`27`、`29`——真正关闭对应属性而不是追加。
  */
 interface SgrState {
   fg: string
   bg: string
-  /** Attribute parameters in force, e.g. `1` (bold) or `4` (underline). */
+  /** 生效中的属性参数，如 `1`（粗体）或 `4`（下划线）。 */
   attrs: readonly string[]
 }
 
-/** The default state: no color, no attributes. */
+/** 默认状态：无颜色、无属性。 */
 const SGR_NONE: SgrState = { fg: '', bg: '', attrs: [] }
 
-/** Attribute closers, mapped to the opener parameters each one turns off. */
+/** 属性关闭码 → 各自关闭的开启参数。 */
 const ATTR_CLOSERS: Record<string, readonly string[]> = {
   22: ['1', '2'], 23: ['3'], 24: ['4'], 25: ['5', '6'], 27: ['7'], 28: ['8'], 29: ['9'],
 }
 
 /**
- * Fold one SGR sequence's parameters into the state it produces.
- * @param state - state in force before the sequence.
- * @param params - the sequence's raw parameter string (`31`, `1;4`, `38;5;208`).
- * @returns the state the sequence leaves in force.
+ * 把一条 SGR 序列的参数折叠进它产生的状态。
+ * @param state 序列生效前的状态
+ * @param params 序列的原始参数串（如 `31`、`1;4`、`38;5;208`）
+ * @returns 序列执行后的生效状态
  */
 function foldSgr(state: SgrState, params: string): SgrState {
   const codes = params === '' ? ['0'] : params.split(';')
@@ -176,8 +161,8 @@ function foldSgr(state: SgrState, params: string): SgrState {
   for (let index = 0; index < codes.length; index++) {
     const code = String(codes[index])
     if (code === '' || code === '0') { next = SGR_NONE; continue }
-    // Extended color: `38;5;N` / `38;2;R;G;B` and the `48` background pair
-    // consume their own arguments, so they are taken whole.
+    // 扩展色：`38;5;N` / `38;2;R;G;B` 与对应的 `48` 背景版会消费自己的参数，
+    // 因此整段取走。
     if (code === '38' || code === '48') {
       const kind = codes[index + 1] ?? ''
       const span = kind === '2' ? 4 : kind === '5' ? 2 : 0
@@ -202,11 +187,10 @@ function foldSgr(state: SgrState, params: string): SgrState {
 }
 
 /**
- * Render a state as the one canonical sequence that establishes it from the
- * default, so a boundary emits a bounded string no matter how the state was
- * reached.
- * @param state - the state to open.
- * @returns the SGR sequence, or the empty string for the default state.
+ * 把状态渲染成「从默认态出发建立它」的那条唯一规范序列——无论状态经由什么
+ * 路径到达，边界最多发出一段有限长度的字符串。
+ * @param state 要开启的状态
+ * @returns SGR 序列；默认状态返回空串
  */
 function openSgr(state: SgrState): string {
   const codes = [...state.attrs]
@@ -215,46 +199,37 @@ function openSgr(state: SgrState): string {
   return codes.length === 0 ? '' : `\u001b[${codes.join(';')}m`
 }
 
-/** Whether two states are the same, so a boundary is only emitted on a change. */
+/** 判断两个状态是否相同，相同则边界不发出序列。 */
 function sameSgr(a: SgrState, b: SgrState): boolean {
   return a.fg === b.fg && a.bg === b.bg && a.attrs.length === b.attrs.length
     && a.attrs.every((attr, index) => attr === b.attrs[index])
 }
 
 /**
- * Replay one line's cursor movements the way a terminal paints it, into a
- * column buffer. Carriage return and backspace only MOVE the cursor — neither
- * erases anything — so what a reader sees is whatever each column last had
- * written to it. That distinction is the whole point of doing this as a buffer
- * rather than as string surgery: `100%\rOK` shows `OK0%` because the redraw is
- * shorter than the frame beneath it, and a trailing `abc\b` still shows `abc`
- * because nothing ever overwrote the `c`.
+ * 把一行的光标移动按终端绘制方式重放进一个「列缓冲」。回车与退格只移动光标——
+ * 什么都不擦除——所以读者看到的是每一列最后被写入的内容。用缓冲而非字符串手术
+ * 正是为了保住这个区别：`100%\rOK` 显示为 `OK0%`（重绘比底下的帧短），行尾的
+ * `abc\b` 仍显示 `abc`（`c` 从未被覆盖）。
  *
- * A CSI sequence occupies no column; it changes the state that the NEXT writes
- * are stamped with, which is how a terminal stores color per cell. `red bad`
- * then three backspaces then `ok` therefore shows `okd` with the `d` still red:
- * `ok` overwrote two cells and the third kept the state it was written with.
- * The columns are re-emitted as runs, so anser sees that same styling.
- * @param line - one output line, still carrying its CSI sequences.
- * @param entrySgr - SGR state in force when the line begins, since a newline
- *   does not reset it.
- * @returns the line as the terminal would have it after every movement, plus the
- *   SGR state at its end for the next line to enter with.
+ * CSI 序列不占列；它改变的是后续写入打上的状态戳——终端正是这样按格存色的。
+ * 因此 `red bad` 加三次退格再加 `ok` 显示为红色的 `okd`：`ok` 覆盖了前两格，
+ * 第三格保留写入时的状态。列按 run 重新发出，anser 看到的样式与终端一致。
+ * @param line 一行输出，仍携带 CSI 序列
+ * @param entrySgr 行首生效的 SGR 状态（换行不重置它）
+ * @returns 终端重放完所有移动后的行文本，以及行尾 SGR 状态（供下一行进场用）
  */
 function replayLine(line: string, entrySgr: SgrState): { text: string; sgr: SgrState } {
-  // Same shape anser splits on, so a sequence is one unit here as well.
+  // 与 anser 切分用的形状一致，保证一个序列在这里也是一个完整单元。
   const csi = /\u001b\[([\u0030-\u003f]*)[\u0020-\u002f]*([\u0040-\u007e])/g
-  /** Per column: the state in force when it was written, and its character. */
+  /** 每列：写入时生效的状态与字符。 */
   const columns: (Cell | undefined)[] = []
   let cursor = 0
-  // State is tracked exactly as a terminal tracks it: each cell is stamped with
-  // whatever was in force at the moment of the write, so a later redraw cannot
-  // restyle the cells it does not reach. It enters carrying the previous line's
-  // state, since a newline does not reset it.
+  // 状态追踪方式与终端完全一致：每格打上写入那一刻生效的状态戳，后续重绘
+  // 无法改变它没覆盖到的格子。进场携带上一行的状态，因为换行不重置状态。
   let sgr = entrySgr
   let at = 0
 
-  /** Clear a cell and, for a wide pair, its partner: a terminal erases both. */
+  /** 清除一格；宽字符对则连同伙伴格一起清（终端会两个都擦）。 */
   const clear = (index: number, fill: string): void => {
     const cell = columns[index]
     if (cell?.spacer === true && index > 0) columns[index - 1] = { sgr, char: fill }
@@ -269,30 +244,25 @@ function replayLine(line: string, entrySgr: SgrState): { text: string; sgr: SgrS
       if (char === '\r') { cursor = 0; continue }
       if (char === '\u0008') { cursor = Math.max(0, cursor - 1); continue }
       if (char === '\t') {
-        // A tab advances to the next 8-column stop, leaving the cells it skips
-        // as they were — which is how a redraw can leave a tabbed column
-        // standing. Column alignment is the whole point of this card.
+        // Tab 前进到下一个 8 列制表位，跳过的格子保持原样——重绘才可能留下
+        // 制表位上的旧内容。列对齐正是这张卡片存在的意义。
         const stop = cursor + TAB_WIDTH - (cursor % TAB_WIDTH)
         for (; cursor < stop; cursor++) columns[cursor] ??= { sgr, char: ' ' }
         continue
       }
       if (ZERO_WIDTH.test(char)) {
-        // No column of its own: it attaches to the cell already written, so a
-        // redraw that covers that cell covers the mark with it. With no cell to
-        // attach to (line start, or straight after a redraw to column 0) a
-        // terminal shows nothing rather than a lone accent.
+        // 不占自己的列：附着到已写好的格子上，覆盖那格的重绘会连记号一起覆盖。
+        // 无格可附着时（行首、或刚重绘回列 0）终端什么都不显示，而不是出现孤立的重音。
         const base = cursor > 0 ? columns[cursor - 1] : undefined
         if (base !== undefined) columns[cursor - 1] = { sgr: base.sgr, char: base.char + char }
         continue
       }
-      // Writing over either half of a wide pair blanks the other half, since a
-      // terminal cannot leave one cell of a two-cell glyph standing.
+      // 覆盖宽字符对的任一半都会清空另一半：终端不会让两格字形只剩一格。
       clear(cursor, ' ')
       columns[cursor] = { sgr, char }
       cursor++
-      // A wide character occupies two columns; the trailing one is a spacer,
-      // marked so that overwriting the lead cell leaves a blank behind instead
-      // of closing the gap and shifting everything after it left.
+      // 宽字符占两列；尾格是 spacer，标记它的意义是：重写主导格后留下一个空白，
+      // 而不是把缺口合上、让后面所有内容左移一列。
       if (isWide(char)) { columns[cursor] = { sgr, char: '', spacer: true }; cursor++ }
     }
   }
@@ -305,29 +275,25 @@ function replayLine(line: string, entrySgr: SgrState): { text: string; sgr: SgrS
     const params = String(match[1])
     const final = String(match[2])
     if (final === 'K') {
-      // Erase in line: the fixed companion of `\r` in every spinner and progress
-      // bar. Without it a shorter redraw leaves the previous frame's tail
-      // standing, which is text the terminal never showed. `1` blanks from the
-      // line start THROUGH the cursor column (inclusive, per the CSI spec)
-      // rather than dropping those cells, since the cursor does not move and a
-      // later write can still land past them. Only the FIRST parameter selects
-      // the mode; a terminal ignores the rest (`1;2K` erases exactly as `1K`).
+      // 行内擦除：所有 spinner 与进度条里 `\r` 的固定搭档。没有它，更短的重绘
+      // 会留下上一帧的尾巴——那是终端从未显示过的文字。`1` 把行首到光标列
+      // （含，按 CSI 规范）置空而不是删除这些格子，因为光标不动，后续写入仍可
+      // 落到它们之外。只有第一个参数选择模式，其余参数终端一律忽略（`1;2K`
+      // 的擦除行为与 `1K` 完全相同）。
       const mode = String(params.split(';')[0])
       if (mode === '1') for (let index = 0; index <= cursor; index++) clear(index, ' ')
       else columns.length = mode === '2' ? 0 : cursor
       continue
     }
-    // Only SGR carries graphic state; every other final byte is a cursor or
-    // erase action that must not affect a cell's style.
+    // 只有 SGR 携带图形状态；其余 final byte 都是光标或擦除动作，不能影响格子样式。
     if (final !== 'm') continue
     sgr = foldSgr(sgr, params)
   }
   consume(line.slice(at))
 
-  // Re-emit the columns, opening a run only where its state changes, so anser
-  // sees the same styling a terminal shows. Each boundary emits ONE canonical
-  // sequence for the state it opens, which is what keeps the output linear in
-  // the number of cells however the state was reached.
+  // 重发各列，仅在状态变化处开启新 run，让 anser 看到与终端一致的样式。
+  // 每个边界只发出「开启该状态」的一条规范序列——这正是输出长度与格子数
+  // 保持线性、与状态到达路径无关的原因。
   let out = ''
   let active = entrySgr
   for (let index = 0; index < columns.length; index++) {
@@ -337,17 +303,15 @@ function replayLine(line: string, entrySgr: SgrState): { text: string; sgr: SgrS
       out += openSgr(column.sgr)
       active = column.sgr
     }
-    // A spacer still holds its column. While its lead cell survives, the wide
-    // glyph spans both and the spacer emits nothing; once a later write replaced
-    // that lead, the terminal blanks the spacer instead of closing the gap, so
-    // emitting nothing would shift everything after it one column left.
+    // spacer 仍占着自己的列。主导格还在时宽字形跨两格，spacer 不发出内容；
+    // 后续写入替换主导格后，终端会用空白填补 spacer 而不是合上缺口——此时
+    // 若不发出空格，后面所有内容会整体左移一列。
     const leadIntact = index > 0 && isWide(columns[index - 1]?.char ?? '')
     out += column.spacer === true && !leadIntact ? ' ' : column.char
   }
-  // Converge to the state the SCAN ended in, not the last written cell's: a
-  // sequence after the final write (the `\x1b[0m` closing a colored line) changes
-  // no cell yet still ends the run, and it has to reach both the DOM and the
-  // next line. Without this a line ending in a reset leaked its color onward.
+  // 收敛到「扫描结束时」的状态，而不是最后被写格子上的状态：最后一次写入之后
+  // 的序列（收尾着色行的 `\x1b[0m`）不改变任何格子，却结束了 run，它必须同时
+  // 传递给 DOM 与下一行。否则以 reset 结尾的行会把颜色泄漏给后续行。
   if (!sameSgr(active, sgr)) {
     if (!sameSgr(active, SGR_NONE)) out += '\u001b[0m'
     out += openSgr(sgr)
@@ -355,21 +319,20 @@ function replayLine(line: string, entrySgr: SgrState): { text: string; sgr: SgrS
   return { text: out, sgr }
 }
 
-/** One replayed column: the state it was written with, and its character. */
+/** 重放后的一列：写入时生效的状态与其字符。 */
 interface Cell {
   sgr: SgrState
   char: string
-  /** The trailing half of a wide character's two-column pair. */
+  /** 宽字符两列对的尾格。 */
   spacer?: boolean
 }
 
 /**
- * Replay every line's cursor movements. A `\r` that only terminates a CRLF line
- * is dropped first, so those lines keep their text instead of being redrawn onto
- * themselves. SGR state threads across lines: a newline does not reset it, so a
- * run opened before a redraw still colors the lines after it.
- * @param text - output text, already free of OSC and non-CSI escapes.
- * @returns the text with each line painted as the terminal would.
+ * 重放每一行的光标移动。仅作为 CRLF 行结尾的 `\r` 先被剥掉，这些行保留原文
+ * 而不是被重绘到自身上。SGR 状态跨行传递：换行不重置它，重绘前开启的 run
+ * 依然会着色之后的行。
+ * @param text 输出文本（已去除 OSC 与非 CSI 转义）
+ * @returns 每行按终端绘制方式重放后的文本
  */
 function applyCursorMovements(text: string): string {
   const replayed: string[] = []
@@ -382,10 +345,9 @@ function applyCursorMovements(text: string): string {
       sgr = result.sgr
       continue
     }
-    // No cursor movement: the line needs no column buffer, and painting one
-    // would allocate a cell per character of output this card never redraws —
-    // an `ls -R` or a 5k-line log. Only its own SGR has to be folded, so a later
-    // line that DOES replay enters with the right state.
+    // 无光标移动的行不需要列缓冲——为它建一个会让这张卡片从不重绘的输出
+    // （`ls -R`、5k 行日志）每字符分配一格。只需折叠自身的 SGR，让后续真正
+    // 要重放的行带着正确状态进场。
     replayed.push(line)
     for (const match of line.matchAll(SGR_SEQUENCE)) sgr = foldSgr(sgr, String(match[1]))
   }
@@ -393,12 +355,11 @@ function applyCursorMovements(text: string): string {
 }
 
 /**
- * Remove every escape sequence and control character that carries no color,
- * leaving CSI sequences for anser and `\n`/`\t` for layout. Cursor movements
- * (carriage return, backspace) replay first, since their effect on the visible
- * text must land before the characters that expressed them are dropped.
- * @param text - raw command output.
- * @returns text whose only remaining escapes are CSI sequences.
+ * 清除所有不携带颜色的转义序列与控制字符，为 anser 保留 CSI，为排版保留
+ * `\n`/`\t`。光标移动（回车、退格）先重放——它们对可见文本的效果必须先落定，
+ * 之后才能丢弃表达它们的字符本身。
+ * @param text 原始命令输出
+ * @returns 仅剩 CSI 序列的文本
  */
 function sanitize(text: string): string {
   const escaped = text.replace(OSC_SEQUENCE, '').replace(NON_CSI_ESCAPE, '')
@@ -406,9 +367,9 @@ function sanitize(text: string): string {
 }
 
 /**
- * Resolve one run's colors and decorations.
- * @param chunk - the anser chunk to style.
- * @returns the run's inline style, or undefined when it carries no SGR state.
+ * 解析一个 run 的颜色与装饰属性。
+ * @param chunk 待着色的 anser chunk
+ * @returns 该 run 的内联样式；不带任何 SGR 状态时返回 undefined
  */
 function resolveStyle(chunk: AnsiChunk): CSSProperties | undefined {
   const style: CSSProperties = {}
@@ -416,9 +377,8 @@ function resolveStyle(chunk: AnsiChunk): CSSProperties | undefined {
   if (background !== undefined) style.backgroundColor = background
   if (chunk.fg !== null) {
     const literal = `rgb(${chunk.fg})`
-    // A run that paints its own background keeps anser's literal pair so the
-    // authored foreground/background contrast survives; a foreground-only run
-    // maps onto a theme token, which adapts to light and dark surfaces.
+    // 自带背景色的 run 保留 anser 的字面前景/背景配对，作者设定的对比度不被破坏；
+    // 只有前景色的 run 映射到主题 token，随明暗两套底色自适应。
     style.color = background === undefined
       ? TOKEN_BY_BASIC_RGB[chunk.fg.replace(/\s+/g, '')] ?? literal
       : literal
@@ -428,9 +388,10 @@ function resolveStyle(chunk: AnsiChunk): CSSProperties | undefined {
 }
 
 /**
- * Parse command output into styled spans grouped by line.
- * @param text - raw output text, which may contain ANSI escape sequences.
- * @returns one entry per output line (always at least one, possibly empty).
+ * 功能：把命令输出解析成按行分组的带样式 span 列表（终端卡片渲染的数据源）。
+ * @param text 原始输出文本，可含 ANSI 转义序列
+ * @returns 每行一个条目（至少一行，行可为空）
+ * 内部逻辑：先 sanitize（剥 OSC/杂控制字符、重放光标移动），再交给 anser 切出 SGR run；chunk 内的 `\n` 切开新行；颜色经 resolveStyle 映射到主题 token 或字面 rgb。
  */
 export function parseAnsiLines(text: string): AnsiLine[] {
   let current: AnsiSpan[] = []

@@ -22,10 +22,16 @@ const MAX_DIFF_BYTES = 512 * 1024
 const MAX_COMMIT_MESSAGE = 10_000
 const MAX_COMMIT_CONTEXT_BYTES = 24 * 1024
 
+/** 一次 git 命令的结果；unavailable 表示 git 本体不存在。 */
 interface GitCommandResult { stdout: string; stderr: string; code: number; unavailable: boolean }
 
 const UNAVAILABLE: GitCommandResult = { stdout: '', stderr: '', code: -1, unavailable: true }
 
+/**
+ * 功能：运行一条 git 命令，永不 reject——错误收敛为结果对象。
+ * 平台差异与安全：统一 `execFile` 不经 shell；GIT_TERMINAL_PROMPT=0 禁止交互式
+ * 凭据提示（远端操作永不挂起）；windowsHide 隐藏控制台窗口；git 不存在返回 UNAVAILABLE。
+ */
 function runGit(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<GitCommandResult> {
   return new Promise(resolveGit => {
     execFile('git', args, { cwd, timeout, maxBuffer: GIT_MAX_OUTPUT_BYTES, windowsHide: true, encoding: 'utf8',
@@ -41,6 +47,7 @@ function runGit(cwd: string, args: string[], timeout = GIT_TIMEOUT_MS): Promise<
   })
 }
 
+/** 构造「非仓库 / git 不可用」的空状态。 */
 function emptyStatus(isGitAvailable: boolean): GitWorktreeStatus {
   return {
     isGitAvailable,
@@ -58,6 +65,7 @@ function emptyStatus(isGitAvailable: boolean): GitWorktreeStatus {
   }
 }
 
+/** porcelain 状态里 `##` 分支行解析出的头部信息。 */
 interface BranchHeader {
   branchName: string | null
   headRefType: GitHeadRefType
@@ -65,7 +73,7 @@ interface BranchHeader {
   behind: number
 }
 
-/** Parses the `##` header `git status --porcelain=v1 --branch -z` emits first. */
+/** 解析 `git status --porcelain=v1 --branch -z` 最先输出的 `##` 头（含 ahead/behind、无提交、detached）。 */
 function parseBranchHeader(line: string): BranchHeader {
   const text = line.slice(3)
   if (text.startsWith('HEAD (no branch)')) {
@@ -83,6 +91,7 @@ function parseBranchHeader(line: string): BranchHeader {
   }
 }
 
+/** 把 porcelain 两字符状态码映射为展示状态；`!!`（忽略）返回 undefined 直接丢弃。 */
 function statusKind(code: string): GitWorktreeFileStatus | undefined {
   if (code === '??') return 'untracked'
   if (code === '!!') return undefined
@@ -93,7 +102,7 @@ function statusKind(code: string): GitWorktreeFileStatus | undefined {
   return 'modified'
 }
 
-/** One `git status --porcelain=v1 -z` stream: the branch header plus every changed path. */
+/** 解析 `git status --porcelain=v1 -z` 的 NUL 分隔流：头部 + 全部改动路径。 */
 function parseStatus(stdout: string): { branch: BranchHeader; files: Array<{ path: string; status: GitWorktreeFileStatus }> } {
   const tokens = stdout.split('\0')
   let branch: BranchHeader = { branchName: null, headRefType: 'detached', ahead: 0, behind: 0 }
@@ -107,7 +116,7 @@ function parseStatus(stdout: string): { branch: BranchHeader; files: Array<{ pat
     }
     if (token.length < 4) continue
     const code = token.slice(0, 2)
-    // With -z a rename/copy writes `XY new-path\0old-path\0`; skip the old-path token.
+    // -z 模式下 rename/copy 写作 `XY 新路径\0旧路径\0`，跳过旧路径 token。
     if (code.includes('R') || code.includes('C')) index += 1
     const kind = statusKind(code)
     if (kind === undefined) continue
@@ -116,7 +125,7 @@ function parseStatus(stdout: string): { branch: BranchHeader; files: Array<{ pat
   return { branch, files }
 }
 
-/** `git diff --numstat -z`: `added\tremoved\tpath`, or `added\tremoved\t\0old\0new` for a rename. */
+/** 解析 `git diff --numstat -z`：`added\tremoved\tpath`，rename 时为 `added\tremoved\t\0旧\0新`。 */
 function parseNumstat(stdout: string): Map<string, { added: number; removed: number }> {
   const counts = new Map<string, { added: number; removed: number }>()
   const tokens = stdout.split('\0')
@@ -144,23 +153,24 @@ function parseNumstat(stdout: string): Map<string, { added: number; removed: num
   return counts
 }
 
+/** 取错误文案：stderr 优先，stdout 兜底，截断到 2000 字符。 */
 function errorText(result: GitCommandResult): string {
   return (result.stderr.trim() || result.stdout.trim() || 'Git 命令执行失败').slice(0, 2_000)
 }
 
-/** `git diff --cached --name-only -z`: just the paths the index currently holds. */
+/** `git diff --cached --name-only -z`：仅当前暂存区持有的路径。 */
 function parseNameOnly(stdout: string): string[] {
   return stdout.split('\0').filter(name => name !== '')
 }
 
-/** `origin/main` when the current branch tracks an upstream; the command fails otherwise. */
+/** 当前分支跟踪上游时返回 `origin/main` 这类名字；无上游时命令失败返回 null。 */
 async function upstreamName(repoRoot: string): Promise<string | null> {
   const upstream = await runGit(repoRoot, ['rev-parse', '--abbrev-ref', '@{upstream}'])
   const name = upstream.stdout.trim()
   return upstream.code === 0 && name !== '' ? name : null
 }
 
-/** ZCode's branch source: the lines this branch added on top of its upstream, keyed by path. */
+/** ZCode 的「分支来源」文件清单：本分支相对上游新增的行数，按路径计。 */
 async function branchFileList(repoRoot: string, upstream: string): Promise<GitWorktreeFile[]> {
   const range = await runGit(repoRoot, ['diff', '--numstat', '-z', `${upstream}...HEAD`])
   const counts = parseNumstat(range.stdout)
@@ -169,13 +179,13 @@ async function branchFileList(repoRoot: string, upstream: string): Promise<GitWo
     .sort((first, second) => first.path.localeCompare(second.path))
 }
 
-/** `git show <revision>:<path>`; undefined when that revision has no such blob. */
+/** `git show <revision>:<path>`；该修订没有对应 blob 时返回 undefined。 */
 async function showRevision(repoRoot: string, path: string, revision: string): Promise<string | undefined> {
   const shown = await runGit(repoRoot, ['show', `${revision}:${path}`])
   return shown.code === 0 ? shown.stdout : undefined
 }
 
-/** Shared patch shaping: binary markers and oversized patches become availability hints. */
+/** 补丁形状化（各 diff 来源共用）：二进制标记与超长补丁转成 availability 提示。 */
 function shapePatch(path: string, patch: GitCommandResult): GitWorktreeDiff {
   if (patch.stdout.startsWith('Binary files ')) return { path, diff: patch.stdout, availability: 'binary' }
   if (patch.stdout !== '') {
@@ -185,6 +195,7 @@ function shapePatch(path: string, patch: GitCommandResult): GitWorktreeDiff {
   return { path }
 }
 
+/** 把原始路径解析为仓库根内的相对路径（`/` 分隔）；逃出根抛 INVALID_INPUT。 */
 function normalizeRelativePath(root: string, rawPath: string): string {
   const target = resolve(root, rawPath)
   const rel = relative(root, target)
@@ -195,26 +206,31 @@ function normalizeRelativePath(root: string, rawPath: string): string {
 }
 
 /**
- * Worktree-level Git support for the status card: status + line counts, one file diff,
- * commit and push. All calls use `execFile` with the repository root as cwd; no shell.
+ * 状态卡所需的工作树级 Git 能力：状态 + 行数统计、单文件 diff、提交与推送。
+ * 全部调用走 `execFile`（cwd 为仓库根），不经 shell。
  */
 export class GitWorktree {
   constructor(private readonly workspaces: () => readonly WorkspaceSummary[]) {}
 
+  /** 按 ID 取工作区路径；不存在抛 NOT_FOUND。 */
   private workspacePath(id: string): string {
     const workspace = this.workspaces().find(item => item.id === id)
     if (!workspace) throw new RuntimeError('NOT_FOUND', '工作区不存在')
     return workspace.path
   }
 
+  /** 读取工作树状态快照（git 不可用或非仓库时返回空状态）。 */
   async status(id: string): Promise<GitWorktreeStatus> {
     return await this.readStatus(this.workspacePath(id))
   }
 
   /**
-   * One file's diff for the review pane. ZCode sources: `staged` compares the index with HEAD
-   * (both texts included so the pane can render a side-by-side view), `branch` compares the
-   * upstream with HEAD; the default keeps the merged `diff HEAD` view with untracked full text.
+   * 功能：为审查面板取一个文件的 diff。
+   * @param sourceId 来源：`staged` 比较暂存区与 HEAD（附带新旧文本供并排渲染）；
+   * `branch` 比较上游与 HEAD；缺省保持 `diff HEAD` 合并视图
+   * @returns shapePatch 处理后的 diff；缺省来源下未跟踪文件附带当前全文（newText）
+   * 内部逻辑：untracked 没有 HEAD 条目，取文件现文本替代——真实路径必须仍在工作
+   * 区内（符号链接可能指到外面），超过 MAX_DIFF_BYTES 就放弃。
    */
   async diff(id: string, rawPath: string, sourceId?: GitChangeSourceId): Promise<GitWorktreeDiff> {
     const status = await this.readStatus(this.workspacePath(id))
@@ -228,11 +244,11 @@ export class GitWorktree {
     if (patch.unavailable) throw new RuntimeError('INVALID_INPUT', '未找到 Git')
     const shaped = shapePatch(path, patch)
     if (shaped.diff !== undefined) return shaped
-    // Untracked files have no HEAD entry, so the inspector gets their current text instead.
+    // 未跟踪文件没有 HEAD 条目，检查器改拿它的当前文本。
     const target = resolve(status.repoRoot, path)
     const info = await lstat(target).catch(() => undefined)
     if (info === undefined || !info.isFile() || info.size > MAX_DIFF_BYTES) return { path }
-    // A symlink can point outside the workspace; only read the real path when it stays inside.
+    // 符号链接可能指向工作区外；真实路径仍在里面时才读。
     const real = await realpath(target).catch(() => undefined)
     if (real === undefined) return { path }
     const insideRoot = relative(status.repoRoot, real)
@@ -241,13 +257,13 @@ export class GitWorktree {
     return text === undefined ? { path } : { path, newText: text }
   }
 
-  /** The index versus HEAD; the texts let the pane render a full diff view instead of a patch. */
+  /** 暂存区与 HEAD 的比较；附带新旧文本让面板渲染完整 diff 视图而非补丁。 */
   private async stagedDiff(root: string, path: string): Promise<GitWorktreeDiff> {
     const patch = await runGit(root, ['diff', '--cached', '--no-color', '--unified=3', '--', path])
     if (patch.unavailable) throw new RuntimeError('INVALID_INPUT', '未找到 Git')
     const shaped = shapePatch(path, patch)
     if (shaped.availability === 'binary') return shaped
-    // A newly added file has no HEAD blob and a removed one no index blob; either drops the texts.
+    // 新增文件没有 HEAD blob、删除的文件没有 index blob，任一缺失就不带文本。
     const indexText = await showRevision(root, path, '')
     const headText = await showRevision(root, path, 'HEAD')
     if (indexText !== undefined && headText !== undefined
@@ -257,7 +273,7 @@ export class GitWorktree {
     return shaped.diff !== undefined ? shaped : { path, availability: 'unavailable' }
   }
 
-  /** The local commits versus the upstream; patches only, matching ZCode's branch source. */
+  /** 本分支相对上游的 diff；只给补丁，与 ZCode 的 branch 来源一致。 */
   private async branchDiff(status: GitWorktreeStatus, path: string): Promise<GitWorktreeDiff> {
     if (status.repoRoot === null) throw new RuntimeError('INVALID_INPUT', '工作区不在 Git 仓库中')
     const upstream = status.trackingBranchName
@@ -268,7 +284,11 @@ export class GitWorktree {
     return shaped.diff !== undefined || shaped.availability !== undefined ? shaped : { path, availability: 'unavailable' }
   }
 
-  /** The diff a commit would contain, capped for the model-based message generator. */
+  /**
+   * 功能：取「这次提交将包含的」diff，供模型生成提交说明（截断到 24 KB）。
+   * @param includeUnstaged true 取 `diff HEAD`（含未暂存改动），false 取 `diff --cached`
+   * @returns 状态与 diff 文本；非仓库或命令失败时 diff 为空串
+   */
   async commitContext(id: string, includeUnstaged: boolean): Promise<{ status: GitWorktreeStatus; diff: string }> {
     const status = await this.readStatus(this.workspacePath(id))
     if (!status.isRepository || status.repoRoot === null) return { status, diff: '' }
@@ -278,6 +298,14 @@ export class GitWorktree {
     return { status, diff: diff.code === 0 ? diff.stdout.slice(0, MAX_COMMIT_CONTEXT_BYTES) : '' }
   }
 
+  /**
+   * 功能：提交工作树改动。
+   * @param input.message 提交信息（1–10000 字符，trim 后校验）
+   * @param input.includeUnstaged true 时先 `git add -A` 把未暂存改动一并暂存
+   * @returns 提交结果：成功带短哈希与刷新后的状态；各失败分支带中文 error
+   * 内部逻辑：暂存后用 `diff --cached --quiet` 探测——退出码 0 说明暂存区为空
+   * （没有可提交的改动）；commit 成功后再 rev-parse 取短哈希。
+   */
   async commit(id: string, input: GitCommitInput): Promise<GitCommitResult> {
     const status = await this.readStatus(this.workspacePath(id))
     if (!status.isRepository || status.repoRoot === null) {
@@ -311,6 +339,7 @@ export class GitWorktree {
     }
   }
 
+  /** 推送当前分支到其上游（裸 `git push`，60 秒超时）；失败带 git 错误文案。 */
   async push(id: string): Promise<GitPushResult> {
     const status = await this.readStatus(this.workspacePath(id))
     if (!status.isRepository || status.repoRoot === null) {
@@ -322,6 +351,12 @@ export class GitWorktree {
     return { ok: true }
   }
 
+  /**
+   * 功能：组装工作树状态：分支头、改动文件、行数统计、暂存标记与上游分支文件。
+   * 内部逻辑：rev-parse 判仓库与根 → porcelain -z 解析状态与分支头 → 并行取
+   * numstat（行数）、cached name-only（暂存标记）、上游名；上游存在时再算
+   * branchFiles（相对上游新增的行）。各步失败按「git 不可用 / 非仓库 / 空状态」降级。
+   */
   private async readStatus(path: string): Promise<GitWorktreeStatus> {
     const inside = await runGit(path, ['rev-parse', '--is-inside-work-tree'])
     if (inside.unavailable) return emptyStatus(false)

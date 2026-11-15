@@ -1,9 +1,9 @@
 /**
- * The rule controls shared by the create panel and inline edits.
+ * 创建面板与行内编辑共用的规则编辑器。
  *
- * The draft keeps the human-facing frequency plus the raw values; `compileRule`
- * turns it into the two-line RRULE the server stores. `advanced` keeps a raw rule
- * so a hand-written or model-written rule stays editable as text.
+ * 草稿同时保留面向用户的频率选项与原始值；`compileRule` 把它编译为服务端存储的
+ * 两行 RRULE。`advanced`（自定义）频率直接保留原始规则，使手写或模型生成的规则
+ * 仍可作为文本编辑。
  */
 import { useId } from 'react'
 import { Input } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -15,6 +15,7 @@ import { zoneOptions } from './time-zones.ts'
 import type { Translate } from './render-labels.ts'
 import css from './AutomationsPage.module.css'
 
+/** 编辑器草稿：任务名、指令、投递目标、关联工作区与人类可读的时机草稿。 */
 export interface AutomationDraft {
   name: string
   prompt: string
@@ -23,6 +24,7 @@ export interface AutomationDraft {
   timing: TimingDraft
 }
 
+/** 频率下拉的候选值与中英文案。 */
 const FREQUENCIES: readonly { value: AutomationFrequency; zh: string; en: string }[] = [
   { value: 'weekly', zh: '每周', en: 'Weekly' },
   { value: 'weekdays', zh: '周一至周五', en: 'Weekdays' },
@@ -35,17 +37,20 @@ const FREQUENCIES: readonly { value: AutomationFrequency; zh: string; en: string
   { value: 'manual', zh: '手动', en: 'Manual' },
 ]
 
+/** 执行位置下拉的候选值与中英文案（编辑器内只暴露两个非 session 选项）。 */
 const TARGETS: readonly { value: 'new_once' | 'new'; zh: string; en: string }[] = [
   { value: 'new_once', zh: '新建会话并复用', en: 'New session, reused' },
   { value: 'new', zh: '每次新建会话', en: 'New session each run' },
 ]
 
+/** 全部投递目标（含 session）的中英文标签，供详情面板展示。 */
 export const TARGET_LABELS: Readonly<Record<string, { zh: string; en: string }>> = {
   session: { zh: '当前会话', en: 'This session' },
   new_once: { zh: '新建会话并复用', en: 'New session, reused' },
   new: { zh: '每次新建会话', en: 'New session each run' },
 }
 
+/** 生成新任务的空白草稿：时机默认「仅一次」，定在 now + 1 小时的整分钟时刻。 */
 export function newDraft(workspaceId: string, timeZone: string, now = Date.now()): AutomationDraft {
   const later = new Date(now + 60 * 60 * 1000)
   const date = `${later.getFullYear()}-${String(later.getMonth() + 1).padStart(2, '0')}-${String(later.getDate()).padStart(2, '0')}`
@@ -62,6 +67,17 @@ export function newDraft(workspaceId: string, timeZone: string, now = Date.now()
   }
 }
 
+/**
+ * 功能：自动化规则编辑器表单（创建面板与详情行内编辑共用）：任务名、任务内容、
+ * 执行位置与关联工作区，以及「运行时间」区（重复频率、间隔、星期、日期、时间、
+ * 时区、自定义 RRULE）。
+ * @param props draft 受控草稿；onChange 以 patch 合并回传更新；workspaces 可选工作区；
+ *              disabled 是否禁用整表（busy 期间）；t 双语翻译函数。
+ * 内部逻辑：各字段直接把变更以 patch 回传（受控组件）；patchTiming 合并时机草稿；
+ * 按频率条件渲染行——非 advanced/minutes/hourly 显示时钟输入、除 once/advanced/manual
+ * 外显示间隔输入、weekly/weekdays 显示星期按钮组、monthly 显示每月日期、once 显示日期、
+ * manual 显示提示、advanced 显示 RRULE 文本域；字段 id 由 useId 生成保证唯一。
+ */
 export function AutomationEditor({ draft, onChange, workspaces, disabled, t }: {
   draft: AutomationDraft
   onChange: (patch: Partial<AutomationDraft>) => void
@@ -171,7 +187,7 @@ export function AutomationEditor({ draft, onChange, workspaces, disabled, t }: {
     </section>
   </fieldset>
 }
-/** The stored rule as editor state; an unparsable rule stays in `advanced`. */
+/** 把已存储的任务还原为编辑器草稿；无法解析的规则保留在 `advanced` 频率下作为原文编辑。 */
 export function draftOf(automation: Automation): AutomationDraft {
   const timing = (automation.rrule === undefined ? undefined : decodeRule(automation.rrule))
     ?? {
@@ -187,7 +203,7 @@ export function draftOf(automation: Automation): AutomationDraft {
   }
 }
 
-/** The patch for an inline save. A session target keeps its destination. */
+/** 行内保存的更新补丁；原目标为 session 时保留原投递目的地不变。 */
 export function inputOf(draft: AutomationDraft, original: Automation, now = Date.now()): UpdateAutomationInput {
   const rrule = compileRule(draft.timing, now) ?? null
   return {
@@ -203,7 +219,7 @@ export function inputOf(draft: AutomationDraft, original: Automation, now = Date
   }
 }
 
-/** The create payload. */
+/** 创建任务的提交载荷：无可编译规则时以 paused 状态创建（手动任务）。 */
 export function createInputOf(draft: AutomationDraft, now = Date.now()): CreateAutomationInput {
   const rrule = compileRule(draft.timing, now)
   return {

@@ -1,9 +1,9 @@
 /**
- * The left list of the automations master-detail page.
+ * 自动化主从页面（AutomationsPage）左侧的任务列表。
  *
- * A row shows what the task is called, how it repeats, and — for an active task —
- * when it fires next as an absolute time plus a relative one. Selecting a row opens
- * its detail on the right; the page owns loading and filtering.
+ * 每行展示任务名称、重复规则，以及——对已开启的任务——下次触发时间
+ * （绝对时间 + 相对时间两种表述）。点击某行即在右侧打开对应详情；
+ * 加载与过滤由页面自身负责，本组件只做纯展示。
  */
 import { IconAlarmClockOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { describeRule } from '../shared/automation-timing.ts'
@@ -12,7 +12,13 @@ import { formatInZone } from './time-zones.ts'
 import type { Translate } from './render-labels.ts'
 import css from './AutomationsPage.module.css'
 
-/** 「3 小时后」, or an absolute stamp far enough out that a count stops helping. */
+/**
+ * 把一个时间戳渲染成相对时间文案：如「3 小时后」「5 分钟前」「即将」。
+ * @param value 目标时间戳（毫秒）；now 当前时间戳，用于计算差值；t 双语翻译函数；
+ *              locale 数字格式化用的 locale；timeZone 超过 30 天时回退为绝对时间所用时区。
+ * @returns 相对时间字符串；差值超出 30 天时返回 formatInZone 的绝对时间戳——
+ *          那个尺度上倒数已无帮助。
+ */
 export function relativeText(value: number, now: number, t: Translate, locale: string, timeZone?: string): string {
   const delta = value - now
   const absolute = Math.abs(delta)
@@ -33,12 +39,23 @@ export function relativeText(value: number, now: number, t: Translate, locale: s
   return formatInZone(value, timeZone, locale)
 }
 
+/** 把任务状态映射为展示文案：active → 已开启、paused → 已暂停、其余 → 已结束。 */
 export function statusLabel(status: Automation['status'], t: Translate): string {
   if (status === 'active') return t('已开启', 'Active')
   if (status === 'paused') return t('已暂停', 'Paused')
   return t('已结束', 'Ended')
 }
 
+/**
+ * 功能：自动化任务列表（主从页左侧栏），以 listbox 形式渲染任务行，
+ * 行内展示闹钟图标、任务名（内置任务附「内置」徽标）、重复规则与下次执行时间摘要。
+ * @param props items 任务列表；selectedId 当前选中任务 id（高亮行）；now 当前时间戳
+ *              （计算相对时间）；locale 数字/时间格式化 locale；onSelect 选中任务回调；
+ *              t 双语翻译函数。
+ * 内部逻辑：每行按 status 计算 active 态的 nextRunAt，有下次时间时摘要为
+ * 「下次计划时间：绝对时间（相对时间）」，否则仅显示状态标签（已开启/已暂停/已结束）；
+ * 行以 role=option + aria-selected 表达选中态。
+ */
 export function AutomationListPane({ items, selectedId, now, locale, onSelect, t }: {
   items: readonly Automation[]
   selectedId: string | undefined

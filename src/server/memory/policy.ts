@@ -18,14 +18,22 @@ import {
   stampOriginSessionId,
 } from './store.ts'
 
+/** 记忆扩展在注册表中的名称；ensureRuntimePolicy 按它补装。 */
 export const MEMORY_EXTENSION_NAME = 'pi-web-memory'
 
+/** 记忆策略扩展的选项：数据目录与「记忆功能是否开启」的实时读取。 */
 export interface MemoryPolicyOptions {
   dataDir: string
   memoryEnabled: () => boolean
 }
 
-/** The save protocol the model is taught. One copy is shared by the main session and extraction. */
+/**
+ * 功能：生成教会模型保存协议的记忆提示词节。
+ * @param root 记忆根目录绝对路径（提示词里直接引用）
+ * @returns Markdown 文本
+ * 内部逻辑：主会话与后台提取共用同一份文案，保证协议口径一致：单文件单事实、
+ * frontmatter 格式、[[链接]]、MEMORY.md 索引规则、保存判据与来源规则。
+ */
 export function memoryInstructions(root: string): string {
   return [
     '# 记忆',
@@ -55,16 +63,19 @@ export function memoryInstructions(root: string): string {
   ].join('\n')
 }
 
+/** 从执行环境解析记忆根目录；无有效 cwd 返回 undefined。 */
 function memoryRoot(env: { cwd?: string } | undefined, dataDir: string): string | undefined {
   if (typeof env?.cwd !== 'string' || env.cwd.trim() === '') return undefined
   return resolveMemoryRoot({ dataDir, workspacePath: env.cwd })
 }
 
 /**
- * Stamp write/edit calls that target the memory root. Pi's native tools write inside their own
- * execute(), so `write` is stamped before the call (its content is the whole file) and `edit` is
- * stamped after a successful call by reading the result back. Nothing here may throw: a throwing
- * wrap would remove the whole tool.
+ * 功能：为指向记忆根的 write/edit 调用打上来源会话戳。
+ * @param options 记忆策略选项
+ * @returns 可交给 defineExtension 的 wraps 配置（write + edit）
+ * 内部逻辑：Pi 原生工具在自己 execute() 内写文件，因此 `write` 在调用前打戳
+ * （其 content 就是整个文件），`edit` 在调用成功后读回文件补打。这里任何步骤都
+ * 不得抛出——抛出的 wrap 会让整个工具被移除。
  */
 function stampWraps(options: MemoryPolicyOptions): NonNullable<Extension['wraps']> {
   const wrap = (tool: ToolRegistration): ToolRegistration => ({
@@ -79,8 +90,8 @@ function stampWraps(options: MemoryPolicyOptions): NonNullable<Extension['wraps'
       const safe = root !== undefined && absoluteTarget !== undefined ? resolveSafeMemoryPath(absoluteTarget, root) : undefined
       if (root === undefined || safe === undefined) return tool.execute(args, api, context)
 
-      // Decide everything that touches the filesystem before the tool runs, so a failure here
-      // falls back to the untouched call instead of running it twice.
+      // 在工具运行前完成所有触碰文件系统的判定，这样判定失败会回退为原样调用，
+      // 而不是把工具跑两遍。
       if (tool.name === 'write') {
         let content: string | undefined
         try {
@@ -112,19 +123,24 @@ function stampWraps(options: MemoryPolicyOptions): NonNullable<Extension['wraps'
   ]
 }
 
+/**
+ * 功能：创建记忆扩展：记忆保存协议 section、MEMORY.md 索引 section 与 write/edit 打戳包装。
+ * @param options 记忆策略选项（dataDir 与开关）
+ * @returns 定义好的 Extension；未开启或无记忆根时各 section 返回 undefined
+ */
 export function createMemoryExtension(options: MemoryPolicyOptions): Extension {
   const memorySection = section('memory', async (input, context) => {
     if (!options.memoryEnabled()) return undefined
     const root = memoryRoot(input.env, options.dataDir)
     if (root === undefined) return undefined
-    // Plan mode narrows the advertised tools to the plan set, which removes write/edit; without a
-    // write path the save protocol is left out. "Remember this" said inside plan mode is still
-    // captured later by background extraction, which runs outside the plan tool filter.
+    // 计划模式把可见工具收窄到计划集合，write/edit 被移除；没有写入通道就不放保存
+    // 协议。计划模式里说的「记住这个」仍会被后台提取捕获——提取不经过计划工具过滤。
     const canWrite = input.agent.tools.some(tool => tool.name === 'write' || tool.name === 'edit')
     if (!canWrite) return undefined
     return memoryInstructions(root)
   })
 
+  /** MEMORY.md 索引 section：有界注入索引并声明其为参考数据而非指令。 */
   const memoryIndexSection = section('memory-index', async (input) => {
     if (!options.memoryEnabled()) return undefined
     const root = memoryRoot(input.env, options.dataDir)

@@ -1,12 +1,20 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall, type FauxResponseFactory } from '@earendil-works/pi-ai'
 
+/** 演示用技能正文（demo-verifier），由脚本按需保存到技能根。 */
 export const DEMO_SKILL = [
   '---', 'name: demo-verifier',
   'description: Verify the explicitly requested Pi Web skill demonstration.',
   '---', '', 'Return the exact marker PI_WEB_SKILL_READY when asked to run this demonstration.', '',
 ].join('\n')
 
-/** Deterministic integration fixture, used only by the explicitly selected demo model. */
+/**
+ * 功能：确定性的集成测试夹具——只在显式选中 demo 模型时使用。
+ * @param context 模型请求上下文（消息历史）
+ * @returns 下一步的假响应；消息不含演示标记时返回 undefined（交给真实链路）
+ * 内部逻辑：按消息里的 `[skills-*]` 标记走脚本化分支——nested-save 先经 codemode
+ * 调 skill_save，delegate 派子 Agent，use 直接 skill_load，默认分支按工具结果数
+ * 依次走 load/save/list/validate/load；工具报错时如实提示并结束。
+ */
 export function skillsDemoResponse(context: Parameters<FauxResponseFactory>[0]) {
   const start = context.messages.findLastIndex(message => message.role === 'user')
   const user = context.messages[start]

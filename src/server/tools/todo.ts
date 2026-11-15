@@ -3,14 +3,17 @@ import { Type } from '@earendil-works/pi-ai'
 import type { TodoItem, TodoStatus } from '../../shared/types.ts'
 import { Plans } from './plan.ts'
 
+/** 单个待办列表允许的最大事项数。 */
 export const MAX_TODO_ITEMS = 100
 
+/** `status` 字段 schema：限定为 pending / in_progress / completed 三种枚举值。 */
 const TODO_STATUS = Type.Union([Type.Literal('pending'), Type.Literal('in_progress'), Type.Literal('completed')])
 
 /**
- * Conversation-scoped snapshot of the latest task list. `projectConversation` reads it into
- * `ConversationDetail.todos`; `runtime` clears it when a new user input is placed, which is DSH's
- * "a new turn starts without a list" rule.
+ * 功能：会话作用域的待办列表文档，保存最新一次任务列表快照。
+ * 内部逻辑：`projectConversation` 把它投影进 `ConversationDetail.todos`；`runtime` 在
+ * 收到新的用户输入时清空它，对应 DSH 的"新回合开始时列表归零"规则。history 取 latest，
+ * 不做 fork 与 checkpoint。
  */
 export const Todos = defineDoc<{ items: TodoItem[] | null; updatedAt: number }>({
   kind: 'pi-web.todos',
@@ -21,6 +24,11 @@ export const Todos = defineDoc<{ items: TodoItem[] | null; updatedAt: number }>(
   initial: () => ({ items: null, updatedAt: 0 }),
 })
 
+/**
+ * 功能：统计待办列表中各状态（pending / in_progress / completed）的数量。
+ * @param items 待办事项列表。
+ * @returns 三种状态的计数对象。
+ */
 function countsFor(items: readonly TodoItem[]): { pending: number; inProgress: number; completed: number } {
   const counts = { pending: 0, inProgress: 0, completed: 0 }
   for (const item of items) {
@@ -31,7 +39,10 @@ function countsFor(items: readonly TodoItem[]): { pending: number; inProgress: n
   return counts
 }
 
-/** DSH's todo list as a Pi tool: one call replaces the whole list and stores it in the conversation document. */
+/**
+ * 功能：todo 工具扩展——DSH 待办列表以 Pi 工具形式呈现，一次调用整体替换列表并写入会话文档。
+ * 本扩展只贡献 `todo_write` 一个工具，不贡献 section。
+ */
 export const TodoTools: Extension = defineExtension({
   name: 'todo',
   tools: [
@@ -48,6 +59,13 @@ export const TodoTools: Extension = defineExtension({
       parameters: Type.Object({
         todos: Type.Array(Type.Object({ content: Type.String(), status: TODO_STATUS })),
       }),
+      /**
+       * 功能：整体替换当前会话的待办列表。
+       * 输入校验：content 去空格后不得为空；条目数不超过 MAX_TODO_ITEMS；内容不得重复。
+       * 权限/边界：计划模式开启时禁止更新（快照预检 + 事务内二次确认），事务提交时写入
+       * Todos 文档并刷新 updatedAt。
+       * @returns 汇总文本输出，details 中携带列表与各状态计数。
+       */
       execute: async (args, api, context) => {
         const plan = await api.snapshot(Plans, api.conversationId, context)
         if (plan?.active === true) {

@@ -1,9 +1,18 @@
 import { createCodemodeExtension, CODEMODE_TOOL_NAME, type CodemodeToolOptions } from '@earendil-works/pi-durable/codemode'
 import type { Extension } from '@earendil-works/pi-durable'
 
-/** Nested-only declarations stay bounded; direct tools already carry their complete schemas. */
+/** codemode 内嵌工具声明的字符预算：仅限嵌套（不直接提供完整声明的）工具；直接工具本身已带完整 schema。 */
 export const CODEMODE_INLINE_BUDGET = 1_200
 
+/**
+ * 功能：创建 pi-web 运行时的 codemode 扩展，并在其 section 渲染层附加路由约束说明。
+ * 贡献：贡献 codemode 工具与其相关 section（由 pi-durable 的 createCodemodeExtension 提供），
+ * pi-web 额外改写每个 section 渲染，注入直接工具与嵌套工具的使用约定。
+ * @param options 透传给 createCodemodeExtension 的选项；inlineBudget 被强制覆写为 CODEMODE_INLINE_BUDGET。
+ * @returns 改写后的扩展；若原 section 存在，渲染时会拼接本请求的路由政策文本。
+ * 内部逻辑：先把直接工具集排除后交给原渲染（避免重复声明），再按"是否只有 codemode 工具"给出不同首行，
+ * 并在存在可直接调用的共享工具时列出它们；未暴露 codemode 工具时该 section 返回 undefined。
+ */
 export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Extension {
   const extension = createCodemodeExtension({ ...options, inlineBudget: CODEMODE_INLINE_BUDGET })
   return {
@@ -11,7 +20,7 @@ export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Ex
     sections: extension.sections?.map(item => ({
       ...item,
       render: async (input, context) => {
-        // An installed extension may be present without its tool being exposed.
+        // 扩展已安装不代表 codemode 工具一定暴露给了本请求。
         if (!input.agent.tools.some(tool => tool.name === CODEMODE_TOOL_NAME)) return undefined
         const direct = new Set(input.agent.tools.filter(tool => tool.name !== CODEMODE_TOOL_NAME).map(tool => tool.name))
         const shared = input.agent.callable.filter(tool => direct.has(tool.name))

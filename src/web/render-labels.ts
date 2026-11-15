@@ -2,9 +2,14 @@ import type {
   DiffBlockLabels, MarkdownLabels, ReadBlockLabels, SearchBlockLabels, TerminalBlockLabels, WebBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 
+/** 双语标签函数：传中英文两份文案，按 UI 语言取一份。 */
 export type Translate = (chinese: string, english: string) => string
 
-/** Compact token count matching DSH: 950, 22K, 1.2M. */
+/**
+ * 功能：紧凑的 token 计数文案（对齐 DSH 风格：950、22K、1.2M）。
+ * @param value token 数
+ * @returns 千位以下原样；千/百万位缩写，≥100 取整、其余保留一位小数
+ */
 export function formatTokens(value: number): string {
   const scaled = (candidate: number): string => String(candidate >= 100 ? Math.round(candidate) : Math.round(candidate * 10) / 10)
   if (value < 1_000) return String(value)
@@ -12,13 +17,23 @@ export function formatTokens(value: number): string {
   return `${scaled(value / 1_000_000)}M`
 }
 
-/** Cache hit share that never rounds a partial hit up to a full one. */
+/**
+ * 功能：计算缓存命中率百分比，部分命中不向上凑整为满命中。
+ * @param cacheRead 缓存读取 token 数
+ * @param billedInput 计费输入 token 数
+ * @returns 百分比整数；cacheRead≥billedInput 时 100，其余向下封顶 99；无计费输入时 undefined
+ */
 export function cacheHitPercent(cacheRead: number, billedInput: number): number | undefined {
   if (billedInput <= 0) return undefined
   if (cacheRead >= billedInput) return 100
   return Math.min(99, Math.round(cacheRead / billedInput * 100))
 }
 
+/**
+ * 功能：生成 Markdown 块渲染所需的标签集（代码块复制/换行按钮、脚注标题）。
+ * @param t 双语标签函数
+ * @returns 对齐 dsh-client-ui-primitives 的 MarkdownLabels
+ */
 export function markdownLabels(t: Translate): MarkdownLabels {
   return {
     code: {
@@ -34,6 +49,11 @@ export function markdownLabels(t: Translate): MarkdownLabels {
   }
 }
 
+/**
+ * 功能：生成终端块的工具栏与状态标签（命令行序号、退出码、复制、折叠/展开行数等）。
+ * @param t 双语标签函数
+ * @returns TerminalBlockLabels
+ */
 export function terminalLabels(t: Translate): TerminalBlockLabels {
   return {
     commandLine: line => t(`命令行 ${line}`, `Command line ${line}`),
@@ -53,6 +73,11 @@ export function terminalLabels(t: Translate): TerminalBlockLabels {
   }
 }
 
+/**
+ * 功能：生成读文件块的标签（窗口行数提示、复制、折叠/展开）。
+ * @param t 双语标签函数
+ * @returns ReadBlockLabels
+ */
 export function readLabels(t: Translate): ReadBlockLabels {
   return {
     codeLabel: t('代码', 'Code'),
@@ -68,6 +93,11 @@ export function readLabels(t: Translate): ReadBlockLabels {
   }
 }
 
+/**
+ * 功能：生成 diff 块的标签（复制差异、折叠/展开等）。
+ * @param t 双语标签函数
+ * @returns DiffBlockLabels
+ */
 export function diffLabels(t: Translate): DiffBlockLabels {
   return {
     codeLabel: t('代码', 'Code'),
@@ -82,6 +112,11 @@ export function diffLabels(t: Translate): DiffBlockLabels {
   }
 }
 
+/**
+ * 功能：生成搜索结果块的标签（路径/匹配摘要、截断提示、复制、折叠/展开）。
+ * @param t 双语标签函数
+ * @returns SearchBlockLabels
+ */
 export function searchLabels(t: Translate): SearchBlockLabels {
   return {
     pathsSummary: (shown, total, truncated) => truncated
@@ -100,6 +135,11 @@ export function searchLabels(t: Translate): SearchBlockLabels {
   }
 }
 
+/**
+ * 功能：生成网页抓取块的标签（无结果、来源截断、HTTP 状态、内容截断），并内嵌 markdownLabels。
+ * @param t 双语标签函数
+ * @returns WebBlockLabels
+ */
 export function webLabels(t: Translate): WebBlockLabels {
   return {
     noResults: t('没有网页结果', 'No web results'),

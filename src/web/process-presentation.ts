@@ -2,19 +2,29 @@ import type { RenderRun } from './render-model.ts'
 import type { ChatPresentationPolicy } from './presentation-policy.ts'
 import type { Translate } from './render-labels.ts'
 
-/** Keep interleaved user inputs visible and respect the selected detail policy. */
+/**
+ * 功能：推导一个工作组的默认展开态，保证交错出现的用户输入可见并遵循所选详情档位。
+ * @param policy 当前呈现策略
+ * @param latest 是否为最新回合
+ * @param live 是否正在运行
+ * @param hasInterleavedUser 回合内是否夹带用户输入
+ * @returns true 表示默认展开
+ * 内部逻辑：折叠条件 = 策略允许折叠 且（完成时机 / 非最新回合）；夹带用户输入、正在直播、不满足折叠条件、或 history 档的最新回合一律展开。
+ */
 export function defaultProcessOpen(policy: ChatPresentationPolicy, latest: boolean, live: boolean, hasInterleavedUser: boolean): boolean {
   const folds = policy.foldCompletedTurns && (policy.collapseTiming === 'completion' || !latest)
   return hasInterleavedUser || live || !folds || policy.stepGrouping === 'history' && latest
 }
 
-/** Why a work group's auto-open state may change: only these boundaries, never an ordinary frame. */
+/** 工作组自动展开状态允许变化的边界：仅这四种，普通帧不会改变它。 */
 export type ProcessGroupBoundary = 'live-start' | 'live-end' | 'demote' | 'none'
 
 /**
- * Derive the boundary between two rendered frames. Live and latest are the only facts that
- * may fold or unfold a group the user never touched, and each may fire once: `live-start`
- * when the run takes over, `live-end` when it settles, `demote` when a newer run appears.
+ * 功能：比较前后两帧的 live/latest 推导出边界事件。
+ * @param was 上一帧的 {live, latest}
+ * @param now 当前帧的 {live, latest}
+ * @returns 边界类型：live-start（run 接管）、live-end（run 落定）、demote（出现更新的 run）；都不满足为 none
+ * 内部逻辑：live 与 latest 是用户未手动触碰的组唯一允许折叠/展开的两个事实，且各自只触发一次。
  */
 export function processGroupBoundary(was: { live: boolean; latest: boolean }, now: { live: boolean; latest: boolean }): ProcessGroupBoundary {
   if (!was.live && now.live) return 'live-start'
@@ -24,8 +34,12 @@ export function processGroupBoundary(was: { live: boolean; latest: boolean }, no
 }
 
 /**
- * The auto open state across one boundary. Everything else keeps the previous value, so a
- * stream of re-projected frames cannot make a group flap open and folded on its own.
+ * 功能：跨边界计算自动展开态：live-start 强制展开，live-end / demote 回到默认态，其余保持原值——
+ * 保证连续重投影的帧不会让组自己开合抖动。
+ * @param previousOpen 上一帧的展开态
+ * @param boundary 本次边界事件
+ * @param defaultOpen 策略推导的默认展开态
+ * @returns 新的展开态
  */
 export function processGroupAutoOpen(previousOpen: boolean, boundary: ProcessGroupBoundary, defaultOpen: boolean): boolean {
   if (boundary === 'live-start') return true
@@ -33,15 +47,26 @@ export function processGroupAutoOpen(previousOpen: boolean, boundary: ProcessGro
   return previousOpen
 }
 
-/** The live summary follows the latest non-empty line of the thought stream. */
+/**
+ * 功能：取思考流中最后一个非空行，作为直播态折叠头的摘要。
+ * @param text 思考全文
+ * @returns 去空白后的摘要行；全空返回空串
+ */
 export function latestReasoningLine(text: string): string {
   return text.replace(/\r\n?/gu, '\n').split('\n').findLast(line => line.trim() !== '')?.trim() ?? ''
 }
 
-/** Use only recorded duration; an unavailable duration is not guessed from wall time. */
+/**
+ * 功能：生成工作组的标题文案（工作中/已工作 + 耗时，或 处理失败/已停止）。
+ * @param run 运行状态与时长
+ * @param t 双语标签函数
+ * @param live 是否仍在工作（默认取 run.status === 'running'）
+ * @returns 双语标题字符串
+ * 内部逻辑：只用已记录的 durationMs，拿不到时长不从墙钟猜；≥60s 显示「X 分 Y 秒」。
+ */
 export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t: Translate, live = run.status === 'running'): string {
-  // A run's status drops to completed between two tool rounds. The conversation-level
-  // live flag keeps the header in the working state until the turn actually settles.
+  // 两次工具轮之间 run.status 会短暂回落为 completed；会话级 live 标志
+  // 让标题保持「工作中」，直到回合真正落定。
   if (live) return t('工作中', 'Working')
   if (run.status === 'error') return t('处理失败', 'Turn failed')
   if (run.status === 'cancelled') return t('已停止', 'Stopped')
@@ -54,10 +79,12 @@ export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t:
 }
 
 /**
- * The prose a folded work group would swallow. A run's process holds every text block the
- * model wrote beside a tool call — the lead-in to a question, the explanation before a
- * verification step — so the collapsed header names the longest one instead of only the
- * duration. A run that wrote no prose returns undefined and keeps the bare header.
+ * 功能：取折叠的工作组会「吞掉」的正文摘要——run 过程里模型伴随工具调用写的文字块
+ * （提问的引子、验证前的解释），取最长一段的首行；不写正文的 run 返回 undefined，
+ * 折叠头保持只有耗时。
+ * @param run 渲染 run（只需 process）
+ * @param limit 最大字符数（码点计），超出截断加省略号，默认 120
+ * @returns 预览文本；无可读正文时 undefined
  */
 export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120): string | undefined {
   let longest = ''
@@ -73,7 +100,10 @@ export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120)
   return characters.length > limit ? `${characters.slice(0, limit).join('')}…` : line
 }
 
-/** The first readable line of a markdown block, skipping fenced code and lines without prose. */
+/**
+ * 功能：取 Markdown 块的第一行可读正文：跳过围栏代码块内各行与没有正文语义的行。
+ * @returns 清洗后的首行正文；没有则空串
+ */
 function firstProseLine(markdown: string): string {
   let fenced = false
   for (const source of markdown.split('\n')) {
@@ -86,7 +116,11 @@ function firstProseLine(markdown: string): string {
   return ''
 }
 
-/** Strip the markers a one-line preview would otherwise read as punctuation. */
+/**
+ * 功能：剥掉会让单行预览读起来像标点的 Markdown 标记（标题、引用、列表、图片/链接、强调、代码），压缩空白。
+ * @param line 原始行
+ * @returns 清洗后的正文；整行只剩分隔符（`- * _ : |` 空格）时返回空串
+ */
 function plainProse(line: string): string {
   const text = line
     .replace(/^#{1,6}\s+/u, '')

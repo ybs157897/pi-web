@@ -22,32 +22,44 @@ import type {
 } from '../../shared/skills.ts'
 import { SkillStore } from '../skills/store.ts'
 
+/** 只读技能工具名单（对子代理/只读会话可见的三个）。 */
 export const SKILL_READ_TOOLS = ['skill_list', 'skill_load', 'skill_validate'] as const
 
+/** 会话内最多保留的已加载技能引用数。 */
 const MAX_ACTIVE_SKILLS = 8
-/** ZCode's catalog budget: past this the descriptions are dropped and only ids plus paths remain. */
+/** ZCode 的目录字符预算：超过后丢弃描述，仅保留 id 与路径。 */
 const MAX_CATALOG_CHARS = 20_000
+/** 工具结果中最多列出的资源文件路径数。 */
 const MAX_SKILL_FILES_IN_RESULT = 100
-/** ZCode presents descriptions truncated to ~250 characters; match that for routing parity. */
+/** ZCode 把描述截断到约 250 字符；保持一致以对齐路由行为。 */
 const MAX_DESCRIPTION_LENGTH = 250
+/** when_to_use 字段的最大字符数（与 ZCode 对齐）。 */
 const MAX_WHEN_TO_USE_LENGTH = 250
+/** "新增技能"提示里最多列出的 id 数。 */
 const MAX_NEW_SKILLS = 8
+/** 单个资源路径的最大字符数。 */
 const MAX_RESOURCE_PATH_LENGTH = 512
+/** skill_load 输出的字节上限。 */
 const MAX_OUTPUT_BYTES = 300_000
 
+/** 一条已加载技能的引用记录（正文本体不进文档）。 */
 type LoadedSkillReference = {
   id: string
   name: string
   version: string
   baseDirectory: string
   resource: string
-  /** Optional while reading v1 documents written before workspace scoping was added. */
+  /** 在引入 workspace 作用域之前写的 v1 文档中该字段可能缺失。 */
   workspace?: string
 }
 
+/** LoadedSkills 文档的状态：引用列表。 */
 type LoadedSkillsState = { references: LoadedSkillReference[] }
 
-/** Loaded bodies stay in tool results; only bounded ids and versions survive in this conversation document. */
+/**
+ * 会话作用域的已加载技能文档。技能正文只留在工具结果里；本会话文档只保留有界的
+ * id 与版本信息。
+ */
 export const LoadedSkills = defineDoc<LoadedSkillsState>({
   kind: 'pi-web.loaded-skills',
   version: 1,
@@ -57,6 +69,7 @@ export const LoadedSkills = defineDoc<LoadedSkillsState>({
   initial: () => ({ references: [] }),
 })
 
+/** 技能摘要 schema：id、名称、描述、来源（六种）、插件信息、版本与可写标记。 */
 const skillSummarySchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
@@ -72,17 +85,20 @@ const skillSummarySchema = Type.Object({
   writable: Type.Boolean(),
 })
 
+/** 技能校验结果 schema：valid 与错误/警告列表。 */
 const skillValidationSchema = Type.Object({
   valid: Type.Boolean(),
   errors: Type.Array(Type.String()),
   warnings: Type.Array(Type.String()),
 })
 
+/** skill_list 的 structuredOutput schema：技能摘要数组与诊断信息。 */
 const catalogOutputSchema = Type.Object({
   skills: Type.Array(skillSummarySchema),
   diagnostics: Type.Array(Type.String()),
 })
 
+/** skill_load 的 structuredOutput schema：摘要、基目录、资源、正文与文件列表。 */
 const loadOutputSchema = Type.Object({
   skill: skillSummarySchema,
   baseDirectory: Type.String(),
@@ -92,8 +108,10 @@ const loadOutputSchema = Type.Object({
   filesTruncated: Type.Boolean(),
 })
 
+/** skill_validate 的 structuredOutput schema（复用校验结果 schema）。 */
 const validationOutputSchema = skillValidationSchema
 
+/** skill_save 的 structuredOutput schema：摘要、创建/未变标记、校验结果与落盘位置。 */
 const saveOutputSchema = Type.Object({
   skill: skillSummarySchema,
   created: Type.Boolean(),
@@ -102,6 +120,13 @@ const saveOutputSchema = Type.Object({
   location: Type.String(),
 })
 
+/**
+ * 功能：把技能摘要转成去掉 path 的安全版本。
+ * 内部逻辑：description/whenToUse/插件字段经 cleanMessage 清洗限长；可选字段仅在
+ * 存在时保留。
+ * @param skill 原始技能摘要。
+ * @returns 不含 path 的摘要。
+ */
 function safeSummary(skill: SkillSummary): Omit<SkillSummary, 'path'> {
   return {
     id: skill.id,
@@ -116,15 +141,29 @@ function safeSummary(skill: SkillSummary): Omit<SkillSummary, 'path'> {
   }
 }
 
+/**
+ * 功能：把一段文本清洗成单行并限长。
+ * 内部逻辑：控制字符与连续空白折叠为单个空格，超长时截断加省略号。
+ * @param value 原始文本。
+ * @param limit 最大字符数，默认 MAX_DESCRIPTION_LENGTH。
+ * @returns 清洗后的单行文本。
+ */
 function cleanMessage(value: string, limit = MAX_DESCRIPTION_LENGTH): string {
   const oneLine = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
   return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine
 }
 
+/** 构造标准的单段文本输出块。 */
 function output(text: string) {
   return [{ type: 'text' as const, text }]
 }
 
+/**
+ * 功能：取当前会话的工作区目录。
+ * 输入校验：cwd 缺失或为空时抛错——没有工作区时技能工具无法安全选择工作区。
+ * @param api 工具执行 API。
+ * @returns 工作区目录路径。
+ */
 function requireWorkspace(api: ToolExecutionApi): string {
   const workspace = api.env?.cwd
   if (typeof workspace !== 'string' || workspace.trim() === '') {
@@ -133,14 +172,21 @@ function requireWorkspace(api: ToolExecutionApi): string {
   return workspace
 }
 
+/** 已请求中止时立即抛 AbortError。 */
 function abortIfRequested(context: Context): void {
   context.abortSignal?.throwIfAborted()
 }
 
+/** 引用去重键：id + NUL 分隔的资源名。 */
 function referenceKey(reference: LoadedSkillReference): string {
   return `${reference.id}\0${reference.resource}`
 }
 
+/**
+ * 功能：把刚加载的技能记入会话的 LoadedSkills 文档。
+ * 内部逻辑：新引用放到列表头部，同工作区内的旧同键引用剔除，整体截到
+ * MAX_ACTIVE_SKILLS；其余工作区的引用不动。
+ */
 async function rememberLoaded(
   api: ToolExecutionApi,
   context: Context,
@@ -165,6 +211,13 @@ async function rememberLoaded(
   }, context)
 }
 
+/**
+ * 功能：计算本次请求实际可调用的技能工具。
+ * 内部逻辑：direct 为直接出现在工具目录中的名字；viaCodemode 为 codemode 可用时
+ * "可调用但未直接列出"的名字。
+ * @param input agent 的直接工具与可调用工具名单。
+ * @returns 直接与经 codemode 两类可用技能工具名。
+ */
 function callableToolNames(input: {
   agent: {
     tools: readonly { name: string }[]
@@ -184,8 +237,16 @@ function callableToolNames(input: {
   }
 }
 
+/** 全部技能工具名单（四个）。 */
 const SKILL_TOOLS = ['skill_list', 'skill_load', 'skill_save', 'skill_validate'] as const
 
+/**
+ * 功能：渲染"本次请求可调用的技能工具"说明。
+ * 内部逻辑：直接工具与经 codemode 工具分别成行列出；两类都为空时返回 undefined
+ * （section 因此整体不注入）。
+ * @param route callableToolNames 的结果。
+ * @returns 说明文本或 undefined。
+ */
 function callableInstruction(route: ReturnType<typeof callableToolNames>): string | undefined {
   if (route.direct.length === 0 && route.viaCodemode.length === 0) return undefined
   const lines = ['本请求可调用的技能工具：']
@@ -200,9 +261,12 @@ function callableInstruction(route: ReturnType<typeof callableToolNames>): strin
 }
 
 /**
- * One catalog line, ZCode-shaped: `- <id>: <description> - <when_to_use> (file: <path>)`.
- * The id stays in the line because `skill_load` takes ids, so a shadowed copy remains reachable;
- * the absolute path means the model can open resources with workspace file tools.
+ * 功能：渲染一条 ZCode 形状的目录行：`- <id>: <描述> - <when_to_use> (file: <路径>)`。
+ * 内部逻辑：行内保留 id 是因为 skill_load 按 id 加载，被遮蔽的副本因此仍可达；绝对
+ * 路径让模型能用工作区文件工具打开资源。
+ * @param skill 技能摘要。
+ * @param withDescription 是否携带描述（预算超限时降级为 false）。
+ * @returns 目录行文本。
  */
 function catalogLine(skill: SkillSummary, withDescription: boolean): string {
   const whenToUse = !withDescription || skill.whenToUse === undefined
@@ -212,7 +276,14 @@ function catalogLine(skill: SkillSummary, withDescription: boolean): string {
   return `- ${cleanMessage(skill.id, 128)}${description} (file: ${skill.path})`
 }
 
-/** Keep the catalog inside the character budget, reserving room for the omitted-count footer. */
+/**
+ * 功能：把目录行裁剪进字符预算，并为省略计数尾注预留空间。
+ * 内部逻辑：按行累加长度，超出预算（预留 80 字符）即停止；被省略的行数经 footer
+ * 回调生成尾注追加在末尾。
+ * @param lines 候选目录行。
+ * @param footer 生成尾注的回调。
+ * @returns 预算内的行数组（可能带尾注）。
+ */
 function boundedCatalogLines(lines: readonly string[], footer: (count: number) => string): string[] {
   const kept: string[] = []
   let used = 0
@@ -226,26 +297,47 @@ function boundedCatalogLines(lines: readonly string[], footer: (count: number) =
   return kept
 }
 
+/**
+ * 功能：渲染技能目录文本。
+ * 内部逻辑：空目录给出提示；全文不超预算时带描述完整渲染；超预算时降级为仅 id 与
+ * 文件路径的有界列表（ZCode 行为）。
+ * @param catalog 技能目录。
+ * @returns 目录文本。
+ */
 function renderCatalog(catalog: SkillCatalog): string {
   if (catalog.skills.length === 0) return '在此工作区中未发现技能。'
   const footer = (count: number) => `- 此有界目录省略了另外 ${count} 个技能。`
   const full = catalog.skills.map(skill => catalogLine(skill, true)).join('\n')
   if (full.length <= MAX_CATALOG_CHARS) return full
-  // Over budget: drop every description, keeping only ids and file paths (ZCode behavior).
+  // 超预算：丢弃全部描述，仅保留 id 与文件路径（ZCode 行为）。
   return boundedCatalogLines(catalog.skills.map(skill => catalogLine(skill, false)), footer).join('\n')
 }
 
-/** Ids the model last saw in the rendered section; undefined when no usable baseline exists. */
+/**
+ * 功能：从模型上次看到的 section 文本中提取技能 id 集合。
+ * 内部逻辑：兼容两种历史格式——2026-11 之前的 JSON 行目录与现在的紧凑行
+ * （`- <id>: ` 开头，id 恰含一个分隔冒号）；无可用基线时返回 undefined。
+ * @param shown 上次注入的 skills-policy section 文本。
+ * @returns 已见过的技能 id 集合，或 undefined。
+ */
 function shownSkillIds(shown: string | undefined): Set<string> | undefined {
   if (shown === undefined || shown.trim() === '') return undefined
   const ids = new Set<string>()
-  // Pre-2026-11 catalogs were JSON lines; keep parsing them so an upgrade does not flag everything.
+  // 2026-11 之前的目录是 JSON 行；继续解析它们，升级时不会把所有技能误判为新增。
   for (const match of shown.matchAll(/"id":"([^"]+)"/gu)) ids.add(match[1]!)
-  // Compact lines start with `- <id>: `, and an id carries exactly one separator colon.
+  // 紧凑行以 `- <id>: ` 开头，id 恰含一个分隔冒号。
   for (const match of shown.matchAll(/^- ([^\s:]+:[^\s:]+):/gmu)) ids.add(match[1]!)
   return ids.size === 0 ? undefined : ids
 }
 
+/**
+ * 功能：渲染"新增技能"提示：目录中存在基线里没有的 id 时提醒模型。
+ * 内部逻辑：最多列 MAX_NEW_SKILLS 个 id，多余的以计数收尾；无基线或无新增返回
+ * undefined。
+ * @param previous 上次已见的技能 id 集合。
+ * @param catalog 当前目录。
+ * @returns 提示文本或 undefined。
+ */
 function renderNewSkills(previous: Set<string> | undefined, catalog: SkillCatalog): string | undefined {
   if (previous === undefined) return undefined
   const added = catalog.skills.filter(skill => !previous.has(skill.id))
@@ -255,6 +347,14 @@ function renderNewSkills(previous: Set<string> | undefined, catalog: SkillCatalo
   return `自上次请求后，此工作区新增了技能：${names.join(', ')}${more > 0 ? `，另有 ${more} 个` : ''}。它们已列在上方；有技能符合任务时，调用 skill_load。`
 }
 
+/**
+ * 功能：渲染当前工作区已加载技能的引用块（仅 id/版本/路径等有界信息，不含正文）。
+ * 内部逻辑：无引用返回 undefined；按是否可用 skill_load 给出不同指引——可用时提示
+ * 内容以 skill_load 重新读取为准，不可用时提示用工作区读取工具查看。
+ * @param references 当前工作区的已加载引用。
+ * @param canLoad skill_load 是否可调用。
+ * @returns 引用块文本或 undefined。
+ */
 function renderReferences(references: readonly LoadedSkillReference[], canLoad: boolean): string | undefined {
   if (references.length === 0) return undefined
   const lines = references.map(reference => `- ${JSON.stringify({
@@ -273,6 +373,14 @@ function renderReferences(references: readonly LoadedSkillReference[], canLoad: 
   ].join('\n')
 }
 
+/**
+ * 功能：创建 skills-policy section 工厂。
+ * 内部逻辑：每次请求动态渲染——工具路由说明（不可调用任何技能工具时整个 section
+ * 不注入）、可用技能目录（读目录失败不阻断请求）、新增技能提示、加载/保存/校验指引、
+ * 不可信数据声明与当前工作区已加载引用。
+ * @param store 技能存储。
+ * @returns section 定义。
+ */
 function renderSkillSection(store: SkillStore) {
   return section('skills-policy', async (input, context) => {
     const route = callableToolNames(input)
@@ -285,11 +393,10 @@ function renderSkillSection(store: SkillStore) {
       const workspace = input.env?.cwd
       if (typeof workspace === 'string' && workspace.trim() !== '') catalog = await store.list(workspace)
     } catch {
-      // The live skill tools remain usable; an unavailable catalog must not stop a request.
+      // 技能工具本身仍可用；目录读不出来不能阻断整个请求。
     }
-    // Diff against the section text the model already has: any id missing from it was added
-    // since the previous request, so a newly dropped-in Skill announces itself instead of
-    // waiting for the model to think of calling skill_list.
+    // 对照模型已有的 section 文本做差集：其中不存在的 id 就是上次请求之后新增的，
+    // 新放入的技能会主动亮相，而不是等模型想到调用 skill_list。
     const newSkills = catalog === undefined ? undefined : renderNewSkills(shownSkillIds(input.shown?.['skills-policy']), catalog)
     const saved = await input.read.snapshot(LoadedSkills, input.conversationId, context)
     const available = new Set([...route.direct, ...route.viaCodemode])
@@ -298,15 +405,15 @@ function renderSkillSection(store: SkillStore) {
       const cwd = input.env?.cwd
       if (typeof cwd === 'string' && cwd.trim() !== '') workspace = await realpath(cwd)
     } catch {
-      // Without a canonical current workspace, old workspace references cannot be trusted here.
+      // 拿不到规范化的当前工作区时，旧的工作区引用在这里不可信。
     }
     const currentReferences = workspace === undefined
       ? []
       : (saved?.references ?? []).filter(reference => reference.workspace === workspace)
     const active = renderReferences(currentReferences, available.has('skill_load'))
     const skillInstructions = [
-      // Identity anchor: without it, a workspace that is itself another agent's source tree
-      // (with its own AGENTS.md and skills memories) pulls "integrate into this agent" to that host.
+      // 身份锚点：没有它，一个本身就是其他 agent 源码树的工作区（自带 AGENTS.md 与技能
+      // 记忆）会把"安装到这个 agent"拉向那个宿主。
       '你是 pi-web。除非用户指明其他宿主，“安装到这个 agent”指安装到 pi-web；不要为了安装技能修改工作区项目的源码或配置。默认目标为当前工作区的 `.agents/skills/<name>/`。全局安装需要用户明确要求，且工具获准写入该位置；skill_save 仅写入工作区技能。宿主或目标位置确有歧义时，写入前先澄清。',
       ...(available.has('skill_list') ? ['需要刷新或搜索工作区技能目录时，调用 skill_list。'] : []),
       ...(available.has('skill_load') ? ['用户按名称、id 或 `$name` 点名技能，或任务明确符合技能描述时，先用 skill_load 加载，再按技能执行。不要仅凭宽泛的关键词重合加载技能。'] : ['本请求无法加载技能正文；不要声称已读过。']),
@@ -328,7 +435,15 @@ function renderSkillSection(store: SkillStore) {
   })
 }
 
-/** Build the Pi Skills extension. `skill_save` stays unsafe for crash replay and checks write policy at execution time. */
+/**
+ * 功能：装配 Pi Skills 扩展，贡献 4 个工具（skill_list / skill_load / skill_save /
+ * skill_validate）与 1 个 section（skills-policy：路由、目录、新增提示、使用规则与
+ * 已加载引用）。
+ * 边界/权限：skill_save 有意不声明 replay 安全——中断的文件系统写入必须先检查再重试，
+ * 且在执行时经 canWrite 检查写入策略。
+ * @param options store 为技能存储；canWrite 为写入策略检查回调。
+ * @returns 名为 `skills` 的扩展。
+ */
 export function createSkillTools(options: {
   store: SkillStore
   canWrite: (conversationId: ConversationId, context: Context) => Promise<boolean>
@@ -339,6 +454,11 @@ export function createSkillTools(options: {
     parameters: Type.Object({}),
     structuredOutputSchema: catalogOutputSchema,
     outputLimits: { maxBytes: 512_000 },
+    /**
+     * 功能：列出当前工作区发现的技能。
+     * 输入校验：检查中止信号；工作区必须存在。
+     * 边界：输出上限 512 KiB；仅返回 id 与精简元数据，正文要经 skill_load。
+     */
     execute: async (_args, api, context) => {
       abortIfRequested(context)
       const catalog = await options.store.list(requireWorkspace(api))
@@ -367,6 +487,12 @@ export function createSkillTools(options: {
     }),
     structuredOutputSchema: loadOutputSchema,
     outputLimits: { maxBytes: MAX_OUTPUT_BYTES },
+    /**
+     * 功能：按 id 加载技能正文或配套资源。
+     * 输入校验：检查中止信号（加载前后各一次）；工作区必须存在。
+     * 内部逻辑：加载后经 rememberLoaded 把引用记入会话文档；资源文件列表截到
+     * MAX_SKILL_FILES_IN_RESULT 并标记截断；输出含 baseDirectory 与相对路径说明。
+     */
     execute: async (args, api, context) => {
       abortIfRequested(context)
       const workspace = await realpath(requireWorkspace(api))
@@ -409,6 +535,11 @@ export function createSkillTools(options: {
     parameters: Type.Object({ skill: Type.String({ minLength: 1 }) }),
     structuredOutputSchema: validationOutputSchema,
     outputLimits: { maxBytes: 12_000 },
+    /**
+     * 功能：校验当前工作区已有的技能：检查格式与声明的资源，不执行技能脚本。
+     * 输入校验：检查中止信号；工作区必须存在。
+     * 边界：输出上限 12 KiB。
+     */
     execute: async (args, api, context) => {
       abortIfRequested(context)
       const validation = await options.store.validate(requireWorkspace(api), args.skill)
@@ -431,7 +562,13 @@ export function createSkillTools(options: {
     }),
     structuredOutputSchema: saveOutputSchema,
     outputLimits: { maxBytes: 20_000 },
-    // Intentionally omit replay: an interrupted filesystem write must be inspected before another attempt.
+    // 有意不声明 replay：被打断的文件系统写入必须先检查再重试。
+    /**
+     * 功能：在 `.agents/skills/<name>/SKILL.md` 创建或更新工作区技能（仅写该文件）。
+     * 输入校验/权限：检查中止信号；先经 canWrite 确认写入策略（确认失败或不可写即拒绝，
+     * 不盲目重试）；保存无回执时报错并要求先检查工作区实际状态。
+     * 边界：expectedVersion 做乐观并发控制；输出上限 20 KiB。
+     */
     execute: async (args, api, context) => {
       abortIfRequested(context)
       let writable: boolean
@@ -481,6 +618,7 @@ export function createSkillTools(options: {
   })
 }
 
+/** 把校验结果渲染为文本：通过/带警告通过/失败，错误与警告逐行列出。 */
 function validationText(validation: SkillValidation): string {
   if (validation.valid && validation.warnings.length === 0) return 'Validation passed.'
   const lines = [validation.valid ? 'Validation passed with warnings.' : 'Validation failed.']
@@ -489,6 +627,7 @@ function validationText(validation: SkillValidation): string {
   return lines.join('\n')
 }
 
+/** 把任意错误压成限长单行描述（cleanMessage 500 字符）。 */
 function describeError(error: unknown): string {
   return error instanceof Error ? cleanMessage(error.message, 500) : cleanMessage(String(error), 500)
 }

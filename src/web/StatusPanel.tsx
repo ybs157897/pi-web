@@ -18,10 +18,12 @@ import css from './StatusPanel.module.css'
 const GIT_POLL_MS = 5_000
 const TODO_FOCUS_WINDOW_SIZE = 3
 const COMPACT_TODO_THRESHOLD = 6
-/** ZCode's auto/panel/mini override, kept per browser like the app's other view preferences. */
+/** ZCode 的 auto/panel/mini 覆盖项，按浏览器保存（与该应用其他视图偏好一致）。 */
 const PANEL_MODE_STORAGE = 'pi-web.status-panel-mode'
+/** 面板显示模式：auto 宽屏展开 / panel 常驻展开 / mini 胶囊。 */
 type PanelMode = 'auto' | 'panel' | 'mini'
 
+/** 从 localStorage 读取显示模式；无效值或缺省回退 auto。 */
 function readPanelMode(): PanelMode {
   try {
     const value = window.localStorage.getItem(PANEL_MODE_STORAGE)
@@ -29,6 +31,7 @@ function readPanelMode(): PanelMode {
   } catch { return 'auto' }
 }
 
+/** StatusPanel 的属性定义：Git/目标/计划/Todo/子智能体数据与各打开回调。 */
 export interface StatusPanelProps {
   workspaceId?: string
   conversationId: string
@@ -53,6 +56,7 @@ export interface StatusPanelProps {
   onContentChange?: (visible: boolean) => void
 }
 
+/** Todo 紧凑窗口的形状：是否进入折叠模式，焦点窗口前/中/后三段条目。 */
 export interface TodoFocusWindow {
   compact: boolean
   preceding: TodoItem[]
@@ -78,10 +82,12 @@ export function todoFocusWindow(items: readonly TodoItem[]): TodoFocusWindow {
   }
 }
 
+/** 提取错误的 message 文本；为空时回退到给定的兜底文案。 */
 function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message.trim() !== '' ? cause.message : fallback
 }
 
+/** 把毫秒时长格式化为「x 秒 / x 分 xx 秒 / x 小时 xx 分」的双语文案。 */
 function formatElapsed(ms: number, t: (zh: string, en: string) => string): string {
   const seconds = Math.max(0, Math.floor(ms / 1_000))
   if (seconds < 60) return t(`${seconds} 秒`, `${seconds}s`)
@@ -90,6 +96,7 @@ function formatElapsed(ms: number, t: (zh: string, en: string) => string): strin
   return t(`${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`, `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`)
 }
 
+/** 计算子智能体已用时长：运行中的以 now - metricsAt 实时外推，结束的取固定 durationMs。 */
 function subagentElapsed(subagent: SubagentSummary, now: number): number | undefined {
   if (subagent.durationMs === undefined) return undefined
   if (subagent.status !== 'running' || subagent.metricsAt === undefined) return subagent.durationMs
@@ -103,6 +110,7 @@ function todoIcon(status: TodoItem['status']) {
   return <Circle size={14} aria-hidden="true" />
 }
 
+/** 目标阶段的短文案：进行中/已暂停/受阻/已完成。 */
 function goalPhaseLabel(phase: GoalView['phase'], t: (zh: string, en: string) => string): string {
   switch (phase) {
     case 'active': return t('进行中', 'Active')
@@ -113,9 +121,15 @@ function goalPhaseLabel(phase: GoalView['phase'], t: (zh: string, en: string) =>
 }
 
 /**
- * ZCode's floating status card: Git worktree, the active goal, submitted plans, the active Todo
- * snapshot and live subagents. It stays inside the chat pane's right margin and only renders when
- * it has something to say.
+ * 功能：ZCode 的浮动状态卡——Git 工作区、当前目标、已提交计划、Todo 快照与
+ * 运行中的子智能体。停靠在会话栏右缘，只在有内容可展示时渲染；宽屏下整卡展开，
+ * 窄屏或 mini 模式下折叠为单行胶囊。
+ * @param props 见 StatusPanelProps。
+ * 内部逻辑：loadGit 按 workspaceId + refreshToken 拉取并轮询（5s，仅展开且页面可见）；
+ * 模式 auto/panel/mini 存 localStorage，expanded = 有内容且（panel 或 auto+宽≥1120px）；
+ * onVisibilityChange/onContentChange 向宿主报告占位；胶囊摘要按优先级取最可行动的事实
+ * （进行中 Todo > 待办 > 最近完成 > 目标 > 运行中智能体 > Git 更改 > 结束智能体 > 计划）；
+ * 提交弹窗支持 AI 生成信息、提交、提交并推送与独立推送。
  */
 export default function StatusPanel({
   workspaceId, conversationId, todos, subagents, goal, plans, refreshToken,
@@ -142,11 +156,13 @@ export default function StatusPanel({
   const [mode, setModeState] = useState<PanelMode>(readPanelMode)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
 
+  /** 切换显示模式并持久化到 localStorage；写入失败时本次会话仍然生效。 */
   const setMode = useCallback((next: PanelMode): void => {
     setModeState(next)
-    try { window.localStorage.setItem(PANEL_MODE_STORAGE, next) } catch { /* The panel still switches for this visit. */ }
+    try { window.localStorage.setItem(PANEL_MODE_STORAGE, next) } catch { /* 本次访问内面板仍会切换。 */ }
   }, [])
 
+  /** 拉取 Git 工作区状态；票据丢弃过期响应，失败写入 gitError。 */
   const loadGit = useCallback(async (): Promise<void> => {
     if (workspaceId === undefined) {
       setGit(null)
@@ -213,8 +229,7 @@ export default function StatusPanel({
   const doneCount = todoItems.filter(item => item.status === 'completed').length
   const hasContent = gitChanges || todoItems.length > 0 || planRows.length > 0 || activeGoal !== null
     || runningAgents.length > 0 || endedAgents.length > 0
-  // ZCode's display modes: `auto` expands on a wide conversation column and falls back to the
-  // capsule; `panel` always expands; `mini` is the capsule until the user expands it again.
+  // ZCode 的显示模式：auto 在宽会话栏展开、否则胶囊；panel 永远展开；mini 保持胶囊直到用户再次展开。
   const expanded = hasContent && (mode === 'panel' || (mode === 'auto' && wide))
   const capsule = hasContent && !expanded
   useEffect(() => { onVisibilityChange?.(expanded) }, [expanded, onVisibilityChange])
@@ -222,6 +237,7 @@ export default function StatusPanel({
   useEffect(() => { onContentChange?.(hasContent) }, [hasContent, onContentChange])
   useEffect(() => () => { onContentChange?.(false) }, [onContentChange])
 
+  /** 查看某文件差异：懒加载后经 onInspectDiff 打开 Inspector 差异视图。 */
   const inspectFile = async (file: GitWorktreeFile): Promise<void> => {
     if (workspaceId === undefined || busyKey !== undefined) return
     setBusyKey(file.path)
@@ -238,6 +254,7 @@ export default function StatusPanel({
     }
   }
 
+  /** 打开提交/推送弹窗：重置信息与选项。 */
   const openCommit = (): void => {
     setCommitError('')
     setCommitMessage('')
@@ -245,6 +262,7 @@ export default function StatusPanel({
     setCommitOpen(true)
   }
 
+  /** 由当前会话上下文 AI 生成提交信息并填入输入框。 */
   const generateMessage = async (): Promise<void> => {
     if (workspaceId === undefined || generating || commitBusy !== undefined) return
     setGenerating(true)
@@ -259,6 +277,7 @@ export default function StatusPanel({
     }
   }
 
+  /** 提交改动（可选随后推送）：成功后应用新状态并按结果提示；失败写弹窗内错误。 */
   const runCommit = async (pushAfter: boolean): Promise<void> => {
     if (workspaceId === undefined || commitBusy !== undefined) return
     if (commitMessage.trim() === '') {
@@ -290,6 +309,7 @@ export default function StatusPanel({
     }
   }
 
+  /** 推送当前分支：quiet（胶囊/弹窗外）路径用 onNotice 提示，否则写弹窗错误。 */
   const runPush = async (quiet = false): Promise<void> => {
     if (workspaceId === undefined || commitBusy !== undefined) return
     if (!quiet) {
@@ -315,6 +335,7 @@ export default function StatusPanel({
     }
   }
 
+  /** 请求停止一个运行中的子智能体，结果经 onNotice 反馈。 */
   const stopAgent = async (subagent: SubagentSummary): Promise<void> => {
     setBusyKey(`agent:${subagent.id}`)
     try {
@@ -333,9 +354,8 @@ export default function StatusPanel({
   const firstPendingTodo = todoItems.find(item => item.status === 'pending')
   const lastCompletedTodo = [...todoItems].reverse().find(item => item.status === 'completed')
   const todoProgress = <span className={css.capsuleCount}>{doneCount}/{todoItems.length}</span>
-  // ZCode's capsule leans on the most actionable fact first. Todos stay ahead of the goal and the
-  // Git summary because the capsule also replaces the bottom Todo dock here: nothing about Todo
-  // progress may become invisible just because a goal or a branch has something to say.
+  // ZCode 的胶囊优先展示最可行动的事实。Todo 排在目标与 Git 摘要之前，因为胶囊在本应用
+  // 中同时取代底部 Todo 停靠栏：不能仅因为目标或分支有内容就让 Todo 进度不可见。
   const capsuleSummary = (): ReactNode => {
     if (activeTodo !== undefined) return <>
       <ArrowRight size={14} aria-hidden="true" />
@@ -373,8 +393,7 @@ export default function StatusPanel({
       <span className={css.capsuleText}>{t('已结束的智能体', 'Ended agents')}</span>
       <span className={css.capsuleCount}>{endedAgents.length}</span>
     </>
-    // A plan-only conversation must still have something to click: ZCode's last fallback is the
-    // latest session plan, and without it the capsule renders as an empty 32px shell.
+    // 纯计划会话也必须有可点的东西：ZCode 的最后兜底是最近的会话计划；没有它胶囊会渲染成空壳。
     if (planRows[0] !== undefined) return <>
       <ListChecks size={14} aria-hidden="true" />
       <span className={css.capsuleText}>{planRows[0].title ?? t('计划', 'Plan')}</span>
@@ -583,6 +602,7 @@ export default function StatusPanel({
   </aside>
 }
 
+/** 可折叠分区头：标题按钮（带箭头）+ 可选的右侧尾随内容（计数/控制按钮）。 */
 function SectionHeader({ title, open, onToggle, trailing }: {
   title: string
   open: boolean
@@ -598,7 +618,7 @@ function SectionHeader({ title, open, onToggle, trailing }: {
   </div>
 }
 
-/** A folded Todo group: the label expands in place, hovering previews the hidden rows (ZCode). */
+/** 折叠的 Todo 分组：点击原位展开，悬浮预览被隐藏的行（ZCode 行为）。 */
 function TodoGroupFold({ group, items, label, onExpand }: {
   group: 'preceding' | 'following'
   items: readonly TodoItem[]
@@ -620,7 +640,7 @@ function TodoGroupFold({ group, items, label, onExpand }: {
     </button>} />
 }
 
-/** A small chevron that only labels the folded Todo groups. */
+/** 仅用于标注「前方折叠组」的小箭头装饰。 */
 function ChevronLeft() {
   return <span className={css.foldChevron} aria-hidden="true">‹</span>
 }
