@@ -130,3 +130,7 @@ pwsh `1..6 × 3s`（模型自选 `yieldTimeMs: 2000` 的极端短 yield，额外
 
 - 6.2 发现的 `gen-section-catalog` 隐性平台依赖已按**最小争议方案**处理：给该脚本补上与 `gen-tool-catalog` 同款的 win32 显式守卫（声明「win32 不可用，产物以 posix 为准」，exit 1，在启动重型 runtime 之前退出）。这只把仓库既有意图显式化并消除「stale 误报」，不改变任何门的语义；macOS 行为零变化。
 - 「win32 --check 是否改为 skip（exit 0）以让 `npm run check` 在 Windows 全绿」仍是政策决策，未动；两个可选路径已记录：A. 对齐 prompt-snapshot 先例做声明式跳过（生成模式仍拒绝，防覆写正典）；B. 平台中立计数（把 `work-policy.ts:93` 平台文案换占位符后再统计，catalog 变全平台一致产物，届时可撤掉 skip）。B 做了之后 A 可撤。
+
+### 6.5 行尾事故与纠正（同日）
+
+`d7b5181`（gen-section-catalog 守卫首版）误把 `scripts/gen-section-catalog.ts` 以 CRLF blob 入库：本机 `core.autocrlf` 被我改为 false 后，`.gitattributes` 只覆盖 `*.md`，其余 ~400 个「i/lf w/crlf」文件失去归一化保护，编辑提交即整文件翻转。已纠正：恢复本地 `autocrlf=true`（`.gitattributes` 继续强制 md 为 LF，其余文件提交时归一化为 LF，与 macOS 作者行为一致），并以 LF 重提守卫。**带回清单补充**：建议维护者评估把 `.gitattributes` 扩到全仓文本（如 `* text=auto`）并一次性 renormalize，根治 Windows 工作区混行尾；在此之前，Windows 机器请保持 `core.autocrlf=true`（仓库级）。
