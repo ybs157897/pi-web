@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-// Windows has no `npx` executable to spawn (`.cmd` shims need shell: true and fail with EINVAL
-// under the Node security patch); run the tsx CLI through the current Node binary instead.
+// Windows 下没有可直接 spawn 的 `npx` 可执行文件（`.cmd` shim 需要 shell: true，且在 Node 安全补丁下以 EINVAL 失败）；
+// 改为通过当前 Node 二进制运行 tsx CLI。
 const tsxCli = createRequire(import.meta.url).resolve('tsx/cli')
 
 // [脚本名, 参数]；生成目录的 --check 门最重（boot demo runtime），放在最后。
@@ -23,6 +23,8 @@ const gates: Array<readonly [string, readonly string[]]> = [
 ]
 
 let failed = 0
+// 主流程：逐门执行并计时。失败不中断后续门（便于一次看到全部问题），只累计失败数；
+// 最终失败数 > 0 时进程以非零码退出，全部门通过则打印汇总成功日志。
 for (const [name, args] of gates) {
   const started = performance.now()
   const result = spawnSync(process.execPath, [tsxCli, `scripts/${name}.ts`, ...args], {

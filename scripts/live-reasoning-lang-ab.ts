@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { createRuntime } from '../src/server/runtime/index.ts'
 import { piWebHome } from '../src/server/state/home.ts'
 
+// 思考档位（--thinking 可指定）；实验里各档固定，组间唯一变量是个性化指令内容。
 type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 // ---- 任务集：全部有唯一客观答案，可本地判分 ----
@@ -53,6 +54,7 @@ function lastNumberAfterAnswer(text: string): number | undefined {
 }
 
 const TASKS: Task[] = [
+  // t1：两位数方程组（唯一答案 3168），从「答案：<数字>」行判分。
   {
     id: 't1-math',
     prompt: [
@@ -66,6 +68,7 @@ const TASKS: Task[] = [
       return { pass: n === 3168, note: `answer=${n ?? 'none'} expected=3168` }
     },
   },
+  // t2：四人四城市逻辑推理（唯一解），从最后一个可解析 JSON 判分。
   {
     id: 't2-logic',
     prompt: [
@@ -89,6 +92,8 @@ const TASKS: Task[] = [
       return { pass, note: `${got} expected=林成都 周武汉 吴西安 郑杭州` }
     },
   },
+  // t3：括号平衡（含 * 通配）算法题——抽出 ```javascript 代码块，spawnSync 用 node 实际运行
+  // 10 组用例的 harness，以退出码判分；无代码块直接判不通过。
   {
     id: 't3-code',
     prompt: [
@@ -116,6 +121,7 @@ const TASKS: Task[] = [
       return { pass: r.status === 0, note: out || `exit=${r.status}` }
     },
   },
+  // t4：数「的」字次数与总字数（唯一答案 de=3、total=59），从 JSON 判分。
   {
     id: 't4-count',
     prompt: [
@@ -131,6 +137,7 @@ const TASKS: Task[] = [
       return { pass, note: `de=${j.de} total=${j.total} expected de=3 total=59` }
     },
   },
+  // t5：五会议排程约束满足（唯一可行安排），从 JSON 判分。
   {
     id: 't5-schedule',
     prompt: [
@@ -203,6 +210,7 @@ const tasks = taskArg ? taskArg.split(',') : TASKS.map(t => t.id)
 const modelOverride = argOf('--model')
 const thinkingLevel = (argOf('--thinking') ?? 'max') as ThinkingLevel
 
+// 全部运行结果行：每行是一次「组×题×轮」的完整观测，finally 后按组汇总并落盘 artifacts。
 const rows: Array<Record<string, unknown>> = []
 
 // 主循环：按组遍历。每组一个独立 tmpdir（dataDir 隔离 + 写入该组的个性化文件）和一个完整

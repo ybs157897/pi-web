@@ -1,3 +1,10 @@
+/**
+ * 提示词策略的真实模型验收（DeepSeek，readOnly 会话）：用自然语言探针补足确定性请求快照
+ * 覆盖不到的行为面。场景：普通流程不加载 statechart；显式点名 statechart 不重复索要批准；
+ * 委派子会话在 codemode off/only 两种模式下都能取回标记；只读会话批准计划后仍保持只读；
+ * 被阻断的写入尝试保留既有结论。环境变量 PI_WEB_POLICY_SCENARIOS 可选场景（逗号分隔）。
+ * 每轮使用临时数据目录与临时工作区，只保留脱敏后的最终证据 artifacts/live-prompt-policy-check.json。
+ */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -15,14 +22,25 @@ import type { ConversationDetail } from '../src/shared/types.ts'
 const root = await mkdtemp(join(tmpdir(), 'pi-web-live-policy-'))
 const workspace = join(root, 'workspace')
 const dataDir = join(root, 'data')
+// 报告聚合：初始 failed，全部场景通过才置 passed；scenarios 按名记录成败与证据。
 const report: Record<string, unknown> = { verifiedAt: new Date().toISOString(), result: 'failed', scenarios: {} }
 const scenarios = report.scenarios as Record<string, unknown>
 const selected = process.env.PI_WEB_POLICY_SCENARIOS?.split(',').map(item => item.trim()).filter(Boolean)
+/** 把一条消息的全部 text 块拼成纯文本。 */
 const textOf = (message: ConversationDetail['messages'][number]) => message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+/** 取最后一条非空 assistant 回答文本；没有时返回空串。 */
 const answerOf = (detail: ConversationDetail) => detail.messages.filter(message => message.role === 'assistant').map(textOf).filter(Boolean).at(-1) ?? ''
+/** 脱敏：Bearer 令牌与 sk/key/token/secret 前缀的高熵串替换为 [redacted]。 */
 const redact = (text: string) => text.replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]').replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]')
 let runtime: Runtime | undefined
 
+/**
+ * 功能：等待一轮（自 previous 基线起）结束。
+ * @param id 会话 id。
+ * @param previous 提交前的消息数基线。
+ * @returns 结束后的会话详情。
+ * @throws 180 秒未结束：先 stop 再抛错；detail.error 亦抛出（已脱敏）。
+ */
 async function settled(id: string, previous: number): Promise<ConversationDetail> {
   const deadline = Date.now() + 180_000
   while (Date.now() < deadline) {
@@ -35,12 +53,19 @@ async function settled(id: string, previous: number): Promise<ConversationDetail
   throw new Error('Policy scenario exceeded 180 seconds')
 }
 
+/** 提交一条消息并以提交前的消息数为基线等待回合结束（见 settled）。 */
 async function turn(id: string, text: string): Promise<ConversationDetail> {
   const previous = (await runtime!.detail(id)).messages.length
   await runtime!.submit(id, { text, requestId: randomUUID() })
   return settled(id, previous)
 }
 
+/**
+ * 功能：场景执行器——运行 run 并把成败与证据写入 report.scenarios。
+ * @param name 场景名（同时用于 PI_WEB_POLICY_SCENARIOS 过滤）。
+ * @param run 场景本体，内部用 assert 表达判分。
+ * @returns 无返回值；失败时记录脱敏错误、打印 failed，不中断后续场景。
+ */
 async function scenario(name: string, run: () => Promise<unknown>) {
   if (selected && !selected.includes(name)) return
   try {
@@ -54,6 +79,8 @@ async function scenario(name: string, run: () => Promise<unknown>) {
 }
 
 try {
+  // 公共准备：写 fixture（README 与证据文件），起隔离 MCP 的 runtime，强制 DeepSeek 默认模型；
+  // 全部场景都用 readOnly 会话（helper create），codemodeMode 在各场景前后按需切换。
   await mkdir(workspace)
   await writeFile(join(workspace, 'README.md'), '业务流程入口：service.ts\n')
   await writeFile(join(workspace, 'evidence.txt'), 'POLICY_CHILD_EVIDENCE_20261104\n')
@@ -125,6 +152,7 @@ try {
     assert.equal(record?.latestAttempt?.blockedReason, 'budget-exhausted')
     return { answer: answerOf(detail), status: record.status, attempt: record.latestAttempt.status }
   })
+  // 汇总：至少命中一个场景（防场景名写错导致静默全跳过）；全部通过才置 passed。
   assert.ok(Object.keys(scenarios).length > 0, 'No matching policy scenarios')
   report.result = Object.values(scenarios).every(item => (item as { passed: boolean }).passed) ? 'passed' : 'failed'
 } catch (error) {

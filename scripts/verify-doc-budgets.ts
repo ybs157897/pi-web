@@ -1,3 +1,10 @@
+/**
+ * 文档字数预算门：按 scripts/doc-budgets.manifest.json 声明的上限逐条校验文档体量。
+ * 计数单位 = 汉字数 + 非 CJK 词数（见 countUnits）。失败条件：
+ * 1) manifest 条目的上限不是正整数；2) 条目指向的文件不存在；
+ * 3) 非空超限——超限条目逐条报错并以非零码退出。
+ * 用法：`--list` 只打印各条目计数与余量百分比（不判超限），否则执行校验。
+ */
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -12,14 +19,17 @@ const countUnits = (text: string): number => {
   return han + words
 }
 
+// manifest 结构：文件路径 → 字数上限正整数；`_comment` 键是注释字段，不参与校验。
 type Manifest = Record<string, unknown>
 const manifest: Manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
 const entries = Object.entries(manifest).filter(([key]) => key !== '_comment')
 
 const listMode = process.argv.includes('--list')
+// failures 聚合所有问题（配置非法/文件缺失/超限）一次性报出；rows 收集计数供 --list 展示。
 const failures: string[] = []
 const rows: Array<readonly [string, number, number]> = []
 
+// 主校验循环：先验配置合法性，再读文件计数，非 list 模式下超限记入 failures。
 for (const [path, limit] of entries) {
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0) {
     failures.push(`${path}: 上限必须是正整数，当前为 ${JSON.stringify(limit)}`)

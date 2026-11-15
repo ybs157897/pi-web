@@ -13,9 +13,11 @@ import type { Runtime } from '../src/server/contracts.ts'
 import type { ConversationDetail, ModelRef } from '../src/shared/types.ts'
 
 /**
- * Real-model checks for the behaviors the runtime prompt promises. Each sample runs in a fresh
- * workspace and data directory. Env: PI_WEB_PROMPT_SAMPLES (default 3), PI_WEB_PROMPT_SCENARIOS
- * (comma-separated ids, default all), PI_WEB_PROMPT_LABEL (report suffix, default "current").
+ * 针对运行时提示词承诺行为的真实模型验收。每个样本都在全新工作区与数据目录中运行。
+ * 环境变量：PI_WEB_PROMPT_SAMPLES（每组样本数，默认 3）、PI_WEB_PROMPT_SCENARIOS
+ * （逗号分隔的场景 id，默认全部）、PI_WEB_PROMPT_LABEL（报告文件后缀，默认 current）。
+ * 判分：每个场景定义若干判据（criteria）与配额（all=全部样本通过 / majority=≥2/3），
+ * 按配额判场景成败，报告写入 artifacts/live-prompt-check-<label>.json；任一场景失败整体即失败。
  */
 const execute = promisify(execFile)
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
@@ -24,9 +26,13 @@ const label = process.env.PI_WEB_PROMPT_LABEL ?? 'current'
 const selected = process.env.PI_WEB_PROMPT_SCENARIOS?.split(',').map(value => value.trim()).filter(Boolean)
 assert.ok(Number.isSafeInteger(samples) && samples > 0, 'PI_WEB_PROMPT_SAMPLES must be a positive integer')
 
+// 判分配额：all 要求全部样本通过；majority 要求 ≥⌈2/3·样本数⌉。
 type Quota = 'all' | 'majority'
+// 一次样本运行的判分结果：criteria 各判据布尔值 + info 附加证据。
 type Sample = { criteria: Record<string, boolean>; info: Record<string, unknown> }
+// 场景运行上下文：由主循环装配后传给 scenario.run。
 type Context = { runtime: Runtime; workspace: string; dataDir: string; model: ModelRef; accessMode: 'workspaceWrite' | 'fullAccess' }
+// 单个验收场景：固定 id/标题/配额表/初始文件，run 内创建会话、执行并返回判分。
 type Scenario = {
   id: string
   title: string
@@ -35,23 +41,37 @@ type Scenario = {
   run: (context: Context) => Promise<Sample>
 }
 
+// 一次工具调用：来自 assistant 的 toolCall 块，isError 从配对的 tool 结果回填。
 type ToolCall = { id: string; name: string; arguments: Record<string, unknown>; isError: boolean | undefined }
 
+/** 把一条消息的全部 text 块拼成纯文本。 */
 function textOf(message: ConversationDetail['messages'][number]): string {
   return message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
 
+/** 取最后一条 assistant 消息的文本；没有 assistant 消息时返回空串。 */
 function finalText(detail: ConversationDetail): string {
   const assistant = detail.messages.filter(message => message.role === 'assistant').at(-1)
   return assistant === undefined ? '' : textOf(assistant)
 }
 
+/**
+ * 功能：抽取会话中 assistant 发起的全部工具调用，并回填每条调用的错误状态。
+ * @param detail 会话详情。
+ * @returns 调用列表（按消息顺序）；isError 通过 toolCallId 与 tool 结果配对获得，缺配对为 undefined。
+ */
 function toolCalls(detail: ConversationDetail): ToolCall[] {
   const results = new Map(detail.messages.filter(message => message.role === 'tool').map(message => [message.toolCallId, message.isError]))
   return detail.messages.flatMap(message => message.role !== 'assistant' ? [] : message.blocks.flatMap(block =>
     block.type === 'toolCall' ? [{ id: block.id, name: block.name, arguments: block.arguments, isError: results.get(block.id) }] : []))
 }
 
+/**
+ * 功能：递归读取目录树下全部文本文件（跳过 node_modules 与 .git）。
+ * @param directory 当前遍历目录。
+ * @param base 计算相对路径的根（默认 = directory，递归调用传工作区根）。
+ * @returns 相对路径 → 文件内容 的映射，用于判分前的文件快照比对。
+ */
 async function files(directory: string, base = directory): Promise<Record<string, string>> {
   const entries = await readdir(directory, { withFileTypes: true })
   const output: Record<string, string> = {}
@@ -64,6 +84,16 @@ async function files(directory: string, base = directory): Promise<Record<string
   return output
 }
 
+/**
+ * 功能：提交一条消息并等待该轮结束，返回结束详情与计时信息。
+ * @param context 场景上下文（用其 runtime 轮询）。
+ * @param id 会话 id。
+ * @param text 提交给模型的消息。
+ * @param deadlineMs 超时上限（默认 300 秒；S3 等长任务可放宽）。
+ * @returns detail=结束时的会话详情；timedOut=是否超时（超时会先 stop）；durationMs=耗时。
+ * 内部逻辑：以提交前消息数为基线，只认基线后新出现的完整 assistant 消息；超时路径先 stop
+ * 再取最终 detail，让场景可以用 timedOut 参与判分（如 S3 的 noHang）。
+ */
 async function turn(context: Context, id: string, text: string, deadlineMs = 300_000): Promise<{ detail: ConversationDetail; timedOut: boolean; durationMs: number }> {
   const started = Date.now()
   const previous = (await context.runtime.detail(id)).messages.length
@@ -80,6 +110,13 @@ async function turn(context: Context, id: string, text: string, deadlineMs = 300
   return { detail: await context.runtime.detail(id), timedOut: true, durationMs: Date.now() - started }
 }
 
+/**
+ * 功能：等待并读取记忆根目录下的记忆文件（MEMORY.md 出现后再等提取落盘）。
+ * @param context 场景上下文。
+ * @param waitMs 最长等待毫秒数（MEMORY.md 未出现时轮询）。
+ * @returns 记忆根下 相对路径 → 内容 的映射；根不存在或超时返回已读到的部分/空映射。
+ * 内部逻辑：MEMORY.md（索引）出现后再等 3 秒，给紧随索引的写入留出落盘时间。
+ */
 async function memoryFiles(context: Context, waitMs: number): Promise<Record<string, string>> {
   const root = resolveMemoryRoot({ dataDir: context.dataDir, workspacePath: await realpath(context.workspace) })
   const deadline = Date.now() + waitMs
@@ -93,7 +130,12 @@ async function memoryFiles(context: Context, waitMs: number): Promise<Record<str
   return files(root).catch(() => ({}))
 }
 
-/** Stop servers the model left running in this sample's workspace, and nothing else. */
+/**
+ * 功能：清理模型遗留的常驻进程——只终止 cwd 位于本样本工作区的 server.mjs 进程，不碰其他进程。
+ * @param workspace 本样本的工作区目录。
+ * @returns 实际 SIGTERM 掉的进程数（win32 直接返回 0，不做清理）。
+ * @throws 进程名匹配或 cwd 查询失败按无残留处理；kill 目标已退出则忽略。
+ */
 async function stopStrays(workspace: string): Promise<number> {
   if (process.platform === 'win32') return 0
   const canonical = await realpath(workspace)
@@ -109,6 +151,9 @@ async function stopStrays(workspace: string): Promise<number> {
   return stopped
 }
 
+// 五个验收场景。S1 只读诊断并链接出错行；S2 复用现有 helper 且不引入新依赖；
+// S3 常驻服务器不无限期前台运行；S4 文件内嵌指令不写入记忆、不被执行；
+// S5 计划模式下陈述的偏好被记住且无写入失败。
 const scenarios: Scenario[] = [
   {
     id: 'S1',
@@ -283,14 +328,18 @@ const scenarios: Scenario[] = [
   },
 ]
 
+/** 配额换算：all 需全部样本通过；majority 需 ≥⌈2/3·样本数⌉（向上取整）。 */
 function required(quota: Quota): number {
   return quota === 'all' ? samples : Math.ceil(samples * 2 / 3)
 }
 
+// 报告聚合对象：初始 result=failed，全部场景按配额通过才改为 passed。
 const report: Record<string, unknown> = { label, verifiedAt: new Date().toISOString(), samples, result: 'failed' }
 const outcome: Record<string, unknown> = {}
 report.scenarios = outcome
 let failed = false
+// 主循环：按选中场景逐个运行 samples 个独立样本；每个样本都在全新临时工作区/数据目录中执行，
+// 结束后无论如何关闭 runtime、清理残留进程并删除临时目录；单样本失败不影响其他样本继续。
 try {
   for (const scenario of scenarios.filter(item => selected === undefined || selected.includes(item.id))) {
     const results: Array<Sample | { error: string }> = []
@@ -319,6 +368,7 @@ try {
         await rm(directory, { recursive: true, force: true })
       }
     }
+    // 场景判分：按配额要求逐判据统计通过样本数，任一判据不达配额即场景失败。
     const summary: Record<string, string> = {}
     let passed = true
     for (const [criterion, quota] of Object.entries(scenario.quotas)) {
@@ -330,6 +380,7 @@ try {
     outcome[scenario.id] = { title: scenario.title, passed, summary, results }
     console.log(`${scenario.id} ${passed ? 'passed' : 'failed'}: ${JSON.stringify(summary)}`)
   }
+  // 整体结果：任一场景失败即 failed；报告无论成败都写入 artifacts 并按结果设置退出码。
   report.result = failed ? 'failed' : 'passed'
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error)
