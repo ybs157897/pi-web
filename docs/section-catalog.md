@@ -12,11 +12,11 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 | --- | --- | --- | --- | --- | --- | ---: | --- |
 | runtime-core | ✓ | ✓ | ✓ | ✓ | ✓ | 2955 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | project-instructions | ✓ | ✓ | ✓ | ✓ | — | 175 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
-| work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 621 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
+| work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 595 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | schedule-policy | ✓ | — | — | — | — | 82 | [`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts) |
 | wetrack-analysis | ✓ | — | ✓ | ✓ | — | 611 | [`src/server/tools/wetrack-analysis.ts`](../src/server/tools/wetrack-analysis.ts) |
 | goal-policy | ✓ | ✓ | ✓ | — | — | 184 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
-| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1065 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
+| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1345 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
 | codemode | ✓ | ✓ | ✓ | ✓ | — | 808 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
@@ -43,7 +43,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section work-policy
 
 - 注入条件：每个请求注入会话事实（工作区、平台、日期、模型、写权限、shell 能力）与工具路由、待办约定；计划模式、只读会话与子会话会收窄其中条款。
-- 实测长度（字符）：default 621 · plan 225 · readonly 556 · subagent-general 621 · subagent-explore 288
+- 实测长度（字符）：default 595 · plan 225 · readonly 556 · subagent-general 595 · subagent-explore 288
 - 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
 
 ### section schedule-policy
@@ -67,7 +67,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section skills-policy
 
 - 注入条件：skill 工具可调用时注入技能目录约定，并对比上次已展示内容提示新增技能。
-- 实测长度（字符）：default 1065 · plan 1051 · readonly 1051 · subagent-general 1065
+- 实测长度（字符）：default 1345 · plan 1331 · readonly 1331 · subagent-general 1345
 - 定义处：[`src/server/tools/skill.ts`](../src/server/tools/skill.ts)
 
 ### section delegation-policy

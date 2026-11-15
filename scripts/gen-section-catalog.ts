@@ -105,6 +105,12 @@ const ENV_FACTS_LINES: ReadonlyMap<string, string> = new Map([
   ['本请求模型：', '本请求模型：<model>；<permissions>。'],
   ['当前工作区（默认当前项目）由系统提供：', '当前工作区（默认当前项目）由系统提供："<workspace>"。把此目录作为本次任务的项目范围。'],
   ['工作区 ', '工作区 <workspace>/AGENTS.md 适用于工作区根目录及其后代：'],
+  // work-policy 的 shell 条款按平台分支：macOS 渲染 `bash` 版，Windows 渲染 `pwsh` 版，两版文本
+  // 长度不同。把两个 direct 变体与两个 codemode 变体各归一成同一占位符，字符数才跨平台可比。
+  ['- shell 只用于', '- <shell-terms>'],
+  ['- shell（`pwsh`）只用于', '- <shell-terms>'],
+  ['- 在 `codemode` 里用 `await tools.bash(...)`', '- <shell-codemode-terms>'],
+  ['- 在 `codemode` 里用 `await tools.pwsh(...)`', '- <shell-codemode-terms>'],
 ])
 
 function normalizeEnvironmentLines(text: string): string {
