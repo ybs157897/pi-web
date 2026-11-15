@@ -107,12 +107,12 @@ export function renderPersonalization(record: PersonalizationRecord): string | u
     if (record.content.trim() === '') return undefined
     const body = record.content.split(`</${BODY_TAG}`).join(`<\\/${BODY_TAG}`)
     return [
-      `User personalization instructions (${record.filePath}) apply to every workspace. Project instructions and explicit task instructions win on conflict:`,
+      `用户个性化指令（${record.filePath}）适用于所有工作区。发生冲突时，项目指令和明确的任务指令优先：`,
       `<${BODY_TAG}>`,
       body,
       `</${BODY_TAG}>`,
-      ...(record.truncated ? [`(The file exceeds the ${MAX_PERSONALIZATION_BYTES / 1024} KB read limit, so only its first part applies.)`] : []),
+      ...(record.truncated ? [`（文件超过 ${MAX_PERSONALIZATION_BYTES / 1024} KB 读取上限，仅已读取的开头部分生效。）`] : []),
     ].join('\n')
   }
-  return `User personalization instructions at ${record.filePath} could not be loaded (${record.issue ?? record.status}); do not claim to follow them.`
+  return `无法加载 ${record.filePath} 的用户个性化指令（${record.issue ?? record.status}）；不要声称已遵循。`
 }

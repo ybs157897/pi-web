@@ -62,7 +62,7 @@ import { WorkspaceFiles } from '../workspace/files.ts'
 import { GitBranches } from '../workspace/git/branches.ts'
 import { GitWorktree } from '../workspace/git/worktree.ts'
 import { createExecutionEnv, workspaceWriteSupported } from '../conversation/execution-env.ts'
-import { disposeBackgroundShells } from '../tools/shell/runner.ts'
+import { disposeShellSessions } from '../tools/shell/runner.ts'
 import { createAutomations } from './automations.ts'
 import { createWorkspaces } from './workspaces.ts'
 import { createSettings } from './settings.ts'
@@ -703,7 +703,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         runtimeClosed = true
         automationsService?.close()
         memoryExtraction.shutdown()
-        disposeBackgroundShells()
+        disposeShellSessions()
         unsubscribeModels()
         modelListeners.clear()
         modelRuntime.close()

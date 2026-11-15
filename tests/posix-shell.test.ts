@@ -7,7 +7,7 @@ import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { afterEach, describe, expect, it } from 'vitest'
 import { executePosixBash, isBlockedShellSearch, killPosixTree, resolvePosixEnv } from '../src/server/tools/shell/posix.ts'
 import { createExecutionEnv, localShellSpawn } from '../src/server/conversation/execution-env.ts'
-import { disposeBackgroundShells, runShellCommand } from '../src/server/tools/shell/runner.ts'
+import { disposeShellSessions, runShellCommand } from '../src/server/tools/shell/runner.ts'
 
 const directories: string[] = []
 const originalEnv = {
@@ -19,7 +19,7 @@ const originalEnv = {
 const TEST_CONTEXT = {} as Context
 
 afterEach(async () => {
-  disposeBackgroundShells()
+  disposeShellSessions()
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
   for (const [key, value] of Object.entries(originalEnv)) {
     if (value === undefined) delete process.env[key]
@@ -132,20 +132,22 @@ describe.runIf(process.platform !== 'win32')('POSIX shell runner', () => {
     expect(result.diagnostics?.some(diagnostic => diagnostic.code === 'no_matches')).toBe(true)
   })
 
-  it('moves a long command to the background and keeps writing its output file', async () => {
+  it('promotes a long command to a pollable session and keeps writing its output file', async () => {
     const root = await workspace()
     const result = await runShellCommand({
       ...shellSpec(root, 'sleep 1; echo done'),
-      backgroundAfterMs: 100,
+      yieldTimeMs: 100,
     })
 
-    const structured = result.structuredOutput as { background?: boolean; fullOutputPath?: string }
-    expect(structured.background).toBe(true)
+    const structured = result.structuredOutput as { status?: string; sessionId?: string; fullOutputPath?: string }
+    expect(structured.status).toBe('running')
+    expect(structured.sessionId).toMatch(/^sh_/)
     expect(structured.fullOutputPath).toBeTruthy()
 
     await new Promise(resolveWait => setTimeout(resolveWait, 1_400))
     const output = await readFile(structured.fullOutputPath!, 'utf8')
     expect(output).toContain('done')
+    expect(output).toContain('[exited with code 0]')
   })
 
   it('decodes non-UTF-8 output with the locale codeset', async () => {

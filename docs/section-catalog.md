@@ -11,14 +11,14 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 | section | default | plan | readonly | subagent-general | subagent-explore | 正文长度(default,字符) | 定义处 |
 | --- | --- | --- | --- | --- | --- | ---: | --- |
 | runtime-core | ✓ | ✓ | ✓ | ✓ | ✓ | 2955 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
-| project-instructions | ✓ | ✓ | ✓ | ✓ | — | 302 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
+| project-instructions | ✓ | ✓ | ✓ | ✓ | — | 260 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 722 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | schedule-policy | ✓ | — | — | — | — | 82 | [`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts) |
 | wetrack-analysis | ✓ | — | ✓ | ✓ | — | 611 | [`src/server/tools/wetrack-analysis.ts`](../src/server/tools/wetrack-analysis.ts) |
-| goal-policy | ✓ | ✓ | ✓ | — | — | 491 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
-| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 2407 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
+| goal-policy | ✓ | ✓ | ✓ | — | — | 184 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
+| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1485 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
-| codemode | ✓ | ✓ | ✓ | ✓ | — | 1123 | (vendor) @earendil-works/pi-durable |
+| codemode | ✓ | ✓ | ✓ | ✓ | — | 808 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
 | instructions | — | — | — | ✓ | ✓ | — | (vendor) @earendil-works/pi-durable |
 | personal-instructions | — | — | — | — | — | — | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
@@ -37,7 +37,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section project-instructions
 
 - 注入条件：工作区根存在 AGENTS.md 时注入其内容（每次请求重读）；Explore 子智能体不注入项目指令。
-- 实测长度（字符）：default 302 · plan 302 · readonly 302 · subagent-general 302
+- 实测长度（字符）：default 260 · plan 260 · readonly 260 · subagent-general 260
 - 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
 
 ### section work-policy
@@ -61,13 +61,13 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section goal-policy
 
 - 注入条件：goal 工具（`get_goal` 等）任一可路由时注入目标创建与自动续跑规则；计划模式下只保留禁止条款。
-- 实测长度（字符）：default 491 · plan 498 · readonly 491
+- 实测长度（字符）：default 184 · plan 169 · readonly 184
 - 定义处：[`src/server/tools/goal.ts`](../src/server/tools/goal.ts)
 
 ### section skills-policy
 
 - 注入条件：skill 工具可调用时注入技能目录约定，并对比上次已展示内容提示新增技能。
-- 实测长度（字符）：default 2407 · plan 2393 · readonly 2393 · subagent-general 2407
+- 实测长度（字符）：default 1485 · plan 1471 · readonly 1471 · subagent-general 1485
 - 定义处：[`src/server/tools/skill.ts`](../src/server/tools/skill.ts)
 
 ### section delegation-policy
@@ -79,13 +79,13 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section codemode
 
 - 注入条件：codemode 工具在 agent 工具集中时由 vendored 扩展注入 codemode 使用规则；模式 on/only/off 改变其中条款。
-- 实测长度（字符）：default 1123 · plan 823 · readonly 1004 · subagent-general 824
+- 实测长度（字符）：default 808 · plan 493 · readonly 674 · subagent-general 509
 - 定义处：(vendor) @earendil-works/pi-durable
 
 ### section plan-policy
 
 - 注入条件：仅当会话的计划模式开启（`Plans.active`）时注入；委派子会话收到只含只读调研条款的子版本。
-- 实测长度（字符）：default 不注入；plan 908
+- 实测长度（字符）：default 不注入；plan 905
 - 定义处：[`src/server/tools/plan.ts`](../src/server/tools/plan.ts)
 
 ### section instructions

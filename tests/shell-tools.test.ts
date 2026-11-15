@@ -45,20 +45,22 @@ function pwshTool() {
 }
 
 describe('shell tool selection', () => {
-  it('adds pwsh before bash on Windows and keeps bash alone elsewhere', () => {
+  it('adds pwsh before bash on Windows and keeps bash alone elsewhere, plus the shared session tool', () => {
     const windows = createCodingTools('win32').tools ?? []
     const posix = createCodingTools('darwin').tools ?? []
 
-    expect(windows.map(tool => tool.name)).toEqual(['read', 'write', 'edit', 'pwsh'])
-    expect(posix.map(tool => tool.name)).toEqual(['read', 'write', 'edit', 'bash'])
+    expect(windows.map(tool => tool.name)).toEqual(['read', 'write', 'edit', 'pwsh', 'shell_session'])
+    expect(posix.map(tool => tool.name)).toEqual(['read', 'write', 'edit', 'bash', 'shell_session'])
     const pwsh = windows.find(tool => tool.name === 'pwsh')
     expect(pwsh?.description).toContain('workdir')
     expect(pwsh?.description).toContain('Set-Location')
-    expect(pwsh?.description).toContain('Before any delete or move')
-    expect(pwsh?.description).toContain('resolved absolute target path')
+    expect(pwsh?.description).toContain('删除或移动前')
+    expect(pwsh?.description).toContain('解析后的绝对目标路径')
     const properties = (pwsh?.parameters as { properties?: Record<string, unknown> }).properties ?? {}
-    expect(Object.keys(properties)).toEqual(expect.arrayContaining(['command', 'description', 'workdir', 'timeout']))
-    expect(posix.find(tool => tool.name === 'bash')?.description).toContain('Before any delete or move')
+    expect(Object.keys(properties)).toEqual(expect.arrayContaining(['command', 'description', 'workdir', 'timeout', 'yieldTimeMs']))
+    expect(posix.find(tool => tool.name === 'bash')?.description).toContain('删除或移动前')
+    expect(posix.find(tool => tool.name === 'bash')?.description).toContain('shell_session')
+    expect(posix.find(tool => tool.name === 'bash')?.description).not.toContain('转入后台并将输出保存到文件')
   })
 
   it('bounds every command with a default timeout and warns against foreground servers', () => {
@@ -67,9 +69,11 @@ describe('shell tool selection', () => {
     expect(commandTimeout(30)).toBe(30)
     for (const tool of [...createCodingTools('darwin').tools ?? [], ...createCodingTools('win32').tools ?? []]) {
       if (tool.name !== 'bash' && tool.name !== 'pwsh') continue
-      expect(tool.description).toContain('Do not run dev servers, watch modes or interactive programs in the foreground')
+      expect(tool.description).toContain('不要在前台运行开发服务器、监听模式或交互式程序')
       const timeout = (tool.parameters as { properties?: Record<string, { description?: string }> }).properties?.timeout
-      expect(timeout?.description).toContain('default 300')
+      expect(timeout?.description).toContain('默认 300')
+      const yieldTimeMs = (tool.parameters as { properties?: Record<string, { description?: string }> }).properties?.yieldTimeMs
+      expect(yieldTimeMs?.description).toContain('10000')
     }
   })
 })

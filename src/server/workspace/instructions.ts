@@ -235,12 +235,12 @@ export function renderProjectInstructions(record: ProjectInstructionsRecord): st
   if (record.status === 'loaded' && typeof record.content === 'string') {
     const body = record.content.split(`</${BODY_TAG}`).join(`<\\/${BODY_TAG}`)
     return [
-      `Workspace ${source} applies to the workspace root and its descendants:`,
+      `工作区 ${source} 适用于工作区根目录及其后代：`,
       `<${BODY_TAG}>`,
       body,
       `</${BODY_TAG}>`,
     ].join('\n')
   }
-  if (record.status === 'missing') return `No AGENTS.md at ${source}; no workspace project instructions apply.`
-  return `AGENTS.md at ${source} could not be loaded (${record.reason ?? record.status}); its rules are unknown — do not claim to follow them.`
+  if (record.status === 'missing') return `未找到 ${source}；没有适用的工作区项目指令。`
+  return `无法加载 ${source} 的 AGENTS.md（${record.reason ?? record.status}）；其规则未知，不要声称已遵循。`
 }

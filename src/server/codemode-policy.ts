@@ -21,12 +21,12 @@ export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Ex
         }, context)
         return [
           direct.size === 0
-            ? 'Only codemode is directly offered in this request. Invoke other tools inside its scripts. Ordinary assistant text is still available: for multi-step work, send a short progress message outside scripts before the first tool call. Tool output and todo updates do not replace this message.'
-            : 'Use direct tools for individual operations; use codemode when batching or scripting helps. Both routes have the same permissions.',
-          'Before calling a nested tool whose full declaration is absent from this request, use describeTool(name) to inspect its arguments and return type. Do not guess a schema from the tool name or a usage example.',
+            ? '本请求只直接提供 codemode 工具，其他工具须在其脚本内调用。仍可输出普通助手文本：多步工作在第一次工具调用前，先在脚本外简短说明进度；工具输出和待办更新不能代替这条消息。'
+            : '单项操作使用直接工具；批量操作或脚本编排有帮助时使用 codemode。两种调用方式具有相同权限。',
+          '调用本请求中未提供完整声明的嵌套工具前，用 describeTool(name) 查看其参数和返回类型。不要根据工具名或使用示例猜测参数结构。',
           ...(shared.length === 0 ? [] : [
-            `Scripts can also call these directly offered tools with the same argument schemas: ${shared.map(tool => tool.name).join(', ')}.`,
-            'Call them as await tools.<name>(args). Use describeTool(name) for the script declaration and return type; searchTools(query) finds other callable tools.',
+            `脚本也可以按相同的参数结构调用这些直接提供的工具：${shared.map(tool => tool.name).join(', ')}。`,
+            '调用形式为 await tools.<name>(args)。用 describeTool(name) 查看脚本声明和返回类型；用 searchTools(query) 查找其他可调用工具。',
           ]),
           nested,
         ].filter(Boolean).join('\n')

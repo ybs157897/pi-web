@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: Create, adapt, update, install, copy, validate, or evaluate an Agent Skill when requested. Do not load for ordinary work that merely uses an existing skill.
+description: 按用户要求创建、适配、更新、安装、复制、验证或评估 Agent 技能。仅使用已有技能完成普通工作时，不加载本技能。
 ---
 
 # Skill Creator

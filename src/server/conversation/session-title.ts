@@ -82,14 +82,14 @@ export function fallbackSessionTitle(
 /** Stable language-aware system instruction shared with DSH's title provider. */
 export function titleSystemPrompt(policy: typeof TITLE_POLICY = TITLE_POLICY): string {
   return [
-    'Create a concise title for an AI coding-assistant session from the supplied human messages.',
-    'Return only the title on one line, **in plain text of natural language**, with no quotes, prefix, explanation, Markdown, XML, or terminal control codes. No code is allowed.',
-    'Use the language of the messages.',
-    `Aim for about ${policy.targetWords} words in non-CJK languages or ${policy.targetCjkCharacters} CJK characters.`,
+    '根据提供的人类消息，为 AI 编程助手会话生成简短标题。',
+    '仅返回一行自然语言纯文本标题，不加引号、前缀、解释、Markdown、XML 或终端控制字符。禁止包含代码。',
+    '使用消息所用的语言。',
+    `非 CJK 语言约 ${policy.targetWords} 个词，CJK 语言约 ${policy.targetCjkCharacters} 个字符。`,
   ].join('\n')
 }
 
 /** Frame exact messages as JSON so user text cannot break structural delimiters. */
 export function frameTitleMessages(messages: readonly { seq: number; text: string }[]): string {
-  return `Generate the session title from this JSON array of human messages:\n${JSON.stringify(messages)}`
+  return `根据以下人类消息 JSON 数组生成会话标题：\n${JSON.stringify(messages)}`
 }

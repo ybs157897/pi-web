@@ -46,6 +46,7 @@ const TOOL_SOURCES: Record<string, string> = {
   write: 'src/server/tools/shell/tools.ts',
   edit: 'src/server/tools/shell/tools.ts',
   bash: 'src/server/tools/shell/tools.ts',
+  shell_session: 'src/server/tools/shell/session.ts',
   list_files: 'src/server/tools/research.ts',
   search_files: 'src/server/tools/research.ts',
   glob: 'src/server/tools/research.ts',

@@ -126,7 +126,7 @@ describe('goal policy without goal tools', () => {
     expect(await render(null)).toBeUndefined()
     const policy = await render({ id: 'g1', revision: 2, objective: 'finish work', phase: 'paused', roundsStarted: 1, maxGoalRounds: 3 })
     expect(policy).toContain('finish work')
-    expect(policy).toContain('Do not start new work toward this goal')
+    expect(policy).toContain('不要为此目标开始新的工作')
     expect(policy).not.toContain('Call `update_goal`')
   })
 })

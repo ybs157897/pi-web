@@ -1,6 +1,6 @@
 ---
 name: statechart
-description: Build a state × event matrix for guarded transitions, event-order bugs, or an explicit exhaustive-state review. Skip ordinary business-flow lookup, stateless logic, and formatting. Ask only about unresolved user-owned policy.
+description: 为带守卫条件的状态转换、事件顺序缺陷或明确要求的穷举状态审查构建状态 × 事件矩阵。普通业务流程查询、无状态逻辑和格式调整不适用。仅询问尚未确定、必须由用户决定的规则。
 ---
 
 # Statechart

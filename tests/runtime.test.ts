@@ -353,11 +353,11 @@ describe('Pi Durable runtime', () => {
     const recovered = await waitForDetail(runtime, id, detail =>
       !detail.conversation.busy && detail.interactions?.some(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending') === true)
     const refusal = recovered.messages.find(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError === true)
-    expect(textOf(refusal)).toContain('Plan mode is not active')
+    expect(textOf(refusal)).toContain('未开启计划模式')
     expect(textOf(refusal)).toContain('enter_plan_mode')
     const entered = recovered.messages.find(message => message.role === 'tool' && message.toolName === 'enter_plan_mode')
     expect(entered?.isError).toBeFalsy()
-    expect(textOf(entered)).toContain('Plan mode is now active')
+    expect(textOf(entered)).toContain('计划模式已开启')
     expect(recovered.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)).toHaveLength(1)
     expect(recovered.plan).toEqual({ active: true })
     expect((await runtime.setPlan(id, true)).plan).toEqual({ active: true })
@@ -369,7 +369,7 @@ describe('Pi Durable runtime', () => {
     expect(first?.detail?.startsWith('# ')).toBe(true)
     expect(first?.detail).toContain('演示计划')
     const planResults = recovered.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)
-    expect(textOf(planResults.at(-1))).toContain('pending')
+    expect(textOf(planResults.at(-1))).toContain('等待用户审阅')
     expect(textOf(recovered.messages.at(-1))).toContain('计划已提交待审')
 
     // A change request settles the review, keeps plan mode on, and hands the feedback to the model,
@@ -427,7 +427,7 @@ describe('Pi Durable runtime', () => {
     expect(cancelled.interactions?.find(interaction => interaction.id === ignoreReview!.id))
       .toMatchObject({ status: 'cancelled' })
     const dismissReply = cancelled.messages.find(message => message.role === 'user' && textOf(message).includes('dismissed_plan_review'))
-    expect(textOf(dismissReply)).toContain('do not implement it')
+    expect(textOf(dismissReply)).toContain('不得实施')
     const againCancelled = await runtime.cancelInteraction(ignoredId, ignoreReview!.id)
     expect(againCancelled.interactions?.find(interaction => interaction.id === ignoreReview!.id))
       .toMatchObject({ status: 'cancelled' })
@@ -722,7 +722,7 @@ describe('Pi Durable runtime', () => {
     const userTexts = child.messages.filter(message => message.role === 'user').map(textOf)
     expect(userTexts.some(text => text.includes('[team-child] 先整理资料'))).toBe(true)
     // DSH frames a peer message with its sender (`index.ts:230-233`).
-    expect(userTexts.some(text => text.includes('Team message from lead:') && text.includes('[team-child-followup]'))).toBe(true)
+    expect(userTexts.some(text => text.includes('来自 lead 的团队消息：') && text.includes('[team-child-followup]'))).toBe(true)
 
     // list_agents reports the durable row with its phase and live availability.
     const listed = detail.messages.find(message => message.toolName === 'list_agents')
@@ -1093,7 +1093,7 @@ describe('background subagent delegation', () => {
     expect(result.isError).not.toBe(true)
     const activation = result.output?.[0]?.text ?? ''
     expect(activation).toContain('机制归纳')
-    expect(activation).toContain('follow-up')
+    expect(activation).toContain('跟进消息')
     expect(details.at(-1)).toMatchObject({ status: 'running', label: '机制归纳', background: true })
     expect((await textsOf(parent)).user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))).toHaveLength(0)
 

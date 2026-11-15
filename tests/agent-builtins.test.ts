@@ -202,7 +202,7 @@ describe('built-in delegation profiles', () => {
     expect(output[0]?.type).toBe('text')
     expect(output[0]?.text).toContain('调研')
     expect(output[0]?.text).toContain(String(CHILD_ID))
-    expect(output[0]?.text).toContain('follow-up')
+    expect(output[0]?.text).toContain('跟进消息')
     expect(output[0]?.text).not.toContain('child answer')
     expect(run.child.submit).toHaveBeenCalledOnce()
     expect(run.child.submit.mock.calls[0]?.[0]).toMatchObject({

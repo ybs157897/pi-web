@@ -45,7 +45,7 @@ describe('personalization file', () => {
     const rendered = renderPersonalization(record)
     expect(rendered).toContain('<personal_instructions>')
     expect(rendered).toContain('Prefer short answers.')
-    expect(rendered).toContain('Project instructions and explicit task instructions win on conflict')
+    expect(rendered).toContain('发生冲突时，项目指令和明确的任务指令优先')
     expect(rendered).toContain('</personal_instructions>')
   })
 
@@ -81,7 +81,7 @@ describe('personalization file', () => {
     expect(record.truncated).toBe(true)
     expect(record.content.length).toBe(MAX_PERSONALIZATION_BYTES)
     expect(record.content).not.toContain('TAIL')
-    expect(renderPersonalization(record)).toContain('only its first part applies')
+    expect(renderPersonalization(record)).toContain('仅已读取的开头部分生效')
   })
 
   it('drops an incomplete trailing code point instead of rejecting a truncated file', async () => {
@@ -106,7 +106,7 @@ describe('personalization file', () => {
     const record = await readPersonalization(dataDir)
     expect(record.status).toBe('error')
     expect(record.issue).toBe('source-invalid-utf8')
-    expect(renderPersonalization(record)).toContain('could not be loaded')
+    expect(renderPersonalization(record)).toContain('无法加载')
   })
 
   it('writes atomically, so a failed save leaves the previous content intact', async () => {

@@ -251,7 +251,7 @@ describe('automation runs', () => {
     await automations.run(created.id)
     expect(submits[0]?.input.text.split('\n')).toEqual([
       '[SCHEDULE REMINDER]',
-      'This is a scheduled message from the user',
+      '这是一条来自用户的定时消息',
       `schedule_id_json: ${JSON.stringify(created.id)}`,
       'occurrence_at: 2026-11-11T01:00:00.000Z',
       'reminder_prompt_json: "deliver the report"',

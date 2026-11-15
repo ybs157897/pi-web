@@ -140,7 +140,7 @@ export function createSubagentSettlement(deps: SubagentSettlementDeps) {
         if (settledNow) return
         settledNow = true
         await watch.stop().catch(() => undefined)
-        await settleOne(input, late !== '' ? { status: 'completed', body: late } : { status: 'failed', body: 'the background run ended without an answer' })
+        await settleOne(input, late !== '' ? { status: 'completed', body: late } : { status: 'failed', body: '后台运行结束，未返回答复' })
       }
     }
     void check().catch(() => undefined)

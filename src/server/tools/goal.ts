@@ -233,10 +233,10 @@ export function goalContinuation(docValue: GoalDocValue | undefined, roundsStart
   const round = roundsStartedSoFar + 1
   return {
     continue: [
-      `[goal ${round}/${goal.maxGoalRounds}] Continue the user's objective: "${goal.objective}".`,
-      'Treat the current workspace, tool results and goal state as authoritative; inspect them instead of assuming earlier narration is still current, and make concrete, verified progress.',
-      'After the whole objective is achieved and its requested verification passes, report completion through the callable goal-tool route. If a concrete blocker makes further progress impossible, report that condition through the supported blocked action.',
-      'If you are waiting for the user\'s answer or approval, end this turn without further changes.',
+      `[goal ${round}/${goal.maxGoalRounds}] 继续完成用户的目标：“${goal.objective}”。`,
+      '以当前工作区、工具结果和目标状态为准；实际检查它们，不要假设先前的描述仍然有效，并取得具体、经过验证的进展。',
+      '整个目标达成且用户要求的验证通过后，通过当前可调用的目标工具报告完成。若具体阻塞使后续工作无法推进，通过支持的 blocked 操作报告该情况。',
+      '如果正在等待用户的答复或批准，结束本轮，不再改动。',
     ].join('\n'),
   }
 }
@@ -289,47 +289,47 @@ function createGoalSection(options: Required<GoalToolOptions>) {
     const goal = doc?.goal
     if (!goal && Object.values(routes).every(route => route === 'unavailable')) return undefined
     const lines = [
-      'Use a persistent goal only for a direct human request that needs work across multiple turns. Infer that intent without requiring the word "goal"; do not create one for trivial, single-turn, or unrelated work.',
-      ...(planMode ? ['Plan mode is active: do planning work only. Do not create a goal, make implementation progress, or start automatic continuation rounds.'] : []),
-      ...(!goal ? ['No goal is currently set for this conversation.'] : []),
+      '仅为用户直接提出、需要跨多轮推进的请求创建持久目标。根据意图判断，无须用户说出“目标”一词；简单、单轮或无关工作不要创建目标。',
+      ...(planMode ? ['计划模式已开启：只做规划，不创建目标、不推进实施，也不启动自动续跑。'] : []),
+      ...(!goal ? ['当前会话尚未设置目标。'] : []),
     ]
 
     const getInstruction = goalToolInstruction('get_goal', routes.get_goal)
-    if (getInstruction !== undefined) lines.push(`Read the current goal when the user asks about it. ${getInstruction}`)
+    if (getInstruction !== undefined) lines.push(`用户询问当前目标时读取它。${getInstruction}。`)
 
     if (!goal || goal.phase === 'complete') {
       if (createCallable) {
-        lines.push('For a qualifying long-running objective, create a goal with the user’s direct request as its scope.', goalToolInstruction('create_goal', routes.create_goal)!)
+        lines.push('对于符合条件的长期任务，以用户直接提出的请求为范围创建目标。', goalToolInstruction('create_goal', routes.create_goal)!)
       } else if (!planMode && routes.create_goal !== 'unavailable') {
-        lines.push('Goal creation is unavailable for this conversation in the current request; do not claim to set a goal.')
+        lines.push('当前请求不允许为本会话创建目标；不要声称已设置目标。')
       }
-      if (goal?.phase === 'complete') lines.push(`The previous goal is complete: "${goal.objective}". Treat a new objective as a new goal only when the human asks for long-running work.`)
+      if (goal?.phase === 'complete') lines.push(`上一个目标已完成：“${goal.objective}”。只有用户提出长期任务时，才将新任务设为新目标。`)
       return lines.join('\n')
     }
 
-    lines.push(`Current goal: goal_id "${goal.id}", revision ${goal.revision}, objective "${goal.objective}".`)
+    lines.push(`当前目标：goal_id "${goal.id}"，revision ${goal.revision}，objective "${goal.objective}"。`)
     if (goal.phase === 'active') {
-      lines.push(`It is active; ${goal.roundsStarted}/${goal.maxGoalRounds} automatic continuation rounds have started.`)
+      lines.push(`目标处于 active 状态；已启动 ${goal.roundsStarted}/${goal.maxGoalRounds} 轮自动续跑。`)
       if (planMode) {
-        lines.push('This goal remains active, but do not change its state or advance implementation while plan mode is active.')
+        lines.push('该目标仍处于 active 状态，但计划模式开启时不得改变目标状态或推进实施。')
       } else {
-        lines.push('Work toward this goal within the current request and keep changes scoped to it.')
+        lines.push('在本请求中推进该目标，改动范围限于此目标。')
         if (resolveToolRoute(input.agent, 'ask_user_question') !== 'unavailable') {
-          lines.push('When a decision belongs to the user, ask with ask_user_question; automatic continuation waits until it is answered.')
+          lines.push('需要用户作决定时，用 ask_user_question 提问；自动续跑会等待答复。')
         }
       }
       if (updateCallable) {
         lines.push(
-          'The model may report only action "complete" or "blocked". Report complete only after the objective is achieved and requested verification has passed, with concrete evidence. Report blocked only when a concrete condition makes further progress impossible, and state that condition; difficulty, uncertainty, or remaining work alone is not a blocker.',
-          'Editing, pausing, and resuming are user requests handled by the goal controls; do not call update_goal with those actions.',
+          '模型只能报告 action "complete" 或 "blocked"。只有目标达成且所要求的验证通过，并有具体证据时，才报告 complete。只有具体条件使后续工作无法推进时，才报告 blocked，并说明该条件；困难、不确定性或仍有剩余工作本身不构成阻塞。',
+          '编辑、暂停和恢复由用户通过目标控件操作；不要用 update_goal 执行这些动作。',
           goalToolInstruction('update_goal', routes.update_goal)!,
         )
       } else if (!planMode) {
-        lines.push('No goal update action is callable in this request; do not claim to change the goal state or start an automatic continuation.')
+        lines.push('本请求没有可调用的目标更新操作；不要声称已更改目标状态或启动自动续跑。')
       }
     } else {
-      lines.push(`The goal is ${goal.phase}${goal.blockedReason ? ` (${goal.blockedReason})` : ''}; automatic continuation rounds will not start.`)
-      lines.push('Do not start new work toward this goal until the user uses the goal controls to resume it.')
+      lines.push(`目标状态为 ${goal.phase}${goal.blockedReason ? ` (${goal.blockedReason})` : ''}；不会启动自动续跑。`)
+      lines.push('用户通过目标控件恢复之前，不要为此目标开始新的工作。')
     }
     return lines.join('\n')
   })
@@ -391,9 +391,9 @@ function goalSummary(goal: GoalState): string {
 const getGoalTool = defineTool({
   name: 'get_goal',
   description: [
-    'Read the goal of this conversation: objective, phase, round budget and revision.',
-    'Use it when the user asks about the current goal or its status.',
-    'When no goal is set, continue according to the current task and available goal policy.',
+    '读取本会话的目标，包括任务内容、阶段、续跑轮数预算和版本号。',
+    '用户询问当前目标或其状态时使用。',
+    '没有设置目标时，按当前任务和可用的目标规则继续。',
   ].join(' '),
   parameters: Type.Object({}),
   execute: async (_args, api, context) => {
@@ -401,7 +401,7 @@ const getGoalTool = defineTool({
     const goal = doc?.goal ?? null
     const text = goal
       ? `Goal (${goalSummary(goal)}): "${goal.objective}"`
-      : 'No goal is set for this conversation. Continue according to the current task and available goal policy.'
+      : '本会话尚未设置目标。按当前任务和可用的目标规则继续。'
     return { output: [{ type: 'text' as const, text }], details: goalDetails(goal) }
   },
 })
@@ -411,9 +411,9 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
   return defineTool({
     name: 'create_goal',
     description: [
-      'Create a persisted goal that keeps this conversation working across bounded automatic continuation rounds.',
-      'Use it for a direct human request that needs work across multiple turns, even when the user did not say "goal"; do not use it for trivial, single-turn, or unrelated work.',
-      'An unfinished goal cannot be replaced; continue its objective or ask the user to use the goal controls. max_goal_rounds caps automatic continuation rounds (default 10).',
+      '创建持久目标，让本会话在有轮数上限的自动续跑中持续工作。',
+      '用于用户直接提出、需要跨多轮推进的请求，即使用户没有说“目标”；简单、单轮或无关工作不要使用。',
+      '未完成的目标不能被替换；继续该目标，或请用户使用目标控件调整。max_goal_rounds 限制自动续跑轮数，默认 10。',
     ].join(' '),
     parameters: Type.Object({
       objective: Type.String(),
@@ -454,8 +454,8 @@ function createGoalTool(canCreate: Required<GoalToolOptions>['canCreate']) {
 const updateGoalTool = defineTool({
   name: 'update_goal',
   description: [
-    'Report the current goal as complete or blocked. Copy goal_id and revision exactly from the current goal policy; stale revisions are rejected.',
-    'The only model actions are "complete" and "blocked"; blocked requires blocked_reason. Editing, pausing, and resuming are user controls.',
+    '报告当前目标已完成或受阻。从当前目标规则中准确复制 goal_id 和 revision；过期版本会被拒绝。',
+    '模型仅可执行 "complete" 和 "blocked"；blocked 必须提供 blocked_reason。编辑、暂停和恢复由用户控件处理。',
   ].join(' '),
   parameters: Type.Object({
     goal_id: Type.String(),

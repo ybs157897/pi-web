@@ -609,6 +609,8 @@ export interface ConversationStats {
   readonly cacheWrite: number
   readonly totalTokens: number
   readonly contextTokens: number
+  /** Session-level output rate: output tokens over active run time. Undefined while no run has a duration. */
+  readonly tokensPerSecond?: number
 }
 
 /** Fold the durable message log into the numbers shown by the composer status pills. */
@@ -621,6 +623,10 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
   let cacheWrite = 0
   let totalTokens = 0
   let contextTokens = 0
+  // DSH's decode-speed fold (StatsPills.tsx:172-176): output tokens and per-request model time
+  // accumulate together, so tool time and runs without a recorded duration never dilute the rate.
+  let rateTokens = 0
+  let rateMs = 0
   for (const message of messages) {
     if (message.role === 'assistant' || message.role === 'tool') stepCount += 1
     const usage = message.usage
@@ -632,7 +638,12 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
     totalTokens += usage.totalTokens
     // The most recent turn prices the window the next request will carry.
     contextTokens = usage.input + usage.cacheRead + usage.cacheWrite + usage.output
+    if (message.role === 'assistant' && message.requestDurationMs !== undefined) {
+      rateTokens += usage.output
+      rateMs += message.requestDurationMs
+    }
   }
+  const tokensPerSecond = rateMs > 0 ? rateTokens / (rateMs / 1000) : undefined
   return {
     runCount: runs.filter(run => run.users.length > 0).length,
     stepCount,
@@ -642,6 +653,7 @@ export function conversationStats(messages: readonly ChatMessage[]): Conversatio
     cacheWrite,
     totalTokens,
     contextTokens,
+    ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
   }
 }
 

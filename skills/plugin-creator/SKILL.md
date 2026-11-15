@@ -1,6 +1,6 @@
 ---
 name: plugin-creator
-description: Create, extend, validate, or update a pi-web plugin and its local development marketplace when the user asks to build a plugin, add a plugin capability, or package skills, MCP tools, or UI surfaces for pi-web. Do not load for ordinary Skill creation (use skill-creator) or for installing an existing plugin.
+description: 用户要求构建插件、增加插件能力，或为 pi-web 打包技能、MCP 工具或界面时，创建、扩展、验证或更新 pi-web 插件及其本地开发市场。普通技能创建使用 skill-creator；安装已有插件时不加载本技能。
 ---
 
 # Plugin Creator

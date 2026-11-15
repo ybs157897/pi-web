@@ -77,6 +77,14 @@ describe('Windows output decoding', () => {
     expect(text).toBe('你好')
   })
 
+  it('replaces invalid bytes instead of throwing when no legacy encoding is available', () => {
+    const decoder = new LegacyAwareDecoder(null)
+    // A stray high byte would throw ERR_ENCODING_INVALID_ENCODED_DATA on the fatal decoder.
+    const text = decoder.write(Buffer.from([0x70, 0x72, 0x65, 0x66, 0x69, 0x78, 0x20, 0xff]))
+      + decoder.write(Buffer.from(' tail', 'utf8')) + decoder.end()
+    expect(text).toBe('prefix \uFFFD tail')
+  })
+
   it('switches to the console code page when bytes are not UTF-8', () => {
     const decoder = new LegacyAwareDecoder('gb18030')
     const text = decoder.write(Buffer.from('prefix ', 'utf8'))

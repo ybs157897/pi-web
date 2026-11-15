@@ -278,30 +278,30 @@ export function memoryExtractionTools(): Tool[] {
   return [
     {
       name: 'read',
-      description: 'Read a text file. Paths may be inside the conversation workspace or the memory directory.',
-      parameters: Type.Object({ path: Type.String({ description: 'Absolute path, or a path relative to the workspace.' }) }),
+      description: '读取文本文件。路径可以位于会话工作区或记忆目录内。',
+      parameters: Type.Object({ path: Type.String({ description: '绝对路径，或相对于工作区的路径。' }) }),
     },
     {
       name: 'list_files',
-      description: 'List files under a directory (recursive). Paths may be inside the workspace or the memory directory.',
-      parameters: Type.Object({ path: Type.Optional(Type.String({ description: 'Directory to list; defaults to the workspace root.' })) }),
+      description: '递归列出目录中的文件。路径可以位于工作区或记忆目录内。',
+      parameters: Type.Object({ path: Type.Optional(Type.String({ description: '要列出的目录，默认工作区根目录。' })) }),
     },
     {
       name: 'search_files',
-      description: 'Search file contents for a case-insensitive literal phrase.',
+      description: '按字面量短语搜索文件内容，忽略大小写。',
       parameters: Type.Object({
-        pattern: Type.String({ description: 'Literal text to search for.' }),
-        path: Type.Optional(Type.String({ description: 'Directory to search; defaults to the workspace root.' })),
+        pattern: Type.String({ description: '要搜索的字面量文本。' }),
+        path: Type.Optional(Type.String({ description: '要搜索的目录，默认工作区根目录。' })),
       }),
     },
     {
       name: 'write',
-      description: 'Write a memory file. Only .md paths inside the memory directory are allowed.',
+      description: '写入记忆文件。仅允许记忆目录内的 .md 路径。',
       parameters: Type.Object({ path: Type.String(), content: Type.String() }),
     },
     {
       name: 'edit',
-      description: 'Replace text in a memory file. Only .md paths inside the memory directory are allowed.',
+      description: '替换记忆文件中的文本。仅允许记忆目录内的 .md 路径。',
       parameters: Type.Object({
         path: Type.String(),
         edits: Type.Array(Type.Object({ oldText: Type.String(), newText: Type.String() })),
@@ -309,7 +309,7 @@ export function memoryExtractionTools(): Tool[] {
     },
     {
       name: 'delete',
-      description: 'Delete a memory file. Only .md paths inside the memory directory are allowed; MEMORY.md cannot be deleted.',
+      description: '删除记忆文件。仅允许记忆目录内的 .md 路径；不能删除 MEMORY.md。',
       parameters: Type.Object({ path: Type.String() }),
     },
   ]

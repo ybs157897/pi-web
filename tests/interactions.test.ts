@@ -91,11 +91,11 @@ describe('plan reviews', () => {
 
   it('accepts only Markdown that starts with a level-1 heading', () => {
     expect(cleanPlan('# 迁移计划\n\n步骤')).toBe('# 迁移计划\n\n步骤')
-    expect(() => cleanPlan('  迁移计划：无标题  ')).toThrow(/level-1 heading/)
-    expect(() => cleanPlan('## 二级标题')).toThrow(/level-1 heading/)
-    expect(() => cleanPlan('')).toThrow(/empty/)
-    expect(() => cleanPlan(undefined)).toThrow(/empty/)
-    expect(() => cleanPlan('# \n\n正文')).toThrow(/heading is empty/)
+    expect(() => cleanPlan('  迁移计划：无标题  ')).toThrow(/一级标题/)
+    expect(() => cleanPlan('## 二级标题')).toThrow(/一级标题/)
+    expect(() => cleanPlan('')).toThrow(/计划为空/)
+    expect(() => cleanPlan(undefined)).toThrow(/计划为空/)
+    expect(() => cleanPlan('# \n\n正文')).toThrow(/标题为空/)
   })
 
   it('reads the heading as the call title and ignores later headings', () => {

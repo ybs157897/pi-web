@@ -940,8 +940,8 @@ function teamCall(name: TeamToolName, routes: Record<TeamToolName, ToolRoute>, a
 
 function sharedTeamPolicy(planActive: boolean): string {
   return planActive
-    ? 'The Team shares one working directory. Plan mode is read-only for every member: inspect and report evidence, preserve all files, and do not make workspace changes.'
-    : 'The Team shares one working directory; file changes are immediately visible to every member. Preserve other members’ edits, stay within your assigned write scope, and coordinate overlapping work before changing shared files.'
+    ? '团队共享同一工作目录。计划模式对所有成员均为只读：检查并报告证据，保留所有文件，不修改工作区。'
+    : '团队共享同一工作目录；文件改动对所有成员立即可见。保留其他成员的改动，遵守分配的写入范围，修改共享文件前先协调重叠工作。'
 }
 
 const teamSection = section('team-policy', async (input, context) => {
@@ -953,27 +953,27 @@ const teamSection = section('team-policy', async (input, context) => {
   const routes = teamRoutes(input.agent)
   if (link?.leadConversationId) {
     const lines = [
-      `You are teammate "${link.name ?? 'teammate'}" of an Agent Team. Your Team Lead is named "lead".`,
+      `你是 Agent 团队的成员“${link.name ?? 'teammate'}”。团队负责人的名称为“lead”。`,
       sharedTeamPolicy(planActive),
       planActive
-        ? 'Follow only the assigned research task; report findings and concrete evidence to the Team Lead.'
-        : 'Follow only the assigned task; report the outcome and concrete verification evidence to the Team Lead. The Lead coordinates the team and owns task assignment.',
+        ? '只执行分配的调研任务，向团队负责人报告发现和具体证据。'
+        : '只执行分配的任务，向团队负责人报告结果和具体的验证证据。负责人负责团队协调和任务分配。',
     ]
     const message = teamCall('send_message', routes, '{ target: "lead", message: "..." }')
     if (message) {
-      lines.push(`To contact the Lead, ${message} A successful send means the inbox accepted it, not that the recipient processed it. Messages from other members start with the sender's name.`)
+      lines.push(`联系负责人时，${message}。发送成功只表示收件箱已接纳，不代表接收方已经处理。其他成员的消息以发送者名称开头。`)
     }
     const list = teamCall('list_agents', routes)
-    if (list) lines.push(`To inspect teammate names and availability, ${list}`)
+    if (list) lines.push(`查看成员名称和当前可用状态时，${list}。`)
     if (planActive && routes.team_task_list !== 'unavailable' && routes.team_task_get !== 'unavailable') {
-      lines.push('Use task board reads only to understand the assigned research scope; do not attempt task updates during Plan mode.')
+      lines.push('仅通过读取任务看板了解分配的调研范围；计划模式下不要尝试更新任务。')
     } else if (!planActive && routes.team_task_list !== 'unavailable' && routes.team_task_get !== 'unavailable' && routes.team_task_update !== 'unavailable') {
-      lines.push('For your assigned shared task, inspect its latest revision, claim it if it is pending and unowned, then mark it complete only after its work and requested verification are done.')
+      lines.push('对于分配给你的共享任务，先读取最新 revision；若为 pending 且没有负责人，先认领；只有工作及所要求的验证都完成后，才标记完成。')
     } else if (routes.team_task_update !== 'unavailable') {
-      lines.push('Use only task identifiers and revisions supplied in the assignment; do not guess either value.')
+      lines.push('只使用派工内容中提供的任务标识和 revision，不要猜测。')
     }
     if (routes.team_task_list !== 'unavailable' && routes.team_task_update !== 'unavailable') {
-      lines.push('Record expected write scopes as workspace-relative path prefixes on shared tasks and express required ordering with task dependencies (blocked_by). Overlapping write scopes are a warning, not a lock.')
+      lines.push('在共享任务中，用工作区相对路径前缀记录预期写入范围，用任务依赖 blocked_by 表达必要顺序。写入范围重叠只会产生警告，不是锁。')
     }
     const taskCalls = (['team_task_list', 'team_task_get', 'team_task_update'] as const)
       .map(name => teamCall(name, routes)).filter((line): line is string => line !== undefined)
@@ -984,44 +984,44 @@ const teamSection = section('team-policy', async (input, context) => {
   const teammates = (doc?.members ?? []).filter(member => member.role === 'teammate')
   if (teammates.length === 0) return undefined
   const lines = [
-    `You are the Team Lead named "lead". Your Team has ${teammates.length} teammate${teammates.length === 1 ? '' : 's'}: ${teammates.map(member => member.name).join(', ')}.`,
+    `你是名为“lead”的团队负责人。团队有 ${teammates.length} 名成员：${teammates.map(member => member.name).join(', ')}。`,
     sharedTeamPolicy(planActive),
   ]
 
   const spawn = teamCall('spawn_teammate', routes)
   if (spawn) {
     lines.push(planActive
-      ? `Delegate only independent read-only research with separate research scopes. Make each prompt self-contained with the task, scope, constraints and authorization, acceptance criteria, and required evidence; the child inherits Plan mode. ${spawn}`
-      : `Delegate only focused work with disjoint write scopes. A teammate prompt must be self-contained and include the task, scope, constraints and authorization, acceptance criteria, and required result evidence; preserve changes outside its assigned scope. A spawned teammate runs in the background. ${spawn}`)
+      ? `只委派彼此独立、调研范围分开的只读研究。每条任务说明都必须自包含，写明任务、范围、约束与授权、验收标准和所需证据；子会话继承计划模式。${spawn}。`
+      : `只委派职责明确且写入范围互不重叠的工作。成员任务说明必须自包含，写明任务、范围、约束与授权、验收标准和所需结果证据，并要求保留分配范围外的改动。创建的成员在后台运行。${spawn}。`)
   }
   const list = teamCall('list_agents', routes)
-  if (list) lines.push(`Use the roster to check each member’s availability; inactive means no turn is running, not task completion. ${list}`)
+  if (list) lines.push(`通过成员列表检查各成员的可用状态；inactive 表示没有回合正在运行，不代表任务完成。${list}。`)
   const message = teamCall('send_message', routes)
   if (message) {
-    lines.push(`Use a message to steer a running member or start/resume an inactive one. A successful send means the inbox accepted it, not that the member processed it; messages from other members start with the sender's name. ${message}`)
+    lines.push(`用消息指导正在运行的成员，或启动、恢复 inactive 成员。发送成功只表示收件箱已接纳，不代表成员已经处理；其他成员的消息以发送者名称开头。${message}。`)
   }
   const interrupt = teamCall('interrupt_agent', routes)
-  if (interrupt) lines.push(`Interrupt only a member whose current turn should stop. ${interrupt}`)
+  if (interrupt) lines.push(`只中断确实应停止当前回合的成员。${interrupt}。`)
 
   const createTask = teamCall('team_task_create', routes)
   if (createTask) {
-    lines.push(`Use shared tasks for work that needs ownership or dependencies. Record expected write scopes as workspace-relative path prefixes and express required ordering with task dependencies (blocked_by); overlapping write scopes are a warning, not a lock. ${createTask}`)
+    lines.push(`需要记录负责人或依赖关系的工作使用共享任务。用工作区相对路径前缀记录预期写入范围，用任务依赖 blocked_by 表达必要顺序；写入范围重叠只会产生警告，不是锁。${createTask}。`)
   }
   const taskList = teamCall('team_task_list', routes)
   const taskGet = teamCall('team_task_get', routes)
   const taskUpdate = teamCall('team_task_update', routes)
   if (taskList) lines.push(planActive
-    ? `Inspect only current task scope and status for research planning. ${taskList}`
-    : `Inspect readiness and ownership before assigning work. ${taskList}`)
+    ? `仅检查当前任务范围和状态，用于调研规划。${taskList}。`
+    : `分配工作前，检查任务是否就绪及其负责人。${taskList}。`)
   if (taskGet) lines.push(planActive
-    ? `Read task details only to understand the current research scope. ${taskGet}`
-    : `Read a task’s latest revision before changing or executing it. ${taskGet}`)
+    ? `仅通过读取任务详情了解当前调研范围。${taskGet}。`
+    : `修改或执行任务前，读取其最新 revision。${taskGet}。`)
   if (taskUpdate) {
-    lines.push(`Use the latest revision for each update; claim before work and complete only after verification passes. Task readiness does not start an owner. ${taskUpdate}`)
+    lines.push(`每次更新使用最新 revision；工作前先认领，验证通过后才标记完成。任务就绪不会自动启动负责人。${taskUpdate}。`)
   }
   const wait = teamCall('wait_agent', routes)
   if (wait && list) {
-    lines.push(`The roster shows availability, not task completion. wait_agent observes later changes and never wakes a member; after a wakeup or timeout re-list. If nobody is active, call it once to collect available answers without waiting. Check answerStatus; the conversation path is a locator for the host or user, not a callable tool.${message ? ' Request missing details from a member when needed; do not wake an inactive member whose work is already complete.' : ' Report missing evidence when no retrieval route is available.'} Collect the results of required teammates before the final answer. ${wait}`)
+    lines.push(`成员列表反映可用状态，不代表任务完成。wait_agent 观察后续变化，不会唤醒成员；等待返回或超时后，重新读取成员列表。若无人运行，调用一次即可收集已有答复，无须等待。检查 answerStatus；会话路径供宿主或用户定位来源，不是可调用工具。${message ? ' 必要时向成员索取缺失的详情；不要唤醒已完成工作的 inactive 成员。' : ' 没有可用的获取方式时，说明缺少哪些证据。'} 最终答复前，收齐必要成员的结果。${wait}。`)
   }
   return lines.join('\n')
 })
@@ -1055,12 +1055,12 @@ export function createTeamTools(options: TeamToolOptions): Extension {
   const spawnTool = defineTool({
     name: 'spawn_teammate',
     description: [
-      'Create one named, durable teammate in a separate child conversation; it runs in the background and this call returns without waiting for its answer.',
-      'Only the Team Lead may call this tool. The name must be unique lower-kebab-case, at most 64 characters, and never "lead"; a name is never reused, even after a failed creation.',
-      'The prompt is the teammate\'s complete, self-contained initial task: it inherits your agent configuration, tools, model and working directory, but not your messages. Include the task, assigned scope, applicable constraints and authorization, acceptance criteria, and required result evidence.',
-      'context picks the seed: fresh starts an empty child, fork continues from your last completed turn. model optionally selects a fresh teammate\'s model as {provider, modelId}, validated against the catalog and allowlist; a fork keeps your model to preserve the prefix it reuses, so model is rejected with context: "fork".',
-      'Members share the working directory. Assign disjoint write scopes and require the teammate to preserve edits outside its assigned scope.',
-      'Teammates are for genuine collaboration that needs the shared task board or member-to-member messaging over time. Independent one-shot subtasks — even many in parallel, even cross-checking each other — belong to subagent instead: its tool result returns the subagent\'s answer directly, while a teammate\'s final text never flows back to the Lead on its own (collect it through tasks, messages, or files).',
+      '在独立子会话中创建一个具名、持久的团队成员；它在后台运行，本调用立即返回，不等待答复。',
+      '仅团队负责人可调用。名称必须唯一，使用小写短横线格式，最多 64 字符，且不能为 "lead"；即使创建失败，该名称也不能复用。',
+      'prompt 是成员完整、自包含的初始任务。成员继承你的 Agent 配置、工具、模型和工作目录，但不继承消息。必须写明任务、分配范围、适用的约束与授权、验收标准和所需结果证据。',
+      'context 选择初始上下文：fresh 创建空子会话，fork 从你上一个已完成回合继续。model 可按 {provider, modelId} 为 fresh 成员指定模型，并接受目录和允许列表校验；fork 保留你的模型以复用前缀，因此 context: "fork" 不接受 model。',
+      '成员共享工作目录。分配互不重叠的写入范围，并要求成员保留其分配范围外的改动。',
+      '团队成员用于持续需要共享任务看板或成员间消息的协作。独立的一次性子任务，即使有很多项并行或相互交叉核验，也应使用 subagent：其工具结果直接返回子智能体答复；团队成员的最终文本不会自行返回负责人，须通过任务、消息或文件收集。',
     ].join(' '),
     parameters: Type.Object({
       name: Type.String(),
@@ -1214,8 +1214,8 @@ export function createTeamTools(options: TeamToolOptions): Extension {
   const sendMessageTool = defineTool({
     name: 'send_message',
     description: [
-      'Send one message to another Team member. A running target receives it at the nearest step boundary; an inactive target starts or resumes a turn.',
-      'The target comes from spawn_teammate or list_agents, including "lead". A successful send only means the inbox accepted it; it is not the recipient\'s answer.',
+      '向另一名团队成员发送一条消息。正在运行的目标会在最近的步骤边界收到消息；inactive 目标会启动或恢复一个回合。',
+      'target 来自 spawn_teammate 或 list_agents，也可为 "lead"。发送成功仅表示收件箱已接纳，不代表收到接收方的答复。',
     ].join(' '),
     parameters: Type.Object({ target: Type.String(), message: Type.String() }),
     execute: async (args, api, context): Promise<ToolExecutionResult<{ sent: boolean; target: string; conversationId: string }>> => {
@@ -1236,7 +1236,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
       if (targetId === api.conversationId) {
         throw new TeamRuleError('a Team member cannot message itself', 'self-message')
       }
-      const framed = `Team message from ${scope.name}:\n${message}`
+      const framed = `来自 ${scope.name} 的团队消息：\n${message}`
       if (Buffer.byteLength(framed, 'utf8') > MAX_TEAM_MESSAGE_BYTES) {
         throw new TeamRuleError(`team message exceeds ${MAX_TEAM_MESSAGE_BYTES} bytes`, 'message-too-large')
       }
@@ -1262,8 +1262,8 @@ export function createTeamTools(options: TeamToolOptions): Extension {
   const listAgentsTool = defineTool({
     name: 'list_agents',
     description: [
-      'List the Lead and every durable teammate with an addressable target and current availability.',
-      'inactive means no turn is executing, not a task result. provisioning and failed describe member creation.',
+      '列出负责人和所有持久团队成员，包含可寻址的 target 及当前可用状态。',
+      'inactive 表示没有回合正在执行，不代表任务结果。provisioning 和 failed 描述成员创建状态。',
     ].join(' '),
     parameters: Type.Object({}),
     execute: async (_args, api, context): Promise<ToolExecutionResult<{ members: TeamMemberView[] }>> => {
@@ -1277,10 +1277,10 @@ export function createTeamTools(options: TeamToolOptions): Extension {
   const waitAgentTool = defineTool({
     name: 'wait_agent',
     description: [
-      'Wait for the next teammate status, message, or shared-task change after this call starts.',
-      'The result includes teammate status and a recent assistant-text preview when available, with answerStatus and its source conversation and entry. A preview can be truncated or belong to an earlier turn. The conversation path locates the source for the host or user; it is not itself a callable tool.',
-      'This never wakes inactive members and returns noProgress immediately when no other member is running or provisioning. Re-list after wakeup or timeout instead of polling.',
-      `timeout_ms is an integer from ${MIN_WAIT_MS} through ${MAX_WAIT_MS}; it defaults to ${DEFAULT_WAIT_MS}.`,
+      '等待本调用开始后的下一次成员状态、消息或共享任务变化。',
+      '结果包含成员状态，以及可用时最近的助手文本预览、answerStatus、来源会话和条目。预览可能被截断或属于之前的回合。会话路径供宿主或用户定位来源，本身不是可调用工具。',
+      '不会唤醒 inactive 成员；其他成员均未运行且未处于 provisioning 时，立即返回 noProgress。等待返回或超时后重新读取成员列表，不要循环轮询。',
+      `timeout_ms 为 ${MIN_WAIT_MS} 到 ${MAX_WAIT_MS} 之间的整数，默认 ${DEFAULT_WAIT_MS}。`,
     ].join(' '),
     parameters: Type.Object({ timeout_ms: Type.Optional(Type.Number()) }),
     execute: async (args, api, context): Promise<ToolExecutionResult<WaitAgentResult>> => {
@@ -1306,7 +1306,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 
   const interruptAgentTool = defineTool({
     name: 'interrupt_agent',
-    description: 'Interrupt one teammate\'s current turn while preserving its pending inbox. Team Lead only.',
+    description: '中断一名成员的当前回合，并保留其待处理收件箱。仅团队负责人可调用。',
     parameters: Type.Object({ target: Type.String() }),
     execute: async (args, api, context): Promise<ToolExecutionResult<{ previousStatus: 'running' | 'inactive' }>> => {
       const scope = await resolveTeamScope(api, context)
@@ -1328,7 +1328,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 
   const teamTaskCreateTool = defineTool({
     name: 'team_task_create',
-    description: 'Create one unowned pending task on the shared Team task board.',
+    description: '在团队共享任务看板上创建一个无负责人、状态为 pending 的任务。',
     parameters: Type.Object({
       subject: Type.String(),
       description: Type.String(),
@@ -1356,7 +1356,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 
   const teamTaskListTool = defineTool({
     name: 'team_task_list',
-    description: 'List shared tasks, including readiness, owner, revision, blockers, and write-scope warnings.',
+    description: '列出共享任务，包括就绪状态、负责人、revision、阻塞项及写入范围警告。',
     parameters: Type.Object({
       status: Type.Optional(Type.Union([Type.Literal('pending'), Type.Literal('in_progress'), Type.Literal('completed')])),
       owner: Type.Optional(Type.String()),
@@ -1386,7 +1386,7 @@ export function createTeamTools(options: TeamToolOptions): Extension {
 
   const teamTaskGetTool = defineTool({
     name: 'team_task_get',
-    description: 'Read the complete latest value of one shared task before changing or executing it.',
+    description: '修改或执行共享任务前，读取该任务完整的最新内容。',
     parameters: Type.Object({ task_id: Type.String() }),
     execute: async (args, api, context): Promise<ToolExecutionResult<TeamTaskView>> => {
       const scope = await resolveTeamScope(api, context)
@@ -1400,9 +1400,9 @@ export function createTeamTools(options: TeamToolOptions): Extension {
   const teamTaskUpdateTool = defineTool({
     name: 'team_task_update',
     description: [
-      'Compare-and-set a shared task action using the latest revision from team_task_get or team_task_list.',
-      'Actions: claim, release, edit, set_dependencies, complete, reopen, reassign, delete. Only the owner or the Team Lead may mutate an owned task; reassign is Lead-only.',
-      'A stale expected_revision is rejected; re-read the task and retry with the current revision.',
+      '使用 team_task_get 或 team_task_list 返回的最新 revision，对共享任务执行比较后更新操作。',
+      '操作包括 claim、release、edit、set_dependencies、complete、reopen、reassign、delete。已有负责人的任务仅可由该负责人或团队负责人修改；reassign 仅限团队负责人。',
+      '过期的 expected_revision 会被拒绝；重新读取任务，并使用当前 revision 重试。',
     ].join(' '),
     parameters: Type.Object({
       task_id: Type.String(),

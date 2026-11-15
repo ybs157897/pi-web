@@ -141,7 +141,7 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     expect(prompt).toContain('builtin:statechart')
     expect(request.sections['runtime-core']).not.toContain('builtin:statechart')
     expect(request.sections['work-policy']).not.toContain('/plan')
-    expect(request.sections['skills-policy']).toContain('Skip ordinary business-flow lookup')
+    expect(request.sections['skills-policy']).toContain('普通业务流程查询、无状态逻辑和格式调整不适用')
     expect(prompt).not.toMatch(/调用 Call|directly\.，|委达/u)
 
     // Scenario details live in the owning skills, not the global prompt.
@@ -150,6 +150,22 @@ describe.skipIf(process.platform === 'win32')('assembled model prompt', () => {
     }
 
     expect(request.sections['runtime-core']?.length ?? 0).toBeLessThanOrEqual(3_300)
+
+    // Own prose is Chinese; upstream descriptions and protocol identifiers stay verbatim.
+    const upstreamTools = new Set(['read', 'write', 'edit', 'codemode', 'tool_search'])
+    const checkDescriptions = (value: unknown, owner: string): void => {
+      if (value === null || typeof value !== 'object') return
+      for (const [key, child] of Object.entries(value)) {
+        if (key === 'description' && typeof child === 'string') {
+          expect(child, owner).toMatch(/\p{Script=Han}/u)
+        } else checkDescriptions(child, owner)
+      }
+    }
+    for (const tool of request.tools) {
+      if (upstreamTools.has(tool.name)) continue
+      expect(tool.description, tool.name).toMatch(/\p{Script=Han}/u)
+      checkDescriptions(JSON.parse(tool.parameters), tool.name)
+    }
   })
 
   it('plan mode', async () => {

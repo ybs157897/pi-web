@@ -38,12 +38,12 @@ export const TodoTools: Extension = defineExtension({
     defineTool({
       name: 'todo_write',
       description: [
-        'Record and update a task list to plan multi-step work and show progress; skip trivial single-step work.',
-        'Add one concrete step per item before starting, including relevant verification.',
-        'Replace the entire list on every call, so include every current item; anything omitted is removed.',
-        'Update statuses promptly as work changes and mark an item completed as soon as it is done.',
-        'Mark an item in_progress only while actively working on it; use multiple in_progress items only for work actually running in parallel.',
-        'Do not use the list as a substitute for the plan-mode plan; it tracks steps you are actually carrying out.',
+        '记录并更新任务列表，用于安排多步工作和展示进度；简单的单步工作跳过。',
+        '开始前，每项列出一个具体步骤，包括相关验证。',
+        '每次调用都会替换整个列表，必须包含所有当前事项；省略的事项会被删除。',
+        '工作变化时及时更新状态；事项完成后立即标记 completed。',
+        '仅将正在执行的事项标记为 in_progress；只有实际并行执行的工作，才可有多个 in_progress。',
+        '不要用此列表代替计划模式中的计划；它跟踪正在实际执行的步骤。',
       ].join(' '),
       parameters: Type.Object({
         todos: Type.Array(Type.Object({ content: Type.String(), status: TODO_STATUS })),
@@ -51,7 +51,7 @@ export const TodoTools: Extension = defineExtension({
       execute: async (args, api, context) => {
         const plan = await api.snapshot(Plans, api.conversationId, context)
         if (plan?.active === true) {
-          throw new Error('Todo progress cannot be updated while plan mode is active. Finish planning and wait for approval before tracking implementation work.')
+          throw new Error('计划模式开启时不能更新待办进度。先完成规划并等待批准，再跟踪实施工作。')
         }
         const items: TodoItem[] = []
         for (const todo of args.todos) {
@@ -68,7 +68,7 @@ export const TodoTools: Extension = defineExtension({
         await api.commit(async (tx) => {
           const currentPlan = await tx.doc(Plans, api.conversationId)
           if (currentPlan.active) {
-            throw new Error('Todo progress cannot be updated while plan mode is active. Finish planning and wait for approval before tracking implementation work.')
+            throw new Error('计划模式开启时不能更新待办进度。先完成规划并等待批准，再跟踪实施工作。')
           }
           const doc = await tx.doc(Todos, api.conversationId)
           doc.items = items

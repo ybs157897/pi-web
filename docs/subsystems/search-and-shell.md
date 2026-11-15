@@ -25,11 +25,11 @@
 
 ## Shell 工具：平台二选一
 
-[tools.ts:40](../../src/server/tools/shell/tools.ts#L40) 的 `coding-tools` 扩展在 Pi 的 `read`/`write`/`edit` 之外按平台注册恰好一个 shell 工具：Windows 只装 `pwsh`，其他平台只装 `bash`。两个工具参数一致（`command`/`description`/`workdir`/`timeout`）；`workdir` 默认会话工作区、相对路径对其解析、须真实存在且留在工作区内（[common.ts:23](../../src/server/tools/shell/common.ts#L23)）；远程或非 `node:local` 执行环境回退 Pi 平台工具的执行模型（外层 `cd`/`Set-Location` 前缀）。macOS `workspaceWrite` 的 `sandbox-exec` 档案对前台与后台命令同样生效：后台命令经 [execution-env.ts:146](../../src/server/conversation/execution-env.ts#L146) 的 `localShellSpawn` 以同一档案的分离进程运行，输出文件由父进程而非沙箱子进程写入，写沙箱不被凿穿。
+[tools.ts:40](../../src/server/tools/shell/tools.ts#L40) 的 `coding-tools` 扩展在 Pi 的 `read`/`write`/`edit` 之外按平台注册恰好一个 shell 工具（Windows 只装 `pwsh`，其他平台只装 `bash`）加一个平台无关的 `shell_session` 续读工具。两个 shell 工具参数一致（`command`/`description`/`workdir`/`timeout`/`yieldTimeMs`）；`workdir` 默认会话工作区、相对路径对其解析、须真实存在且留在工作区内（[common.ts:23](../../src/server/tools/shell/common.ts#L23)）；远程或非 `node:local` 执行环境回退 Pi 平台工具的执行模型（外层 `cd`/`Set-Location` 前缀）。macOS `workspaceWrite` 的 `sandbox-exec` 档案对前台与后台命令同样生效：后台命令经 [execution-env.ts:146](../../src/server/conversation/execution-env.ts#L146) 的 `localShellSpawn` 以同一档案的分离进程运行，输出文件由父进程而非沙箱子进程写入，写沙箱不被凿穿。
 
 ## 共享 runner 契约
 
-本地执行统一走 [runner.ts:59](../../src/server/tools/shell/runner.ts#L59) 的 `runShellCommand`。输出：stdout/stderr 流式解码（UTF-8 有效则按 UTF-8，失效后切换平台 legacy 编码）进保留尾部（50 KiB / 2000 行），同时全量追加到 OS 临时目录 `pi-web-shell/` 下的 0600 日志文件；输出被裁剪时以 `full_output` info 诊断给出完整日志路径，未被裁剪则删除日志。后台化：前台预算 15 秒，超时（默认 300 秒，[common.ts:6](../../src/server/tools/shell/common.ts#L6)）大于 15 秒的命令到点自动转后台，立即返回 `background: true` 结构化输出与日志路径，进程树继续跑到显式超时为止，模型用 `read` 轮询该文件看进度；转后台的命令脱离会话 abort 信号并登记进后台表，`runtime.close()` 时由 `disposeBackgroundShells()` 统一击杀（[runner.ts:28](../../src/server/tools/shell/runner.ts#L28)，[runtime/index.ts:693](../../src/server/runtime/index.ts#L693)）。
+本地执行统一走 [runner.ts:59](../../src/server/tools/shell/runner.ts#L59) 的 `runShellCommand`。输出：stdout/stderr 流式解码（UTF-8 有效则按 UTF-8，失效后切换平台 legacy 编码）进保留尾部（50 KiB / 2000 行），同时全量追加到 OS 临时目录 `pi-web-shell/` 下的 0600 日志文件；输出被裁剪时以 `full_output` info 诊断给出完整日志路径，未被裁剪则删除日志。会话化（对齐 codex `exec_command` 的 yield 语义）：前台预算默认 10 秒（`yieldTimeMs` 可调 250–30000），超时（默认 300 秒，[common.ts:6](../../src/server/tools/shell/common.ts#L6)）仍是进程总时限；到 yield 点仍未结束的命令提升为会话（`status: "running"` + `sessionId` + 已有输出），进程继续跑到显式超时为止。后续轮次用 `shell_session`（[session.ts](../../src/server/tools/shell/session.ts)）以消费游标读增量输出或写 stdin，终态轮返回退出码并回收会话；会话缓冲 1 MiB 封顶、活跃会话 20 个封顶，溢出靠日志文件兜底。提升后的命令脱离会话 abort 信号，`runtime.close()` 时由 `disposeShellSessions()` 统一击杀。stdin 为管道：非交互命令不受影响，会话可接收 `shell_session` 的 `stdin` 写入。
 
 退出语义对检索友好（[common.ts:98](../../src/server/tools/shell/common.ts#L98)）：`grep`/`egrep`/`fgrep`/`rg`/`findstr`/`git grep` 的退出码 1 归一为成功的「No matches found.」info 诊断，其余非零退出保留 `exit_code` error 诊断。进程树击杀按平台分派：POSIX 以分离进程组运行、`kill(-pid, SIGKILL)`；Windows 用 `taskkill /F /T`。
 
@@ -43,8 +43,8 @@
 
 ## 已知限制
 
-- 后台命令完成只能靠 `read` 轮询日志文件，没有自动通知；终端与工作流分区未实现（shell runner 尚缺 workId/标题/开始时间与取消接口），见 [spec.md 2026-10-31 未决](../spec.md#2026-10-31)。
-- 后台命令在服务器关闭时被统一终止，不跨重启存活。
+- 会话完成没有主动通知，模型需再发一次 `shell_session` 轮询终态；终端与工作流分区未实现（shell runner 尚缺 workId/标题/开始时间与取消接口），见 [spec.md 2026-10-31 未决](../spec.md#2026-10-31)。
+- 会话命令在服务器关闭时被统一终止，不跨重启存活；重启后旧 `sessionId` 一律 `NOT_FOUND`。
 - POSIX 递归搜索拦截是启发式：`sh -c` 收到引号包裹的脚本可绕过；系统提示词与 bash 工具描述承担兜底约束。
 - 原生 grep 的 Rust 正则语法窄于 JS，不支持的语法自动回退 JS walker；且回退路径不读 `.gitignore`（原生路径遵守），两条路径对 gitignore 文件的覆盖不一致。
 - ripgrep 依赖可选包 `@vscode/ripgrep`：离线安装缺该包时只剩 `PATH` 上的 `rg` 或 JS walker 两条路。

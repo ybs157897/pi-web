@@ -65,7 +65,7 @@ describe('goal continuation budget', () => {
   })
 
   it('tells a continued turn to stop while it waits on the user', () => {
-    expect(goalContinuation({ goal: goal() }, 0)?.continue).toContain('waiting for the user\'s answer or approval, end this turn')
+    expect(goalContinuation({ goal: goal() }, 0)?.continue).toContain('等待用户的答复或批准，结束本轮')
   })
 
   it('treats a pending question or plan review as waiting on the user', () => {

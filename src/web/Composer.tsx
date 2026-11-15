@@ -504,6 +504,7 @@ export default function Composer(props: ComposerProps) {
       {stats !== undefined && (stats.runCount > 0 || stats.stepCount > 0) && <span className={css.stat}>
         <IconGaugeOutlineRegular size={12} />
         <span>{stats.runCount} {t('轮', 'runs')} {stats.stepCount} {t('步', 'steps')}</span>
+        {stats.tokensPerSecond !== undefined && <span>· {Math.round(stats.tokensPerSecond)} tok/s</span>}
       </span>}
       {stats !== undefined && stats.totalTokens > 0 && <Menu open={menu === 'usage'} onClose={() => setMenu(null)} side="top" portal
         anchor={<button type="button" aria-label={t('Token 用量', 'Token usage')} onClick={() => setMenu(menu === 'usage' ? null : 'usage')}>

@@ -164,7 +164,7 @@
 ## 2026-10-28
 
 - 定了：按 `docs/prompts/refactor-plan.md` 实施提示词改造刀 1–8（快照测试、plugin-reference 三类能力全空才跳过、goal 续跑待答守卫、shell 默认超时 300s、去重瘦身、代码修改规范/可点击引用、记忆来源规则与计划模式解耦、AGENTS.md 分隔渲染），参考实现 `devin/prompt-refactor` 逐刀 cherry-pick，提交映射见该文档「实施状态」。runtime-core 4,202 → 2,758 字符，7 份提示词快照成为改动评审门。刀 9（commit message 历史）未实施（P2 可选）。
-- 判据：`npm run check` 66 文件 651 通过 + 1 平台跳过；刀 10 真实验收（`opencode-go/deepseek-v4.1-flash`）S1/S2/S5/S6 通过，且拦下一处真实回归——刀 6 示例「修一下→直接修」与 workflow fixture 的「直接实施」叠加导致模型跳过待办协议（基线 2/2 过、改造后 0/2），已改为「→ 修复它」（`844cd79`）后双模式通过。S3 `bounded`（模型不自愿限时前台命令）与 S4 `notInjected`（提取模型无视来源规则）记为模型顺从度边界；S4 需要提取产物侧硬过滤，另立任务。记录见 `docs/prompts/sources-and-integration.md`「2026-10-28 验收记录」。
+- 判据：`npm run check` 66 文件 651 通过 + 1 平台跳过；刀 10 真实验收（`opencode-go/deepseek-v4.1-flash`）S1/S2/S5/S6 通过，且拦下一处真实回归——刀 6 示例「修一下→直接修」与 workflow fixture 的「直接实施」叠加导致模型跳过待办协议（基线 2/2 过、改造后 0/2），已改为「→ 修复它」（`844cd79`）后双模式通过。S3 `bounded`（模型不自愿限时前台命令）与 S4 `notInjected`（提取模型无视来源规则）记为模型顺从度边界；S4 需要提取产物侧硬过滤，另立任务。记录见 `docs/prompts/sources-and-integration.md`「2026-10-28 验收记录」。（2026-11-14 注：所据 refactor-plan「不做」第 1 条「不统一中英混写」已被当日「提示词统一中文」条目修订）
 - 定了：恢复正文子智能体条带 `SubagentRunStrip`（修订同日「子智能体执行渲染」旧决策）：单行 `ToolCard` 保留给单个调用；≥2 个连续顶层调用折 `source:'calls'` 条带，codemode 嵌套调用 1 个也折（`source:'codemode'`，置于脚本卡前）；chip 开右侧只读 tab 不替换主列。`ToolCard`/`CodemodeBody` 的 nested 过滤保留互补。实现 `src/web/subagent-run-model.ts` + `SubagentRunStrip.tsx`，`useLiveSubagents` 1.5s 轮询；条带接在 `ProcessGroup` inline 分组上，与同日的粘性开合状态机（live/latest 边界才变开合）叠加。
 - 判据：全量 vitest 651 通过；新增 `tests/subagent-run-model.test.ts` 14 项；真实模型 codemode 并行 5 子 agent ego 验收：5 chip 颜色互异、「子智能体运行中 0/5 结束」→「5 个子智能体已完成」、嵌套行 0、chip 开只读 tab 主列不变，截图 `artifacts/subagent-strip-check/`；窄主列按容器查询降级纯色点。
 
@@ -214,7 +214,7 @@
 
 ## 2026-11-04
 
-- 定了（提示词与运行时复核落地）：按 docs/prompts/review-2026-11-04.md 顶部最终决定实施；工具路由按当前能力，中文拼接修正、team 英文去重；一次性子会话在执行层限制为一层并统一 direct/callable/deferred，Explore 保持只读；批准计划不提升权限，只读卡确认方案；无工具仍保留已有 goal 状态。
+- 定了（提示词与运行时复核落地）：按 docs/prompts/review-2026-11-04.md 顶部最终决定实施；工具路由按当前能力，中文拼接修正、team 英文去重；一次性子会话在执行层限制为一层并统一 direct/callable/deferred，Explore 保持只读；批准计划不提升权限，只读卡确认方案；无工具仍保留已有 goal 状态。（2026-11-14 注：复核 D1「team-policy 定为英文」已被当日「提示词统一中文」条目修订）
 - 定了（WeTrack 结论保护）：blocked/analyzing 尝试与可靠结论分离，保存须读取版本，旧版本拒绝；run 更新防并发回退与提交前误判；最近尝试含结构化原因，页面与旧结论并列。未配置列表明确报错，按 offset 分页。
 - 否了：原稿只过滤模型可见工具、无工具就删 goal 全段、无 active 就不能取 wait 结果、只删 statechart 常驻行但不改技能、失败尝试覆盖旧结论等方案。statechart 改短描述路由与按缺失决定提问，修订 2026-11-03 cd89a93 的宽泛路由；不新增 Skill 人工审批。
 - 未决：WeTrack 工具按会话类型门控、teammate 整体交互转接、多个进程共享 dataDir 的 CAS、远端列表一致性游标、WeTrack 页面证据链接跳转。最近保存历史最多 5 条/约 1 MB；真实 WeTrack 连接未测，ZCode 行为对跑受缺失构建入口阻塞；没有修改本机配置或安装依赖。
@@ -230,3 +230,9 @@
 
 - 定了（移除 Agent preset 功能）：`AgentPreset` 类型、`/api/presets` 路由、`runtime/presets.ts`、设置页「Agent 预设」面板、Composer 预设选择器与会话/自动化上的 `presetId`、`settings.defaultPresetId` 全部删除；`buildAgentChange` 回到全量安装扩展与工具，模型/思考等级只走显式选择与全局默认两条链。旧 `app-state.json` 在加载期剥离 `presets`、`settings.defaultPresetId` 与 automation `presetId`（首次写盘后文件干净），会话 metadata 中的残留 `presetId` 不再读取。
 - 判据：`npm run typecheck` 与全量 vitest 通过；新增 app-state 迁移用例；runtime-policy 中以 preset 为载体的无工具/自定义指令用例随功能删除（readOnly、plan 与 codemode 边界仍由其余用例覆盖）。
+
+## 2026-11-14
+
+- 定了（提示词统一中文）：自有 section、工具与参数描述、内置技能目录元数据、宿主注入指令和后台旁路提示词统一中文；代码、标识符及机器匹配的固定契约保持原文。按本轮确认的范围，Pi Durable 依赖说明、第三方 MCP/技能、按需技能正文与 references 保留原文，不增加依赖包装翻译或字符串替换。压缩摘要标题、占位模板与历史前缀保持兼容；标题跟随消息语言，commit message 继续由 locale 决定。实现边界见 [note](../.agents/notes/implemented/feature/2026-11-14-prompts-zh-unification.md)，评审规则见 [prompt-changes.md](defensive-patterns/prompt-changes.md)。
+- 判据：15 份快照逐份核对，section key、顶层工具集合及除 description 外的参数 schema 不变；`npm run check` 通过（101 文件、1090 测试通过、4 跳过，类型、构建与文档门通过）。使用用户指定的 CommandCode `deepseek/deepseek-v4.1-flash` 前后对照：workflow、policy、tools、codemode、skills 均通过；prompt 的 S1/S2/S5 各 3 次通过，S3 bounded 前后均 0/3、S4 notInjected 前后均 2/3，保留为未通过项，不能声称全量 live 通过。额外 cached/serialized 压缩及中英文标题/commit 输出共 12 次前后调用通过。ego 中使用同一模型完成只读计划、批准、待办、修复与红绿测试，4 个用例通过，批准前文件未变；限于此次 macOS 样本，不外推模型稳定性。
+- 未决：Windows 实机验证；S3 长命令主动限时与 S4 文件内指令不进入记忆的既有判据仍未达标（本轮两项均未见样本通过率下降）；中文对模型表现和实际 token 成本的普遍影响。本次不以字符数下降推断实际 token 节省。

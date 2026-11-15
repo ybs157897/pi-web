@@ -39,7 +39,9 @@
 }
 .capsule {
   display: inline-flex;
-  max-width: 100%;
+  /* ZCode 的折叠胶囊是 w-max 跟内容、上限 min(20rem, 容器宽-2rem)（ConversationStatusPanel.tsx
+     的 max-w-[min(20rem,calc(100cqw-2rem))]）。容器减 32px 已由 .bar 兜底，这里补 20rem 绝对封顶。 */
+  max-width: min(20rem, 100%);
   min-height: 32px;
   align-items: center;
   gap: 6px;

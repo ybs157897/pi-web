@@ -161,9 +161,9 @@ describe('renderProjectInstructions', () => {
   })
 
   it('renders missing and error records as one status line without a body', () => {
-    expect(renderProjectInstructions({ ...base, status: 'missing' })).toContain('No AGENTS.md at /ws/AGENTS.md')
+    expect(renderProjectInstructions({ ...base, status: 'missing' })).toContain('未找到 /ws/AGENTS.md')
     const error = renderProjectInstructions({ ...base, status: 'error', reason: 'source-too-large' })
-    expect(error).toContain('could not be loaded')
+    expect(error).toContain('无法加载')
     expect(error).toContain('source-too-large')
     expect(error).not.toContain('project_instructions>')
   })

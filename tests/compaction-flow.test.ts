@@ -42,7 +42,7 @@ async function scriptedProvider(options: { bigReads?: number } = {}): Promise<Sc
       const payload = JSON.parse(body) as { messages?: Array<{ role: string }> }
       const messages = payload.messages ?? []
       const assistantTurns = messages.filter(message => message.role === 'assistant').length
-      const isSummary = body.includes('context compaction engine') || body.includes('Produce a checkpoint')
+      const isSummary = body.includes('上下文压缩引擎') || body.includes('仅生成检查点')
       const chunks: string[] = []
       const event = (choice: Record<string, unknown>) => `data: ${JSON.stringify({
         id: 'chat_test', object: 'chat.completion.chunk', created: 1, model: 'repro-model', choices: [choice],

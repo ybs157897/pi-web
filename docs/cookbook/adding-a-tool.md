@@ -6,7 +6,7 @@
 
 ## 步骤
 
-1. 定义工具：在 [src/server/tools/](../../src/server/tools/) 下新建扩展文件，或在既有扩展里追加一个 `defineTool`。给出 `name`（snake_case）、`parameters`（`@earendil-works/pi-ai` 的 TypeBox `Type.Object`）与 `description`——description 是写给模型看的英文使用契约（何时用、何时不用、边界与输出约定），参照 [todo.ts](../../src/server/tools/todo.ts) 的 `todo_write`。
+1. 定义工具：在 [src/server/tools/](../../src/server/tools/) 下新建扩展文件，或在既有扩展里追加一个 `defineTool`。给出 `name`（snake_case）、`parameters`（`@earendil-works/pi-ai` 的 TypeBox `Type.Object`）与 `description`——description 是写给模型看的使用契约（何时用、何时不用、边界与输出约定），用中文写，工具名、参数名与代码保持英文（[prompt-changes.md](../defensive-patterns/prompt-changes.md)）；结构参照 [todo.ts](../../src/server/tools/todo.ts) 的 `todo_write`。
 2. 注册扩展：在 [src/server/runtime/index.ts](../../src/server/runtime/index.ts) 的 `registry.install` 静态序列里安装（`CodingTools`、`TodoTools` 那一段）。安装序即注册序，目录 default 变体按它排序；新扩展必须装在 `refreshMcpExtensions()` 首次调用之前——执行策略扩展在那时捕获已安装工具快照，并给每个工具包上计划模式守卫。
 3. 补来源映射：在 [gen-tool-catalog.ts](../../scripts/gen-tool-catalog.ts) 顶部的 `TOOL_SOURCES`（[gen-tool-catalog.ts:44](../../scripts/gen-tool-catalog.ts#L44)）加 `name → 源文件路径`。完整性守卫双向咬合：`src/server/tools` 下扫到的每个 `name: '…'` 字面量必须出现在某个 runtime 变体；每个变体工具必须有映射；每条映射必须指向存在的文件。守卫不过，`npm run gen:docs` 与 `--check` 门直接失败。
 4. 按工具类别决定权限面登记（写工具什么都不用登记）：

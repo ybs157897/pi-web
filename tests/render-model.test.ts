@@ -713,6 +713,26 @@ describe('conversation stats', () => {
     })
     expect(conversationStats([])).toMatchObject({ runCount: 0, totalTokens: 0, contextTokens: 0 })
   })
+
+  it('computes output rate from per-request model time only, ignoring messages without one', () => {
+    const messages: ChatMessage[] = [
+      { ...user('user-1', 'request-1'), runId: 'run-1' },
+      // Tool-heavy run: the run-level durationMs covers tool time and must not enter the rate.
+      assistant('assistant-1', [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: {} }], { runId: 'run-1', durationMs: 60_000,
+        usage: { input: 10, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost } }),
+      { id: 'tool-1', role: 'tool', blocks: [{ type: 'text', text: 'ok' }], timestamp: 300, runId: 'run-1',
+        toolCallId: 'call-1', toolName: 'bash' },
+      assistant('assistant-2', [{ type: 'text', text: 'final' }], { runId: 'run-1', durationMs: 30_000, requestDurationMs: 5_000,
+        usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30, cost } }),
+      { ...user('user-2', 'request-2'), runId: 'run-2' },
+      // A legacy message without requestDurationMs contributes tokens to neither side of the rate.
+      assistant('assistant-3', [{ type: 'text', text: 'again' }], { runId: 'run-2',
+        usage: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 35, cost } }),
+    ]
+
+    // 20 output tokens over 5s of model time; the tool-heavy run's 100 tokens stay out.
+    expect(conversationStats(messages)).toMatchObject({ output: 150, tokensPerSecond: 4 })
+  })
 })
 
 

@@ -243,8 +243,8 @@ describe('Plan inheritance before child submissions', () => {
 describe('team tool prompt policy', () => {
   it('shows only directly callable Lead tools and their direct routes', async () => {
     const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
-    expect(prompt).toContain('Call `spawn_teammate({ name: "worker", prompt: "..." })` directly.')
-    expect(prompt).toContain('Call `team_task_list({})` directly.')
+    expect(prompt).toContain('直接调用 `spawn_teammate({ name: "worker", prompt: "..." })`')
+    expect(prompt).toContain('直接调用 `team_task_list({})`')
     expect(prompt).not.toContain('send_message')
     expect(prompt).not.toContain('wait_agent')
     expect(prompt).not.toContain('team_task_update')
@@ -255,16 +255,16 @@ describe('team tool prompt policy', () => {
       offered: ['codemode'],
       callable: ['spawn_teammate', 'list_agents', 'wait_agent', 'team_task_get', 'team_task_update'],
     })
-    expect(prompt).toContain('Through `codemode`, call `await tools.spawn_teammate({ name: "worker", prompt: "..." })` inside the script.')
-    expect(prompt).toContain('Through `codemode`, call `await tools.team_task_update({ task_id: "task-1", expected_revision: 1, action: "claim" })` inside the script.')
+    expect(prompt).toContain('在 `codemode` 脚本里调用 `await tools.spawn_teammate({ name: "worker", prompt: "..." })`')
+    expect(prompt).toContain('在 `codemode` 脚本里调用 `await tools.team_task_update({ task_id: "task-1", expected_revision: 1, action: "claim" })`')
     expect(prompt).not.toContain('send_message')
     expect(prompt).not.toContain('team_task_create')
   })
 
   it('keeps teammate guidance distinct from Lead delegation and honors inherited Plan mode', async () => {
     const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
-    expect(teammate).toContain('You are teammate "researcher"')
-    expect(teammate).toContain('Call `send_message({ target: "lead", message: "..." })` directly.')
+    expect(teammate).toContain('你是 Agent 团队的成员“researcher”')
+    expect(teammate).toContain('直接调用 `send_message({ target: "lead", message: "..." })`')
     expect(teammate).not.toContain('spawn_teammate')
     expect(teammate).not.toContain('wait_agent')
 
@@ -273,11 +273,11 @@ describe('team tool prompt policy', () => {
       offered: ['codemode'],
       callable: ['spawn_teammate', 'list_agents', 'wait_agent', 'team_task_list', 'team_task_get'],
     })
-    expect(plan).toContain('Plan mode is read-only for every member')
-    expect(plan).toContain('the child inherits Plan mode')
+    expect(plan).toContain('计划模式对所有成员均为只读')
+    expect(plan).toContain('子会话继承计划模式')
     expect(plan).not.toContain('team_task_update')
     expect(plan).not.toContain('claim')
-    expect(plan).not.toContain('complete only after')
+    expect(plan).not.toContain('验证通过后才标记完成')
   })
 
   it('makes subagent and teammate delegation prompts self-contained and scope-bounded', () => {
@@ -286,13 +286,13 @@ describe('team tool prompt policy', () => {
     const teammate = createTeamTools(teamOptions)
       .tools?.find(candidate => candidate.name === 'spawn_teammate')?.description ?? ''
     for (const description of [subagent, teammate]) {
-      expect(description).toContain('self-contained')
-      expect(description).toContain('scope')
-      expect(description).toContain('constraints and authorization')
-      expect(description).toContain('acceptance criteria')
-      expect(description).toContain('evidence')
-      expect(description).toContain('disjoint')
-      expect(description).toContain('preserve')
+      expect(description).toContain('自包含')
+      expect(description).toContain('范围')
+      expect(description).toContain('约束与授权')
+      expect(description).toContain('验收标准')
+      expect(description).toContain('证据')
+      expect(description).toContain('互不重叠')
+      expect(description).toContain('保留')
     }
   })
 
@@ -303,28 +303,28 @@ describe('team tool prompt policy', () => {
         'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update',
       ],
     })
-    expect(lead).toContain('workspace-relative path prefixes')
-    expect(lead).toContain('warning, not a lock')
-    expect(lead).toContain('inbox accepted it')
-    expect(lead).toContain('never wakes a member')
-    expect(lead).toContain('before the final answer')
-    expect(lead).toContain('call it once to collect available answers')
+    expect(lead).toContain('工作区相对路径前缀')
+    expect(lead).toContain('警告，不是锁')
+    expect(lead).toContain('收件箱已接纳')
+    expect(lead).toContain('不会唤醒成员')
+    expect(lead).toContain('最终答复前')
+    expect(lead).toContain('调用一次即可收集已有答复')
 
     const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
-    expect(teammate).toContain('inbox accepted it')
-    expect(teammate).not.toContain('warning, not a lock')
+    expect(teammate).toContain('收件箱已接纳')
+    expect(teammate).not.toContain('警告，不是锁')
   })
 
   it('keeps the coordination additions off when their tools are not routable', async () => {
     const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
     expect(prompt).not.toContain('send_message')
     expect(prompt).not.toContain('wait_agent')
-    expect(prompt).not.toContain('warning, not a lock')
+    expect(prompt).not.toContain('警告，不是锁')
     // The wait guidance names send_message, so a Lead without messaging must not see it either.
     const noMessaging = await renderTeamPolicy({ offered: ['spawn_teammate', 'list_agents', 'wait_agent'] })
-    expect(noMessaging).toContain('Call `wait_agent({ timeout_ms: 30000 })` directly.')
+    expect(noMessaging).toContain('直接调用 `wait_agent({ timeout_ms: 30000 })`')
     expect(noMessaging).not.toContain('send_message')
-    expect(noMessaging).toContain('before the final answer')
+    expect(noMessaging).toContain('最终答复前')
   })
 
   it('snapshots actual team roles and the plan-limited tool set', async () => {
@@ -332,9 +332,9 @@ describe('team tool prompt policy', () => {
     const lead = await renderTeamPolicy({ offered })
     const teammate = await renderTeamPolicy({ role: 'teammate', offered })
     const planLead = await renderTeamPolicy({ planActive: true, offered: ['spawn_teammate', 'list_agents', 'wait_agent', 'interrupt_agent', 'team_task_list', 'team_task_get'] })
-    expect(lead).not.toMatch(/[\u4e00-\u9fff]/u)
-    expect(teammate).not.toMatch(/[\u4e00-\u9fff]/u)
-    expect(planLead).not.toMatch(/[\u4e00-\u9fff]/u)
+    expect(lead).toMatch(/[\u4e00-\u9fff]/u)
+    expect(teammate).toMatch(/[\u4e00-\u9fff]/u)
+    expect(planLead).toMatch(/[\u4e00-\u9fff]/u)
     await expect(lead).toMatchFileSnapshot('./__snapshots__/prompt/team-lead.txt')
     await expect(teammate).toMatchFileSnapshot('./__snapshots__/prompt/team-teammate.txt')
     await expect(planLead).toMatchFileSnapshot('./__snapshots__/prompt/team-plan-lead.txt')

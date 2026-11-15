@@ -55,13 +55,13 @@ const HEADING_PREFIX = '# '
 export function cleanPlan(value: unknown): string {
   const plan = typeof value === 'string' ? value.trim() : ''
   if (plan === '') {
-    throw new Error('The plan is empty. Write the plan as Markdown text and pass it as the "plan" argument.')
+    throw new Error('计划为空。请将计划写成 Markdown 文本，并通过 plan 参数传入。')
   }
   if (!plan.startsWith(HEADING_PREFIX)) {
-    throw new Error('The plan must be Markdown starting with a level-1 heading: make its first line "# <title>" and call exit_plan_mode again.')
+    throw new Error('计划必须是以一级标题开头的 Markdown：首行写作 "# <标题>"，再调用 exit_plan_mode。')
   }
   if (plan.split('\n', 1)[0]?.slice(HEADING_PREFIX.length).trim() === '') {
-    throw new Error('The plan heading is empty: put a short title after "# " (for example "# 迁移计划").')
+    throw new Error('计划标题为空：在 "# " 后写一个简短标题（例如 "# 迁移计划"）。')
   }
   return plan
 }
@@ -75,9 +75,9 @@ export function planTitle(plan: string): string | undefined {
 
 /** Plan mode is off, so there is nothing to submit; the message tells the model how to recover. */
 export const PLAN_INACTIVE_ERROR = [
-  'Plan mode is not active in this conversation, so there is no plan to submit.',
-  'Use only the planning tools available in the current request; otherwise give the plan in your reply.',
-  'If the request is already approved, continue only within the current access permissions.',
+  '本会话未开启计划模式，因此没有可提交的计划。',
+  '仅使用当前请求提供的计划工具；没有可用工具时，在答复中直接给出计划。',
+  '若请求已经批准，仅在当前访问权限范围内继续。',
 ].join(' ')
 
 /**
@@ -155,7 +155,7 @@ const planSection = section('plan-policy', async (input, context) => {
       : '对话中的同意或对某个问题的确认不结束计划模式；必须通过 `exit_plan_mode` 提交计划并由用户批准。',
     '工作顺序：先探索仓库、理解现有模式与约定，再设计方案；有分歧先问，最后成稿提交。',
     `先探索：用当前可用的只读工具（${readTools.length > 0 ? readTools.join('、') : '读取与检索工具'}、静态分析和检查）把计划落在真实仓库上。不要写文件、改配置、运行会改写文件的格式化或代码生成、提交，也不要执行计划。优先复用现有函数和模式，不要为新机制而新机制。`,
-    'Host 会拒绝写入、shell 和外部 MCP 调用；当前请求可能只列出只读工具。这些计划模式规则优先于后续任何建议使用写入工具的说明。',
+    '宿主会拒绝写入、shell 和外部 MCP 调用；当前请求可能只列出只读工具。这些计划模式规则优先于后续任何建议使用写入工具的说明。',
     submission === undefined
       ? '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施；计划直接在最终回复里给出。'
       : '不要用 `todo_write` 跟踪计划阶段：它跟踪批准后的实施，计划本身属于 `exit_plan_mode`。',
@@ -187,15 +187,15 @@ export type PlanExtensionOptions = {
 const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
   name: 'exit_plan_mode',
   description: [
-    'Submit the plan you wrote in plan mode for the user\'s approval, ending this turn without waiting for the review.',
-    'Use it only when the task is code-writing work whose implementation steps need planning; for research tasks — gathering information, searching or reading files, understanding the codebase — answer directly instead and do not submit a plan.',
-    'Before calling, make sure the plan is complete and unambiguous: resolve any material user-owned questions about requirements or approach first, then submit.',
-    'Do not separately ask "Is this plan okay?" or "Should I proceed?" — submitting the plan is itself the approval request.',
-    `Make this the only and final tool call in that assistant response, and make the plan Markdown starting with a level-1 heading ("${HEADING_PREFIX}<title>") followed by the steps and the verification you will run.`,
-    'Only call this while plan mode is active.',
-    'The user reviews the plan in the transcript; approval turns plan mode off and their confirmation arrives as a follow-up message.',
-    'If they ask for changes, revise the plan and call exit_plan_mode again instead of starting the work.',
-    'Examples: "search for and understand how vim mode is implemented" → report the findings, do not submit a plan; "implement yank mode for vim" → submit the implementation plan; "add authentication, auth method undecided" → ask which auth method first, then submit.',
+    '将你在计划模式下编写的计划提交给用户批准，然后结束本轮，不等待审阅。',
+    '仅用于实施步骤需要规划的代码编写任务；调研任务（收集信息、搜索或读取文件、理解代码库）应直接回答，不提交计划。',
+    '调用前，确保计划完整且无歧义：先解决需求或方案中必须由用户决定的重要问题，再提交。',
+    '不要另外询问“这个计划可以吗”或“是否继续”；提交计划本身就是批准请求。',
+    `这是该助手回复中唯一且最后一次工具调用。计划使用 Markdown，以一级标题（"${HEADING_PREFIX}<标题>"）开头，随后列出步骤及将执行的验证。`,
+    '仅在计划模式已开启时调用。',
+    '用户在对话中审阅计划；批准后关闭计划模式，确认内容以跟进消息送达。',
+    '若用户要求修改，修订计划并再次调用 exit_plan_mode，不要开始实施。',
+    '示例：“搜索并理解 vim 模式如何实现”→ 报告发现，不提交计划；“为 vim 实现 yank 模式”→ 提交实施计划；“添加认证，认证方式未定”→ 先询问认证方式，再提交。',
   ].join(' '),
   parameters: Type.Object({ plan: Type.String() }),
   execute: async (args, api, context) => {
@@ -203,7 +203,7 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
     if (state?.active !== true) {
       const route = resolveToolRoute(await api.agent(context), 'enter_plan_mode')
       const entry = toolRouteInstruction('enter_plan_mode', route, '{}')
-      throw new Error(entry === undefined ? PLAN_INACTIVE_ERROR : `${PLAN_INACTIVE_ERROR} To enter plan mode for review: ${entry}`)
+      throw new Error(entry === undefined ? PLAN_INACTIVE_ERROR : `${PLAN_INACTIVE_ERROR} 需要进入计划模式进行审阅时：${entry}。`)
     }
     const plan = cleanPlan(args.plan)
     let approveLabel = PLAN_APPROVE_LABEL
@@ -233,7 +233,7 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
     return {
       output: [{
         type: 'text' as const,
-        text: 'The plan is now pending the user\'s review in the transcript. Do not start executing it and do not wait in this turn: end your turn, and continue when their decision arrives as a follow-up message.',
+        text: '计划已在对话中等待用户审阅。不要开始执行，也不要在本轮等待：结束本轮，待用户的决定作为跟进消息送达后再继续。',
       }],
       details: {
         requestKey: api.callId,
@@ -255,29 +255,29 @@ const exitPlanModeTool = (options: PlanExtensionOptions) => defineTool({
 const enterPlanModeTool = defineTool({
   name: 'enter_plan_mode',
   description: [
-    'Switch this conversation into plan mode yourself, without asking the user and without waiting for a confirmation.',
-    'Prefer entering plan mode for implementation tasks unless they are trivial: new features, work with several viable approaches, multi-file refactors, architectural decisions, or unclear acceptance criteria.',
-    'Simple lookups, one-line fixes, obvious bug fixes, direct answers, and tasks with explicit and detailed user instructions do not need plan mode.',
-    'While plan mode is active, only research the repository and design the plan — make no changes — and finish by submitting the plan with exit_plan_mode for the user\'s approval.',
-    'If plan mode is already active, there is no need to call this again.',
+    '自行将本会话切换为计划模式，无须询问用户或等待确认。',
+    '非简单的实施任务优先进入计划模式，例如新功能、有多种可行方案的工作、多文件重构、架构决策或验收标准不明确的任务。',
+    '简单查询、单行修复、明显的缺陷修复、直接回答，以及用户已给出明确详细指令的任务，无须进入计划模式。',
+    '计划模式开启时，仅研究仓库和设计计划，不做改动；最后用 exit_plan_mode 提交计划，等待用户批准。',
+    '计划模式已经开启时，无须重复调用。',
   ].join(' '),
   parameters: Type.Object({}),
   execute: async (_args, api, context) => {
     const goal = await api.snapshot(Goals, api.conversationId, context)
     if (goal?.goal?.phase === 'active') {
-      throw new Error('Plan and Goal cannot be active at the same time: pause or complete the goal before entering plan mode.')
+      throw new Error('计划和目标不能同时处于活动状态：进入计划模式前，先暂停或完成目标。')
     }
     const state = await api.snapshot(Plans, api.conversationId, context)
     if (state?.active === true) {
       return {
         output: [{
           type: 'text' as const,
-          text: 'Plan mode is already active. Research first, then submit your plan with exit_plan_mode.',
+          text: '计划模式已经开启。先调研，再用 exit_plan_mode 提交计划。',
         }],
       }
     }
     if (resolveToolRoute(await api.agent(context), 'exit_plan_mode') === 'unavailable') {
-      throw new Error('Cannot enter plan mode because this request has no callable plan submission tool. Research and give the plan in your reply instead.')
+      throw new Error('本请求没有可调用的计划提交工具，无法进入计划模式。请先调研，再直接在答复中给出计划。')
     }
     await api.commit(async (tx) => {
       const doc = await tx.doc(Plans, api.conversationId)
@@ -287,7 +287,7 @@ const enterPlanModeTool = defineTool({
     return {
       output: [{
         type: 'text' as const,
-        text: 'Plan mode is now active. Research first, design the plan, and submit it with exit_plan_mode; do not implement anything until the user approves it.',
+        text: '计划模式已开启。先调研、设计计划，再用 exit_plan_mode 提交；用户批准前不得实施。',
       }],
       details: { kind: 'plan-mode' as const, status: 'active' as const },
     }

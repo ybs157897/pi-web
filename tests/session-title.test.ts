@@ -28,10 +28,10 @@ describe('session titles', () => {
 
   it('frames generation with DSH vocabulary', () => {
     const prompt = titleSystemPrompt()
-    expect(prompt).toContain(`about ${TITLE_POLICY.targetWords} words`)
-    expect(prompt).toContain(`${TITLE_POLICY.targetCjkCharacters} CJK characters`)
-    expect(prompt).toContain('Return only the title on one line')
+    expect(prompt).toContain(`约 ${TITLE_POLICY.targetWords} 个词`)
+    expect(prompt).toContain(`${TITLE_POLICY.targetCjkCharacters} 个字符`)
+    expect(prompt).toContain('仅返回一行自然语言纯文本标题')
     expect(frameTitleMessages([{ seq: 7, text: 'hello' }]))
-      .toBe('Generate the session title from this JSON array of human messages:\n[{"seq":7,"text":"hello"}]')
+      .toBe('根据以下人类消息 JSON 数组生成会话标题：\n[{"seq":7,"text":"hello"}]')
   })
 })

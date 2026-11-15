@@ -90,15 +90,15 @@ export function createWetrackAnalysisExtension(options: {
   const saveTool = defineTool({
     name: 'wetrack_analysis_save',
     description: [
-      'Persist the analysis of one WeTrack defect so the issues page can show it after the conversation is gone.',
-      'Pass the answer body you would send to the user as `markdown`; the page renders it verbatim.',
-      'Read wetrack_analysis_get first and provide the returned revision as expectedRevision. A stale revision is rejected.',
-      'A blocked attempt preserves any previous analyzed or fixed conclusion. Call again with status "fixed" only after the user approves and the fix is done.',
+      '持久保存一条 WeTrack 缺陷的分析，以便会话消失后问题页仍能展示。',
+      '将准备发送给用户的答复正文作为 markdown 传入；页面会原样渲染。',
+      '先调用 wetrack_analysis_get，将返回的 revision 作为 expectedRevision。过期版本会被拒绝。',
+      '受阻的尝试会保留此前已分析或已修复的结论。只有用户批准且修复完成后，才再次调用并设置 status 为 "fixed"。',
     ].join(' '),
     parameters: Type.Object({
       defectNumber: Type.String({ minLength: 4, maxLength: 32, description: 'DTS 编号，例如 DTS006761203' }),
       markdown: Type.String({ minLength: 1, maxLength: MAX_ANALYSIS_MARKDOWN, description: '分析正文（Markdown）' }),
-      expectedRevision: Type.Integer({ minimum: 0, description: 'Version from wetrack_analysis_get; 0 when no record exists.' }),
+      expectedRevision: Type.Integer({ minimum: 0, description: 'wetrack_analysis_get 返回的版本；无记录时为 0。' }),
       status: Type.Optional(STATUS),
       blockedReason: Type.Optional(Type.Union([Type.Literal('budget-exhausted'), Type.Literal('access'), Type.Literal('missing-code'), Type.Literal('contract'), Type.Literal('other')])),
       title: Type.Optional(Type.String({ maxLength: 200 })),
@@ -127,7 +127,7 @@ export function createWetrackAnalysisExtension(options: {
 
   const getTool = defineTool({
     name: 'wetrack_analysis_get',
-    description: 'Read the stored analysis of one WeTrack defect. Use it before re-analyzing so you can tell whether the conclusion changed.',
+    description: '读取一条 WeTrack 缺陷已保存的分析。重新分析前先读取，以判断结论是否变化。',
     parameters: Type.Object({
       defectNumber: Type.String({ minLength: 4, maxLength: 32 }),
     }),
@@ -148,7 +148,7 @@ export function createWetrackAnalysisExtension(options: {
 
   const detailTool = options.readDefect === undefined ? undefined : defineTool({
     name: 'wetrack_analysis_detail',
-    description: 'Read one WeTrack defect for a read-only analysis. Use this instead of rd-cli to retrieve its current details on demand.',
+    description: '读取一条 WeTrack 缺陷以进行只读分析。按需获取当前详情时使用本工具，不使用 rd-cli。',
     parameters: Type.Object({
       defectNumber: Type.String({ minLength: 4, maxLength: 32 }),
     }),
@@ -169,8 +169,8 @@ export function createWetrackAnalysisExtension(options: {
   const listTool = options.readDefects === undefined ? undefined : defineTool({
     name: 'wetrack_analysis_list',
     description: [
-      'List the current user’s pending WeTrack defects. Use offset and maxResults to page through the list;',
-      'the output includes total and next offset. Pending does not imply the defect has no stored analysis.',
+      '列出当前用户待处理的 WeTrack 缺陷。用 offset 和 maxResults 分页；',
+      '结果包含总数和下一个偏移量。待处理不代表该缺陷没有已保存的分析。',
     ].join(' '),
     parameters: Type.Object({
       /** Cap the returned rows; the list can hold dozens of pending defects. */

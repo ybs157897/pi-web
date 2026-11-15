@@ -364,7 +364,7 @@ async function screenshotInPage(session: BrowserState, fullPage: boolean): Promi
 
 const browserTool = defineTool({
   name: BROWSER_TOOL_NAME,
-  description: `Drive a headless Chromium browser over the Chrome DevTools Protocol — for UI verification and page checks that shell tools cannot do (rendering bugs, web consoles, visual smoke checks). Actions: "open" navigates (url required) and returns title/URL/page text; "evaluate" runs a JS expression in the page (expression required); "click" clicks the first CSS-selector match (selector required); "fill" sets an input/textarea value and fires input/change events (selector + value required); "screenshot" returns a PNG as an image block (fullPage optional); "close" shuts the browser down. The browser launches once per pi-web process with an isolated profile and tabs are reused across calls; pass freshProfile to wipe the profile on launch. Screenshots are expensive — prefer evaluate/text assertions when they suffice.`,
+  description: `通过 Chrome DevTools Protocol 操作无头 Chromium，用于 shell 工具无法完成的界面验证和页面检查（渲染缺陷、网页控制台、可视化冒烟检查）。action："open" 导航并返回标题、URL 和页面文本（必填 url）；"evaluate" 在页面运行 JS 表达式（必填 expression）；"click" 点击首个匹配 CSS 选择器的元素（必填 selector）；"fill" 设置 input/textarea 的值并触发 input/change 事件（必填 selector 和 value）；"screenshot" 以图像块返回 PNG（可选 fullPage）；"close" 关闭浏览器。每个 pi-web 进程仅启动一次浏览器，使用隔离的配置目录，调用间复用标签页；启动时传 freshProfile 可清空配置。截图成本较高，evaluate 或文本断言足够时优先使用它们。`,
   parameters: Type.Object({
     action: Type.Union([
       Type.Literal('open'),
@@ -373,13 +373,13 @@ const browserTool = defineTool({
       Type.Literal('fill'),
       Type.Literal('screenshot'),
       Type.Literal('close'),
-    ], { description: 'Operation to perform.' }),
-    url: Type.Optional(Type.String({ description: 'Absolute URL for the open action (http, https or file).' })),
-    expression: Type.Optional(Type.String({ description: 'JavaScript expression for the evaluate action.' })),
-    selector: Type.Optional(Type.String({ description: 'CSS selector for the click/fill actions.' })),
-    value: Type.Optional(Type.String({ description: 'Value for the fill action.' })),
-    fullPage: Type.Optional(Type.Boolean({ description: 'Capture beyond the viewport for the screenshot action.' })),
-    freshProfile: Type.Optional(Type.Boolean({ description: 'Wipe the browser profile before launching (open action).' })),
+    ], { description: '要执行的操作。' }),
+    url: Type.Optional(Type.String({ description: 'open 操作的绝对 URL（http、https 或 file）。' })),
+    expression: Type.Optional(Type.String({ description: 'evaluate 操作的 JavaScript 表达式。' })),
+    selector: Type.Optional(Type.String({ description: 'click/fill 操作的 CSS 选择器。' })),
+    value: Type.Optional(Type.String({ description: 'fill 操作要填写的值。' })),
+    fullPage: Type.Optional(Type.Boolean({ description: 'screenshot 操作是否截取视口之外的整页。' })),
+    freshProfile: Type.Optional(Type.Boolean({ description: '启动前清空浏览器配置目录（open 操作）。' })),
   }),
   outputLimits: { maxBytes: SCREENSHOT_MAX_BYTES },
   execute: async (args, _api, context) => {

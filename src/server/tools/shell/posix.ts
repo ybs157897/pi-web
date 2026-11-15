@@ -122,7 +122,7 @@ export function killPosixTree(child: ChildProcess | undefined): void {
  * sandboxed invocation is used when a long command is moved to the background.
  */
 export async function executePosixBash(
-  args: { command: string; workdir?: string; timeout?: number },
+  args: { command: string; workdir?: string; timeout?: number; yieldTimeMs?: number },
   api: ToolExecutionApi,
   context: Context,
 ): Promise<ToolExecutionResult> {
@@ -161,6 +161,7 @@ export async function executePosixBash(
     env,
     legacyEncoding,
     timeoutSeconds,
+    yieldTimeMs: args.yieldTimeMs,
     kill: killPosixTree,
     api,
     context,

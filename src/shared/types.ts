@@ -611,6 +611,8 @@ export interface ChatMessage {
   requestId?: string
   runId?: string
   durationMs?: number
+  /** Decode wall time of this model request (TTFT subtracted, tool time excluded) for the composer's tok/s. Absent on legacy entries; in-flight rows approximate with elapsed request time. */
+  requestDurationMs?: number
   status?: MessageStatus
   usage?: MessageUsage
   artifacts?: FileArtifact[]

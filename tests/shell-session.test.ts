@@ -1,0 +1,180 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { Context } from '@earendil-works/chord/context'
+import type { ToolExecutionApi } from '@earendil-works/pi-durable'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { afterEach, describe, expect, it } from 'vitest'
+import { killPosixTree } from '../src/server/tools/shell/posix.ts'
+import { createShellSessionTool } from '../src/server/tools/shell/session.ts'
+import { CodingTools, createCodingTools } from '../src/server/tools/shell/tools.ts'
+import { activeShellSessionCount, disposeShellSessions, runShellCommand, YIELD_TIME_MS } from '../src/server/tools/shell/runner.ts'
+
+const directories: string[] = []
+
+afterEach(async () => {
+  disposeShellSessions()
+  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
+
+async function workspace(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-web-shell-session-'))
+  directories.push(directory)
+  return directory
+}
+
+function apiFor(cwd: string): ToolExecutionApi {
+  let text = ''
+  return {
+    env: new NodeExecutionEnv({ cwd }),
+    callId: `session-${Date.now()}`,
+    output: (chunk: string) => { text += chunk },
+    retainedOutput: () => ({ text, truncated: false }),
+    diagnostic: () => undefined,
+  } as unknown as ToolExecutionApi
+}
+
+const TEST_CONTEXT = {} as Context
+
+/** A spec with a 250ms yield budget (the codex-aligned floor), so promotion is deterministic. */
+function spec(cwd: string, command: string, yieldTimeMs: number | undefined = 250) {
+  return {
+    command,
+    program: '/bin/bash',
+    args: ['-c', command],
+    cwd,
+    env: process.env,
+    legacyEncoding: null,
+    timeoutSeconds: 5,
+    yieldTimeMs,
+    kill: killPosixTree,
+    api: apiFor(cwd),
+    context: TEST_CONTEXT,
+  }
+}
+
+describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)', () => {
+  it('keeps the default yield budget exported for tool descriptions', () => {
+    expect(YIELD_TIME_MS).toBe(10_000)
+  })
+
+  it('promotes a still-running command to a pollable session', async () => {
+    const cwd = await workspace()
+    const result = await runShellCommand(spec(cwd, 'sleep 0.6; echo done-from-session'))
+    const structured = result.structuredOutput as { status?: string; sessionId?: string; exitCode: number; fullOutputPath?: string }
+    expect(structured.status).toBe('running')
+    expect(structured.sessionId).toMatch(/^sh_/)
+    expect(structured.exitCode).toBe(-1)
+    expect(structured.fullOutputPath).toBeDefined()
+    expect(activeShellSessionCount()).toBe(1)
+    expect(result.diagnostics?.some(diagnostic => diagnostic.code === 'session_started')).toBe(true)
+  })
+
+  it('reads incremental output through the session cursor until exit', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'echo first-line; sleep 0.7; echo second-line; echo third-line'))
+    const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
+
+    const tool = createShellSessionTool()
+    const api = apiFor(cwd)
+
+    // The promotion response already carried the pre-promotion output (first-line); polls
+    // stream only what is printed after promotion.
+    expect((promoted.structuredOutput as { output?: string }).output).toContain('first-line')
+    // First poll with a short window: nothing new yet, the command is still sleeping.
+    const first = await tool.execute({ sessionId, yieldTimeMs: 250 }, api, TEST_CONTEXT)
+    expect((first.structuredOutput as { status: string }).status).toBe('running')
+    expect((first.structuredOutput as { output: string }).output).not.toContain('first-line')
+
+    // Second poll after the remaining lines: only the delta since the cursor comes back.
+    await new Promise(resolve => setTimeout(resolve, 700))
+    const second = await tool.execute({ sessionId }, api, TEST_CONTEXT)
+    const secondStructured = second.structuredOutput as { output: string; status: string; exitCode?: number }
+    expect(secondStructured.status).toBe('exited')
+    expect(secondStructured.exitCode).toBe(0)
+    expect(secondStructured.output).toContain('second-line')
+    expect(secondStructured.output).not.toContain('first-line')
+    expect(second.isError).toBe(false)
+    expect(activeShellSessionCount()).toBe(0)
+  })
+
+  it('reports the reclaimed session as NOT_FOUND after exit', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'sleep 0.3; echo bye'))
+    const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
+    const tool = createShellSessionTool()
+    await tool.execute({ sessionId }, apiFor(cwd), TEST_CONTEXT)
+    await expect(tool.execute({ sessionId }, apiFor(cwd), TEST_CONTEXT)).rejects.toThrow(/does not exist/)
+  })
+
+  it('writes stdin through to the session process', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'read line; echo "got:$line"'))
+    const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
+    const tool = createShellSessionTool()
+    const polled = await tool.execute({ sessionId, stdin: 'hello-stdin\n' }, apiFor(cwd), TEST_CONTEXT)
+    const structured = polled.structuredOutput as { output: string; status: string; exitCode?: number }
+    expect(structured.status).toBe('exited')
+    expect(structured.output).toContain('got:hello-stdin')
+  })
+
+  it('marks the terminal poll as an error for nonzero exits', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'sleep 0.4; exit 3'))
+    const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
+    const tool = createShellSessionTool()
+    const polled = await tool.execute({ sessionId }, apiFor(cwd), TEST_CONTEXT)
+    expect((polled.structuredOutput as { status: string }).status).toBe('exited')
+    expect((polled.structuredOutput as { exitCode?: number }).exitCode).toBe(3)
+    expect(polled.isError).toBe(true)
+    expect(polled.diagnostics?.some(diagnostic => diagnostic.code === 'exit_code')).toBe(true)
+  })
+
+  it('keeps the spill file complete and marks the exit in it', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'echo spill-line; sleep 0.4; echo tail-line'))
+    const structured = promoted.structuredOutput as { sessionId: string; fullOutputPath: string }
+    const tool = createShellSessionTool()
+    await tool.execute({ sessionId: structured.sessionId }, apiFor(cwd), TEST_CONTEXT)
+    const log = await readFile(structured.fullOutputPath, 'utf8')
+    expect(log).toContain('spill-line')
+    expect(log).toContain('tail-line')
+    expect(log).toContain('[exited with code 0]')
+  })
+
+  it('bounds the buffer and reports truncation', async () => {
+    const cwd = await workspace()
+    // The flood starts after promotion, so its bytes land in the session buffer budget.
+    const promoted = await runShellCommand(spec(cwd, 'sleep 0.4; head -c 1200000 /dev/zero | tr "\\0" "x"; sleep 0.2'))
+    const structured = promoted.structuredOutput as { sessionId: string; fullOutputPath: string; truncated: boolean }
+    const tool = createShellSessionTool()
+    const polled = await tool.execute({ sessionId: structured.sessionId }, apiFor(cwd), TEST_CONTEXT)
+    expect((polled.structuredOutput as { truncated: boolean }).truncated).toBe(true)
+    const log = await readFile(structured.fullOutputPath, 'utf8')
+    expect(log.length).toBeGreaterThan(1_000_000)
+  })
+
+  it('enforces the explicit timeout on a promoted session', async () => {
+    const cwd = await workspace()
+    const promoted = await runShellCommand(spec(cwd, 'sleep 30'))
+    const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
+    // The session inherits the spec's timeoutSeconds (5s). Wait past it.
+    await new Promise(resolve => setTimeout(resolve, 5_400))
+    const tool = createShellSessionTool()
+    const polled = await tool.execute({ sessionId }, apiFor(cwd), TEST_CONTEXT)
+    expect((polled.structuredOutput as { status: string }).status).toBe('exited')
+    expect((polled.structuredOutput as { exitCode?: number }).exitCode).toBe(-1)
+    expect(polled.isError).toBe(true)
+    expect(polled.diagnostics?.some(diagnostic => diagnostic.code === 'timeout')).toBe(true)
+  }, 10_000)
+
+  it('registers the session tool on both platforms', () => {
+    for (const platform of ['darwin', 'win32'] as const) {
+      const tools = createCodingTools(platform).tools
+      expect(tools).toBeDefined()
+      const names = (tools ?? []).map(tool => tool.name)
+      expect(names).toContain('shell_session')
+      expect(names).toContain(platform === 'win32' ? 'pwsh' : 'bash')
+    }
+  })
+})

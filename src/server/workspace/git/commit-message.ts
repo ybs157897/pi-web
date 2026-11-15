@@ -24,11 +24,11 @@ export function normalizeCommitMessage(input: string): string {
 
 export function commitMessageSystemPrompt(locale: 'zh' | 'en'): string {
   return [
-    'Write one Git commit message for the supplied worktree change.',
-    'Return only the commit message: no quotes, code fences, labels or explanation.',
-    'Use an imperative first line of at most 72 characters; add a short body after one blank line only when it helps.',
-    'Describe what changed and why when the diff makes it clear. Do not invent files, behavior or motivations.',
-    locale === 'zh' ? 'Write in Simplified Chinese.' : 'Write in English.',
+    '为提供的工作区改动编写一条 Git 提交说明。',
+    '仅返回提交说明，不加引号、代码围栏、标签或解释。',
+    '首行使用祈使句，最多 72 字符；只有确有帮助时，才空一行后添加简短正文。',
+    '差异能明确说明时，描述改了什么以及原因。不要虚构文件、行为或动机。',
+    locale === 'zh' ? '使用简体中文。' : '使用英文。',
   ].join('\n')
 }
 
@@ -38,13 +38,13 @@ export function frameCommitContext(input: CommitContextInput): string {
     const counts = file.added + file.removed > 0 ? ` +${file.added} -${file.removed}` : ''
     return `- ${file.status.toUpperCase()} ${file.path}${counts}`
   })
-  const omitted = input.files.length > fileLines.length ? `\n- ... ${input.files.length - fileLines.length} more files` : ''
+  const omitted = input.files.length > fileLines.length ? `\n- ……另有 ${input.files.length - fileLines.length} 个文件` : ''
   const diff = input.diff.trim() === ''
-    ? 'No textual diff is available (for example untracked files). Use the file list only.'
+    ? '没有可用的文本差异（例如未跟踪文件）。仅根据文件列表编写。'
     : `<<<DIFF\n${input.diff}\nDIFF>>>`
   return [
-    `Branch: ${input.branchName ?? 'detached HEAD'}`,
-    `Changed files (${input.files.length}):`,
+    `分支：${input.branchName ?? 'detached HEAD'}`,
+    `改动文件（${input.files.length}）：`,
     ...(fileLines.length > 0 ? fileLines : ['- (none)']),
     `${omitted}`.trim(),
     '',

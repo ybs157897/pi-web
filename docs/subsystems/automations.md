@@ -38,7 +38,7 @@
 
 ## 模型工具与提示词
 
-四个工具在 `createScheduleExtension` 里定义（[schedule.ts:100](../../src/server/tools/schedule.ts#L100)）：`schedule_create`（title/prompt/rrule/target）、`schedule_edit`（update/delete；`active:true` 要求有未来触发点；`expectedUpdatedAt` 做乐观并发）、`schedule_list`（active 三态 + limit/offset）、`schedule_view`。`target` 的 `this_session` 映射为 `{target:'session', sessionId: 当前会话}`；写库时 `timeZone` 取自规则 DTSTART 的 TZID。工具描述是英文，与其余工具一致；`rrule` 描述按上述子集裁剪。
+四个工具在 `createScheduleExtension` 里定义（[schedule.ts:100](../../src/server/tools/schedule.ts#L100)）：`schedule_create`（title/prompt/rrule/target）、`schedule_edit`（update/delete；`active:true` 要求有未来触发点；`expectedUpdatedAt` 做乐观并发）、`schedule_list`（active 三态 + limit/offset）、`schedule_view`。`target` 的 `this_session` 映射为 `{target:'session', sessionId: 当前会话}`；写库时 `timeZone` 取自规则 DTSTART 的 TZID。自有工具描述使用中文，标识符与 RRULE 语法保持原文；`rrule` 描述按上述子集裁剪。
 
 `schedule-policy` section 只在 `schedule_create` 或 `schedule_edit` 对当前请求可见（直接或经 codemode）时注入，文案一句授权约束；只有 list/view 可见时不注入（[schedule.ts:247](../../src/server/tools/schedule.ts#L247)）。四个工具名都在 `CHILD_FORBIDDEN_TOOLS` 里，子智能体会话既看不到也调不动（[subagent-policy.ts:35](../../src/server/conversation/subagent-policy.ts#L35)）。
 

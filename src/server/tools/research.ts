@@ -385,7 +385,7 @@ async function findRegexMatches(
 
 const listFilesTool = defineTool({
   name: 'list_files',
-  description: `List relative file and directory paths from the current workspace. path defaults to "."; recursive defaults to false; maxEntries is an integer from 1 to ${MAX_LIST_ENTRIES} (default ${MAX_LIST_ENTRIES}). Hidden paths, node_modules, common secret files, and symlinks are excluded. Read-only; does not invoke a shell.`,
+  description: `列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 ${MAX_LIST_ENTRIES} 的整数（默认 ${MAX_LIST_ENTRIES}）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。`,
   parameters: Type.Object({
     path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
     recursive: Type.Optional(Type.Boolean()),
@@ -414,7 +414,7 @@ const listFilesTool = defineTool({
 
 const searchFilesTool = defineTool({
   name: 'search_files',
-  description: `Search workspace text files for a single-line literal phrase of 1 to ${MAX_QUERY_LENGTH} characters (case-insensitive by default). Returns relative paths, one-based line numbers, and excerpts. path defaults to "."; recursive defaults to true; maxResults is an integer from 1 to ${MAX_SEARCH_RESULTS} (default ${MAX_SEARCH_RESULTS}). Skips hidden paths, common secret files, binary/oversized files and symlinks. Read-only; no shell.`,
+  description: `在工作区文本文件中搜索长度为 1 到 ${MAX_QUERY_LENGTH} 字符的单行字面量短语，默认忽略大小写。返回相对路径、从 1 开始的行号和片段。path 默认 "."；recursive 默认 true；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
   parameters: Type.Object({
     query: Type.String({ minLength: 1, maxLength: MAX_QUERY_LENGTH }),
     path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
@@ -505,7 +505,7 @@ const searchFilesTool = defineTool({
 
 const globTool = defineTool({
   name: 'glob',
-  description: `Find files whose paths match a glob pattern. A pattern without "/" matches the basename at any depth; "**" matches any depth. Includes hidden paths; excludes VCS metadata, node_modules, dist, .data, common secret files, and symlinks. Returns up to ${MAX_GLOB_RESULTS} paths in modification-time order (newest first). Read-only; no shell. Prefer this over find or ls -R.`,
+  description: `查找路径匹配 glob 模式的文件。模式不含 "/" 时匹配任意深度的文件名；"**" 匹配任意深度。包含隐藏路径；排除 VCS 元数据、node_modules、dist、.data、常见敏感文件及符号链接。按修改时间从新到旧返回最多 ${MAX_GLOB_RESULTS} 个路径。只读，不使用 shell。优先使用本工具，不用 find 或 ls -R。`,
   parameters: Type.Object({
     pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
     path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
@@ -536,7 +536,7 @@ const globTool = defineTool({
 
 const grepTool = defineTool({
   name: 'grep',
-  description: `Search workspace text files with a regular expression (native ripgrep, with a JavaScript fallback; case-insensitive by default). Use this to find unknown content or file locations; use read directly when you know the file path. Do not run \`grep\` or \`rg\` via shell: they bypass workspace policy, output limits, and sensitive-file filtering. Patterns use ripgrep regex syntax when the native engine runs; if ripgrep rejects a pattern, the JavaScript fallback is tried. path defaults to "."; include optionally filters files by glob (for example "*.ts"); maxResults is an integer from 1 to ${MAX_SEARCH_RESULTS} (default ${MAX_SEARCH_RESULTS}). Skips hidden paths, node_modules, common secret files, binary/oversized files and symlinks. Read-only; no shell.`,
+  description: `使用正则表达式搜索工作区文本文件（原生 ripgrep，可回退到 JavaScript；默认忽略大小写）。用于查找未知内容或文件位置；已知文件路径时直接用 read。不要通过 shell 运行 \`grep\` 或 \`rg\`，它们会绕过工作区策略、输出限制和敏感文件过滤。原生引擎使用 ripgrep 正则语法；ripgrep 拒绝模式时会尝试 JavaScript 回退。path 默认 "."；include 可按 glob 过滤文件（如 "*.ts"）；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、node_modules、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
   parameters: Type.Object({
     pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
     path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),

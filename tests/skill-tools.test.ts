@@ -160,7 +160,7 @@ describe('Skills extension tools', () => {
     const prompt = await renderSection(extension, promptInput(path, ['skill_load'], ['skill_load'], state.references))
     expect(prompt).toContain('agents:support-demo')
     expect(prompt).toContain(canonicalSkillDirectory)
-    expect(prompt).toContain('After compaction')
+    expect(prompt).toContain('压缩、重启')
     expect(prompt).not.toContain('# Support guide')
 
     const otherWorkspace = await workspace()
@@ -221,10 +221,10 @@ describe('Skills prompt routing', () => {
     const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
     const prompt = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list', 'skill_load', 'skill_save', 'skill_validate']))
 
-    expect(prompt).toContain('Direct tools: `skill_list`.')
+    expect(prompt).toContain('直接工具：`skill_list`。')
     expect(prompt).not.toContain('`skill_save`')
-    expect(prompt).not.toContain('load a relevant Skill')
-    expect(prompt).not.toContain('skill_validate after')
+    expect(prompt).not.toContain('加载相关技能')
+    expect(prompt).not.toContain('保存或更新技能后，调用 skill_validate')
   })
 
   it('supports codemode-only requests from the resolved callable tool set', async () => {
@@ -236,10 +236,10 @@ describe('Skills prompt routing', () => {
       ['skill_list', 'skill_load', 'skill_save', 'skill_validate'],
     ))
 
-    expect(prompt).toContain('Through `codemode`')
+    expect(prompt).toContain('通过 `codemode`')
     expect(prompt).toContain('`skill_list`, `skill_load`, `skill_save`, `skill_validate`')
-    expect(prompt).toContain('load `builtin:skill-creator`')
-    expect(prompt).toContain('clearly matches a Skill description, load it with skill_load before acting')
+    expect(prompt).toContain('存在 `builtin:skill-creator`，先加载它')
+    expect(prompt).toContain('任务明确符合技能描述时，先用 skill_load 加载')
   })
 
   it('omits the section when the current preset exposes no Skill tool', async () => {
@@ -253,7 +253,7 @@ describe('Skills prompt routing', () => {
     const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
     const prompt = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
 
-    expect(prompt).toMatch(/- builtin:skill-creator: Create, adapt.* \(file: .*skills\/skill-creator\/SKILL\.md\)/u)
+    expect(prompt).toMatch(/- builtin:skill-creator: 按用户要求创建、适配.* \(file: .*skills\/skill-creator\/SKILL\.md\)/u)
     expect(prompt).not.toContain('{"id":')
   })
 
@@ -280,7 +280,7 @@ describe('Skills prompt routing', () => {
     expect(prompt).not.toContain('d'.repeat(200))
     expect(prompt).not.toContain('w'.repeat(200))
     expect(prompt).toMatch(/- agents:bulk-000-a+ \(file: .*bulk-000-a+\/SKILL\.md\)/u)
-    expect(prompt).toContain('additional Skills are omitted from this bounded catalog')
+    expect(prompt).toContain('此有界目录省略了另外')
     expect(prompt?.length ?? 0).toBeLessThan(25_000)
   })
 
@@ -288,18 +288,18 @@ describe('Skills prompt routing', () => {
     const path = await workspace()
     const extension = createSkillTools({ store: new SkillStore(), canWrite: async () => true })
     const first = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list']))
-    expect(first).not.toContain('New Skills became available')
+    expect(first).not.toContain('自上次请求后，此工作区新增了技能')
 
     const directory = join(path, '.agents', 'skills', 'fresh-drop')
     await mkdir(directory, { recursive: true })
     await writeFile(join(directory, 'SKILL.md'), '---\nname: fresh-drop\ndescription: Dropped in mid-session.\n---\n\nFollow it.\n')
 
     const second = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list'], undefined, { 'skills-policy': first! }))
-    expect(second).toContain('New Skills became available')
+    expect(second).toContain('自上次请求后，此工作区新增了技能')
     expect(second).toContain('agents:fresh-drop')
 
     // Once that text is the shown section, the notice is gone again.
     const third = await renderSection(extension, promptInput(path, ['skill_list'], ['skill_list'], undefined, { 'skills-policy': second! }))
-    expect(third).not.toContain('New Skills became available')
+    expect(third).not.toContain('自上次请求后，此工作区新增了技能')
   })
 })

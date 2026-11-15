@@ -53,7 +53,7 @@ const MAX_RUN_HISTORY = 50
 export function framedPrompt(automation: Automation, plannedAt: number): string {
   return [
     '[SCHEDULE REMINDER]',
-    'This is a scheduled message from the user',
+    '这是一条来自用户的定时消息',
     `schedule_id_json: ${JSON.stringify(automation.id)}`,
     `occurrence_at: ${new Date(plannedAt).toISOString()}`,
     `reminder_prompt_json: ${JSON.stringify(automation.prompt)}`,

@@ -237,8 +237,10 @@ function demoCompactionResponse(context: Parameters<FauxResponseFactory>[0]) {
   const system = context.messages.filter(message => message.role === 'system').map(message => toolResultText(message)).join('\n')
   const lastUser = latestUserText(context)
   const isCompaction = system.includes('context compaction engine')
+    || system.includes('上下文压缩引擎')
     || system.includes('context summarization assistant')
     || lastUser.includes('Write a checkpoint the next model will continue from')
+    || lastUser.includes('编写供下一个模型继续工作的检查点')
   return isCompaction ? fauxAssistantMessage(fauxText(DEMO_COMPACTION_SUMMARY)) : undefined
 }
 
@@ -387,7 +389,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   const planReply = parsePlanReviewReply(userText)
   const answerReply = planReply === undefined ? parseAnswerReply(userText) : undefined
   if (planReply?.approved) {
-    if (userText.includes('This conversation remains read-only')) {
+    if (userText.includes('This conversation remains read-only') || userText.includes('当前会话仍为只读')) {
       return fauxAssistantMessage(fauxText('计划已获批准，计划模式已关闭；当前会话仍为只读，未实施任何修改。实施需要具备写入权限的会话。'))
     }
     return fauxAssistantMessage([

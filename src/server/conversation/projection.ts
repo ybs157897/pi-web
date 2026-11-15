@@ -280,6 +280,12 @@ function messageFromPi(message: Message, entryId: string, index: number, request
         usage: message.usage,
       },
       ...(requestId ? { requestId } : {}),
+      // Decode time for the composer's tok/s, DSH's `completedTime - firstTokenTime` fold: pi-ai
+      // measures the whole request and our stream observer stamps TTFT (untyped, trajectory.ts),
+      // so subtracting removes the first-token latency and tool time never enters the denominator.
+      ...(message.durationMs !== undefined
+        ? { requestDurationMs: Math.max(0, message.durationMs - Math.max(0, (message as AssistantMessage & { ttftMs?: number }).ttftMs ?? 0)) }
+        : {}),
     }
   }
   return messageFromToolResult(message, entryId, index, requestId)
@@ -980,6 +986,8 @@ export function projectConversation(
         ...(activeRunId ? { runId: activeRunId } : {}),
         ...(messageUsage(partial.usage) ? { usage: messageUsage(partial.usage) } : {}),
         ...(activeRunId && runStartedAt.has(activeRunId) ? { durationMs: Math.max(0, Date.now() - (runStartedAt.get(activeRunId) ?? partial.timestamp)) } : {}),
+        // In-flight model request time: the partial's timestamp is when the request started.
+        requestDurationMs: Math.max(0, Date.now() - partial.timestamp),
         details: {
           stopReason: partial.stopReason,
           provider: partial.provider,

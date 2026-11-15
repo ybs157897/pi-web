@@ -113,14 +113,14 @@ export const InteractionTools: Extension = defineExtension({
     defineTool({
       name: 'ask_user_question',
       description: [
-        'Ask the user up to eight questions (usually one to three) and end this turn without waiting for the answer.',
-        'Use this when a user-owned choice, missing external reference, or material ambiguity blocks progress; do not use it for facts you can inspect in the workspace.',
-        'Ask brief, direct, self-contained questions in user-facing terms; assume the user does not know background work or internal names.',
-        'Each question has a stable id, the question text, optional options (label plus optional description), and multiSelect.',
-        'If you recommend one option, put it first and append "(Recommended)" to its label.',
-        'The answers arrive as a follow-up user message on a later turn; continue with independent work or wrap up now.',
-        'Pending is not permission: do not perform the action a pending question depends on; a timeout or unanswered question is not consent.',
-        'Do not repeat the same questions while they are pending.',
+        '向用户提出最多八个问题（通常一到三个），结束本轮，不等待答复。',
+        '当必须由用户决定的选择、缺失的外部引用或重要歧义阻碍推进时使用；不要用来询问可自行检查工作区确认的事实。',
+        '问题要简短、直接、自包含，使用用户能理解的表达；不要假设用户了解后台工作或内部名称。',
+        '每个问题包含稳定的 id、问题文本、可选的 options（label 和可选的 description）以及 multiSelect。',
+        '若推荐某个选项，将其放在首位，并在 label 后加“（推荐）”。',
+        '答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。',
+        '等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。',
+        '问题待答期间，不要重复提问。',
       ].join(' '),
       parameters: Type.Object({
         questions: Type.Array(QUESTION_PARAMETER, { minItems: 1, maxItems: MAX_QUESTIONS }),
@@ -134,7 +134,7 @@ export const InteractionTools: Extension = defineExtension({
         return {
           output: [{
             type: 'text' as const,
-            text: 'The questions are now pending with the user. Their answers will arrive as a follow-up user message. Do not wait for them in this turn: continue with work that does not depend on the answers, or end your turn now.',
+            text: '问题已提交给用户，正在等待答复。答复会作为用户跟进消息送达。不要在本轮等待：继续不依赖答复的工作，或结束本轮。',
           }],
           details: { requestKey: api.callId, questions, status: 'pending' as const },
         }

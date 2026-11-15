@@ -16,7 +16,7 @@ describe('commit message helpers', () => {
       files: [{ path: 'src/a.ts', status: 'modified', added: 2, removed: 1, staged: false }],
       diff: '- old\n+ new',
     })
-    expect(framed).toContain('Branch: main')
+    expect(framed).toContain('分支：main')
     expect(framed).toContain('MODIFIED src/a.ts +2 -1')
     expect(framed).toContain('<<<DIFF\n- old\n+ new\nDIFF>>>')
   })
@@ -27,9 +27,9 @@ describe('commit message helpers', () => {
     }))
     const framed = frameCommitContext({ branchName: null, files, diff: '', locale: 'zh' })
     expect(framed).toContain('detached HEAD')
-    expect(framed).toContain('10 more files')
-    expect(framed).toContain('No textual diff is available')
-    expect(commitMessageSystemPrompt('zh')).toContain('Write in Simplified Chinese')
-    expect(commitMessageSystemPrompt('en')).toContain('Write in English')
+    expect(framed).toContain('另有 10 个文件')
+    expect(framed).toContain('没有可用的文本差异')
+    expect(commitMessageSystemPrompt('zh')).toContain('使用简体中文')
+    expect(commitMessageSystemPrompt('en')).toContain('使用英文')
   })
 })

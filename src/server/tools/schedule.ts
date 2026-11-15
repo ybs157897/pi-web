@@ -21,22 +21,22 @@ const MAX_LIST_LIMIT = 500
 const TARGET_ITEMS = [Type.Literal('this_session'), Type.Literal('new_once'), Type.Literal('new')] as const
 
 const RRULE_DESCRIPTION = [
-  'RFC 5545 subset: one DTSTART line, a newline, and one RRULE line.',
-  'DTSTART ends in Z for UTC or carries TZID with an IANA time zone; a fixed offset such as UTC+5 is Etc/GMT-5, with the sign reversed.',
-  'A TZID rule keeps local clock time across daylight-saving changes; generated nonexistent local times are skipped, and repeated ones occur once, at the earlier instant.',
-  'DTSTART may be in the past; delivery starts with the first occurrence after creation.',
-  'A one-time delivery is RRULE:FREQ=DAILY;COUNT=1.',
-  'Supported: FREQ=MINUTELY, HOURLY, DAILY, WEEKLY, MONTHLY, YEARLY; COUNT at most 1000; UNTIL as a UTC instant ending in Z.',
-  'MINUTELY and HOURLY accept no BY parts, so set the clock time in DTSTART.',
-  'BYMONTHDAY and ordinal BYDAY require MONTHLY or YEARLY; BYYEARDAY and BYWEEKNO require YEARLY; an ordinal BYDAY cannot combine with BYWEEKNO.',
+  'RFC 5545 子集：一行 DTSTART、一个换行和一行 RRULE。',
+  'UTC 的 DTSTART 以 Z 结尾；其他时区用 TZID 携带 IANA 时区。固定偏移如 UTC+5 写作 Etc/GMT-5，符号相反。',
+  'TZID 规则在夏令时切换时保持本地钟表时间；生成的不存在的本地时间会被跳过，重复时间仅执行一次，取较早时刻。',
+  'DTSTART 可以在过去；从创建后的第一次发生时间开始投递。',
+  '一次性投递使用 RRULE:FREQ=DAILY;COUNT=1。',
+  '支持 FREQ=MINUTELY、HOURLY、DAILY、WEEKLY、MONTHLY、YEARLY；COUNT 最多 1000；UNTIL 为以 Z 结尾的 UTC 时刻。',
+  'MINUTELY 和 HOURLY 不接受任何 BY 部分；请在 DTSTART 中设置钟表时间。',
+  'BYMONTHDAY 和带序号的 BYDAY 要求 MONTHLY 或 YEARLY；BYYEARDAY 和 BYWEEKNO 要求 YEARLY；带序号的 BYDAY 不能与 BYWEEKNO 组合。',
   'Example: "DTSTART;TZID=Asia/Shanghai:20260901T080000\\nRRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1"',
 ].join(' ')
 
 const TARGET_DESCRIPTION = [
-  'this_session delivers to this session; new_once delivers to the same new session every time, opened at the first delivery;',
-  'new opens a different new session for every delivery. New sessions use this session\'s working directory.',
-  'Use this_session for reminders and for follow-ups to this conversation;',
-  'use new_once or new for independent work, such as a recurring report, and whenever the user asks for a new conversation.',
+  'this_session 投递到本会话；new_once 每次投递到同一个新会话，该会话在首次投递时创建；',
+  'new 每次投递都创建不同的新会话。新会话使用本会话的工作目录。',
+  '提醒或跟进本会话时使用 this_session；',
+  '独立工作（如定期报告）或用户明确要求新会话时，使用 new_once 或 new。',
 ].join(' ')
 
 /** The slice of the automations service these tools need; the runtime passes the real feature. */
@@ -99,13 +99,13 @@ export function createScheduleExtension(options: { automations: ScheduleService 
   const createTool = defineTool({
     name: 'schedule_create',
     description: [
-      'Create a scheduled task. At each occurrence of rrule, prompt is delivered to the target session as a scheduled message from the user.',
-      'The result includes the task id and the next occurrence.',
-      'After downtime, only the latest missed occurrence is delivered.',
+      '创建定时任务。在 rrule 的每次发生时间，将 prompt 作为用户的定时消息投递到目标会话。',
+      '结果包含任务 id 和下次发生时间。',
+      '停机恢复后，仅补投最近一次错过的发生时间。',
     ].join(' '),
     parameters: Type.Object({
-      title: Type.String({ description: `Task name of at most ${MAX_TITLE_CHARS} characters in the user's language: action plus object. Omit timing, status, ids, and bracketed suffixes.` }),
-      prompt: Type.String({ description: 'Instruction delivered at each occurrence.' }),
+      title: Type.String({ description: `用用户语言填写任务名称，最多 ${MAX_TITLE_CHARS} 字符，采用动作加对象。不含时间、状态、id 或括号后缀。` }),
+      prompt: Type.String({ description: '每次发生时投递的指令。' }),
       rrule: Type.String({ description: RRULE_DESCRIPTION }),
       target: Type.Union([...TARGET_ITEMS], { description: TARGET_DESCRIPTION }),
     }),
@@ -132,16 +132,16 @@ export function createScheduleExtension(options: { automations: ScheduleService 
 
   const editTool = defineTool({
     name: 'schedule_edit',
-    description: 'Update, pause, resume, or delete one scheduled task by id. Deleting does not retract queued messages.',
+    description: '按 id 更新、暂停、恢复或删除一个定时任务。删除不会撤回已排队的消息。',
     parameters: Type.Object({
-      id: Type.String({ description: 'Task id.' }),
-      action: Type.Union([Type.Literal('update'), Type.Literal('delete')], { description: 'update applies the provided fields, at least one; delete removes the task.' }),
-      title: Type.Optional(Type.String({ description: `New task name of at most ${MAX_TITLE_CHARS} characters.` })),
-      prompt: Type.Optional(Type.String({ description: 'New instruction delivered at each occurrence.' })),
+      id: Type.String({ description: '任务 id。' }),
+      action: Type.Union([Type.Literal('update'), Type.Literal('delete')], { description: 'update 应用提供的字段，至少需要一个；delete 删除任务。' }),
+      title: Type.Optional(Type.String({ description: `新的任务名称，最多 ${MAX_TITLE_CHARS} 字符。` })),
+      prompt: Type.Optional(Type.String({ description: '每次发生时投递的新指令。' })),
       rrule: Type.Optional(Type.String({ description: RRULE_DESCRIPTION })),
       target: Type.Optional(Type.Union([...TARGET_ITEMS], { description: TARGET_DESCRIPTION })),
-      active: Type.Optional(Type.Boolean({ description: 'false pauses the task; true resumes only if its timing has a future occurrence. Otherwise provide a new rrule.' })),
-      expectedUpdatedAt: Type.Optional(Type.String({ description: 'updatedAt from the latest result that returned this task; if the task changed after that result, the result is schedule_conflict and nothing changes.' })),
+      active: Type.Optional(Type.Boolean({ description: 'false 暂停任务；true 仅在规则仍有未来发生时间时恢复。否则需提供新的 rrule。' })),
+      expectedUpdatedAt: Type.Optional(Type.String({ description: '最近一次返回该任务的结果中的 updatedAt；如果此后任务已变化，返回 schedule_conflict，不做任何改动。' })),
     }),
     execute: async (args, api) => {
       if (args.action === 'delete') {
@@ -186,11 +186,11 @@ export function createScheduleExtension(options: { automations: ScheduleService 
 
   const listTool = defineTool({
     name: 'schedule_list',
-    description: 'List scheduled tasks, including tasks created from other sessions. Active tasks come first, ordered by next occurrence.',
+    description: '列出定时任务，包括其他会话创建的任务。活动任务排在前面，按下次发生时间排序。',
     parameters: Type.Object({
-      active: Type.Optional(Type.Boolean({ description: 'true for active tasks only; false for paused and ended tasks only; omitted for all tasks.' })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_LIMIT, description: `Page size from 1 to ${MAX_LIST_LIMIT}; defaults to ${DEFAULT_LIST_LIMIT}.` })),
-      offset: Type.Optional(Type.Integer({ minimum: 0, description: 'Number of tasks to skip; defaults to 0.' })),
+      active: Type.Optional(Type.Boolean({ description: 'true 仅返回活动任务；false 仅返回暂停和已结束任务；省略时返回所有任务。' })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_LIMIT, description: `每页数量为 1 到 ${MAX_LIST_LIMIT}，默认 ${DEFAULT_LIST_LIMIT}。` })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: '跳过的任务数量，默认 0。' })),
     }),
     execute: async (args) => {
       const all = automations.list()
@@ -227,8 +227,8 @@ export function createScheduleExtension(options: { automations: ScheduleService 
 
   const viewTool = defineTool({
     name: 'schedule_view',
-    description: 'View one scheduled task by id.',
-    parameters: Type.Object({ id: Type.String({ description: 'Task id.' }) }),
+    description: '按 id 查看一个定时任务。',
+    parameters: Type.Object({ id: Type.String({ description: '任务 id。' }) }),
     execute: async (args) => {
       const automation = automations.list().find(item => item.id === args.id)
       if (automation === undefined) throw new Error(`No scheduled task has id ${args.id}.`)

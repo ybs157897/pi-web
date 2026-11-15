@@ -1,6 +1,6 @@
 ---
 name: wetrack-defects
-description: Use when the user asks about WeTrack pending defects, a DTS defect detail, or wants a defect analyzed against the current codebase and rendered as a hierarchical report. Do not load for generic code review without a WeTrack defect.
+description: 用户询问 WeTrack 待处理缺陷、DTS 缺陷详情，或要求结合当前代码库分析缺陷并生成分层报告时使用。没有 WeTrack 缺陷的普通代码审查不适用。
 ---
 
 # WeTrack Defects

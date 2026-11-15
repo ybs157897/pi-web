@@ -152,7 +152,7 @@ describe('planning tool prompt policy', () => {
   it('refuses plan entry when the plan cannot be submitted', async () => {
     const api = mockApi({ offered: ['enter_plan_mode'] })
     await expect(tool(PlanExtension, 'enter_plan_mode').execute({} as never, api as never, context as never))
-      .rejects.toThrow('no callable plan submission tool')
+      .rejects.toThrow('没有可调用的计划提交工具')
     expect(api.commit).not.toHaveBeenCalled()
     const nested = mockApi({ offered: ['codemode'], callable: ['exit_plan_mode'] })
     await expect(tool(PlanExtension, 'enter_plan_mode').execute({} as never, nested as never, context as never)).resolves.toBeDefined()
@@ -161,13 +161,13 @@ describe('planning tool prompt policy', () => {
   it('reports inactive plan mode without inventing an entry route at either check', async () => {
     for (const api of [mockApi(), mockApi({ planActive: true })]) {
       await expect(tool(PlanExtension, 'exit_plan_mode').execute({ plan: '# Plan' } as never, api as never, context as never))
-        .rejects.toThrow('Use only the planning tools available')
+        .rejects.toThrow('仅使用当前请求提供的计划工具')
     }
   })
 
   it('states the host-enforced read-only Plan boundary and plan format', async () => {
     const prompt = await renderPlanPolicy({ offered: ['exit_plan_mode'] })
-    expect(prompt).toContain('Host 会拒绝写入、shell 和外部 MCP 调用')
+    expect(prompt).toContain('宿主会拒绝写入、shell 和外部 MCP 调用')
     expect(prompt).toContain('第一行是一级标题')
     expect(prompt).toContain('命令式语言要求实施时')
     expect(prompt).toContain('不结束计划模式')
@@ -180,38 +180,38 @@ describe('planning tool prompt policy', () => {
   it('gates plan submission on code-writing work and upfront clarification', () => {
     const description = tool(PlanExtension, 'exit_plan_mode').description
 
-    expect(description).toContain('research tasks')
-    expect(description).toContain('do not submit a plan')
-    expect(description).toContain('user-owned questions')
-    expect(description).toContain('approval request')
-    expect(description).toContain('implement yank mode for vim')
+    expect(description).toContain('调研任务')
+    expect(description).toContain('不提交计划')
+    expect(description).toContain('必须由用户决定的重要问题')
+    expect(description).toContain('批准请求')
+    expect(description).toContain('为 vim 实现 yank 模式')
   })
 
   it('keeps pending questions unauthorized and asks in user-facing terms', () => {
     const description = tool(InteractionTools, 'ask_user_question').description
 
-    expect(description).toContain('Pending is not permission')
-    expect(description).toContain('timeout or unanswered question is not consent')
-    expect(description).toContain('user-facing terms')
-    expect(description).toContain('(Recommended)')
+    expect(description).toContain('等待答复不代表已获许可')
+    expect(description).toContain('超时或未答复不构成同意')
+    expect(description).toContain('用户能理解的表达')
+    expect(description).toContain('（推荐）')
   })
 
   it('describes concrete multi-step todo use, timely status updates, and real parallel work', () => {
     const description = tool(TodoTools, 'todo_write').description
-    expect(description).toContain('multi-step')
-    expect(description).toContain('skip trivial')
-    expect(description).toContain('relevant verification')
-    expect(description).toContain('Update statuses promptly')
-    expect(description).toContain('actually running in parallel')
-    expect(description).toContain('Replace the entire list')
-    expect(description).toContain('Do not use the list as a substitute for the plan-mode plan')
+    expect(description).toContain('多步工作')
+    expect(description).toContain('简单的单步工作跳过')
+    expect(description).toContain('相关验证')
+    expect(description).toContain('及时更新状态')
+    expect(description).toContain('实际并行执行')
+    expect(description).toContain('替换整个列表')
+    expect(description).toContain('不要用此列表代替计划模式中的计划')
   })
 
   it('renders a policy before any goal exists and names only directly callable tools', async () => {
     const prompt = await renderGoalPolicy({ offered: ['get_goal', 'create_goal', 'update_goal'] })
-    expect(prompt).toContain('No goal is currently set')
-    expect(prompt).toContain('Call `create_goal` directly.')
-    expect(prompt).toContain('Call `get_goal` directly.')
+    expect(prompt).toContain('当前会话尚未设置目标')
+    expect(prompt).toContain('直接调用 `create_goal`')
+    expect(prompt).toContain('直接调用 `get_goal`')
     expect(prompt).not.toContain('codemode')
   })
 
@@ -220,16 +220,16 @@ describe('planning tool prompt policy', () => {
       offered: ['codemode'],
       callable: ['create_goal', 'get_goal', 'update_goal'],
     })
-    expect(createPrompt).toContain('Through `codemode`, call `await tools.create_goal({ ... })` inside the script.')
-    expect(createPrompt).toContain('Through `codemode`, call `await tools.get_goal({ ... })` inside the script.')
+    expect(createPrompt).toContain('在 `codemode` 脚本里调用 `await tools.create_goal({ ... })`')
+    expect(createPrompt).toContain('在 `codemode` 脚本里调用 `await tools.get_goal({ ... })`')
 
     const activePrompt = await renderGoalPolicy({
       offered: ['codemode'],
       callable: ['create_goal', 'get_goal', 'update_goal'],
       goal: { goal: { id: 'g1', revision: 1, objective: 'continue work', phase: 'active', roundsStarted: 0, maxGoalRounds: 3, createdAt: 1, updatedAt: 1 } },
     })
-    expect(activePrompt).toContain('Through `codemode`, call `await tools.get_goal({ ... })` inside the script.')
-    expect(activePrompt).toContain('Through `codemode`, call `await tools.update_goal({ ... })` inside the script.')
+    expect(activePrompt).toContain('在 `codemode` 脚本里调用 `await tools.get_goal({ ... })`')
+    expect(activePrompt).toContain('在 `codemode` 脚本里调用 `await tools.update_goal({ ... })`')
     expect(activePrompt).not.toContain('`create_goal`')
   })
 
@@ -237,7 +237,7 @@ describe('planning tool prompt policy', () => {
     const prompt = await renderGoalPolicy({
       goal: { goal: { id: 'g1', revision: 1, objective: 'continue work', phase: 'active', roundsStarted: 0, maxGoalRounds: 3, createdAt: 1, updatedAt: 1 } },
     })
-    expect(prompt).toContain('Current goal: goal_id "g1", revision 1')
+    expect(prompt).toContain('当前目标：goal_id "g1"，revision 1')
     expect(prompt).not.toContain('`get_goal`')
     expect(prompt).not.toContain('`create_goal`')
     expect(prompt).not.toContain('`update_goal`')
@@ -257,15 +257,15 @@ describe('planning tool prompt policy', () => {
   it('reports an unset goal without suggesting an unavailable slash command', async () => {
     const result = await tool(createGoalExtension(), 'get_goal').execute({} as never, mockApi() as never, context as never)
     const output = result as { output: { text?: string }[] }
-    expect(output.output[0]?.text).toContain('available goal policy')
+    expect(output.output[0]?.text).toContain('可用的目标规则')
     expect(output.output[0]?.text).not.toContain('/goal')
   })
 
   it('does not instruct goal creation or implementation progress in plan mode', async () => {
     const prompt = await renderGoalPolicy({ offered: ['create_goal'], planActive: true })
-    expect(prompt).toContain('Plan mode is active: do planning work only.')
+    expect(prompt).toContain('计划模式已开启：只做规划')
     expect(prompt).not.toContain('`create_goal`')
-    expect(prompt).not.toContain('create a goal with')
+    expect(prompt).not.toContain('以用户直接提出的请求为范围创建目标')
   })
 
   it('keeps an active goal visible in plan mode without directing goal updates', async () => {
@@ -274,8 +274,8 @@ describe('planning tool prompt policy', () => {
       offered: ['create_goal', 'update_goal'],
       planActive: true,
     })
-    expect(prompt).toContain('Current goal: goal_id "g1", revision 3')
-    expect(prompt).toContain('This goal remains active')
+    expect(prompt).toContain('当前目标：goal_id "g1"，revision 3')
+    expect(prompt).toContain('该目标仍处于 active 状态')
     expect(prompt).not.toContain('`create_goal`')
     expect(prompt).not.toContain('`update_goal`')
   })
@@ -286,15 +286,15 @@ describe('planning tool prompt policy', () => {
       callable: [],
       goal: { goal: { id: 'g1', revision: 2, objective: 'ship and verify', phase: 'active', roundsStarted: 1, maxGoalRounds: 4, createdAt: 1, updatedAt: 2 } },
     })
-    expect(prompt).toContain('requested verification has passed, with concrete evidence')
-    expect(prompt).toContain('a concrete condition makes further progress impossible')
-    expect(prompt).not.toContain('consecutive rounds')
+    expect(prompt).toContain('所要求的验证通过，并有具体证据')
+    expect(prompt).toContain('具体条件使后续工作无法推进')
+    expect(prompt).not.toContain('连续轮次')
   })
 
   it('exposes only model-owned goal actions while retaining exact goal identifiers in policy', async () => {
     const activeGoal = { goal: { id: 'goal-42', revision: 7, objective: 'ship and verify', phase: 'active', roundsStarted: 1, maxGoalRounds: 4, createdAt: 1, updatedAt: 2 } }
     const prompt = await renderGoalPolicy({ offered: ['update_goal'], goal: activeGoal })
-    expect(prompt).toContain('goal_id "goal-42", revision 7')
+    expect(prompt).toContain('goal_id "goal-42"，revision 7')
 
     const parameters = JSON.stringify(tool(createGoalExtension(), 'update_goal').parameters)
     expect(parameters).toContain('"complete"')
@@ -312,7 +312,7 @@ describe('planning mode write guards', () => {
       { todos: [{ content: 'implementation', status: 'in_progress' }] } as never,
       api as never,
       context as never,
-    )).rejects.toThrow(/plan mode is active/)
+    )).rejects.toThrow(/计划模式开启/)
     expect(api.commit).not.toHaveBeenCalled()
   })
 

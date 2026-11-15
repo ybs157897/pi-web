@@ -266,7 +266,7 @@ describe('subagent background settlement', () => {
     const delivered = texts.user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))
     expect(delivered).toHaveLength(1)
     expect(delivered[0]).toContain('子智能体「机制归纳」未能完成任务')
-    expect(delivered[0]).toContain('without an answer')
+    expect(delivered[0]).toContain('未返回答复')
     expect((await delegationOf(harness, child))?.deliveredAt).toBeTypeOf('number')
   })
 

@@ -56,13 +56,13 @@ describe('plan approval and access mode', () => {
     expect(settled.conversation.accessMode).toBe(accessMode)
     const reply = messageText(settled.messages.find(message => message.role === 'user' && messageText(message).includes('"approved":true'))!)
     if (accessMode === 'readOnly') {
-      expect(reply).toContain('remains read-only')
-      expect(reply).toContain('do not implement')
-      expect(reply).not.toContain('execute the approved plan in this turn')
+      expect(reply).toContain('仍为只读')
+      expect(reply).toContain('不要实施改动')
+      expect(reply).not.toContain('在本轮按当前访问权限执行获批计划')
       expect(await readdir(workspace)).toEqual([])
     } else {
-      expect(reply).toContain('execute the approved plan in this turn')
-      expect(reply).toContain('current access permissions')
+      expect(reply).toContain('在本轮按当前访问权限执行获批计划')
+      expect(reply).toContain('当前访问权限')
     }
   }, 30_000)
 })

@@ -33,10 +33,10 @@ describe('builtin statechart skill', () => {
       source: 'builtin',
       writable: false,
     })
-    expect(statechart?.description).toContain('state × event')
+    expect(statechart?.description).toContain('状态 × 事件')
     // Both sides of the trigger must survive the model catalog's 250-character cap.
     expect(statechart!.description.length).toBeLessThanOrEqual(250)
-    expect(statechart?.description).toContain('Skip ordinary business-flow lookup')
+    expect(statechart?.description).toContain('普通业务流程查询、无状态逻辑和格式调整不适用')
     expect(await store.validate(workspace, 'statechart')).toEqual({ valid: true, errors: [], warnings: [] })
   })
 

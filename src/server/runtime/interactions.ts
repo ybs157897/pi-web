@@ -89,9 +89,9 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       answers: settledAnswers,
       instruction: decision.approved
         ? metadata?.accessMode === 'readOnly'
-          ? 'The user approved the plan and plan mode is now off. This conversation remains read-only: do not implement changes; explain that execution requires write access.'
-          : 'The user approved the plan and plan mode is now off: execute the approved plan in this turn, starting with todo_write if the work is multi-step, within the current access permissions.'
-        : 'The user asked for changes and plan mode is still on: revise the plan and submit it again with exit_plan_mode.',
+          ? '用户已批准计划，计划模式已关闭。当前会话仍为只读：不要实施改动；请说明执行需要写入权限。'
+          : '用户已批准计划，计划模式已关闭：在本轮按当前访问权限执行获批计划；多步工作先调用 todo_write。'
+        : '用户要求修改，计划模式仍开启：修订计划，再用 exit_plan_mode 提交。',
     }
     const requestId = `plan-review-reply:${callId}`
     await submitReply(conversation, requestId, JSON.stringify(reply), {
@@ -139,7 +139,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       kind: 'dismissed_plan_review',
       callId,
       approveLabel: review.approveLabel,
-      instruction: 'The user dismissed the plan review without a decision. Plan mode is still on and the plan was not approved: do not implement it. Ask the user how to proceed (revise the plan, or work without one).',
+      instruction: '用户关闭了计划审阅，未作决定。计划模式仍开启，计划未获批准，不得实施。请询问用户如何继续（修订计划，或不使用计划开展工作）。',
     }), {
       kind: 'pi-web.plan-review-dismissed',
       data: { requestId, callId },
@@ -235,7 +235,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
         ...question,
         ...(question.options ? { options: question.options.map(option => ({ ...option })) } : {}),
       })),
-      instruction: 'The user dismissed these questions without answering. Do not ask them again; continue with work that does not depend on the answers, or wrap up.',
+      instruction: '用户关闭了这些问题，未作答复。不要重复提问；继续不依赖答复的工作，或结束本轮。',
     }
     const requestId = `question-dismiss:${callId}`
     await submitReply(conversation, requestId, JSON.stringify(dismissal), {

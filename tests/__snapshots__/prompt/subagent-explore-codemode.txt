@@ -1,6 +1,6 @@
 # subagent-explore-codemode
 
-sections (7989 chars): runtime-core 2955, work-policy 543, codemode 4064, instructions 427
+sections (6697 chars): runtime-core 2955, work-policy 543, codemode 2772, instructions 427
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -83,8 +83,8 @@ tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 ## section codemode
 
 <codemode>
-Only codemode is directly offered in this request. Invoke other tools inside its scripts. Ordinary assistant text is still available: for multi-step work, send a short progress message outside scripts before the first tool call. Tool output and todo updates do not replace this message.
-Before calling a nested tool whose full declaration is absent from this request, use describeTool(name) to inspect its arguments and return type. Do not guess a schema from the tool name or a usage example.
+本请求只直接提供 codemode 工具，其他工具须在其脚本内调用。仍可输出普通助手文本：多步工作在第一次工具调用前，先在脚本外简短说明进度；工具输出和待办更新不能代替这条消息。
+调用本请求中未提供完整声明的嵌套工具前，用 describeTool(name) 查看其参数和返回类型。不要根据工具名或使用示例猜测参数结构。
 Tools scripts can call (`await tools.<name>(args)`):
 
 ### `read`
@@ -103,7 +103,7 @@ declare const tools: { read(args: {
 ```
 
 ### `list_files`
-List relative file and directory paths from the current workspace. path defaults to "."; recursive defaults to false; maxEntries is an integer from 1 to 100 (default 100). Hidden paths, node_modules, common secret files, and symlinks are excluded. Read-only; does not invoke a shell.
+列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 100 的整数（默认 100）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。
 
 codemode tool declaration:
 ```ts
@@ -117,7 +117,7 @@ declare const tools: { list_files(args: {
 ```
 
 ### `search_files`
-Search workspace text files for a single-line literal phrase of 1 to 200 characters (case-insensitive by default). Returns relative paths, one-based line numbers, and excerpts. path defaults to "."; recursive defaults to true; maxResults is an integer from 1 to 50 (default 50). Skips hidden paths, common secret files, binary/oversized files and symlinks. Read-only; no shell.
+在工作区文本文件中搜索长度为 1 到 200 字符的单行字面量短语，默认忽略大小写。返回相对路径、从 1 开始的行号和片段。path 默认 "."；recursive 默认 true；maxResults 为 1 到 50 的整数（默认 50）。跳过隐藏路径、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。
 
 codemode tool declaration:
 ```ts
@@ -134,7 +134,7 @@ declare const tools: { search_files(args: {
 ```
 
 ### `glob`
-Find files whose paths match a glob pattern. A pattern without "/" matches the basename at any depth; "**" matches any depth. Includes hidden paths; excludes VCS metadata, node_modules, dist, .data, common secret files, and symlinks. Returns up to 100 paths in modification-time order (newest first). Read-only; no shell. Prefer this over find or ls -R.
+查找路径匹配 glob 模式的文件。模式不含 "/" 时匹配任意深度的文件名；"**" 匹配任意深度。包含隐藏路径；排除 VCS 元数据、node_modules、dist、.data、常见敏感文件及符号链接。按修改时间从新到旧返回最多 100 个路径。只读，不使用 shell。优先使用本工具，不用 find 或 ls -R。
 
 codemode tool declaration:
 ```ts
@@ -149,7 +149,7 @@ declare const tools: { glob(args: {
 ```
 
 ### `grep`
-Search workspace text files with a regular expression (native ripgrep, with a JavaScript fallback; case-insensitive by default). Use this to find unknown content or file locations; use read directly when you know the file path. Do not run `grep` or `rg` via shell: they bypass workspace policy, output limits, and sensitive-file filtering. Patterns use ripgrep regex syntax when the native engine runs; if ripgrep rejects a pattern, the JavaScript fallback is tried. path defaults to "."; include optionally filters files by glob (for example "*.ts"); maxResults is an integer from 1 to 50 (default 50). Skips hidden paths, node_modules, common secret files, binary/oversized files and symlinks. Read-only; no shell.
+使用正则表达式搜索工作区文本文件（原生 ripgrep，可回退到 JavaScript；默认忽略大小写）。用于查找未知内容或文件位置；已知文件路径时直接用 read。不要通过 shell 运行 `grep` 或 `rg`，它们会绕过工作区策略、输出限制和敏感文件过滤。原生引擎使用 ripgrep 正则语法；ripgrep 拒绝模式时会尝试 JavaScript 回退。path 默认 "."；include 可按 glob 过滤文件（如 "*.ts"）；maxResults 为 1 到 50 的整数（默认 50）。跳过隐藏路径、node_modules、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。
 
 codemode tool declaration:
 ```ts

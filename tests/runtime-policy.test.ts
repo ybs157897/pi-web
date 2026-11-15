@@ -117,10 +117,10 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(request.tools).toEqual(['codemode'])
     expect(request.system?.sections?.['work-policy']).toContain('tools.todo_write')
     expect(request.system?.sections?.['goal-policy']).toContain('codemode')
-    expect(request.system?.sections?.codemode).toContain('Only codemode is directly offered')
-    expect(request.system?.sections?.codemode).toContain('Ordinary assistant text is still available')
-    expect(request.system?.sections?.codemode).toContain('use describeTool(name)')
-    expect(request.system?.sections?.codemode).not.toContain('Use direct tools for individual operations')
+    expect(request.system?.sections?.codemode).toContain('本请求只直接提供 codemode 工具')
+    expect(request.system?.sections?.codemode).toContain('仍可输出普通助手文本')
+    expect(request.system?.sections?.codemode).toContain('用 describeTool(name)')
+    expect(request.system?.sections?.codemode).not.toContain('单项操作使用直接工具')
   })
 
   it('keeps plan mode research-only and suspends an existing goal continuation', async () => {
@@ -238,7 +238,7 @@ describe('default policy at the actual Pi provider boundary', () => {
     expect(pending?.kind).toBe('question')
     expect(asked.goal?.roundsStarted).toBe(0)
     expect(f.requests.filter(item => item.user.startsWith('[goal '))).toHaveLength(0)
-    expect(currentRequest(f.requests, '[ask] goal question').system?.sections?.['goal-policy']).toContain('automatic continuation waits until it is answered')
+    expect(currentRequest(f.requests, '[ask] goal question').system?.sections?.['goal-policy']).toContain('自动续跑会等待答复')
 
     await f.runtime.answerInteraction(id, pending!.id, [
       { id: 'scope', selected: ['前端交互 (Recommended)'] },

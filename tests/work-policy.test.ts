@@ -221,12 +221,12 @@ describe('default runtime work policy', () => {
       const section = await renderSection('personal-instructions')
       expect(section).toContain('<personal_instructions>')
       expect(section).toContain('Prefer short answers.')
-      expect(section).toContain('Project instructions and explicit task instructions win on conflict')
+      expect(section).toContain('发生冲突时，项目指令和明确的任务指令优先')
       expect(section).toContain('</personal_instructions>')
 
       const prompt = await renderPolicy({ cwd })
       // runtime-core quotes the project tag in prose, so locate the project section by its status line.
-      expect(prompt.indexOf('<personal_instructions>')).toBeLessThan(prompt.indexOf(`Workspace ${join(cwd, 'AGENTS.md')} applies`))
+      expect(prompt.indexOf('<personal_instructions>')).toBeLessThan(prompt.indexOf(`工作区 ${join(cwd, 'AGENTS.md')} 适用于`))
     } finally {
       await rm(join(dataDir, 'AGENTS.md'), { force: true })
       await rm(cwd, { recursive: true, force: true })

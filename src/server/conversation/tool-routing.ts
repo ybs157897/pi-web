@@ -16,7 +16,7 @@ export function resolveToolRoute(agent: ToolCatalog, name: string): ToolRoute {
 }
 
 /** Describe only a route that the current request can actually invoke. */
-export function toolRouteInstruction(name: string, route: ToolRoute, args?: string, lang: 'en' | 'zh' = 'en'): string | undefined {
+export function toolRouteInstruction(name: string, route: ToolRoute, args?: string, lang: 'en' | 'zh' = 'zh'): string | undefined {
   if (route === 'direct') return lang === 'zh'
     ? `直接调用 \`${name}${args === undefined ? '' : `(${args})`}\``
     : `Call \`${name}${args === undefined ? '' : `(${args})`}\` directly.`
