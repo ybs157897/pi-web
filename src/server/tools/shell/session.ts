@@ -35,13 +35,22 @@ export function createShellSessionTool(): ToolRegistration {
         )
       }
       const { session, delta } = read
+      // The model only sees what `api.output()` retained; `structuredOutput` reaches codemode
+      // programs only. Stream the delta there, mirroring how bash/pwsh stream their output.
+      if (delta !== '') {
+        try {
+          api.output(delta)
+        } catch {
+          // The call may already be settled or aborted.
+        }
+      }
       // The final state is delivered exactly once: the session was reclaimed on read.
       const diagnostics = session.exited
         ? [
             ...(sessionDiagnostics(session) ?? []),
             ...(session.timedOut
               ? []
-              : [{ severity: 'info' as const, code: 'session_reclaimed', message: `Session ${session.id} is complete and reclaimed.` }]),
+              : [{ severity: 'info' as const, code: 'session_reclaimed', message: `Session ${session.id} is complete and reclaimed (exit code: ${String(session.exitCode ?? -1)}).` }]),
           ]
         : sessionDiagnostics(session)
       return {

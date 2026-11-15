@@ -3,10 +3,14 @@
  * 规则与预算见 docs/AGENTS.md；单个门的语义以各自脚本为准。
  */
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+// Windows has no `npx` executable to spawn (`.cmd` shims need shell: true and fail with EINVAL
+// under the Node security patch); run the tsx CLI through the current Node binary instead.
+const tsxCli = createRequire(import.meta.url).resolve('tsx/cli')
 
 // [脚本名, 参数]；生成目录的 --check 门最重（boot demo runtime），放在最后。
 const gates: Array<readonly [string, readonly string[]]> = [
@@ -21,7 +25,7 @@ const gates: Array<readonly [string, readonly string[]]> = [
 let failed = 0
 for (const [name, args] of gates) {
   const started = performance.now()
-  const result = spawnSync('npx', ['tsx', `scripts/${name}.ts`, ...args], {
+  const result = spawnSync(process.execPath, [tsxCli, `scripts/${name}.ts`, ...args], {
     cwd: root,
     stdio: 'inherit',
   })

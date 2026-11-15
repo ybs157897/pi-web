@@ -76,7 +76,12 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     const sessionId = (promoted.structuredOutput as { sessionId: string }).sessionId
 
     const tool = createShellSessionTool()
-    const api = apiFor(cwd)
+    // The model reads polls only through `api.output()` retention, never structuredOutput.
+    let retained = ''
+    const api = {
+      ...apiFor(cwd),
+      output: (chunk: string) => { retained += chunk },
+    } as unknown as ToolExecutionApi
 
     // The promotion response already carried the pre-promotion output (first-line); polls
     // stream only what is printed after promotion.
@@ -85,6 +90,7 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     const first = await tool.execute({ sessionId, yieldTimeMs: 250 }, api, TEST_CONTEXT)
     expect((first.structuredOutput as { status: string }).status).toBe('running')
     expect((first.structuredOutput as { output: string }).output).not.toContain('first-line')
+    expect(retained).not.toContain('first-line')
 
     // Second poll after the remaining lines: only the delta since the cursor comes back.
     await new Promise(resolve => setTimeout(resolve, 700))
@@ -95,6 +101,11 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(secondStructured.output).toContain('second-line')
     expect(secondStructured.output).not.toContain('first-line')
     expect(second.isError).toBe(false)
+    // The same delta reached the model through api.output() retention.
+    expect(retained).toContain('second-line')
+    expect(retained).toContain('third-line')
+    expect(retained).not.toContain('first-line')
+    expect(second.diagnostics?.some(diagnostic => diagnostic.code === 'session_reclaimed' && diagnostic.message.includes('exit code: 0'))).toBe(true)
     expect(activeShellSessionCount()).toBe(0)
   })
 

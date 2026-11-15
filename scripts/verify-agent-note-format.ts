@@ -29,7 +29,9 @@ for (const lifecycle of lifecycles) {
   } catch {
     continue // 目录不存在视作该生命周期暂无 note
   }
-  for (const entry of entries.sort()) {
+  for (const raw of entries.sort()) {
+    // Recursive readdir returns backslash-separated paths on Windows.
+    const entry = raw.replaceAll('\\', '/')
     if (entry.endsWith('.md') && !entry.endsWith('README.md')) noteFiles.push({ lifecycle, relative: `${lifecycle}/${entry}` })
   }
 }
