@@ -120,9 +120,9 @@ export interface AppSettings {
   defaultAccessMode: AccessMode
   /** Pi code mode for agents built from these settings; `only` hides the native tools from the model. */
   codemodeMode: CodemodeMode
-  /** Cross-conversation project memory: index injection, memory writes, and background extraction. */
+  /** 跨会话项目记忆：索引注入、记忆写入与后台提取。 */
   memoryEnabled: boolean
-  /** Pin the model's reasoning (thinking) language to Chinese via a per-request prompt section. */
+  /** 把模型的思考（reasoning）语言固定为中文：随 personal-instructions section 每请求注入指令。 */
   chineseReasoning: boolean
   /** Show defect-analysis sessions in the ordinary sidebar; they are list-only by default. */
   showAnalysisConversations: boolean

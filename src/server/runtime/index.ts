@@ -179,6 +179,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
   const codemodeSandbox = new CodemodeSandbox({ memoryLimitBytes: 256 * 1024 * 1024 })
   const registry = createRegistry()
+  // 工作政策扩展：chineseReasoning 闭包每请求读设置快照，开关切换在下一请求生效、无需重建 agent。
   registry.install(createWorkPolicyExtension({ dataDir, chineseReasoning: () => appState.snapshot().settings.chineseReasoning }))
   registry.install(createCompactionExtension({ harness: () => harness }))
   // After the compaction extension, so a captured request reflects the exact post-prune shape.

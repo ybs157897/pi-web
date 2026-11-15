@@ -40,7 +40,7 @@ const settingsSchema = z.object({
   codemodeMode: z.enum(CODEMODE_MODES).default('on'),
   /** Cross-conversation memory; absent files written before this setting read as off. */
   memoryEnabled: z.boolean().default(false),
-  /** Chinese reasoning prompt section; absent files written before this setting read as off. */
+  /** 中文思考提示段（随 personal-instructions 注入）；本字段加入之前落盘的旧文件读取为关闭。 */
   chineseReasoning: z.boolean().default(false),
   /** Defect analysis stays out of the ordinary conversation sidebar unless explicitly enabled. */
   showAnalysisConversations: z.boolean().default(false),

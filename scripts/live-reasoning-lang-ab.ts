@@ -14,12 +14,20 @@ type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | '
 
 // ---- 任务集：全部有唯一客观答案，可本地判分 ----
 
+/** 单个实验任务：题面 prompt + 本地判分函数 judge（从最终回答文本或抽取的代码块判定）。 */
 interface Task {
   id: string
   prompt: string
   judge: (text: string, code: string) => { pass: boolean; note: string }
 }
 
+/**
+ * 从回答文本里抽出最后一个可解析的 JSON 对象。
+ * @param text 模型最终回答全文。
+ * @returns 最后一个能 JSON.parse 成功的 `{...}` 片段；一个都解析不了时返回 undefined。
+ * 内部逻辑：正则抓所有不含嵌套花括号的 `{...}` 片段，从后往前逐个尝试解析——模型常先输出格式示例
+ * 再输出真答案，取最后一个可解析的更贴近真实答案。
+ */
 function lastJson(text: string): Record<string, unknown> | undefined {
   const matches = text.match(/\{[^{}]*\}/g) ?? []
   for (let i = matches.length - 1; i >= 0; i--) {
@@ -32,6 +40,12 @@ function lastJson(text: string): Record<string, unknown> | undefined {
   return undefined
 }
 
+/**
+ * 抽取回答里最后一个「答案：<数字>」的数值（t1 数学题专用）。
+ * @param text 模型最终回答全文。
+ * @returns 最后一个匹配的数字；没有匹配时返回 undefined（判为不通过）。
+ * 内部逻辑：matchAll 找所有 `答案[：:]\s*([0-9.]+)`，取最后一个的捕获组转 Number。
+ */
 function lastNumberAfterAnswer(text: string): number | undefined {
   const matches = [...text.matchAll(/答案[：:]\s*([0-9.]+)/g)]
   const last = matches.at(-1)?.[1]
@@ -143,6 +157,11 @@ const TASKS: Task[] = [
 
 // ---- 分组 ----
 
+/**
+ * 三组实验配置：注入的个性化文件内容即组间唯一变量。
+ * zh——中文思考指令；en——语义对齐的英文指令；control——不写个性化文件（模型默认行为）。
+ * 值为 undefined 的组不写 <dataDir>/AGENTS.md，renderPersonalization 对缺失文件贡献零字节。
+ */
 const GROUPS = {
   zh: '思考（reasoning）全程使用中文；代码标识符、文件路径、命令、专有名词保留原文。',
   en: 'Your reasoning (thinking) must be written entirely in English. Keep code identifiers, file paths, commands, and proper nouns unchanged.',
@@ -153,6 +172,12 @@ type GroupId = keyof typeof GROUPS
 
 // ---- 指标 ----
 
+/**
+ * 统计思考文本的语言构成。
+ * @param text thinking 块全文。
+ * @returns han——汉字（\\p{Script=Han}）数量；nonSpace——去空白后的总字符数；ratio——汉字占比。
+ * 内部逻辑：占比以「去空白字符」为分母，数学符号/英文标记会稀释 ratio，解读时结合 preview 判断。
+ */
 function zhStats(text: string): { han: number; nonSpace: number; ratio: number } {
   const han = (text.match(/\p{Script=Han}/gu) ?? []).length
   const nonSpace = text.replace(/\s+/g, '').length
@@ -161,6 +186,11 @@ function zhStats(text: string): { han: number; nonSpace: number; ratio: number }
 
 // ---- 主流程 ----
 
+/**
+ * 读取命令行参数值。
+ * @param name 形如 `--runs` 的参数名。
+ * @returns 其后的值；未提供时返回 undefined（由调用方给默认值）。
+ */
 function argOf(name: string): string | undefined {
   const i = process.argv.indexOf(name)
   return i >= 0 ? process.argv[i + 1] : undefined
@@ -175,6 +205,9 @@ const thinkingLevel = (argOf('--thinking') ?? 'max') as ThinkingLevel
 
 const rows: Array<Record<string, unknown>> = []
 
+// 主循环：按组遍历。每组一个独立 tmpdir（dataDir 隔离 + 写入该组的个性化文件）和一个完整
+// createRuntime；piDir 显式指向全局 home，凭据从 ~/.pi-web 读取（隔离 dataDir 自身没有凭据）。
+// 组内每题每轮一个全新会话，保证上下文互不污染。
 for (const group of groups) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-web-lang-ab-'))
   const dataDir = join(dir, 'data')
@@ -213,6 +246,8 @@ for (const group of groups) {
         while (Date.now() < deadline) {
           const detail = await runtime.detail(created.conversation.id)
           if (detail.error) { error = detail.error; break }
+          // busy 为 false 表示本轮生成结束：取最后一条 assistant 消息的文本/thinking/usage。
+          // host DTO 的 assistant 消息 requestId 为 null，多轮下只能按「最后一条」定位。
           if (!detail.conversation.busy) {
             const assistant = detail.messages.filter(m => m.role === 'assistant').at(-1)
             if (assistant) {
@@ -265,7 +300,12 @@ for (const group of groups) {
   }
 }
 
-// 汇总
+/**
+ * 汇总一组（或一题）的运行结果。
+ * @param subset 同组（或同题）的行集合。
+ * @returns n——样本数；passRate——判分通过率；medianOutputTokens / medianDurationMs /
+ * medianThinkingRatio——三个指标的中位数（排序取中点，不剔除离群值）。
+ */
 const summarize = (subset: typeof rows) => {
   const passes = subset.filter(r => r.pass === true).length
   const tok = subset.filter(r => typeof r.outputTokens === 'number')

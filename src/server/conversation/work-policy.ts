@@ -9,18 +9,28 @@ import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
 
 export const WORK_POLICY_EXTENSION_NAME = 'runtime-policy'
 
-// Read once when the server module loads. This is the canonical core prompt for this process;
-// documentation is not consulted at request time.
+/**
+ * 核心行为提示词（runtime-core.md）。
+ * 功能：每个模型请求无条件注入的固定核心政策。
+ * 内部逻辑：进程加载模块时一次性读取文件内容（运行时不查文档），保证全文稳定且零请求开销。
+ */
 export const RUNTIME_CORE_PROMPT = readFileSync(new URL('./prompts/runtime-core.md', import.meta.url), 'utf8').trim()
 
 type TodoRoute = 'direct' | 'codemode'
 
+/** section 渲染时模型侧可见的 agent 摘要：直接工具集、codemode 可调用集、当前模型。 */
 type PromptAgent = {
   tools: readonly { name: string }[]
   callable: readonly { name: string }[]
   model?: { provider: string; modelId: string }
 }
 
+/**
+ * 判定本请求的待办工具路由。
+ * @param input 携带 `agent`（PromptAgent）的渲染输入。
+ * @returns 'direct'——todo_write 是本请求的直接工具；'codemode'——todo_write 仅可经 codemode 脚本调用；undefined——没有可执行的待办工具。
+ * 内部逻辑：先看直接工具集里是否有 todo_write；否则在 codemode 工具开启且 todo_write 出现在可调用集合时返回 codemode。
+ */
 function todoRoute(input: { agent: PromptAgent }): TodoRoute | undefined {
   if (input.agent.tools.some(tool => tool.name === 'todo_write')) return 'direct'
 
@@ -29,11 +39,18 @@ function todoRoute(input: { agent: PromptAgent }): TodoRoute | undefined {
   return codemodeEnabled && todoCallable ? 'codemode' : undefined
 }
 
+/** 待办使用的两条通用约定，与路由无关，供 todoPolicy 按路由拼装。 */
 const TODO_STEPS = [
   '非平凡的多步工作在开始前用它列出具体步骤和必要验证；首次更新时将马上开始的第一步设为 `in_progress`，其余步骤按依赖列为 `pending`。简单问题或单步改动跳过待办。',
   '只有彼此独立且确有并行价值的步骤才并行处理；待办在串行时只标一个 `in_progress`，只有真实并行时才标多个。每完成一步立即更新；新发现改变范围或顺序时及时修订。没有对应证据，不得把实现或验证标为完成。',
 ]
 
+/**
+ * 按待办路由渲染使用约定文本。
+ * @param route todoRoute 的判定结果（direct / codemode / undefined）。
+ * @returns 首行说明路由形态，后接 TODO_STEPS 通用约定；无工具时提示不要编造工具。
+ * 内部逻辑：三个分支各自拼接首行与通用约定，直接工具与 codemode 的调用写法不同。
+ */
 function todoPolicy(route: TodoRoute | undefined): string {
   if (route === 'direct') return ['本请求提供直接待办工具 `todo_write`。', ...TODO_STEPS].join('\n')
   if (route === 'codemode') {
@@ -42,13 +59,27 @@ function todoPolicy(route: TodoRoute | undefined): string {
   return '本请求没有可调用的执行待办工具；不要编造或要求调用不可用的工具。'
 }
 
-/** A direct tool already carries its own description, so `direct` is set only for facts that description lacks. */
+/**
+ * 按路由生成一行工具指引。
+ * @param route resolveToolRoute 的结果（'direct' / 'codemode' / 'unavailable'）。
+ * @param direct 直接工具的补充说明；仅当该事实是工具自带 description 缺失时才给（direct 工具已带自己的描述）。
+ * @param nested codemode 场景下整行使用的文案。
+ * @returns 拼好的一行文案；unavailable 或（direct 且无补充）时返回 undefined，由调用方过滤。
+ * 内部逻辑：direct 只在有补充事实时输出 `- ${direct}`；codemode 固定输出 nested；其余情况不输出。
+ */
 function routeText(route: ToolRoute, direct: string | undefined, nested: string): string | undefined {
   if (route === 'direct') return direct === undefined ? undefined : `- ${direct}`
   if (route === 'codemode') return `- ${nested}`
   return undefined
 }
 
+/**
+ * 汇总本请求全部工具的使用约定。
+ * @param input 携带 `agent`（PromptAgent）的渲染输入，工具路由逐个经 resolveToolRoute 判定。
+ * @returns 「本请求的工具使用约定：」+ 各行文案；全部路由不可用时返回空串（调用方以 filter(Boolean) 剔除）。
+ * 内部逻辑：glob/grep 仅在不可用时才渲染 list_files/search_files 的兜底文案（可用时兜底工具不占提示词）；
+ * read/edit/write 与 shell（按平台取 pwsh 或 bash）各按 direct/codemode 输出对应写法。
+ */
 function toolGuidance(input: { agent: PromptAgent }): string {
   const route = (name: string): ToolRoute => resolveToolRoute(input.agent, name)
   const lines = [
@@ -86,6 +117,14 @@ function toolGuidance(input: { agent: PromptAgent }): string {
   return lines.length === 0 ? '' : ['本请求的工具使用约定：', ...lines].join('\n')
 }
 
+/**
+ * 渲染本请求的会话事实（工作区、平台、日期、模型、写权限、shell 能力）。
+ * @param input 携带 `agent`（PromptAgent，取当前模型）与 `env.cwd`（工作区路径）的渲染输入。
+ * @returns 四行事实文本：工作区范围、平台与命令解释器、当前日期与时区、模型与权限。
+ * 内部逻辑：平台为 win32 时 shell 描述为 PowerShell 并提示 `D:\path` 写法，否则为 bash；
+ * 日期用 sv-SE locale 格式化为 YYYY-MM-DD；可写权限由 write/edit 任一可路由判定；
+ * shell 能力分三态——无 shell、仅可经 codemode、可直接执行。
+ */
 function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undefined }): string {
   const cwd = input.env?.cwd
   const platform = process.platform
@@ -114,24 +153,23 @@ function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undef
   ].join('\n')
 }
 
+/** runtime-core section：无条件返回模块加载时读好的核心提示词，无每请求逻辑。 */
 const runtimeCoreSection = section('runtime-core', () => RUNTIME_CORE_PROMPT)
 
 /**
- * The user-level personalization file is re-read on every request, like the project one, so the
- * editor's save applies to the next request without restarting the process. Explore subagents
- * skip it for the same reason they skip the project file: they are read-only retrieval agents.
- */
-/**
- * The Chinese-reasoning setting rides inside the personal-instructions section instead of its own
- * section: live verification (2026-11-15) showed a standalone section buried among the tool
- * policies gets ignored by the model, while this position — right after runtime-core with a
- * user-level authority framing — is what the A/B runs validated.
+ * 中文思考开关的注入文案常量。
+ * 功能：用户在设置里开启「中文思考」后，随 personal-instructions 注入的推理语言要求。
+ * 内部逻辑（为什么并入本 section）：live 验证（2026-11-15）显示夹在工具政策中段的独立 section 会被模型无视，
+ * 而 personal-instructions 的位置（紧跟 runtime-core、用户级权威框定）是 A/B 实验验证过遵从的。
  */
 export const CHINESE_REASONING_INSTRUCTION = '思考（reasoning）全程使用中文；代码标识符、文件路径、命令、专有名词保留原文。'
 
+/**
+ * 渲染设置开关对应的注入段。
+ * @returns 与 renderPersonalization 同构的文本：权威框定句 + `<personal_instructions>` 包裹的指令。
+ * 内部逻辑：刻意复用个性化文件的框定句式与标签——模型只在该框架下遵从语言指令（live 验证：自创框定被无视）。
+ */
 function renderChineseReasoningSetting(): string {
-  // Same framing and tag as renderPersonalization: the model only honors the instruction under
-  // the user-level authority framing (live-verified 2026-11-15 — a custom framing gets ignored).
   return [
     '用户设置适用于所有工作区。发生冲突时，项目指令和明确的任务指令优先：',
     '<personal_instructions>',
@@ -140,6 +178,14 @@ function renderChineseReasoningSetting(): string {
   ].join('\n')
 }
 
+/**
+ * 构建 personal-instructions section（用户级指令，每次请求渲染）。
+ * @param dataDir 数据目录，个性化文件（AGENTS.md）所在位置。
+ * @param chineseReasoning 每请求读取「中文思考」开关的闭包——读快照而非缓存，设置切换后下一请求即生效。
+ * @returns section 渲染函数；返回 undefined 时不向提示词贡献任何字节。
+ * 内部逻辑：Explore 子会话直接跳过（与项目文件同理——它们是只读检索智能体，不注入用户级指令）；
+ * 个性化文件每请求重读（设置页保存后下一请求生效）；两个来源都存在时拼接，个性化内容在前。
+ */
 function personalInstructionsSection(dataDir: string, chineseReasoning: () => boolean) {
   return section('personal-instructions', async (input, context) => {
     const identity = await input.read.snapshot(Subagents, input.conversationId, context)
@@ -153,6 +199,11 @@ function personalInstructionsSection(dataDir: string, chineseReasoning: () => bo
 }
 
 // Re-read on every request so edits to the workspace's root instructions take effect immediately.
+/**
+ * project-instructions section：每请求重读工作区根 AGENTS.md 并渲染其内容。
+ * 内部逻辑：Explore 子会话不注入项目指令（对齐 ZCode 的 injectAgents.md: false）；
+ * 与个性化文件同理每请求重读，编辑即时生效、无需重启。
+ */
 const projectInstructionsSection = section('project-instructions', async (input, context) => {
   // Explore subagents are read-only retrieval agents (ZCode's injectAgentsMd: false): the project's
   // AGENTS.md stays out of their requests while every other conversation keeps it.
@@ -161,6 +212,12 @@ const projectInstructionsSection = section('project-instructions', async (input,
   return renderProjectInstructions(await loadProjectInstructions(input.env?.cwd))
 })
 
+/**
+ * work-policy section：本请求的工作政策（会话事实、计划模式提示、工具使用约定、待办约定）。
+ * 内部逻辑：并行读 Plans 与 Subagents 快照——计划模式激活时只渲染会话事实 + 只读约束（子会话与
+ * 主会话文案不同）；非计划模式按 enter/exit_plan_mode 的路由决定计划模式引导文案（子会话不引导）；
+ * 其余按顺序拼装 sessionFacts、planning、toolGuidance、todoPolicy，空段用 filter(Boolean) 剔除。
+ */
 const workPolicySection = section('work-policy', async (input, context) => {
   const [plan, identity] = await Promise.all([
     input.read.snapshot(Plans, input.conversationId, context),
@@ -197,7 +254,13 @@ const workPolicySection = section('work-policy', async (input, context) => {
   ].filter(Boolean).join('\n\n')
 })
 
-/** Default behavior policy. This extension deliberately contributes no tools or hooks. */
+/**
+ * 装配 runtime-policy 扩展（默认行为政策）。
+ * @param options.dataDir 数据目录，personal-instructions section 用它定位个性化文件。
+ * @param options.chineseReasoning 每请求读取「中文思考」设置的闭包，透传给 personalInstructionsSection。
+ * @returns 只含四个 section（runtime-core、personal-instructions、project-instructions、work-policy）的扩展；
+ * 有意不贡献任何工具或 hook——纯提示词侧政策，工具面完全由其他扩展提供。
+ */
 export function createWorkPolicyExtension(options: { dataDir: string; chineseReasoning: () => boolean }): Extension {
   return defineExtension({
     name: WORK_POLICY_EXTENSION_NAME,

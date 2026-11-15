@@ -77,6 +77,7 @@ export function createSettings(deps: SettingsDeps) {
       if (input.defaultAccessMode !== undefined) state.settings.defaultAccessMode = input.defaultAccessMode
       if (input.codemodeMode !== undefined) state.settings.codemodeMode = input.codemodeMode
       if (input.memoryEnabled !== undefined) state.settings.memoryEnabled = input.memoryEnabled
+      // 中文思考：section 渲染每请求读快照，这里落盘即可，无需同步 idle 会话。
       if (input.chineseReasoning !== undefined) state.settings.chineseReasoning = input.chineseReasoning
       if (input.showAnalysisConversations !== undefined) state.settings.showAnalysisConversations = input.showAnalysisConversations
       if (input.defaultModel === null) delete state.settings.defaultModel
