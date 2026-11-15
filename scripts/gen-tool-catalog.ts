@@ -124,9 +124,16 @@ async function main(): Promise<void> {
   if (args.length > 1 || (args.length === 1 && args[0] !== '--check')) usage()
   const check = args[0] === '--check'
   // The catalog documents the posix tool surface (`bash`); win32 registers `pwsh` instead, and
-  // tests/prompt-snapshot.test.ts skips that platform for the same reason.
+  // tests/prompt-snapshot.test.ts skips that platform for the same reason. A win32 run can
+  // neither validate the artifact nor regenerate it, so the two modes diverge: --check declares
+  // the skip and passes (drift protection lives on macOS/Linux), generation still refuses so a
+  // win32 run can never overwrite the posix-canonical catalog.
   if (process.platform === 'win32') {
-    console.error('gen-tool-catalog 在 win32 上不可用：该平台的 shell 工具是 pwsh，产物以 posix（bash）为准。')
+    if (check) {
+      console.error('gen-tool-catalog 在 win32 上跳过 --check：catalog 记录 posix（bash）工具面，本平台 shell 工具是 pwsh，漂移校验在 macOS/Linux 进行。')
+      return
+    }
+    console.error('gen-tool-catalog 在 win32 上不可用：该平台的 shell 工具是 pwsh，产物以 posix（bash）为准，请在 macOS/Linux 上运行 `npm run gen:docs`。')
     process.exit(1)
   }
 

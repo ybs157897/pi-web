@@ -152,3 +152,7 @@ pwsh `1..6 × 3s`（模型自选 `yieldTimeMs: 2000` 的极端短 yield，额外
 ### 6.7 跨平台收敛确认（同日，bb73bc7 后）
 
 macOS 侧提交 `browser-codemode` 技能（1af0f48）并补上 82eb002 漏掉的最后一条：work-policy 的 shell 条款按平台分支渲染（bash 版/pwsh 版、codemode 两变体），`bb73bc7` 归一为 `<shell-terms>`/`<shell-codemode-terms>` 占位符。Windows 侧 pull 后复核：`--check` **无需重生成即 fresh**（macOS 生成的 catalog 在 Windows 逐字节通过）；Windows 重生成与已提交文件哈希一致；路径无关性复验 SAME；环境泄漏 0；catalog 终值三平台一致（work-policy 595、skills-policy 1345、project-instructions 175、runtime-core 2955）。`doc:check` Windows 5/6，唯一红门为 `gen-tool-catalog` 的显式 win32 拒绝（跳过语义待拍板，见带回清单 1）。
+
+### 6.8 带回清单第 1 条落地：tool-catalog 跳过语义（同日）
+
+经拍板，`gen-tool-catalog` 的 win32 分支按模式拆分：`--check` 声明跳过（打印「catalog 记录 posix（bash）工具面…漂移校验在 macOS/Linux 进行」后 exit 0），生成模式维持拒绝（exit 1，防止 win32 运行覆写 posix 正典产物）。macOS/Linux 行为零变化。Windows `doc:check` 升至 **6/6 全绿**（6 个门全部通过或声明跳过）。注意 `npm run check` 整体在 Windows 仍会红在 vitest 的 17 个平台类失败（带回清单第 2 条，独立批次）；doc 门禁层面已无红项。
