@@ -263,7 +263,7 @@ class FakeRuntime implements Runtime {
     theme: 'system', locale: 'zh', fontSize: 14, codeFontSize: 11, terminalFontSize: 13,
     textFontFamily: '', codeFontFamily: '', terminalFontFamily: '',
     transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true, busySendMode: 'followUp',
-    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false, showAnalysisConversations: false,
+    defaultThinkingLevel: 'off', defaultAccessMode: 'workspaceWrite', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false, chineseReasoning: false, showAnalysisConversations: false,
   }
   settings() { return this.settingsValue }
   personalizationValue: Protocol.PersonalizationView = { content: '', filePath: '/tmp/pi-web-test/AGENTS.md', limitBytes: 100 * 1024 }

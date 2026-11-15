@@ -122,6 +122,7 @@ const settingsSchema = z.object({
   defaultThinkingLevel: z.enum(thinkingLevels).optional(), defaultAccessMode: z.enum(accessModes).optional(),
   codemodeMode: z.enum(CODEMODE_MODES).optional(),
   memoryEnabled: z.boolean().optional(),
+  chineseReasoning: z.boolean().optional(),
   showAnalysisConversations: z.boolean().optional(),
   defaultWorkspaceId: identifier.nullable().optional(), shortcuts: shortcutsSchema.nullable().optional(),
 }).strict().refine(value => Object.keys(value).length > 0)

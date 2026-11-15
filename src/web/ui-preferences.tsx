@@ -7,6 +7,7 @@ export const DEFAULT_UI_SETTINGS: AppSettings = {
   textFontFamily: '', codeFontFamily: '', terminalFontFamily: '',
   transcriptView: 'detailed', collapseTiming: 'completion', performanceUsage: 'detailed', codingViews: true,
   busySendMode: 'followUp', defaultThinkingLevel: 'off', defaultAccessMode: 'fullAccess', modelAllowlist: [], codemodeMode: 'on', memoryEnabled: false,
+  chineseReasoning: false,
   showAnalysisConversations: false,
 }
 

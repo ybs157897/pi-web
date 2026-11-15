@@ -122,6 +122,8 @@ export interface AppSettings {
   codemodeMode: CodemodeMode
   /** Cross-conversation project memory: index injection, memory writes, and background extraction. */
   memoryEnabled: boolean
+  /** Pin the model's reasoning (thinking) language to Chinese via a per-request prompt section. */
+  chineseReasoning: boolean
   /** Show defect-analysis sessions in the ordinary sidebar; they are list-only by default. */
   showAnalysisConversations: boolean
   defaultWorkspaceId?: string

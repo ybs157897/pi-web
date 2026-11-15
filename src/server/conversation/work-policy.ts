@@ -121,11 +121,34 @@ const runtimeCoreSection = section('runtime-core', () => RUNTIME_CORE_PROMPT)
  * editor's save applies to the next request without restarting the process. Explore subagents
  * skip it for the same reason they skip the project file: they are read-only retrieval agents.
  */
-function personalInstructionsSection(dataDir: string) {
+/**
+ * The Chinese-reasoning setting rides inside the personal-instructions section instead of its own
+ * section: live verification (2026-11-15) showed a standalone section buried among the tool
+ * policies gets ignored by the model, while this position — right after runtime-core with a
+ * user-level authority framing — is what the A/B runs validated.
+ */
+export const CHINESE_REASONING_INSTRUCTION = '思考（reasoning）全程使用中文；代码标识符、文件路径、命令、专有名词保留原文。'
+
+function renderChineseReasoningSetting(): string {
+  // Same framing and tag as renderPersonalization: the model only honors the instruction under
+  // the user-level authority framing (live-verified 2026-11-15 — a custom framing gets ignored).
+  return [
+    '用户设置适用于所有工作区。发生冲突时，项目指令和明确的任务指令优先：',
+    '<personal_instructions>',
+    CHINESE_REASONING_INSTRUCTION,
+    '</personal_instructions>',
+  ].join('\n')
+}
+
+function personalInstructionsSection(dataDir: string, chineseReasoning: () => boolean) {
   return section('personal-instructions', async (input, context) => {
     const identity = await input.read.snapshot(Subagents, input.conversationId, context)
     if (identity?.record?.profile === 'Explore') return undefined
-    return renderPersonalization(await readPersonalization(dataDir))
+    const personalization = renderPersonalization(await readPersonalization(dataDir))
+    const reasoning = chineseReasoning() ? renderChineseReasoningSetting() : undefined
+    if (personalization === undefined) return reasoning
+    if (reasoning === undefined) return personalization
+    return `${personalization}\n\n${reasoning}`
   })
 }
 
@@ -175,9 +198,9 @@ const workPolicySection = section('work-policy', async (input, context) => {
 })
 
 /** Default behavior policy. This extension deliberately contributes no tools or hooks. */
-export function createWorkPolicyExtension(options: { dataDir: string }): Extension {
+export function createWorkPolicyExtension(options: { dataDir: string; chineseReasoning: () => boolean }): Extension {
   return defineExtension({
     name: WORK_POLICY_EXTENSION_NAME,
-    sections: [runtimeCoreSection, personalInstructionsSection(options.dataDir), projectInstructionsSection, workPolicySection],
+    sections: [runtimeCoreSection, personalInstructionsSection(options.dataDir, options.chineseReasoning), projectInstructionsSection, workPolicySection],
   })
 }

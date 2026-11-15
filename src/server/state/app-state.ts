@@ -40,6 +40,8 @@ const settingsSchema = z.object({
   codemodeMode: z.enum(CODEMODE_MODES).default('on'),
   /** Cross-conversation memory; absent files written before this setting read as off. */
   memoryEnabled: z.boolean().default(false),
+  /** Chinese reasoning prompt section; absent files written before this setting read as off. */
+  chineseReasoning: z.boolean().default(false),
   /** Defect analysis stays out of the ordinary conversation sidebar unless explicitly enabled. */
   showAnalysisConversations: z.boolean().default(false),
   defaultWorkspaceId: z.string().min(1).optional(),
@@ -221,6 +223,7 @@ function defaultSettings(defaultThinkingLevel: ThinkingLevel | undefined, worksp
     defaultAccessMode: DEFAULT_ACCESS,
     codemodeMode: 'on',
     memoryEnabled: false,
+    chineseReasoning: false,
     showAnalysisConversations: false,
     ...(workspaceId === undefined ? {} : { defaultWorkspaceId: workspaceId }),
   }

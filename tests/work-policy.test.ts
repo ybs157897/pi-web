@@ -2,13 +2,15 @@ import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/conversation/work-policy.ts'
+import { CHINESE_REASONING_INSTRUCTION, createWorkPolicyExtension, WORK_POLICY_EXTENSION_NAME } from '../src/server/conversation/work-policy.ts'
 import { Subagents, type SubagentProfile } from '../src/server/tools/subagent.ts'
 
 const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 
 /** A data directory with no personalization file: the section must contribute nothing. */
 let dataDir = ''
+/** Chinese-reasoning toggle state for the fixture closures below. */
+let chineseReasoning = false
 beforeAll(async () => { dataDir = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-work-policy-data-'))) })
 afterAll(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }) })
 
@@ -41,7 +43,7 @@ function promptInput(options: {
 }
 
 async function renderPolicy(options: Parameters<typeof promptInput>[0] = {}): Promise<string> {
-  const extension = createWorkPolicyExtension({ dataDir })
+  const extension = createWorkPolicyExtension({ dataDir, chineseReasoning: () => chineseReasoning })
   const sections = extension.sections ?? []
   if (sections.length === 0) throw new Error('Runtime policy extension has no sections')
   const rendered = await Promise.all(sections.map(policy => policy.render(promptInput(options) as never, {} as never)))
@@ -49,7 +51,7 @@ async function renderPolicy(options: Parameters<typeof promptInput>[0] = {}): Pr
 }
 
 async function renderSection(key: string, options: Parameters<typeof promptInput>[0] = {}): Promise<string | undefined> {
-  const extension = createWorkPolicyExtension({ dataDir })
+  const extension = createWorkPolicyExtension({ dataDir, chineseReasoning: () => chineseReasoning })
   const policy = extension.sections?.find(candidate => candidate.key === key)
   if (!policy) throw new Error(`Missing ${key} section`)
   return await (policy.render as unknown as (input: unknown, context: unknown) => Promise<string | undefined>)(promptInput(options) as never, {} as never)
@@ -57,7 +59,7 @@ async function renderSection(key: string, options: Parameters<typeof promptInput
 
 describe('default runtime work policy', () => {
   it('has a stable extension identity and contributes no tools', () => {
-    const extension = createWorkPolicyExtension({ dataDir })
+    const extension = createWorkPolicyExtension({ dataDir, chineseReasoning: () => chineseReasoning })
 
     expect(extension.name).toBe(WORK_POLICY_EXTENSION_NAME)
     expect(extension.sections?.map(section => section.key)).toEqual(['runtime-core', 'personal-instructions', 'project-instructions', 'work-policy'])
@@ -265,5 +267,45 @@ describe('default runtime work policy', () => {
     expect(prompt).toContain('不启动自动续跑工作目标')
     expect(prompt).toContain('只读研究并提交计划')
     expect(prompt).not.toContain('todo_write')
+  })
+})
+
+describe('chinese reasoning setting', () => {
+  it('stays silent while the toggle is off', async () => {
+    chineseReasoning = false
+    try {
+      expect(await renderSection('personal-instructions')).toBeUndefined()
+    } finally {
+      chineseReasoning = false
+    }
+  })
+
+  it('renders the instruction through the personal-instructions framing while on', async () => {
+    chineseReasoning = true
+    try {
+      const section = await renderSection('personal-instructions')
+      if (section === undefined) throw new Error('personal-instructions should render while the toggle is on')
+      expect(section).toContain('<personal_instructions>')
+      expect(section).toContain(CHINESE_REASONING_INSTRUCTION)
+      expect(section).toContain('用户设置适用于所有工作区')
+    } finally {
+      chineseReasoning = false
+    }
+  })
+
+  it('appends the instruction after the personalization file body when both apply', async () => {
+    chineseReasoning = true
+    try {
+      await writeFile(join(dataDir, 'AGENTS.md'), '# Personal\n- Prefer short answers.\n', 'utf8')
+      const section = await renderSection('personal-instructions')
+      if (section === undefined) throw new Error('personal-instructions should render both parts when on')
+      expect(section).toContain('<personal_instructions>')
+      expect(section).toContain('<personal_instructions>')
+      expect(section.indexOf('<personal_instructions>')).toBeLessThan(section.lastIndexOf('<personal_instructions>'))
+      expect(await renderSection('personal-instructions', { subagentProfile: 'Explore' })).toBeUndefined()
+    } finally {
+      chineseReasoning = false
+      await rm(join(dataDir, 'AGENTS.md'), { force: true })
+    }
   })
 })
