@@ -148,3 +148,7 @@ pwsh `1..6 × 3s`（模型自选 `yieldTimeMs: 2000` 的极端短 yield，额外
 **新发现（带回清单补充）**：macOS 版 catalog/快照里的 `skills-policy: 1485` 包含 `builtin:browser-codemode` 技能条目，但 `skills/browser-codemode/` **从未提交进 git**（仅存在于 macOS 工作区，`git log --all` 无记录）。即已提交的 catalog/快照依赖 macOS 机器上未入库的本地文件——任何其他机器都无法复现该数值。需 macOS 侧拍板：提交该技能（随后 `npm run gen:docs` 重生成一次即三平台对齐）或明确口径后重生成。归一化已把路径差异消除，届时 skills-policy 将逐字节一致。
 
 **遗留同源问题（独立批次）**：`tests/__snapshots__/prompt/*.txt` 快照为 macOS 原始口径（含环境行原文与 browser-codemode 条目），`prompt-snapshot.test.ts` 仅 skip win32、Linux 从未验证；`normalizeEnvironmentLines` 的思路可在该批次复用。
+
+### 6.7 跨平台收敛确认（同日，bb73bc7 后）
+
+macOS 侧提交 `browser-codemode` 技能（1af0f48）并补上 82eb002 漏掉的最后一条：work-policy 的 shell 条款按平台分支渲染（bash 版/pwsh 版、codemode 两变体），`bb73bc7` 归一为 `<shell-terms>`/`<shell-codemode-terms>` 占位符。Windows 侧 pull 后复核：`--check` **无需重生成即 fresh**（macOS 生成的 catalog 在 Windows 逐字节通过）；Windows 重生成与已提交文件哈希一致；路径无关性复验 SAME；环境泄漏 0；catalog 终值三平台一致（work-policy 595、skills-policy 1345、project-instructions 175、runtime-core 2955）。`doc:check` Windows 5/6，唯一红门为 `gen-tool-catalog` 的显式 win32 拒绝（跳过语义待拍板，见带回清单 1）。
