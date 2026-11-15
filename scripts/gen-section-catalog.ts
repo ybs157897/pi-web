@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentSystemMessage, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
@@ -18,10 +19,10 @@ import type { Runtime } from '../src/server/contracts.ts'
  *   npx tsx scripts/gen-section-catalog.ts --check   # regenerate in memory, byte-compare with disk
  *
  * The enumeration pipeline mirrors tests/prompt-snapshot.test.ts: same temp-root layout, same
- * probe markers, same section extraction via getCurrentSystemMessage. Section lengths are the raw
- * `.length` of each section value (the snapshot files' convention), so the temp root prefix must
- * stay exactly as long as the test's (`pi-web-prompt-snapshot-`, 23 chars incl. trailing dash)
- * for the numbers to line up with tests/__snapshots__/prompt/.
+ * probe markers, same section extraction via getCurrentSystemMessage. Section lengths are the
+ * `.length` of each section value after `normalizeEnvironmentLines` (see below) — the catalog's
+ * numbers are environment-normalized, so they intentionally differ from the snapshot files' raw
+ * lengths for sections carrying environment facts.
  */
 
 const DOC_PATH = new URL('../docs/section-catalog.md', import.meta.url)
@@ -86,20 +87,44 @@ function textOfUser(content: unknown): string {
 function sectionsOf(messages: Parameters<typeof getCurrentSystemMessage>[0]): Record<string, string> {
   const system = getCurrentSystemMessage(messages)
   return Object.fromEntries(
-    Object.entries(system?.sections ?? {}).flatMap(([key, value]) => (typeof value === 'string' ? [[key, value] as const] : [])),
+    Object.entries(system?.sections ?? {}).flatMap(([key, value]) => (typeof value === 'string' ? [[key, normalizeEnvironmentLines(value)] as const] : [])),
   )
 }
 
+/**
+ * `sessionFacts()` (src/server/conversation/work-policy.ts) bakes environment-dependent lines
+ * into section bodies: the platform + shell text, the date + timezone, the model identity and
+ * shell ability, and the absolute workspace path. Raw lengths would only ever match on the
+ * machine profile that generated the catalog — OS, timezone, temp-dir shape, installed models —
+ * so each of those lines is normalized to a stable placeholder: every machine (macOS, Linux,
+ * Windows) regenerates byte-identical output and `--check` validates drift everywhere.
+ */
+const ENV_FACTS_LINES: ReadonlyMap<string, string> = new Map([
+  ['平台：', '平台：<platform>；命令解释器：<shell>。'],
+  ['当前日期：', '当前日期：<date>（时区 <timezone>）。'],
+  ['本请求模型：', '本请求模型：<model>；<permissions>。'],
+  ['当前工作区（默认当前项目）由系统提供：', '当前工作区（默认当前项目）由系统提供："<workspace>"。把此目录作为本次任务的项目范围。'],
+  ['工作区 ', '工作区 <workspace>/AGENTS.md 适用于工作区根目录及其后代：'],
+])
+
+function normalizeEnvironmentLines(text: string): string {
+  // Builtin skill catalog entries embed the checkout path (`(file: <repo>/skills/…/SKILL.md)`),
+  // in native separators on each machine; replace it in both separator conventions.
+  const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)))
+  let normalized = text.split(repoRoot).join('<repo>').split(repoRoot.replaceAll('\\', '/')).join('<repo>')
+  return normalized.split('\n').map(line => {
+    const clean = line.replace(/\r$/, '')
+    for (const [prefix, replacement] of ENV_FACTS_LINES) {
+      if (clean.startsWith(prefix)) return replacement
+    }
+    return clean
+  }).join('\n')
+}
+
 async function main(): Promise<void> {
-  // Section bodies embed the platform line from work-policy (shell interpreter text), so the
-  // catalog documents the posix surface exactly like gen-tool-catalog: a win32 run can neither
-  // validate it against --check nor regenerate it without baking in win32-specific counts.
-  if (process.platform === 'win32') {
-    console.error('gen-section-catalog 在 win32 上不可用：section 字符数含平台相关文案，产物以 posix 为准（同 gen-tool-catalog）。')
-    process.exit(1)
-  }
-  // Same layout as the test's beforeAll, including the 23-char temp prefix: raw section lengths
-  // (the snapshot convention) embed the workspace path, so the prefix length must not drift.
+  // Same layout as the test's beforeAll, same 23-char temp prefix. The workspace path no longer
+  // affects the catalog (normalizeEnvironmentLines placeholders it), the layout parity just
+  // keeps the capture pipeline comparable with tests/prompt-snapshot.test.ts.
   const rawRoot = await mkdtemp(join(tmpdir(), 'pi-web-section-catalog-'))
   const root = await realpath(rawRoot)
   const workspace = join(root, 'workspace')
@@ -254,7 +279,7 @@ function render(sectionsByVariant: Record<Variant, Record<string, string>>): str
     '',
     'sections 是每次模型请求按真实能力动态注入的提示词块：工具集、访问模式、计划模式、委派身份等决定某个 section 是否出现及其条款。本文由真实 runtime 枚举生成，作为穷举参考——目录只做索引，不复制正文。',
     '',
-    '生成方式：在临时工作区起 demo runtime，对 5 个变体（default、plan、readonly、subagent-general、subagent-explore）各发一条真实请求，在 provider 边界捕获 system message 的 sections（口径与 `tests/prompt-snapshot.test.ts` 一致，长度为 section 正文的字符数）。规范源在代码：改文案请去对应定义文件修改，再重新生成本目录。',
+    '生成方式：在临时工作区起 demo runtime，对 5 个变体（default、plan、readonly、subagent-general、subagent-explore）各发一条真实请求，在 provider 边界捕获 system message 的 sections（口径与 `tests/prompt-snapshot.test.ts` 一致）。长度为 section 正文的字符数，其中环境相关行（平台/命令解释器、日期/时区、模型身份、工作区路径）按占位符归一（见 `scripts/gen-section-catalog.ts` 的 `normalizeEnvironmentLines`），因此在 macOS / Linux / Windows 任一平台重新生成都逐字节一致，`--check` 在三平台均可校验漂移。规范源在代码：改文案请去对应定义文件修改，再重新生成本目录。',
     '',
     '## 总表',
     '',

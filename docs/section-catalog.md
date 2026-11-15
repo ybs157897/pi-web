@@ -4,19 +4,19 @@
 
 sections 是每次模型请求按真实能力动态注入的提示词块：工具集、访问模式、计划模式、委派身份等决定某个 section 是否出现及其条款。本文由真实 runtime 枚举生成，作为穷举参考——目录只做索引，不复制正文。
 
-生成方式：在临时工作区起 demo runtime，对 5 个变体（default、plan、readonly、subagent-general、subagent-explore）各发一条真实请求，在 provider 边界捕获 system message 的 sections（口径与 `tests/prompt-snapshot.test.ts` 一致，长度为 section 正文的字符数）。规范源在代码：改文案请去对应定义文件修改，再重新生成本目录。
+生成方式：在临时工作区起 demo runtime，对 5 个变体（default、plan、readonly、subagent-general、subagent-explore）各发一条真实请求，在 provider 边界捕获 system message 的 sections（口径与 `tests/prompt-snapshot.test.ts` 一致）。长度为 section 正文的字符数，其中环境相关行（平台/命令解释器、日期/时区、模型身份、工作区路径）按占位符归一（见 `scripts/gen-section-catalog.ts` 的 `normalizeEnvironmentLines`），因此在 macOS / Linux / Windows 任一平台重新生成都逐字节一致，`--check` 在三平台均可校验漂移。规范源在代码：改文案请去对应定义文件修改，再重新生成本目录。
 
 ## 总表
 
 | section | default | plan | readonly | subagent-general | subagent-explore | 正文长度(default,字符) | 定义处 |
 | --- | --- | --- | --- | --- | --- | ---: | --- |
 | runtime-core | ✓ | ✓ | ✓ | ✓ | ✓ | 2955 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
-| project-instructions | ✓ | ✓ | ✓ | ✓ | — | 260 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
-| work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 722 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
+| project-instructions | ✓ | ✓ | ✓ | ✓ | — | 175 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
+| work-policy | ✓ | ✓ | ✓ | ✓ | ✓ | 621 | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
 | schedule-policy | ✓ | — | — | — | — | 82 | [`src/server/tools/schedule.ts`](../src/server/tools/schedule.ts) |
 | wetrack-analysis | ✓ | — | ✓ | ✓ | — | 611 | [`src/server/tools/wetrack-analysis.ts`](../src/server/tools/wetrack-analysis.ts) |
 | goal-policy | ✓ | ✓ | ✓ | — | — | 184 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
-| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1485 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
+| skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1065 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
 | codemode | ✓ | ✓ | ✓ | ✓ | — | 808 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
@@ -37,13 +37,13 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section project-instructions
 
 - 注入条件：工作区根存在 AGENTS.md 时注入其内容（每次请求重读）；Explore 子智能体不注入项目指令。
-- 实测长度（字符）：default 260 · plan 260 · readonly 260 · subagent-general 260
+- 实测长度（字符）：default 175 · plan 175 · readonly 175 · subagent-general 175
 - 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
 
 ### section work-policy
 
 - 注入条件：每个请求注入会话事实（工作区、平台、日期、模型、写权限、shell 能力）与工具路由、待办约定；计划模式、只读会话与子会话会收窄其中条款。
-- 实测长度（字符）：default 722 · plan 325 · readonly 656 · subagent-general 722 · subagent-explore 388
+- 实测长度（字符）：default 621 · plan 225 · readonly 556 · subagent-general 621 · subagent-explore 288
 - 定义处：[`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts)
 
 ### section schedule-policy
@@ -67,7 +67,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section skills-policy
 
 - 注入条件：skill 工具可调用时注入技能目录约定，并对比上次已展示内容提示新增技能。
-- 实测长度（字符）：default 1485 · plan 1471 · readonly 1471 · subagent-general 1485
+- 实测长度（字符）：default 1065 · plan 1051 · readonly 1051 · subagent-general 1065
 - 定义处：[`src/server/tools/skill.ts`](../src/server/tools/skill.ts)
 
 ### section delegation-policy

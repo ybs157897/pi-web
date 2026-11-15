@@ -134,3 +134,17 @@ pwsh `1..6 × 3s`（模型自选 `yieldTimeMs: 2000` 的极端短 yield，额外
 ### 6.5 行尾事故与纠正（同日）
 
 `d7b5181`（gen-section-catalog 守卫首版）误把 `scripts/gen-section-catalog.ts` 以 CRLF blob 入库：本机 `core.autocrlf` 被我改为 false 后，`.gitattributes` 只覆盖 `*.md`，其余 ~400 个「i/lf w/crlf」文件失去归一化保护，编辑提交即整文件翻转。已纠正：恢复本地 `autocrlf=true`（`.gitattributes` 继续强制 md 为 LF，其余文件提交时归一化为 LF，与 macOS 作者行为一致），并以 LF 重提守卫。**带回清单补充**：建议维护者评估把 `.gitattributes` 扩到全仓文本（如 `* text=auto`）并一次性 renormalize，根治 Windows 工作区混行尾；在此之前，Windows 机器请保持 `core.autocrlf=true`（仓库级）。
+
+### 6.6 B-section 落地：catalog 环境归一化（同日）
+
+按「三平台均为正式运行环境」的前提实现 B：`gen-section-catalog.ts` 新增 `normalizeEnvironmentLines`，在捕获后、计数前把 section 正文中的环境相关内容归一为稳定占位符——
+
+- `sessionFacts()` 四类环境行（平台/命令解释器、日期/时区、模型身份、工作区 scope 行）与 `工作区 <path>/AGENTS.md 适用于…` 行 → 按行前缀替换为 `<platform>`/`<date>`/`<model>`/`<workspace>` 占位符；
+- 内置技能目录条目里的 checkout 绝对路径（`(file: <repo>/skills/…/SKILL.md)`）→ `<repo>`（native 与 `/` 两种分隔符形态都替换）；
+- 顺带剥离 `\r`（防源文件 CRLF 渗入计数）。
+
+验证（Windows 实机）：typecheck ✅；两次生成字节一致（确定性 ✅）；`TMPDIR=C:\t` 与深层用户 temp 两种临时目录形状下生成结果字节一致（路径无关性 ✅）；catalog 零环境泄漏（机器路径/时区/日期 grep 为 0）；与 macOS 生成值对比，**所有非环境 section 的数值逐字节一致**（runtime-core 2955 等），仅 3 个环境 section 按设计变为归一化值（project-instructions 175、work-policy 621、skills-policy 1065）。`doc:check` 在 Windows 升至 **5/6**：`gen-section-catalog --check` 首次在 Windows **真实通过**，win32 守卫已随之撤除（归一化后不再需要）；`gen-tool-catalog` 维持显式 win32 拒绝（工具面本身按平台不同，属产品语义）。
+
+**新发现（带回清单补充）**：macOS 版 catalog/快照里的 `skills-policy: 1485` 包含 `builtin:browser-codemode` 技能条目，但 `skills/browser-codemode/` **从未提交进 git**（仅存在于 macOS 工作区，`git log --all` 无记录）。即已提交的 catalog/快照依赖 macOS 机器上未入库的本地文件——任何其他机器都无法复现该数值。需 macOS 侧拍板：提交该技能（随后 `npm run gen:docs` 重生成一次即三平台对齐）或明确口径后重生成。归一化已把路径差异消除，届时 skills-policy 将逐字节一致。
+
+**遗留同源问题（独立批次）**：`tests/__snapshots__/prompt/*.txt` 快照为 macOS 原始口径（含环境行原文与 browser-codemode 条目），`prompt-snapshot.test.ts` 仅 skip win32、Linux 从未验证；`normalizeEnvironmentLines` 的思路可在该批次复用。
