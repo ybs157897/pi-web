@@ -10,8 +10,18 @@ const PROBE_SAMPLES = resolve('artifacts/wetrack-probe/samples')
 const FIXTURE_ENV: NodeJS.ProcessEnv = { ...process.env, WETRACK_FIXTURE: resolve(root, 'fixtures/demo.json') }
 let child: ChildProcessWithoutNullStreams | undefined
 
+/**
+ * WeTrack 插件 MCP server 的进程级测试：spawn plugins/wetrack-defects/server.mjs，
+ * 走真实 stdio JSON-RPC。验证工具清单、fixture/CLI 数据源、信封解包、
+ * 分层报告渲染与 UI 资源。
+ */
 interface RpcResponse { jsonrpc: '2.0'; id: number; result?: unknown; error?: { message?: string } }
 
+/**
+ * 构造以「node -e 脚本」为 CLI 后端的环境变量。
+ * @param script CLI 被调用时执行的 Node 脚本（通常输出固定 JSON）
+ * @returns 清空 fixture/script/CLI 配置、只留 WETRACK_CLI_JSON 的环境
+ */
 function cliEnv(script: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -22,6 +32,11 @@ function cliEnv(script: string): NodeJS.ProcessEnv {
   }
 }
 
+/**
+ * 启动插件 MCP server 子进程并建立行分帧的 JSON-RPC 客户端。
+ * @param env 传给子进程的环境变量，默认指向内置 demo fixture
+ * @returns request 按 id 发送请求并在 5 秒内等待对应响应（超时抛错）；close 杀掉子进程
+ */
 function start(env: NodeJS.ProcessEnv = FIXTURE_ENV): { request: (id: number, method: string, params?: unknown) => Promise<RpcResponse>; close: () => void } {
   const proc = spawn(process.execPath, ['server.mjs'], {
     cwd: root,
@@ -52,9 +67,13 @@ function start(env: NodeJS.ProcessEnv = FIXTURE_ENV): { request: (id: number, me
   return { request, close: () => { proc.kill() } }
 }
 
+/** 兜底回收子进程，防止用例失败时留下孤儿 node 进程。 */
 afterEach(() => { child?.kill(); child = undefined })
 
 describe('WeTrack plugin MCP server', () => {
+  // 基础链路：initialize 握手 → tools/list → wetrack_pending（fixture 两条 +
+  // fullscreen UI 资源元数据）→ wetrack_detail（模型要拿到完整描述而非单行摘要）→
+  // wetrack_report 分层结构 → ui://wetrack/board 资源可读。
   it('lists pending defects, reads a detail and renders a hierarchical report', async () => {
     const { request, close } = start()
     try {
@@ -88,6 +107,8 @@ describe('WeTrack plugin MCP server', () => {
     }
   })
 
+  // rd-cli 信封契约：success:true 解包 data；success:false（含非零退出码）转为
+  // isError 工具错误，错误文案保留「code：message」原文。
   it('unwraps the rd-cli envelope and reports business failures as tool errors', async () => {
     const ok = start(cliEnv('process.stdout.write(JSON.stringify({success:true,data:{items:[{defectNumber:"DTS000000666"}]}}))'))
     try {
@@ -108,6 +129,9 @@ describe('WeTrack plugin MCP server', () => {
     }
   })
 
+  // 真实 CLI 子进程（shell 脚本）路径：过滤参数映射为 advanced-query 旗标、
+  // detail 正确解包；advanced-query 需要至少一个项目/产品线/缺陷/需求过滤条件，
+  // 缺失时应引导补参而不是放行到 BIZ_400。
   it.skipIf(process.platform === 'win32')('maps filters to advanced-query flags, unwraps detail and guards filter-only queries', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi web wetrack-'))
     try {
@@ -133,7 +157,7 @@ describe('WeTrack plugin MCP server', () => {
         const detail = await tool.request(2, 'tools/call', { name: 'wetrack_detail', arguments: { defectNumber: 'DTS006744740' } }) as { result: { structuredContent: { defectNumber: string; moduleName: string } } }
         expect(detail.result.structuredContent).toMatchObject({ defectNumber: 'DTS006744740', moduleName: '安保服务' })
 
-        // advanced-query needs one of project/product-line/defect/requirement, so ask instead of failing with BIZ_400.
+        // advanced-query 至少需要项目/产品线/缺陷/需求之一，缺参应主动引导而不是以 BIZ_400 失败。
         const guarded = await tool.request(3, 'tools/call', { name: 'wetrack_pending', arguments: { owner: '340188' } }) as { result: { isError?: boolean; content: Array<{ text: string }> } }
         expect(guarded.result.isError).toBe(true)
         expect(guarded.result.content[0]?.text).toContain('项目编号')
@@ -145,6 +169,8 @@ describe('WeTrack plugin MCP server', () => {
     }
   })
 
+  // 探针回放：用抓包的真实 detail 响应原样回放（需本地存在 artifacts 样本），
+  // 验证解析器对真实数据形状（含 processHistories）的兼容。
   it.skipIf(!existsSync(PROBE_SAMPLES))('replays the captured detail response', async () => {
     const text = await readFile(join(PROBE_SAMPLES, 'detail.json'), 'utf8')
     const tool = start(cliEnv(`process.stdout.write(${JSON.stringify(text)})`))

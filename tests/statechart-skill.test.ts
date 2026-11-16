@@ -5,18 +5,22 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SkillStore } from '../src/server/skills/store.ts'
 
 /**
- * Pins the shipped builtin bundle: the statechart Skill must stay discoverable,
- * frontmatter-clean, and loadable with its method reference — it is part of the
- * product surface (prompt catalog + analysis workflow), not test scenery.
+ * 固定（pin）内置技能包的形状：statechart 技能必须始终可发现、frontmatter 干净、
+ * 且能连同方法参考文档一起加载——它是产品表面（提示词目录 + 分析工作流）的一部分，
+ * 不是测试布景。
  */
 const temporaryRoots: string[] = []
 
+/**
+ * 构造只含内置技能包的 SkillStore。
+ * @returns 默认 builtinRoot 相对于 store 模块（即仓库 skills/ 目录）解析、
+ *          且不挂全局根的 SkillStore，因此目录内容恰为随仓库分发的内置技能。
+ */
 function bundledStore() {
-  // The default builtinRoot resolves relative to the store module, i.e. the repo's
-  // skills/ directory; no global root, so the catalog is exactly the bundle.
   return new SkillStore()
 }
 
+/** 逐用例清理临时 workspace 目录，避免 tmpdir 中残留垃圾。 */
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -34,12 +38,15 @@ describe('builtin statechart skill', () => {
       writable: false,
     })
     expect(statechart?.description).toContain('状态 × 事件')
-    // Both sides of the trigger must survive the model catalog's 250-character cap.
+    // 触发词两侧的语义都必须完整越过模型目录的 250 字符上限。
     expect(statechart!.description.length).toBeLessThanOrEqual(250)
     expect(statechart?.description).toContain('普通业务流程查询、无状态逻辑和格式调整不适用')
     expect(await store.validate(workspace, 'statechart')).toEqual({ valid: true, errors: [], warnings: [] })
   })
 
+  // 验证加载后的技能正文与方法参考资源：正文必须保留工作流关键要素
+  // （穷举提问、ask_user_question、references/method.md 引用），
+  // 且不包含已被修订掉的旧表述「问题未决就结束回合」。
   it('loads with its method reference and carries the workflow essentials', async () => {
     const workspace = await realpath(await mkdtemp(join(tmpdir(), 'pi-web-statechart-')))
     temporaryRoots.push(workspace)

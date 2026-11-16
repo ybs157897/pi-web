@@ -37,10 +37,17 @@ import {
 import { createSubagentTools } from '../src/server/tools/subagent.ts'
 import { Plans } from '../src/server/tools/plan.ts'
 
+/**
+ * 团队（team）机制契约测试：提交前的计划模式继承（subagent/teammate 回放、消息目标约束）、
+ * 团队工具提示词路由（按可见工具裁剪、成员/Lead 区分、DSH 协调补充、快照门）、
+ * 任务看板（创建/依赖/就绪/写域/成员名/CAS 状态机/授权/删除/上限）、
+ * spawn 回放计划与 provisioning 对账。
+ */
 const NOW = 1_800_000_000_000
 const LEAD: TeamActor = { lead: true, name: 'lead' }
 const OWNER: TeamActor = { lead: false, name: 'researcher' }
 const STRANGER: TeamActor = { lead: false, name: 'writer' }
+/** 团队工具选项桩：不准备子会话、成员一律不活跃、watch 返回空取消器。 */
 const teamOptions: TeamToolOptions = {
   prepareChild: async () => undefined,
   conversationInfo: async () => ({ status: 'inactive' }),
@@ -48,10 +55,19 @@ const teamOptions: TeamToolOptions = {
   memberSession: async () => ({ exists: false, linked: false, promptRejected: false, running: false }),
 }
 
+/**
+ * 构造团队文档 fixture。
+ * @param tasks 任务列表
+ * @param members 成员列表
+ */
 function doc(tasks: TeamTaskRecord[] = [], members: TeamMemberRecord[] = []): TeamDocValue {
   return { members, tasks }
 }
 
+/**
+ * 构造任务 fixture。
+ * @returns revision 1、pending、无依赖无写域的基准任务
+ */
 function task(overrides: Partial<TeamTaskRecord> = {}): TeamTaskRecord {
   return {
     id: 'task-1',
@@ -67,10 +83,21 @@ function task(overrides: Partial<TeamTaskRecord> = {}): TeamTaskRecord {
   }
 }
 
+/**
+ * 在文档上创建任务并返回新文档与任务（链式构造看板状态的便捷封装）。
+ */
 function added(base: TeamDocValue, input: Parameters<typeof createTask>[1]): { doc: TeamDocValue; task: TeamTaskRecord } {
   return createTask(base, input, NOW)
 }
 
+/**
+ * 渲染 team-policy 提示词 section 的便捷封装。
+ * @param role lead（默认，快照返回无 TeamLink）或 teammate（快照返回已链接成员）
+ * @param offered 本请求可见的工具名
+ * @param callable 可调用集合（codemode 场景）
+ * @param planActive Plans 文档是否处于计划模式
+ * @returns 渲染后的策略文本
+ */
 async function renderTeamPolicy(options: {
   role?: 'lead' | 'teammate'
   offered?: string[]
@@ -102,6 +129,10 @@ async function renderTeamPolicy(options: {
   return (await render(input, {} as Context)) ?? ''
 }
 
+/**
+ * 按名取已注册工具，缺失抛错。
+ * @returns 带 execute 的工具定义（类型放宽，便于桩 API 调用）
+ */
 function registeredTool(extension: { tools?: readonly { name: string }[] }, name: string) {
   const found = extension.tools?.find(candidate => candidate.name === name)
   if (!found) throw new Error(`Missing ${name} tool`)
@@ -109,6 +140,8 @@ function registeredTool(extension: { tools?: readonly { name: string }[] }, name
 }
 
 describe('Plan inheritance before child submissions', () => {
+  // 回放的 subagent 调用复用子会话时，必须在 submit 之前把父会话的 Plan 模式
+  // 重新施加到子会话——否则计划约束在复用路径上丢失。
   it('reapplies Plan mode before a replayed subagent submits to its reused child', async () => {
     const parentId = 1 as ConversationId
     const childId = 2 as ConversationId
@@ -149,6 +182,7 @@ describe('Plan inheritance before child submissions', () => {
     expect(child.submit).toHaveBeenCalledOnce()
   })
 
+  // 同理：回放的 spawn_teammate 复用成员子会话前也要先施加 Plan 模式。
   it('reapplies Plan mode before a replayed teammate submits to its reused child', async () => {
     const leadId = 1 as ConversationId
     const childId = 2 as ConversationId
@@ -197,6 +231,8 @@ describe('Plan inheritance before child submissions', () => {
     expect(child.submit).toHaveBeenCalledOnce()
   })
 
+  // 成员向 Lead 发消息：提交前把成员自身的 Plan 模式约束同步到目标（Lead）会话，
+  // 保持计划约束沿消息链路传播。
   it('constrains a teammate target before a team message is submitted', async () => {
     const memberId = 1 as ConversationId
     const leadId = 2 as ConversationId
@@ -241,6 +277,8 @@ describe('Plan inheritance before child submissions', () => {
 })
 
 describe('team tool prompt policy', () => {
+  // 直接工具路由：只展示本次可见的 Lead 工具及其直接调用形式，其余工具的
+  // 指引全部省略。
   it('shows only directly callable Lead tools and their direct routes', async () => {
     const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
     expect(prompt).toContain('直接调用 `spawn_teammate({ name: "worker", prompt: "..." })`')
@@ -250,6 +288,8 @@ describe('team tool prompt policy', () => {
     expect(prompt).not.toContain('team_task_update')
   })
 
+  // codemode-only 路由：可调用集合中的工具改写为 `await tools.<name>` 脚本形式，
+  // 不可用的工作流步骤（send_message / create）不出现。
   it('routes codemode-only Lead tools through codemode and omits unavailable workflow steps', async () => {
     const prompt = await renderTeamPolicy({
       offered: ['codemode'],
@@ -261,6 +301,8 @@ describe('team tool prompt policy', () => {
     expect(prompt).not.toContain('team_task_create')
   })
 
+  // 成员视角与 Lead 视角区分：成员只见 send_message 指引不见委派工具；
+  // 计划模式激活时插入「对所有成员只读 / 子会话继承计划」并隐去任务写操作。
   it('keeps teammate guidance distinct from Lead delegation and honors inherited Plan mode', async () => {
     const teammate = await renderTeamPolicy({ role: 'teammate', offered: ['send_message'] })
     expect(teammate).toContain('你是 Agent 团队的成员“researcher”')
@@ -280,6 +322,8 @@ describe('team tool prompt policy', () => {
     expect(plan).not.toContain('验证通过后才标记完成')
   })
 
+  // 委派提示词自包含要求：subagent 与 spawn_teammate 的工具描述都必须写明
+  // 自包含任务、范围、约束授权、验收标准、证据与互不重叠/保留等要求。
   it('makes subagent and teammate delegation prompts self-contained and scope-bounded', () => {
     const subagent = createSubagentTools({ prepareChild: async () => undefined })
       .tools?.find(candidate => candidate.name === 'subagent')?.description ?? ''
@@ -296,6 +340,8 @@ describe('team tool prompt policy', () => {
     }
   })
 
+  // DSH 协调补充：对应工具可路由时才渲染（写域前缀、警告非锁、收件箱语义、
+  // wait 指引、答复收集）；成员视角只保留与其相关的条目。
   it('renders the DSH coordination additions once their tools are routable', async () => {
     const lead = await renderTeamPolicy({
       offered: [
@@ -315,6 +361,8 @@ describe('team tool prompt policy', () => {
     expect(teammate).not.toContain('警告，不是锁')
   })
 
+  // 路由不可达时补充项保持关闭；wait 指引点名 send_message，因此没有消息工具的
+  // Lead 也看不到该指引（其余 wait 文案保留）。
   it('keeps the coordination additions off when their tools are not routable', async () => {
     const prompt = await renderTeamPolicy({ offered: ['spawn_teammate', 'team_task_list'] })
     expect(prompt).not.toContain('send_message')
@@ -327,6 +375,8 @@ describe('team tool prompt policy', () => {
     expect(noMessaging).toContain('最终答复前')
   })
 
+  // 快照门：Lead / 成员 / 计划受限 Lead 三种完整提示词落盘快照（tests/__snapshots__/prompt/），
+  // 改提示词必须显式刷新并评审。
   it('snapshots actual team roles and the plan-limited tool set', async () => {
     const offered = ['spawn_teammate', 'send_message', 'list_agents', 'wait_agent', 'interrupt_agent', 'team_task_create', 'team_task_list', 'team_task_get', 'team_task_update']
     const lead = await renderTeamPolicy({ offered })
@@ -340,6 +390,8 @@ describe('team tool prompt policy', () => {
     await expect(planLead).toMatchFileSnapshot('./__snapshots__/prompt/team-plan-lead.txt')
   })
 
+  // 竞态恢复：成员在「活跃检查」与「watcher 挂载」之间完成时，等待函数应立即
+  // 返回 false（变化已发生）而不是挂到超时。
   it('recovers a member completion between the active check and watcher setup', async () => {
     const base = doc([], [{ name: 'worker', role: 'teammate', phase: 'active', conversationId: '2' }])
     const api = { snapshot: async () => base, watchDoc: async () => undefined }
@@ -350,6 +402,8 @@ describe('team tool prompt policy', () => {
     await expect(waitForTeamChange(api as never, options, 1 as ConversationId, 10_000, {} as Context, observed)).resolves.toBe(false)
   })
 
+  // 预览边界：超长答复标记 truncated（截到 2000 字符、带会话 API 路径）；
+  // 读取失败的成员标记 read_failed 且不掩盖其他成员的预览。
   it('reports truncated and unreadable teammate previews with their source', async () => {
     const base = doc([], [
       { name: 'long', role: 'teammate', phase: 'active', conversationId: '2' },
@@ -372,6 +426,8 @@ describe('team tool prompt policy', () => {
     ])
   })
 
+  // fork 语义：fork 上下文继承 Lead 的对话与模型，显式传 model 必须拒绝
+  // （且不得触发模型解析）。
   it('refuses a fork teammate with an explicit model', async () => {
     const api = {
       conversationId: 1 as ConversationId,
@@ -391,6 +447,8 @@ describe('team tool prompt policy', () => {
 })
 
 describe('team task board', () => {
+  // 创建契约：任务编号顺序递增、revision 1、文本修剪、写域归一去重
+  // （反斜杠/前导 ./ 均归一为 src/web）、无依赖时无环。
   it('creates revision-one pending tasks, normalized and de-duplicated', () => {
     const first = added(doc(), {
       subject: '  调研面板  ',
@@ -416,6 +474,8 @@ describe('team task board', () => {
     expect(detectCycle(second.doc.tasks)).toBeUndefined()
   })
 
+  // 依赖校验矩阵：空文本、未知/重复/自引用/成环依赖都要拒绝；
+  // detectCycle 返回环上的首个任务 id。
   it('rejects empty text, unknown, duplicate, self and cyclic dependencies', () => {
     expect(() => added(doc(), { subject: '   ', description: 'x' })).toThrow(/subject must be non-empty/)
     expect(() => added(doc(), { subject: 'x', description: '  ' })).toThrow(/description must be non-empty/)
@@ -431,13 +491,15 @@ describe('team task board', () => {
     expect(() => setDependencies(chained.doc, 'task-1', 1, LEAD, ['task-3'], NOW)).toThrow(/dependency cycle/)
     expect(() => setDependencies(chained.doc, 'task-1', 1, LEAD, ['task-1'], NOW)).toThrow(/cannot block itself/)
 
-    // task-1 depends on task-3; task-3 depends back on task-1: the candidate graph has a cycle.
+    // task-1 依赖 task-3、task-3 又回头依赖 task-1：候选图成环。
     const acyclic = added(base, { subject: 'x', description: 'y' })
     const cycle = setDependencies(acyclic.doc, 'task-1', 1, LEAD, ['task-3'], NOW)
     expect(() => setDependencies(cycle.doc, 'task-3', 1, LEAD, ['task-1'], NOW)).toThrow(/dependency cycle/)
     expect(detectCycle([task({ id: 'task-1', blockedBy: ['task-2'] }), task({ id: 'task-2', blockedBy: ['task-1'] })])).toBe('task-1')
   })
 
+  // 就绪推导：被阻塞任务 not ready；写域重叠是建议性警告（进行中任务的父目录
+  // 包含本任务的文件级写域）而非锁；completed/进行中（他人所有）任务不可 claim。
   it('derives readiness, the blocked flag and advisory write-scope warnings', () => {
     const tasks = [
       task({ id: 'task-1', status: 'in_progress', owner: 'lead', writeScopes: ['src/web'] }),
@@ -448,7 +510,7 @@ describe('team task board', () => {
     expect(taskView(tasks, tasks[1]!)).toMatchObject({
       ready: true,
       blocked: false,
-      // The in-progress task's `src/web` contains this task's scope: advisory warning, not a lock.
+      // 进行中任务的 `src/web` 包含本任务的写域：建议性警告，不是锁。
       writeScopeWarnings: ['write scopes overlap with task-1'],
     })
     expect(taskView(tasks, tasks[2]!)).toMatchObject({ ready: false, blocked: true })
@@ -459,6 +521,8 @@ describe('team task board', () => {
     })
   })
 
+  // 写域归一化：反斜杠转正斜杠、去 ./ 前缀与尾斜杠、去重；
+  // 绝对路径、盘符、父目录穿越、内点号/空段等一律拒绝。
   it('normalizes advisory write scopes and refuses absolute or traversing ones', () => {
     expect(normalizeWriteScope('src\\web\\TeamPanel.tsx')).toBe('src/web/TeamPanel.tsx')
     expect(normalizeWriteScope('./src/web/')).toBe('src/web')
@@ -468,6 +532,7 @@ describe('team task board', () => {
     }
   })
 
+  // 成员名规则：小写 kebab-case、≤64 字符；保留名 lead 禁用。
   it('enforces the member-name rules including the reserved lead name', () => {
     expect(normalizeMemberName('researcher-2')).toBe('researcher-2')
     expect(() => normalizeMemberName('lead')).toThrow(/not "lead"/)
@@ -476,6 +541,8 @@ describe('team task board', () => {
     expect(() => normalizeMemberName(`a${'b'.repeat(64)}`)).toThrow(/at most 64 characters/)
   })
 
+  // 状态机 CAS：claim/release/complete/reopen 全部以 expectedRevision 比较设置——
+  // 陈旧修订、他人所有、非前置状态（如 release 已 pending 的任务）都要拒绝。
   it('compare-and-sets claim, release, complete and reopen', () => {
     const created = added(doc(), { subject: 'Task', description: 'Work' })
     const claimed = claimTask(created.doc, 'task-1', 1, 'researcher', NOW + 1)
@@ -499,6 +566,7 @@ describe('team task board', () => {
     expect(() => reopenTask(released.doc, 'task-1', 3, LEAD, NOW + 5)).toThrow(/only a completed task can reopen/)
   })
 
+  // 阻塞传播：blocker 完成前依赖者不可 claim（blocked=true）；完成后立即 ready。
   it('unblocks dependents only after their blocker completes', () => {
     const first = added(doc(), { subject: 'First', description: 'Do first' })
     const second = added(first.doc, { subject: 'Second', description: 'Do second', blockedBy: ['task-1'] })
@@ -512,6 +580,7 @@ describe('team task board', () => {
     expect(claimTask(done.doc, 'task-2', 1, 'writer', NOW).task).toMatchObject({ status: 'in_progress', owner: 'writer' })
   })
 
+  // 依赖改写：set_dependencies 整组替换 blockedBy 并推进修订；重复引用拒绝。
   it('moves blockers with set_dependencies and rejects duplicate or self references', () => {
     const first = added(doc(), { subject: 'First', description: 'Do first' })
     const second = added(first.doc, { subject: 'Second', description: 'Do second' })
@@ -522,6 +591,8 @@ describe('team task board', () => {
     expect(() => setDependencies(linked.doc, 'task-3', 2, LEAD, ['task-1', 'task-1'], NOW + 2)).toThrow(/duplicate blocker/)
   })
 
+  // 授权矩阵：完成/编辑限 owner 或 Lead；改派仅限 Lead 且目标必须是活跃成员；
+  // 改派可清空 owner 回到 pending；被阻塞任务不可改派。
   it('authorizes mutation to the owner or the Lead, and reassignment to the Lead only', () => {
     const created = added(doc([], [{ name: 'researcher', role: 'teammate', phase: 'active', conversationId: '17' }]), {
       subject: 'Task',
@@ -547,6 +618,8 @@ describe('team task board', () => {
     expect(() => reassignTask(blocked.doc, 'task-3', 1, LEAD, 'researcher', NOW)).toThrow(/is blocked/)
   })
 
+  // 删除语义：仍被依赖的任务不可删；删除是墓碑（status=deleted）而非物理移除；
+  // 墓碑不可再 claim/edit/delete；已删的 blocker 不再算可解析依赖（不能以其为阻塞引用）。
   it('deletes only dependency-free tasks and never mutates a tombstone', () => {
     const first = added(doc(), { subject: 'First', description: 'Do first' })
     const second = added(first.doc, { subject: 'Second', description: 'Do second', blockedBy: ['task-1'] })
@@ -558,11 +631,13 @@ describe('team task board', () => {
     expect(() => claimTask(removed.doc, 'task-2', 2, 'researcher', NOW)).toThrow(/is deleted/)
     expect(() => editTask(removed.doc, 'task-2', 2, LEAD, { subject: 'x' }, NOW)).toThrow(/is deleted/)
     expect(taskView(removed.doc.tasks, removed.doc.tasks[1]!)).toMatchObject({ status: 'deleted', ready: false })
-    // A deleted blocker no longer counts as a resolvable dependency.
+    // 已删除的 blocker 不再算可解析的依赖。
     expect(() => added(removed.doc, { subject: 'Third', description: 'x', blockedBy: ['task-2'] })).toThrow(/not found/)
     expect(deleteTask(removed.doc, 'task-1', 1, LEAD, NOW).task.status).toBe('deleted')
   })
 
+  // 部署上限：任务数封顶 MAX_TEAM_TASKS，删除释放预算但编号不复用；
+  // 成员上限同数量级（此处只验证可构造满员名册）。
   it('enforces the deployment limits for tasks and members', () => {
     let state = doc()
     for (let index = 0; index < MAX_TEAM_TASKS; index += 1) {
@@ -570,7 +645,7 @@ describe('team task board', () => {
     }
     expect(state.tasks).toHaveLength(MAX_TEAM_TASKS)
     expect(() => added(state, { subject: 'Overflow', description: 'Work' })).toThrow(`Team task limit ${MAX_TEAM_TASKS} reached`)
-    // A deleted task frees the budget without reusing its id.
+    // 删除的任务释放预算，但 id 不复用。
     const deleted = deleteTask(state, 'task-1', 1, LEAD, NOW)
     const replacement = added(deleted.doc, { subject: 'Replacement', description: 'Work' })
     expect(replacement.task.id).toBe(`task-${MAX_TEAM_TASKS + 1}`)
@@ -584,6 +659,8 @@ describe('team task board', () => {
     expect(members).toHaveLength(MAX_TEAM_MEMBERS)
   })
 
+  // 成员视图投影：Lead 永远排第一，持久化的 phase（active/failed/provisioning）
+  // 原样保留；会话信息（status/model）按需合并；失败的成员带 error 且无 model。
   it('projects member rows with the Lead first and the durable phases preserved', async () => {
     const members: TeamMemberRecord[] = [
       { name: 'lead', role: 'lead', phase: 'active', conversationId: '2', label: 'Lead' },
@@ -611,23 +688,29 @@ describe('team task board', () => {
 })
 
 describe('team spawn replay and provisioning reconciliation', () => {
+  // 回放计划：名册无此人 → create；provisioning/active 带会话 → reuse；
+  // failed 或无子会话 → taken（名字已烧毁，DSH 从不复用成员名）；Lead 行不阻塞成员名。
   it('plans create, reuse, and taken from the durable roster by member name', () => {
     expect(planSpawnReplay(doc(), 'researcher')).toEqual({ kind: 'create' })
-    // A replayed call finds the child its first attempt created and reuses it.
+    // 回放调用找到首次尝试创建的子会话并复用。
     expect(planSpawnReplay(doc([], [{ name: 'researcher', role: 'teammate', phase: 'provisioning', conversationId: '17' }]), 'researcher'))
       .toEqual({ kind: 'reuse', conversationId: '17' })
     expect(planSpawnReplay(doc([], [{ name: 'researcher', role: 'teammate', phase: 'active', conversationId: '17' }]), 'researcher'))
       .toEqual({ kind: 'reuse', conversationId: '17' })
-    // A failed or childless row keeps the name burned: DSH never reuses a teammate name.
+    // failed 或无子会话的行让名字保持烧毁：DSH 从不复用成员名。
     expect(planSpawnReplay(doc([], [{ name: 'researcher', role: 'teammate', phase: 'failed' }]), 'researcher'))
       .toEqual({ kind: 'taken' })
     expect(planSpawnReplay(doc([], [{ name: 'researcher', role: 'teammate', phase: 'provisioning' }]), 'researcher'))
       .toEqual({ kind: 'taken' })
-    // The Lead row is not a teammate and never blocks a teammate name.
+    // Lead 行不是成员，永不阻塞成员名。
     expect(planSpawnReplay(doc([], [{ name: 'lead', role: 'lead', phase: 'active', conversationId: '2' }]), 'researcher'))
       .toEqual({ kind: 'create' })
   })
 
+  // provisioning 对账矩阵（对齐 DSH roster.ts:375-417）：按子会话状态结算每行——
+  // 无会话/会话丢失 → failed（可恢复子会话缺失）、prompt 被拒 → failed、
+  // 链接失效 → failed、仍在跑 → 保持 provisioning、健康 → active；
+  // 已终态的行原样保留。
   it('settles provisioning rows from their child session, matching DSH roster.ts:375-417', async () => {
     const members: TeamMemberRecord[] = [
       { name: 'lead', role: 'lead', phase: 'active', conversationId: '2' },
@@ -674,6 +757,7 @@ describe('team spawn replay and provisioning reconciliation', () => {
     ])
   })
 
+  // 探针失败容错：memberSession 抛错时把错误记为该成员的失败原因，而不是让对账崩溃。
   it('records a probe failure as the failed reason instead of throwing', async () => {
     let stored: TeamDocValue = doc([], [{ name: 'broken', role: 'teammate', phase: 'provisioning', conversationId: '50' }])
     await reconcileProvisioning({

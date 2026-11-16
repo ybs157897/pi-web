@@ -5,6 +5,7 @@ import { AnalysisPanel } from '../src/web/WetrackPage.tsx'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider } from '../src/web/ui-preferences.tsx'
 import { setupRenderingDom } from './rendering/setup.ts'
 
+/** WeTrack 分析面板对「分析受阻（blocked）」状态的呈现契约测试（jsdom 环境）。 */
 setupRenderingDom()
 afterEach(cleanup)
 
@@ -21,6 +22,7 @@ describe('WeTrack analysis attempts', () => {
     expect(screen.getByText('既有证据')).toBeTruthy()
   })
 
+  // 边界：首次分析就受阻、没有任何既有结论时，只展示受阻原因，不出现「已保留此前结论」。
   it('shows the reason when the first analysis is blocked', () => {
     render(<UiPreferencesProvider value={DEFAULT_UI_SETTINGS}><AnalysisPanel
       state={{ loading: false, error: '', value: {

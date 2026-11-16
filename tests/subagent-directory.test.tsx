@@ -5,13 +5,16 @@ import SubagentDirectory from '../src/web/SubagentDirectory.tsx'
 import type { SubagentSummary } from '../src/shared/types.ts'
 import { setupRenderingDom } from './rendering/setup.ts'
 
+/** 子智能体目录（SubagentDirectory）的分组渲染与交互契约测试（jsdom 环境）。 */
 beforeEach(() => { setupRenderingDom() })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+/** 运行中的子智能体样本：metricsAt 存在（有实时指标），status 为 running。 */
 const running: SubagentSummary = {
   id: 'child-run', label: 'reviewer', title: '检查状态卡', status: 'running', answer: '正在比对',
   tokens: 900, durationMs: 30_000, metricsAt: Date.now(), createdAt: 1, updatedAt: 2,
 }
+/** 已结束的子智能体样本：status 为 inactive、无 metricsAt，token 用量更大。 */
 const ended: SubagentSummary = {
   id: 'child-done', label: 'writer', title: '整理验收记录', status: 'inactive', answer: '已完成',
   tokens: 12_345, durationMs: 65_000, createdAt: 1, updatedAt: 2,
@@ -29,6 +32,7 @@ describe('SubagentDirectory', () => {
     expect(document.querySelector('[data-subagent-group="ended"] [data-subagent-id="child-done"]')).toBeTruthy()
   })
 
+  // 交互契约：点击某一行以 id + title 回调 onOpen，由外层打开对应子会话标签页。
   it('opens the child session tab for a row', () => {
     const onOpen = vi.fn()
     render(<SubagentDirectory subagents={[running, ended]} onOpen={onOpen} />)
@@ -36,6 +40,7 @@ describe('SubagentDirectory', () => {
     expect(onOpen).toHaveBeenCalledWith('child-done', '整理验收记录')
   })
 
+  // 边界：无子智能体时展示引导文案而非空分组标题，避免用户面对空壳列表。
   it('explains the empty conversation instead of drawing an empty list', () => {
     render(<SubagentDirectory subagents={[]} onOpen={() => {}} />)
     expect(screen.getByText('这个会话还没有子智能体')).toBeTruthy()

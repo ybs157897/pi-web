@@ -10,19 +10,35 @@ import { createShellSessionTool } from '../src/server/tools/shell/session.ts'
 import { CodingTools, createCodingTools } from '../src/server/tools/shell/tools.ts'
 import { activeShellSessionCount, disposeShellSessions, runShellCommand, YIELD_TIME_MS } from '../src/server/tools/shell/runner.ts'
 
+/**
+ * codex 风格 shell 会话契约测试：长命令在 yield 预算后「晋升」为可轮询会话，
+ * 模型通过 shell_session 工具按游标增量读取输出。
+ * 关键契约：晋升响应携带晋升前输出；轮询只返回游标之后的增量；
+ * 会话退出后被回收（再轮询报 NOT_FOUND）；溢出文件（spill file）始终完整。
+ */
 const directories: string[] = []
 
 afterEach(async () => {
+  // 释放全部会话并清理临时 workspace，防止子进程跨用例泄漏。
   disposeShellSessions()
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
+/**
+ * 创建一次性临时 workspace 目录并登记待清理。
+ * @returns 临时目录绝对路径
+ */
 async function workspace(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'pi-web-shell-session-'))
   directories.push(directory)
   return directory
 }
 
+/**
+ * 构造测试用 ToolExecutionApi。
+ * @param cwd 工具执行的工作目录
+ * @returns output 分片按序累积进 retained 缓冲的桩实现
+ */
 function apiFor(cwd: string): ToolExecutionApi {
   let text = ''
   return {
@@ -36,7 +52,13 @@ function apiFor(cwd: string): ToolExecutionApi {
 
 const TEST_CONTEXT = {} as Context
 
-/** A spec with a 250ms yield budget (the codex-aligned floor), so promotion is deterministic. */
+/**
+ * 构造 shell 命令 spec。
+ * @param cwd 命令工作目录
+ * @param command 要执行的 bash 命令
+ * @param yieldTimeMs yield 预算，默认 250ms（codex 对齐下限），保证晋升可确定复现
+ * @returns 走 /bin/bash、超时 5 秒、POSIX 进程树 kill 的完整执行 spec
+ */
 function spec(cwd: string, command: string, yieldTimeMs: number | undefined = 250) {
   return {
     command,
@@ -58,6 +80,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(YIELD_TIME_MS).toBe(10_000)
   })
 
+  // 晋升契约：超过 yield 预算仍在跑的命令返回 status=running + sh_ 前缀会话 id +
+  // exitCode=-1 + 溢出文件路径，并发出 session_started 诊断。
   it('promotes a still-running command to a pollable session', async () => {
     const cwd = await workspace()
     const result = await runShellCommand(spec(cwd, 'sleep 0.6; echo done-from-session'))
@@ -109,6 +133,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(activeShellSessionCount()).toBe(0)
   })
 
+  // 生命周期边界：会话正常退出即被回收，再次轮询同一 sessionId 必须抛出
+  // 「does not exist」，而不是返回一个僵尸会话。
   it('reports the reclaimed session as NOT_FOUND after exit', async () => {
     const cwd = await workspace()
     const promoted = await runShellCommand(spec(cwd, 'sleep 0.3; echo bye'))
@@ -118,6 +144,7 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     await expect(tool.execute({ sessionId }, apiFor(cwd), TEST_CONTEXT)).rejects.toThrow(/does not exist/)
   })
 
+  // 交互能力：轮询时透传 stdin（换行结尾），交互式命令能读到并回显。
   it('writes stdin through to the session process', async () => {
     const cwd = await workspace()
     const promoted = await runShellCommand(spec(cwd, 'read line; echo "got:$line"'))
@@ -129,6 +156,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(structured.output).toContain('got:hello-stdin')
   })
 
+  // 失败语义：非零退出码的终止轮询要 isError=true 并带 exit_code 诊断，
+  // 让模型能感知命令失败。
   it('marks the terminal poll as an error for nonzero exits', async () => {
     const cwd = await workspace()
     const promoted = await runShellCommand(spec(cwd, 'sleep 0.4; exit 3'))
@@ -141,6 +170,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(polled.diagnostics?.some(diagnostic => diagnostic.code === 'exit_code')).toBe(true)
   })
 
+  // 溢出文件契约：晋升前后全部输出都落盘，末尾追加退出码标记；
+  // 内存缓冲可截断，落盘文件不允许缺行。
   it('keeps the spill file complete and marks the exit in it', async () => {
     const cwd = await workspace()
     const promoted = await runShellCommand(spec(cwd, 'echo spill-line; sleep 0.4; echo tail-line'))
@@ -155,7 +186,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
 
   it('bounds the buffer and reports truncation', async () => {
     const cwd = await workspace()
-    // The flood starts after promotion, so its bytes land in the session buffer budget.
+    // 洪峰输出发生在晋升之后，因此这些字节计入会话缓冲预算：
+    // 结构化输出要标记 truncated=true，落盘文件仍保留全量（>1MB）。
     const promoted = await runShellCommand(spec(cwd, 'sleep 0.4; head -c 1200000 /dev/zero | tr "\\0" "x"; sleep 0.2'))
     const structured = promoted.structuredOutput as { sessionId: string; fullOutputPath: string; truncated: boolean }
     const tool = createShellSessionTool()
@@ -165,6 +197,8 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(log.length).toBeGreaterThan(1_000_000)
   })
 
+  // 晋升后的会话继承 spec 的 timeoutSeconds（5 秒）：超时后轮询应看到
+  // exited + exitCode=-1 + timeout 诊断，而不是命令继续挂到 30 秒。
   it('enforces the explicit timeout on a promoted session', async () => {
     const cwd = await workspace()
     const promoted = await runShellCommand(spec(cwd, 'sleep 30'))
@@ -179,6 +213,7 @@ describe.runIf(process.platform !== 'win32')('shell sessions (codex-style yield)
     expect(polled.diagnostics?.some(diagnostic => diagnostic.code === 'timeout')).toBe(true)
   }, 10_000)
 
+  // 工具注册表契约：两个平台都要有 shell_session，命令工具按平台切换 bash/pwsh。
   it('registers the session tool on both platforms', () => {
     for (const platform of ['darwin', 'win32'] as const) {
       const tools = createCodingTools(platform).tools

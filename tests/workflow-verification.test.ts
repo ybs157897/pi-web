@@ -5,8 +5,16 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { WORKFLOW_MUTANTS, workflowMutantSource } from '../scripts/workflow-fixture.ts'
 
+/**
+ * 工作流评估的 oracle 质量测试：每个变异体（mutant）必须恰好破坏一项必需行为，
+ * 且不得因为「校验差异」（无关的参数校验不同）而被无关测试捕获失败——
+ * 否则说明评估用例区分力不足，变异体与原实现无法被正确判定。
+ */
 describe('workflow evaluation defects', () => {
   it('changes one required behavior without failing tests through unrelated validation differences', async () => {
+    // 流程：把原实现与各变异体写成临时 .mjs 动态 import，
+    // 验证 ignoresQuantity / treatsZeroAsOne 保留完整入参校验（TypeError/RangeError），
+    // 而各变异体的核心行为差异（数量被忽略、0 视为 1、校验被删）能被精确区分。
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workflow-oracle-'))
     try {
       await writeFile(join(root, 'workflow-original.mjs'), `

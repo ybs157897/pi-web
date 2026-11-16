@@ -7,29 +7,45 @@ import {
   builtinFixturePath, readWetrackDefect, readWetrackDefects, readWetrackReport, wetrackConfigured, wetrackReportDir,
 } from '../src/server/automation/wetrack.ts'
 
+/**
+ * WeTrack 自动化数据源契约测试：缺陷列表/详情的读取链路（fixture → CLI → rd-cli 信封）、
+ * 数据归一化、配置探测与报告目录解析。
+ */
 const DEMO_FIXTURE = resolve('plugins/wetrack-defects/fixtures/demo.json')
-/** Real captures stay out of git; when the probe folder is present its bytes are replayed as-is. */
+/** 真实抓包样本不进 git；探针目录存在时按原字节回放。 */
 const PROBE_SAMPLES = resolve('artifacts/wetrack-probe/samples')
 const hasProbe = existsSync(PROBE_SAMPLES)
-/** No fixture and no working CLI: the route must report "not configured" instead of inventing rows. */
+/** 无 fixture 且无可用 CLI：路由必须报「未配置」而不是编造行。 */
 const UNCONFIGURED = { ...process.env, WETRACK_FIXTURE: '', WETRACK_CLI_JSON: '', WETRACK_SCRIPT: '', WETRACK_CLI: 'pi-web-no-such-wetrack-cli' }
-/** A stand-in for rd-cli: swings the `wetrack` namespace question and echoes the argv it received. */
+/** rd-cli 替身：验证 `wetrack` 命名空间的添加方式，并回显收到的 argv。 */
 const RDCLI_STUB = [
   '#!/usr/bin/env node',
   'process.stdout.write(JSON.stringify({ success: true, data: { items: [{ defectNumber: "DTS000000555", argv: process.argv.slice(2).join("|") }] } }))',
 ].join('\n')
 
+/**
+ * 构造以「node -e 脚本」为 CLI 后端的环境变量。
+ * @param script CLI 被调用时执行的 Node 脚本（通常输出固定 JSON）
+ * @returns 清空 fixture/script/CLI 配置、只留 WETRACK_CLI_JSON 的环境
+ */
 function nodeCli(script: string): NodeJS.ProcessEnv {
   return { ...process.env, WETRACK_FIXTURE: '', WETRACK_CLI: '', WETRACK_SCRIPT: '', WETRACK_CLI_JSON: JSON.stringify([process.execPath, '-e', script]) }
 }
 
-/** Replays a captured stdout byte-for-byte through the real spawn/parse path. */
+/**
+ * 用抓包样本按原字节回放，走真实的 spawn/解析路径。
+ * @param name artifacts/wetrack-probe/samples 下的样本文件名
+ * @param exitCode 附加给 CLI 的退出码（模拟业务失败）
+ * @returns 带对应 nodeCli 环境的 Promise
+ */
 async function replayCli(name: string, exitCode = 0): Promise<NodeJS.ProcessEnv> {
   const text = await readFile(join(PROBE_SAMPLES, name), 'utf8')
   return nodeCli(`process.stdout.write(${JSON.stringify(text)})${exitCode === 0 ? '' : `;process.exitCode=${exitCode}`}`)
 }
 
 describe('wetrack list contract', () => {
+  // 归一化契约：demo fixture 读取为 configured 列表，行只保留标量字段，
+  // generatedAt 为本地时间格式。
   it('normalizes the bundled demo fixture and keeps scalar fields', async () => {
     const list = await readWetrackDefects({ env: UNCONFIGURED, fixture: DEMO_FIXTURE })
     expect(list.configured).toBe(true)
@@ -45,12 +61,15 @@ describe('wetrack list contract', () => {
     expect(list.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u)
   })
 
+  // 内置 fixture 路径解析到插件目录旁的 demo.json，且可被读取。
   it('resolves the demo fixture path shipped beside the plugin', async () => {
     expect(builtinFixturePath()).toBe(DEMO_FIXTURE)
     const list = await readWetrackDefects({ env: UNCONFIGURED, fixture: builtinFixturePath() })
     expect(list.count).toBe(2)
   })
 
+  // 载荷形状兼容：顶层数组、{pending:[...]}、{items:[...]} 都接受；
+  // 缺缺陷号的行直接丢弃。
   it('accepts array, pending-array and items-only payloads and drops rows without a number', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi-web-wetrack-'))
     try {
@@ -71,6 +90,8 @@ describe('wetrack list contract', () => {
     }
   })
 
+  // 行结构扁平化：详情形状的嵌套载荷（attachments/images 数组）不得进入表格行，
+  // 只留标量字段 + 补空的 simpleDesc。
   it('keeps list rows flat: nested detail payloads never reach the table', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi-web-wetrack-'))
     try {
@@ -89,6 +110,7 @@ describe('wetrack list contract', () => {
     }
   })
 
+  // 优先级：显式 WETRACK_FIXTURE 优先于内置兜底 fixture。
   it('prefers WETRACK_FIXTURE over the bundled fallback', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi-web-wetrack-'))
     try {
@@ -101,6 +123,8 @@ describe('wetrack list contract', () => {
     }
   })
 
+  // 未配置体验：返回 configured:false + 空列表 + 配置指引（含各环境变量名），
+  // 页面照常渲染而不是报错。
   it('reports an unconfigured service with setup guidance instead of failing the page', async () => {
     const list = await readWetrackDefects({ env: UNCONFIGURED })
     expect(list).toMatchObject({ configured: false, count: 0, items: [] })
@@ -108,6 +132,7 @@ describe('wetrack list contract', () => {
     expect(list.notice).toContain('WETRACK_FIXTURE')
   })
 
+  // 噪声容忍：CLI 输出前面带日志行时，解析器要能从中提取合法 JSON。
   it('runs the configured CLI and parses JSON wrapped in log noise', async () => {
     const script = 'process.stdout.write("starting\\n" + JSON.stringify({pending:{items:[{defectNumber:"DTS000000777",severityName:"严重"}]}}))'
     const list = await readWetrackDefects({ env: nodeCli(script) })
@@ -115,6 +140,8 @@ describe('wetrack list contract', () => {
     expect(list.items[0]).toEqual({ defectNumber: 'DTS000000777', severityName: '严重', simpleDesc: '' })
   })
 
+  // rd-cli 信封三态：success 解包 data；空结果集仍是「已配置」来源；
+  // 业务失败（stdout JSON + 非零退出）转为带「code：message（recover_hint）」的错误。
   it('unwraps the rd-cli success envelope and keeps the CLI error code and message', async () => {
     const wrapped = 'process.stdout.write(JSON.stringify({success:true,data:{items:[{defectNumber:"DTS000000888",severityName:"严重"}]}}))'
     const list = await readWetrackDefects({ env: nodeCli(wrapped) })
@@ -133,17 +160,21 @@ describe('wetrack list contract', () => {
     await expect(readWetrackDefects({ env: nodeCli(unauthorized) })).rejects.toThrow(/API_KEY_INVALID：API Key 无效或已吊销（请检查 API Key 配置）/u)
   })
 
+  // stderr 容错：CLI 不产 JSON 而往 stderr 打用法错误时，错误信息要透传。
   it('reports usage errors from stderr when the CLI prints no JSON', async () => {
     const script = 'process.stderr.write("Error: unknown flag: --project\\n");process.exitCode=1'
     await expect(readWetrackDefects({ env: nodeCli(script) })).rejects.toThrow(/unknown flag: --project/u)
   })
 
+  // 参数传递契约：每个参数只出现一次且保持独立 argv 项（不受 shell 分词影响）。
   it('passes each argument once and keeps it a separate argv entry', async () => {
     const script = 'process.stdout.write(JSON.stringify({pending:{items:[{defectNumber:"DTS1",argv:process.argv.slice(1).join("|")}]}}))'
     const list = await readWetrackDefects({ env: nodeCli(script) })
     expect(list.items[0]?.argv).toBe('pending|--json')
   })
 
+  // 命名空间规则：rd-cli 直调时补一次 `wetrack`；基命令里已带命名空间则不重复；
+  // 脚本模式（wetrack.py 直收命令）不加命名空间。
   it.skipIf(process.platform === 'win32')('adds the wetrack namespace once, and only for rd-cli', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi web wetrack-'))
     try {
@@ -155,11 +186,11 @@ describe('wetrack list contract', () => {
       const direct = await readWetrackDefects({ env: { ...base, WETRACK_CLI: cli } })
       expect(direct.items[0]?.argv).toBe('wetrack|pending|--json')
 
-      // An explicit namespace in the base is honoured, not doubled.
+      // 基命令里已显式带命名空间时保持原样，不二次追加。
       const explicit = await readWetrackDefects({ env: { ...base, WETRACK_CLI_JSON: JSON.stringify([cli, 'wetrack']) } })
       expect(explicit.items[0]?.argv).toBe('wetrack|pending|--json')
 
-      // A Python script takes the command directly, so the namespace must not appear.
+      // Python 脚本直接接收命令，命名空间不应出现。
       const scripted = await readWetrackDefects({ env: { ...base, WETRACK_SCRIPT: cli, WETRACK_PYTHON: process.execPath } })
       expect(scripted.items[0]?.argv).toBe('pending|--json')
     } finally {
@@ -167,6 +198,7 @@ describe('wetrack list contract', () => {
     }
   })
 
+  // 仅 Windows：路径含空格的 .cmd 垫片能被正确 spawn，且命名空间与参数齐全。
   it.skipIf(process.platform !== 'win32')('runs a .cmd shim whose path contains spaces', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi web wetrack-'))
     try {
@@ -180,12 +212,14 @@ describe('wetrack list contract', () => {
     }
   })
 
+  // 失败面：非法 JSON、超时（60ms 上限）、CLI_JSON 配置形状错误都要报可读错误。
   it('surfaces CLI failures and timeouts as errors', async () => {
     await expect(readWetrackDefects({ env: nodeCli('process.stdout.write("not json")') })).rejects.toThrow(/合法 JSON/u)
     await expect(readWetrackDefects({ env: nodeCli('setTimeout(() => {}, 5000)'), timeoutMs: 60 })).rejects.toThrow(/秒未返回/u)
     await expect(readWetrackDefects({ env: { ...process.env, WETRACK_CLI: '', WETRACK_FIXTURE: '', WETRACK_CLI_JSON: '{"bad":true}' } })).rejects.toThrow(/字符串数组/u)
   })
 
+  // 配置探测：四种来源（CLI/fixture/script/CLI_JSON）任一存在即视为已配置。
   it('detects whether any source is configured', () => {
     expect(wetrackConfigured({})).toBe(false)
     expect(wetrackConfigured({ WETRACK_CLI: 'rd-cli' })).toBe(true)
@@ -194,6 +228,8 @@ describe('wetrack list contract', () => {
     expect(wetrackConfigured({ WETRACK_CLI_JSON: '["python"]' })).toBe(true)
   })
 
+  // 探针回放（需本地样本）：真实抓包的 pending/空列表/鉴权失败/详情 404 四种响应
+  // 走真实 spawn/解析路径，验证对生产数据的兼容与错误映射。
   it.skipIf(!hasProbe)('replays the captured rd-cli responses', async () => {
     const pending = await readWetrackDefects({ env: await replayCli('pending.json') })
     expect(pending).toMatchObject({ configured: true, source: 'pending', count: 12 })
@@ -209,6 +245,7 @@ describe('wetrack list contract', () => {
 })
 
 describe('wetrack detail and report', () => {
+  // 详情链路：CLI success 信封解包出缺陷与处理历史；业务失败（BIZ_404）保留原文。
   it('reads a defect detail from the CLI and keeps the business error', async () => {
     const script = 'process.stdout.write(JSON.stringify({success:true,data:{defectNumber:"DTS006744740",simpleDesc:"x",processHistories:[{createTime:"2026-10-30 15:29:39",remark:"批准"}]}}))'
     const detail = await readWetrackDefect('DTS006744740', { env: nodeCli(script) })
@@ -220,6 +257,7 @@ describe('wetrack detail and report', () => {
     await expect(readWetrackDefect('DTS000000000', { env: nodeCli(missing) })).rejects.toThrow(/BIZ_404：问题单不存在/u)
   })
 
+  // fixture 详情：demo 里存在的号可读；不存在的号报「夹具中没有」；格式非法号直接拒绝。
   it('reads the demo fixture detail and refuses unknown numbers', async () => {
     const detail = await readWetrackDefect('DTS006744740', { env: UNCONFIGURED, fixture: DEMO_FIXTURE })
     expect(detail).toMatchObject({ configured: true })
@@ -228,6 +266,8 @@ describe('wetrack detail and report', () => {
     await expect(readWetrackDefect('not-a-defect', { env: UNCONFIGURED })).rejects.toThrow(/DTS/u)
   })
 
+  // 详情参数形态：rd-cli 用 `--defect-number` 旗标；脚本模式用位置参数；
+  // 两者都以 `--json` 收尾。
   it('passes --defect-number to rd-cli and a positional argument to wetrack.py', async () => {
     if (process.platform === 'win32') return
     const dir = await mkdtemp(join(tmpdir(), 'pi web wetrack-'))
@@ -250,6 +290,8 @@ describe('wetrack detail and report', () => {
     }
   })
 
+  // 报告读取：WETRACK_REPORT_DIR 下按「<缺陷号>.md」查找，返回正文与更新时间；
+  // 缺失文件返回 available:false 而非报错。
   it('reads an analysis document from the report directory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'pi-web-wetrack-report-'))
     try {
@@ -267,6 +309,8 @@ describe('wetrack detail and report', () => {
     }
   })
 
+  // 报告目录解析：环境变量为空时回退到数据目录下的 wetrack-reports；
+  // 非法缺陷号在读取前即被拒绝。
   it('defaults the report directory under the data dir and rejects bad numbers', async () => {
     expect(wetrackReportDir({ WETRACK_REPORT_DIR: '' }, '/tmp/pi-web-data')).toBe(join('/tmp/pi-web-data', 'wetrack-reports'))
     expect(wetrackReportDir({ WETRACK_REPORT_DIR: '/tmp/reports' }, '/tmp/pi-web-data')).toBe('/tmp/reports')

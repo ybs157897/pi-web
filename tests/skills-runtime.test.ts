@@ -10,7 +10,16 @@ import { DEMO_SKILL } from '../src/server/skills/demo.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import type { ConversationDetail } from '../src/shared/types.ts'
 
+/**
+ * 技能系统贯穿应用 runtime 的集成测试：技能创建/保存/发现/校验的完整链路、
+ * 只读模式与 code mode 的写权限边界、子会话技能工具下发、HTTP API 面。
+ */
 const fixtures: Array<{ root: string; runtime: Runtime }> = []
+
+/**
+ * 构造一个完整的临时 runtime fixture（数据目录 + workspace + pi 目录，demo 模式）。
+ * @returns options 为 runtime 启动参数；item 持有 root 与 runtime，登记进 fixtures 供 afterEach 清理
+ */
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'pi-web-skills-runtime-'))
   const options = { dataDir: join(root, 'data'), workspace: join(root, 'workspace'), piDir: join(root, 'pi'), demo: true }
@@ -22,12 +31,27 @@ async function fixture() {
   return { ...options, runtime, item }
 }
 afterEach(async () => {
+  // 逐个关闭 runtime 并删除临时根目录，防止文件句柄与子进程泄漏。
   for (const item of fixtures.splice(0)) {
     await item.runtime.close()
     await rm(item.root, { recursive: true, force: true })
   }
 })
+
+/**
+ * 拼接一条消息的全部文本块。
+ * @param message 会话消息
+ * @returns 各 text 块以换行连接的结果
+ */
 const textOf = (message: ConversationDetail['messages'][number]) => message.blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
+
+/**
+ * 向会话提交一条用户消息并轮询到助手回合结束（非 busy 且新消息不再 streaming）。
+ * @param runtime 目标 runtime
+ * @param id 会话 id
+ * @param text 要提交的文本（通常是 demo 技能触发标记，如 `[skills-create]`）
+ * @returns 结算后的会话详情；15 秒内未结算或出现错误则抛错
+ */
 async function run(runtime: Runtime, id: string, text: string) {
   const count = (await runtime.detail(id)).messages.length
   await runtime.submit(id, { text, requestId: randomUUID() })
@@ -42,6 +66,8 @@ async function run(runtime: Runtime, id: string, text: string) {
 }
 
 describe('Skills through the application runtime', () => {
+  // 端到端主链路：内置创建者技能 → 保存 demo-verifier → 目录可发现且校验通过 →
+  // 重启 runtime 后新会话仍能加载并复用持久化的技能。
   it('loads the bundled creator, saves, discovers and validates a skill, then reuses it in another conversation after restart', async () => {
     const f = await fixture()
     const conversation = await f.runtime.create({ title: 'Create a skill' })
@@ -61,6 +87,8 @@ describe('Skills through the application runtime', () => {
     expect(textOf(loaded)).toContain('PI_WEB_SKILL_READY')
   }, 30_000)
 
+  // 权限边界：只读会话可加载/发现技能，但 skill_save 直接失败；
+  // 即便切到 code mode-only 借道 codemode 嵌套保存，同样必须落空（不产生文件）。
   it('allows read-only discovery but rejects skill saves directly and through code mode', async () => {
     const { runtime, workspace } = await fixture()
     const direct = await runtime.create({ title: 'Read only', accessMode: 'readOnly' })
@@ -74,6 +102,8 @@ describe('Skills through the application runtime', () => {
     await expect(readFile(join(workspace, '.agents/skills/demo-verifier/SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  // 对照：code mode 下可写技能；但 plan 模式激活期间嵌套保存必须被拒绝，
+  // 退出 plan 后（新建会话）同一操作才能落盘。
   it('supports skill writes through code mode and rejects them while plan mode is active', async () => {
     const { runtime, workspace } = await fixture()
     await runtime.updateSettings({ codemodeMode: 'only' })
@@ -87,6 +117,8 @@ describe('Skills through the application runtime', () => {
     expect(await readFile(join(workspace, '.agents/skills/demo-verifier/SKILL.md'), 'utf8')).toBe(DEMO_SKILL)
   })
 
+  // 委派契约：只读父会话通过 subagent 把技能工具传给子会话，子会话继承
+  // accessMode=readOnly 且能成功加载技能产出 PI_WEB_SKILL_READY。
   it('passes configured skill tools to child conversations', async () => {
     const { runtime, workspace } = await fixture()
     await mkdir(join(workspace, '.agents/skills/demo-verifier'), { recursive: true })
@@ -100,6 +132,8 @@ describe('Skills through the application runtime', () => {
     expect((await runtime.detail(child.id)).conversation.accessMode).toBe('readOnly')
   })
 
+  // HTTP API 面：workspace 作用域的技能目录（含诊断）、资源读取（含 plugin-creator
+  // 的参考文档）、损坏技能校验失败、未知 workspace 404、缺参 400、路径穿越被拒。
   it('serves a workspace-scoped catalog, bounded resources and validation through HTTP', async () => {
     const { runtime, workspace } = await fixture()
     const app = createApp(runtime, { demo: true })

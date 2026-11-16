@@ -6,8 +6,18 @@ import type { ConversationMetadata } from '../src/server/runtime/index.ts'
 import { projectConversation } from '../src/server/conversation/projection.ts'
 import { scriptedResponse } from '../src/server/model/demo.ts'
 
+/**
+ * 后台子智能体结算的投影（projection）契约测试：结算条目如何呈现在会话中——
+ * 静默系统行（绝不渲染为用户气泡）、失败措辞、外来写入的容错、排队条目的隔离，
+ * 以及 demo 脚本对后台委派/子任务/结算回合的响应行为。
+ */
 const WORKSPACE = '/tmp/pi-subagent-settlement-workspace'
 
+/**
+ * 构造会话元数据 fixture。
+ * @param overrides 覆盖默认字段的属性
+ * @returns fullAccess、无 workspace 的基准元数据
+ */
 function metadata(overrides: Partial<ConversationMetadata> = {}): ConversationMetadata {
   return {
     title: 'Subagent settlement fixture',
@@ -27,6 +37,10 @@ function metadata(overrides: Partial<ConversationMetadata> = {}): ConversationMe
   }
 }
 
+/**
+ * 构造 token 用量样本。
+ * @returns totalTokens 为 input+output、成本总额为 total 的用量对象
+ */
 function usage(input: number, output: number, total: number) {
   return {
     input,
@@ -38,6 +52,10 @@ function usage(input: number, output: number, total: number) {
   }
 }
 
+/**
+ * 构造助手消息 fixture。
+ * @param stopReason 停止原因，默认 'stop'（工具调用轮次传 'toolUse'）
+ */
 function assistant(content: AssistantMessage['content'], timestamp: number, stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
   return {
     role: 'assistant',
@@ -51,6 +69,13 @@ function assistant(content: AssistantMessage['content'], timestamp: number, stop
   }
 }
 
+/**
+ * 构造会话条目记录 fixture。
+ * @param id 条目 id（同时决定运行分组）
+ * @param kind 条目类型（pi-web.user / pi.assistant / pi-web.subagent-settlement）
+ * @param model 可选的模型载荷
+ * @param data 可选的类型相关载荷（如 settlement 的 label/status）
+ */
 function entry(id: number, kind: string, model?: EntryRecord['model'], data?: EntryRecord['data']): EntryRecord {
   return {
     id: id as EntryId,
@@ -61,6 +86,11 @@ function entry(id: number, kind: string, model?: EntryRecord['model'], data?: En
   }
 }
 
+/**
+ * 组装会话视图 fixture。
+ * @param entries 按顺序排列的条目
+ * @param docs 文档载荷（如 pi.inbox 排队项）
+ */
 function view(entries: readonly EntryRecord[], docs: Record<string, JsonObject> = {}): ConversationView {
   return {
     conversation: { id: ROOT_CONVERSATION_ID },
@@ -70,6 +100,8 @@ function view(entries: readonly EntryRecord[], docs: Record<string, JsonObject> 
 }
 
 describe('background subagent settlement projection', () => {
+  // 呈现契约：结算条目投影为静默系统行，归入它触发的那个运行（runId 一致），
+  // 原始 [subagent-settlement] 输入文本不得以用户气泡形式出现。
   it('projects a settlement entry as a quiet system row inside the run it triggers, never a user bubble', () => {
     const entries = [
       entry(1, 'pi-web.user', [{ role: 'user', content: 'Start the background research', timestamp: 100 }], { requestId: 'start' }),
@@ -81,21 +113,21 @@ describe('background subagent settlement projection', () => {
     ]
     const result = projectConversation(view(entries), metadata(), { workspace: WORKSPACE })
 
-    // The settlement input itself is carried by the host row, not by a user bubble.
+    // 结算输入本身由宿主行承载，而不是用户气泡。
     expect(JSON.stringify(result.messages)).not.toContain('[subagent-settlement]')
     expect(result.messages).toContainEqual(expect.objectContaining({
       role: 'system',
       blocks: [{ type: 'text', text: '后台子智能体「后台机制归纳」已完成' }],
     }))
-    // No host systemKind: the row keeps the plain system shape the transcript renders by text.
+    // 不带宿主 systemKind：该行保持纯 system 形状，由转录按文本渲染。
     const row = result.messages.find(message => message.role === 'system')
     expect(row?.systemKind).toBeUndefined()
-    // Without a request id in the entry data the run falls back to the entry id, and the
-    // answer the settlement triggered shares that run.
+    // 条目数据里没有 requestId 时运行回退到条目 id，结算触发的回答共享该运行。
     expect(row?.runId).toBe('run:3')
     expect(result.messages.find(message => message.role === 'assistant' && message.timestamp === 250)?.runId).toBe('run:3')
   })
 
+  // 失败措辞：status=failed 的结算行用「失败」而非「已完成」。
   it('words a failed settlement as a failure', () => {
     const result = projectConversation(view([
       entry(7, 'pi-web.subagent-settlement', [
@@ -108,6 +140,8 @@ describe('background subagent settlement projection', () => {
     }))
   })
 
+  // 容错：外来写入者（其他版本/插件）留下的缺 label 条目退化为普通用户消息，
+  // 不冒充系统行。
   it('leaves an entry a foreign writer left without a label as an ordinary user message', () => {
     const result = projectConversation(view([
       entry(7, 'pi-web.subagent-settlement', [
@@ -118,6 +152,7 @@ describe('background subagent settlement projection', () => {
     expect(result.messages.some(message => message.role === 'system')).toBe(false)
   })
 
+  // 队列隔离：排队中的结算条目不进入面向用户的会话队列，普通 steer/followUp 项保持原位。
   it('keeps a queued settlement out of the conversation queue while ordinary items remain', () => {
     const result = projectConversation(view([], {
       'pi.inbox': {
@@ -143,7 +178,9 @@ describe('demo subagent background script', () => {
   const respond = (messages: ResponseContext['messages']): ReturnType<ScriptedResponse> =>
     scriptedResponse({ messages } as ResponseContext, undefined, responseState, responseModel)
 
+  /** 构造用户消息 fixture。 */
   const user = (text: string, timestamp: number): UserMessage => ({ role: 'user', content: text, timestamp })
+  /** 构造 subagent 工具结果消息 fixture。 */
   const toolResult = (toolCallId: string, text: string, timestamp: number): ToolResultMessage => ({
     role: 'toolResult',
     toolCallId,
@@ -152,9 +189,13 @@ describe('demo subagent background script', () => {
     isError: false,
     timestamp,
   })
+  /** 拼接助手消息的全部文本块。 */
   const textOf = (message: AssistantMessage): string =>
     message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 
+  // demo 脚本行为：[subagent-bg] 触发后台委派（run_in_background=true、
+  // 任务带 [subagent-child] 前缀）；spawn 回执（已转后台运行）在当轮到达后立即收轮，
+  // 不等待子任务完成。
   it('submits a background delegation for [subagent-bg] and closes the turn once the spawn receipt lands', async () => {
     const first = await respond([user('[subagent-bg] 后台调研一下子智能体机制。', 100)])
     expect(first.stopReason).toBe('toolUse')
@@ -162,7 +203,7 @@ describe('demo subagent background script', () => {
     expect(call).toMatchObject({ name: 'subagent', arguments: { label: '后台机制归纳', run_in_background: true } })
     expect(call !== undefined && call.type === 'toolCall' && typeof call.arguments.task === 'string' && call.arguments.task.startsWith('[subagent-child]')).toBe(true)
 
-    // The spawn receipt arrives inside the same turn: the script stops instead of waiting.
+    // spawn 回执在当轮内到达：脚本直接收轮而不是原地等待。
     const second = await respond([
       user('[subagent-bg] 后台调研一下子智能体机制。', 100),
       assistant([{ type: 'toolCall', id: 'c1', name: 'subagent', arguments: {} }], 150, 'toolUse'),
@@ -172,6 +213,7 @@ describe('demo subagent background script', () => {
     expect(textOf(second)).toContain('后台')
   })
 
+  // [subagent-child] 任务在子会话内执行：直接给出子任务答复，不得再次委派。
   it('answers a [subagent-child] task with the child answer instead of delegating again', async () => {
     const response = await respond([user('[subagent-child] 后台调研任务：总结 demo 会话继承语义。', 100)])
     expect(response.stopReason).toBe('stop')
@@ -179,6 +221,8 @@ describe('demo subagent background script', () => {
     expect(textOf(response)).toContain('子会话')
   })
 
+  // 结算回合防递归：即使结算正文引用了子会话的结论，demo 模型也要归纳结算
+  // 而不是再次委派——正文含「子会话」字样不得误触发 [subagent-child] 分支。
   it('summarizes the settlement turn instead of delegating again, even though the body quotes the child', async () => {
     const settlement = [
       '[subagent-settlement]',

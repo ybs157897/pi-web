@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { buildCallCards, parseTrajectory, summarizeCalls } from '../src/web/trajectory-view.ts'
 
-/** Realistic assistant message per pi-ai's AssistantMessage, as the capture records it. */
+/**
+ * 轨迹查看器（trajectory-view）纯函数契约测试：JSONL 解析的行过滤与容错、
+ * 请求/响应配对成调用卡片（含消息整形与 token/耗时提取）、时间线汇总。
+ */
+
+/**
+ * 构造贴近 pi-ai AssistantMessage 形状的助手消息（capture 记录的原样形状）。
+ * @param overrides 覆盖默认字段（content/stopReason/usage 等）
+ * @returns 默认 usage 120/45、时长 1300ms 的消息对象
+ */
 function assistantMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     role: 'assistant',
@@ -17,6 +26,10 @@ function assistantMessage(overrides: Record<string, unknown> = {}): Record<strin
   }
 }
 
+/**
+ * 构造 request 行 JSONL 文本。
+ * @param messages 轮廓或全量消息数组
+ */
 function requestText(task: string, request: number, ts: number, messages: unknown[]): string {
   return JSON.stringify({
     type: 'request',
@@ -31,11 +44,17 @@ function requestText(task: string, request: number, ts: number, messages: unknow
   })
 }
 
+/**
+ * 构造 response 行 JSONL 文本。
+ * @param message 最终消息对象
+ */
 function responseText(task: string, request: number, ts: number, message: Record<string, unknown>): string {
   return JSON.stringify({ type: 'response', ts, conversationId: '7', task, request, message })
 }
 
 describe('parseTrajectory', () => {
+  // 行过滤契约：只保留模型 IO 行（request/response/sidecall），
+  // 转录（entry/conversation）、任务、目录、工具行全部丢弃。
   it('keeps only the model-IO lines and drops transcript, task, catalog and tools lines', () => {
     const text = [
       JSON.stringify({ type: 'conversation', id: 7, record: { title: 'Traj' } }),
@@ -51,6 +70,7 @@ describe('parseTrajectory', () => {
     expect(lines.map(line => line.type)).toEqual(['request', 'response', 'sidecall'])
   })
 
+  // 容错：半截 JSON 与纯垃圾行被跳过，其余行不受影响。
   it('skips corrupt lines without losing the rest', () => {
     const text = [
       '{"type":"request","ts":1000,"task":"t1","request":1',
@@ -61,6 +81,7 @@ describe('parseTrajectory', () => {
     expect(parseTrajectory(text).map(line => line.type)).toEqual(['request', 'response'])
   })
 
+  // 边界：空文本与纯空白文本解析为空数组。
   it('tolerates empty and blank text', () => {
     expect(parseTrajectory('')).toEqual([])
     expect(parseTrajectory('\n \n\t\n')).toEqual([])
@@ -68,6 +89,8 @@ describe('parseTrajectory', () => {
 })
 
 describe('buildCallCards', () => {
+  // 配对契约：request 与 response 按 task/request 编号配对成一张调用卡片；
+  // 输入按角色整形（图片折叠 [image]、system 直取文本），输出拆出正文与工具调用。
   it('pairs a request with its response by task/request and shapes model IO', () => {
     const text = [
       requestText('t1', 1, 1000, [
@@ -101,6 +124,8 @@ describe('buildCallCards', () => {
     expect(card.toolCalls).toEqual([{ name: 'read', arguments: '{"path":"notes.md"}' }])
   })
 
+  // 工具轮：同一任务内第 2 次请求/响应配对为新卡片；输入行整形出
+  // assistant 的调用与 tool 结果行，token 按各轮 usage 分别提取。
   it('pairs tool rounds within one task and shapes tool results into lines', () => {
     const text = [
       requestText('t1', 1, 1000, [{ role: 'user', content: 'read notes.md' }]),
@@ -128,6 +153,8 @@ describe('buildCallCards', () => {
     ])
   })
 
+  // 旁路调用卡片：带 purpose 标签、时间取 startedAt；error 行与缺 usage 的行
+  // 都要容错（token 记 0、输出文本为空）。
   it('shapes sidecalls with their purpose label and tolerates errors and missing usage', () => {
     const text = [
       JSON.stringify({
@@ -171,6 +198,8 @@ describe('buildCallCards', () => {
     expect(failed.outputTokens).toBe(0)
   })
 
+  // 孤儿响应（task/request 对不上号）合并进上一张卡片而非丢弃；
+  // 请求侧事实（输入、时间戳）不被合并覆盖。
   it('merges an unmatched response into the previous card instead of dropping it', () => {
     const text = [
       requestText('t1', 1, 1000, [{ role: 'user', content: 'hi' }]),
@@ -186,6 +215,7 @@ describe('buildCallCards', () => {
     expect(cards[0]!.timestamp).toBe(1000)
   })
 
+  // 边界：任何请求之前先到的响应自成一张卡片（输入为空）。
   it('keeps a response that arrives before any request as its own card', () => {
     const text = responseText('t1', 1, 2000, assistantMessage())
     const cards = buildCallCards(parseTrajectory(text))
@@ -195,6 +225,7 @@ describe('buildCallCards', () => {
     expect(cards[0]!.input).toEqual([])
   })
 
+  // 回退规则：响应缺 durationMs 与 usage 时，耗时回退为 ts 差值、token 记 0。
   it('falls back to the ts difference when the response carries no durationMs and no usage', () => {
     const text = [
       requestText('t1', 1, 1000, [{ role: 'user', content: 'hi' }]),
@@ -207,6 +238,7 @@ describe('buildCallCards', () => {
     expect(cards[0]!.outputTokens).toBe(0)
   })
 
+  // 错误标注：stopReason=error 的响应把 errorMessage 提升为卡片错误。
   it('marks responses that ended in an error', () => {
     const text = [
       requestText('t1', 1, 1000, []),
@@ -218,6 +250,7 @@ describe('buildCallCards', () => {
 })
 
 describe('summarizeCalls', () => {
+  // 汇总：调用数与输入/输出 token 合计覆盖主链与旁路调用。
   it('totals the call count and token usage', () => {
     const cards = buildCallCards(parseTrajectory([
       requestText('t1', 1, 1000, []),
@@ -227,6 +260,7 @@ describe('summarizeCalls', () => {
     expect(summarizeCalls(cards)).toEqual({ count: 2, inputTokens: 130, outputTokens: 50 })
   })
 
+  // 边界：空时间线汇总为全零。
   it('stays at zero for an empty timeline', () => {
     expect(summarizeCalls([])).toEqual({ count: 0, inputTokens: 0, outputTokens: 0 })
   })

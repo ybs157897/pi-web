@@ -6,7 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { compileRule, systemTimeZone } from '../src/shared/automation-timing.ts'
 
-/** A minute-interval rule anchored now, for the restart-recovery cases. */
+/**
+ * Pi Durable runtime 的端到端契约测试：会话创建/提交/投影、去重与队列控制、
+ * 未读标记、交互问答（ask/dismiss）、计划模式全流程、目标（goal）、
+ * 元数据持久化与 fork、自定义 provider 与凭据卫生、workspace 生命周期与自动化、
+ * 团队/子智能体委派、code mode 三态切换、MCP 只读导入与容错，
+ * 以及直连 harness 的后台委派结算链路。
+ */
+
+/** 以当前时刻为锚点的分钟间隔规则，供重启恢复用例使用。 */
 const everyMinutes = (minutes: number): string => compileRule({
   frequency: 'minutes', interval: String(minutes), weekdays: [1], monthDay: 1,
   date: '', time: '00:00', timeZone: systemTimeZone(),
@@ -28,6 +36,13 @@ const SHELL_TOOL = process.platform === 'win32' ? 'pwsh' : 'bash'
 
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 
+/**
+ * 构造完整 runtime fixture：临时数据目录 + workspace + pi 目录（demo 模式）。
+ * @param demo 是否启用 demo 模型（false 时需要手动配 provider）
+ * @param appState 预写的 app-state.json 内容（如旧版设置/插件开关）
+ * @param mcpConfig 预写的 mcp.json 内容
+ * @returns 各目录路径与 runtime；cleanup 已登记进 fixtures 供 afterEach 清理
+ */
 async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Promise<{ root: string; dataDir: string; workspace: string; piDir: string; runtime: Awaited<ReturnType<typeof createRuntime>>; cleanup: { root: string; closers: Array<() => Promise<void>> } }> {
   const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-runtime-'))
   const dataDir = join(root, 'data')
@@ -36,7 +51,7 @@ async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Pr
   await Promise.all([mkdir(dataDir, { recursive: true }), mkdir(workspace, { recursive: true }), mkdir(piDir, { recursive: true })])
   await writeFile(join(piDir, 'settings.json'), '{}\n')
   if (appState !== undefined) await writeFile(join(dataDir, 'app-state.json'), JSON.stringify(appState))
-  // Demo runtimes read their own MCP file under the data directory, so tests never touch ~/.pi-web.
+  // Demo runtime 读取数据目录下自己的 MCP 文件，测试永远不会碰到 ~/.pi-web。
   if (mcpConfig !== undefined) await writeFile(join(dataDir, 'mcp.json'), JSON.stringify(mcpConfig))
   const runtime = await createRuntime({ dataDir, workspace, piDir, demo })
   const cleanup = { root, closers: [() => runtime.close()] }
@@ -45,6 +60,7 @@ async function fixture(demo = true, appState?: unknown, mcpConfig?: unknown): Pr
 }
 
 afterEach(async () => {
+  // 关闭全部 runtime 并删除临时目录，回收所有 fixture。
   const pending = fixtures.splice(0)
   await Promise.all(pending.map(async ({ closers, root }) => {
     await Promise.all(closers.map(close => close()))
@@ -52,6 +68,10 @@ afterEach(async () => {
   }))
 })
 
+/**
+ * 等待会话完成一轮运行：watch 流上出现非 streaming 的助手文本且会话不再 busy。
+ * @param timeoutMs 超时上限（默认 20 秒），超时抛错
+ */
 async function waitForCompletedRun(runtime: Awaited<ReturnType<typeof createRuntime>>, id: string, timeoutMs = 20_000): Promise<ConversationDetail> {
   let unsubscribe: (() => Promise<void>) | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
@@ -81,6 +101,11 @@ async function waitForCompletedRun(runtime: Awaited<ReturnType<typeof createRunt
   }
 }
 
+/**
+ * 轮询会话详情直到自定义谓词成立。
+ * @param predicate 判定详情是否达到期望状态
+ * @param timeoutMs 超时上限（默认 20 秒），超时抛错
+ */
 async function waitForDetail(
   runtime: Awaited<ReturnType<typeof createRuntime>>,
   id: string,
@@ -114,12 +139,17 @@ async function waitForDetail(
   }
 }
 
-/** The visible text of one projected message, which is how the reply payloads are asserted. */
+/**
+ * 取一条投影消息的可见文本，回复载荷的断言都基于它。
+ */
 function textOf(message: ConversationDetail['messages'][number] | undefined): string {
   return (message?.blocks ?? []).flatMap(block => block.type === 'text' ? [block.text] : []).join('\n')
 }
 
-/** Poll one child's status: the parent's stream cannot observe a child's own entries. */
+/**
+ * 轮询子会话状态直到达到期望值。
+ * 父会话的 watch 流观察不到子会话自身的条目，必须轮询 children 列表。
+ */
 async function waitForChildStatus(
   runtime: Awaited<ReturnType<typeof createRuntime>>,
   parentId: string,
@@ -137,6 +167,9 @@ async function waitForChildStatus(
 }
 
 describe('Pi Durable runtime', () => {
+  // 基础链路：watch 立即给出初始快照（空消息）；同一 requestId 重放返回同一结果、
+  // 同 id 不同内容报 CONFLICT；真实 CodingTools（write/read/bash|pwsh）跑通并落盘，
+  // 助手消息带 thinking 块与 Markdown 表格总结。
   it('projects the initial watch snapshot, deduplicates submissions, and runs real CodingTools', async () => {
     const { runtime, workspace } = await fixture()
     const created = await runtime.create({ title: 'Tool transcript' })
@@ -168,6 +201,8 @@ describe('Pi Durable runtime', () => {
     expect(await readFile(join(workspace, 'hello.txt'), 'utf8')).toBe('Hello from Pi Durable Web.\n')
   })
 
+  // 未读标记：新回答完成 → unread=true；读详情视为「已打开」，红点清除。
+  // 创建会话本身算作查看，空会话行无红点。
   it('marks a finished reply unread until the conversation is viewed again', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({ title: 'Unread marker' })
@@ -184,6 +219,8 @@ describe('Pi Durable runtime', () => {
     expect(await unreadOf()).toBeUndefined()
   })
 
+  // 队列控制：busy 时 followUp/steer 排队；removeQueued 只撤目标一条；
+  // stop 结束当前运行但保留队列中剩余输入。
   it('removes a queued submission and stop preserves remaining queued inputs', async () => {
     const gate = holdNextDemoResponse()
     const { runtime } = await fixture()
@@ -211,6 +248,8 @@ describe('Pi Durable runtime', () => {
     }
   })
 
+  // Todo 生命周期：模型写入的任务清单投影到 detail.todos 并持久；
+  // 下一轮无 Todo 时清为 null（不残留上一轮清单）。
   it('stores the task list the model writes and clears it for the next turn', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
@@ -229,8 +268,8 @@ describe('Pi Durable runtime', () => {
   })
 
   it('ignores legacy plugin switches and keeps every tool enabled', async () => {
-    // Old app-state files may contain per-plugin/tool switches; product decision
-    // removed that surface, so a disabled entry must not narrow the tool list.
+    // 旧 app-state 可能带按插件/工具的开关；产品已移除该面，
+    // disabled 条目不得收窄工具清单（todo_write 仍可用）。
     const { runtime } = await fixture(true, {
       version: 1,
       settings: {
@@ -248,6 +287,7 @@ describe('Pi Durable runtime', () => {
     expect(completed.todos?.map(item => item.content)).toContain('Draft the migration plan')
   })
 
+  // 字体列表归一化：多余空白折叠、无引号的族名加引号、纯空白清空；结果随设置落盘。
   it('normalizes user font lists and persists them with the settings', async () => {
     const { runtime, dataDir } = await fixture()
     const saved = await runtime.updateSettings({
@@ -262,6 +302,9 @@ describe('Pi Durable runtime', () => {
     expect(onDisk.settings.textFontFamily).toBe('"Inter", system-ui, "SF Pro Text"')
   })
 
+  // 问答链路：[ask] 触发 pending question 集合（scope/notes 两问、带推荐项）；
+  // 未知 callId 报 NOT_FOUND、无效选项报 INVALID_INPUT；回答折叠为带
+  // answer_to_pending_question 的用户消息恰好一次（重复回答幂等），模型据此收尾。
   it('asks a question, folds the answer back in, and injects the reply only once', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
@@ -308,6 +351,8 @@ describe('Pi Durable runtime', () => {
     expect(again.interactions?.find(interaction => interaction.id === callId)?.status).toBe('answered')
   })
 
+  // 放弃问题组：cancel 后投影为 cancelled、以 dismissed_pending_question steer 恰好一次；
+  // 已结算的调用重复取消幂等，再回答报 CONFLICT。
   it('dismisses a pending question set: cancelled in the projection, steered once, and closed to answers', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
@@ -340,15 +385,19 @@ describe('Pi Durable runtime', () => {
     ])).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
+  // 计划模式全流程：模型自行 enter_plan_mode（未开模式时 exit 拒绝并指路）→
+  // 提交计划待审（plan-review 交互）→ 要求修改 → 修订版新审 → 忽略审阅后
+  // 新提交把旧审置 continued（stale 审阅的回答是 no-op）→ 忽略（cancel）结算为
+  // cancelled 且计划保持 → 第三次提交被模型自限（两轮后不再自动提交）→
+  // 同意执行关闭计划模式并汇报执行；重复批准幂等。
   it('runs plan mode: the model enters plan mode itself, submits for review, revises, and stops on approval', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
     const id = created.conversation.id
     expect((await runtime.detail(id)).plan).toEqual({ active: false })
 
-    // ZCode's EnterPlanMode parity: without the switch the tool refuses and points at
-    // enter_plan_mode, which the model calls itself — no user action — and the resubmitted
-    // plan lands as a pending review with plan mode on.
+    // 与 ZCode 的 EnterPlanMode 对齐：没有开关时工具拒绝并指向 enter_plan_mode，
+    // 由模型自行调用（无需用户操作），重交的计划以待审形式落地且计划模式开启。
     await runtime.submit(id, { text: '[plan] 计划模式未开启时提交', requestId: 'plan-off' })
     const recovered = await waitForDetail(runtime, id, detail =>
       !detail.conversation.busy && detail.interactions?.some(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending') === true)
@@ -372,8 +421,8 @@ describe('Pi Durable runtime', () => {
     expect(textOf(planResults.at(-1))).toContain('等待用户审阅')
     expect(textOf(recovered.messages.at(-1))).toContain('计划已提交待审')
 
-    // A change request settles the review, keeps plan mode on, and hands the feedback to the model,
-    // which answers with a revised plan submitted as a new review.
+    // 要求修改会结算本次审阅、计划保持开启，反馈交给模型，
+    // 模型以修订版计划提交一次新审阅。
     const askedChanges = await runtime.answerInteraction(id, first!.id, [
       { id: 'plan-review', selected: ['要求修改'], custom: '补上回滚说明' },
     ])
@@ -386,14 +435,14 @@ describe('Pi Durable runtime', () => {
     const second = revised.interactions?.find(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending')
     expect(second?.detail).toContain('修订')
     expect(revised.plan).toEqual({ active: true })
-    // The refused call from the first turn is still in the transcript, so only the successful ones count.
+    // 第一轮被拒的调用仍在转录里，所以只统计成功的调用。
     expect(revised.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)).toHaveLength(2)
     const changeReply = revised.messages.find(message => message.role === 'user' && message.blocks.some(block => block.type === 'text' && block.text.includes('plan-review')))
     expect(textOf(changeReply)).toContain('补上回滚说明')
     expect(textOf(changeReply)).toContain('"approved":false')
 
-    // Dismissing a review in the UI leaves it undecided, so the next submission settles it as
-    // superseded instead of letting the stale review become the live one again.
+    // UI 里搁置（不理会）的审阅保持未决，下一次提交把它结算为 continued（被取代），
+    // 而不是让过期审阅重新生效。
     const dismissed = await runtime.create({})
     const dismissedId = dismissed.conversation.id
     await runtime.setPlan(dismissedId, true)
@@ -407,14 +456,13 @@ describe('Pi Durable runtime', () => {
     expect(superseding.interactions?.find(interaction => interaction.id === superseded!.id)).toMatchObject({ status: 'continued' })
     expect(superseding.interactions?.filter(interaction => interaction.kind === 'plan-review' && interaction.status === 'pending')).toHaveLength(1)
     expect(superseding.plan).toEqual({ active: true })
-    // Answering a superseded review is a no-op: nothing is waiting on it.
+    // 回答一个已被取代的审阅是 no-op：没有任何东西在等它。
     const stale = await runtime.answerInteraction(dismissedId, superseded!.id, [{ id: 'plan-review', selected: ['同意执行'] }])
     expect(stale.plan).toEqual({ active: true })
     expect(stale.interactions?.find(interaction => interaction.id === superseded!.id)).toMatchObject({ status: 'continued' })
 
-    // 忽略 (ZCode's decline) settles the review as cancelled without a decision: plan mode
-    // stays on, and the steered reply tells the model nothing was decided. A repeat dismissal
-    // is idempotent.
+    // 忽略（ZCode 的 decline）把审阅结算为 cancelled 且无决定：计划模式保持开启，
+    // steer 回复告知模型未做任何决定；重复忽略幂等。
     const ignored = await runtime.create({})
     const ignoredId = ignored.conversation.id
     await runtime.setPlan(ignoredId, true)
@@ -432,14 +480,14 @@ describe('Pi Durable runtime', () => {
     expect(againCancelled.interactions?.find(interaction => interaction.id === ignoreReview!.id))
       .toMatchObject({ status: 'cancelled' })
 
-    // A third submission is refused by the demo model itself, which stops resubmitting after two rounds.
+    // 第三次提交被 demo 模型自限拒绝：两轮之后不再自动重交。
     await runtime.submit(id, { text: '再补充风险一节', requestId: 'plan-run-3' })
     const capped = await waitForCompletedRun(runtime, id)
     expect(capped.plan).toEqual({ active: true })
     expect(capped.messages.filter(message => message.role === 'tool' && message.toolName === 'exit_plan_mode' && message.isError !== true)).toHaveLength(2)
     expect(textOf(capped.messages.at(-1))).toContain('不会再自动提交')
 
-    // Approving turns plan mode off in the same settlement and the model reports the execution.
+    // 批准在同一结算里关闭计划模式，模型随后汇报执行。
     const approved = await runtime.answerInteraction(id, second!.id, [{ id: 'plan-review', selected: ['同意执行'] }])
     expect(approved.plan).toEqual({ active: false })
     expect(approved.interactions?.find(interaction => interaction.id === second!.id))
@@ -451,12 +499,13 @@ describe('Pi Durable runtime', () => {
     const approvalReplies = executed.messages.filter(message => message.role === 'user' && textOf(message).includes('"approved":true'))
     expect(approvalReplies).toHaveLength(1)
 
-    // A repeat answer is idempotent: no second reply message enters the transcript.
+    // 重复回答幂等：转录里不出现第二条回复消息。
     const again = await runtime.answerInteraction(id, second!.id, [{ id: 'plan-review', selected: ['同意执行'] }])
     expect(again.messages.filter(message => message.role === 'user' && textOf(message).includes('"approved":true'))).toHaveLength(1)
     expect(again.plan).toEqual({ active: false })
   })
 
+  // 目标机制：[goal] 触发工具创建（active、轮次预算 3），用户可暂停、可清除。
   it('creates a goal through the tool and lets the user pause it', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({})
@@ -471,6 +520,8 @@ describe('Pi Durable runtime', () => {
     expect(cleared.goal ?? null).toBeNull()
   })
 
+  // 持久化：标题/钉住/归档/思考等级跨关闭重开保留，消息逐条一致；
+  // fork 从指定用户条目派生新会话（标题加 fork 后缀、不带钉住/归档、含原请求消息）。
   it('persists metadata and fork history across close and reopen', async () => {
     const { dataDir, workspace, piDir, runtime, cleanup } = await fixture()
     const created = await runtime.create({ title: 'Reference conversation' })
@@ -498,6 +549,8 @@ describe('Pi Durable runtime', () => {
     expect(listing.some(summary => summary.id === child.conversation.id)).toBe(true)
   })
 
+  // 凭据卫生：自定义 provider 立即落盘、重开后凭据可用；目录（catalog）只报
+  // configured 布尔值绝不泄漏 apiKey；models.json/auth.json 权限 0600、数据目录 0700。
   it('saves custom providers immediately and restores multiple protected credentials without catalog disclosure', async () => {
     const { runtime, dataDir, piDir, cleanup } = await fixture(false)
     const providers = [
@@ -527,6 +580,8 @@ describe('Pi Durable runtime', () => {
     expect(JSON.stringify(reloaded)).not.toContain('secret-two')
   })
 
+  // workspace 生命周期：删除时其会话重绑到默认 workspace（不留悬挂绑定）；
+  // 不存在的 id 报 NOT_FOUND；删除最后一个 workspace 允许，会话解绑等待新增。
   it('deletes a workspace, rebinding its sessions, and allows dropping the last one', async () => {
     const { runtime, root } = await fixture()
     const second = join(root, 'second-workspace')
@@ -538,14 +593,14 @@ describe('Pi Durable runtime', () => {
     await runtime.deleteWorkspace(added.id)
 
     expect(runtime.workspaces().map(workspace => workspace.id)).not.toContain(added.id)
-    // The session must not keep a dangling binding.
+    // 会话不得保留悬挂绑定。
     const rebound = await runtime.detail(bound.conversation.id)
     expect(rebound.conversation.workspaceId).not.toBe(added.id)
     expect(runtime.workspaces().map(workspace => workspace.id)).toContain(rebound.conversation.workspaceId)
 
     await expect(runtime.deleteWorkspace('missing-workspace')).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
-    // Dropping the last workspace is allowed; its sessions stay unbound until another is added.
+    // 删除最后一个 workspace 是允许的；其会话保持解绑直到新增 workspace。
     const last = runtime.workspaces()[0]
     await runtime.deleteWorkspace(last.id)
     expect(runtime.workspaces()).toEqual([])
@@ -554,6 +609,8 @@ describe('Pi Durable runtime', () => {
     expect(unbound.conversation.workspaceId).toBeUndefined()
   })
 
+  // 无默认目录启动：workspace 列表为空，创建会话被拒（「还没有工作区」）；
+  // 后续添加 workspace 后创建即可绑定。
   it('starts with no workspaces when no default directory is given, until one is added', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-runtime-'))
     const dataDir = join(root, 'data')
@@ -578,6 +635,8 @@ describe('Pi Durable runtime', () => {
     expect(created.conversation.workspaceId).toBe(workspace.id)
   })
 
+  // 自动化引用守门：被（即使已暂停的）自动化引用的 workspace 删除报 CONFLICT
+  // （错误信息点名自动化）；改派到默认 workspace 后即可删除，会话重绑。
   it('blocks deleting a workspace referenced by a disabled automation, then allows removal after reassignment', async () => {
     const { runtime, root } = await fixture()
     const secondPath = join(root, 'automation-workspace')
@@ -606,6 +665,8 @@ describe('Pi Durable runtime', () => {
     expect((await runtime.detail(bound.conversation.id)).conversation.workspaceId).toBe(fallbackId)
   })
 
+  // 并发序列化：删除与「引用该 workspace 的自动化创建」并发时，
+  // 删除先行完成、创建随后报 NOT_FOUND，不产生孤儿自动化。
   it('serializes workspace removal against an automation being created concurrently', async () => {
     const { runtime, root } = await fixture()
     const secondPath = join(root, 'concurrent-automation-workspace')
@@ -625,6 +686,7 @@ describe('Pi Durable runtime', () => {
     expect(runtime.workspaces().some(item => item.id === workspace.id)).toBe(false)
   })
 
+  // 重启恢复（逾期任务）：nextRunAt 已过去的自动化在 runtime 重启后被补跑并完成。
   it('recovers an overdue automation after the runtime restarts', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
     const automation = await runtime.createAutomation({
@@ -651,6 +713,7 @@ describe('Pi Durable runtime', () => {
     expect(recovered?.lastRun?.conversationId).toBeTruthy()
   })
 
+  // 对照边界：远未到期的 30 天间隔任务重启后不立即执行，nextRunAt 保持在未来。
   it('does not run a 30-day automation immediately after restart', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
     const automation = await runtime.createAutomation({
@@ -666,6 +729,9 @@ describe('Pi Durable runtime', () => {
     expect(recovered?.nextRunAt).toBeGreaterThan(Date.now())
   })
 
+  // 团队投影：[team] 生成 lead + 两名成员名册与任务看板（依赖/写域齐全）；
+  // 每个成员是真实子会话（origin=subagent、有 parentId）且不出现在侧栏列表；
+  // spawn 工具行带子会话 id 供面板直达；显式 team() 路由同一数据，未知/非法 id 报错。
   it('spawns teammates as background child conversations and projects the roster and the board', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Team parent' })
@@ -689,7 +755,7 @@ describe('Pi Durable runtime', () => {
     expect(team?.tasks[1]?.blockedBy).toEqual(['task-1'])
     expect(team?.tasks[0]?.writeScopes).toEqual(['src/web'])
 
-    // Every teammate is a real child conversation that stays out of the sidebar.
+    // 每个成员都是真实子会话，且不进侧栏列表。
     const children = await runtime.children(parent.conversation.id)
     expect(children.map(row => row.label)).toEqual(['资料调研', '面板实现'])
     expect((await runtime.list()).map(item => item.id)).toEqual([parent.conversation.id])
@@ -698,17 +764,20 @@ describe('Pi Durable runtime', () => {
     expect(childDetail.conversation.parentId).toBe(parent.conversation.id)
     expect(textOf(childDetail.messages.find(message => message.role === 'user'))).toContain('[team-child]')
 
-    // The spawn tool rows carry the child ids so the panel can open a member directly.
+    // spawn 工具行携带子会话 id，面板可直接打开成员。
     const spawnRows = detail.messages.filter(message => message.toolName === 'spawn_teammate')
     expect(spawnRows.map(message => (message.details as { conversationId?: string } | undefined)?.conversationId))
       .toEqual(children.map(row => row.id))
 
-    // The explicit route projects the same rows, and refuses an unknown conversation.
+    // 显式路由投影同样的行，并拒绝未知会话。
     expect((await runtime.team(parent.conversation.id)).members.map(member => member.name)).toEqual(['lead', 'researcher', 'writer'])
     await expect(runtime.team('9999')).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(runtime.team('not-a-number')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
 
+  // 团队消息：send_message 立即投递不等回答（只读会话同样可行）；
+  // 成员消息带发送者框架（「来自 lead 的团队消息：」，对齐 DSH index.ts:230-233）；
+  // list_agents 报持久名册行（phase）与实况可用性。
   it('delivers a teammate message without waiting for its answer, even in a read-only conversation', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Team messages', accessMode: 'readOnly' })
@@ -721,16 +790,18 @@ describe('Pi Durable runtime', () => {
       value.messages.some(message => message.role === 'assistant' && textOf(message).includes('进度：资料已整理完')), 20_000)
     const userTexts = child.messages.filter(message => message.role === 'user').map(textOf)
     expect(userTexts.some(text => text.includes('[team-child] 先整理资料'))).toBe(true)
-    // DSH frames a peer message with its sender (`index.ts:230-233`).
+    // DSH 以发送者框架包装成员间消息（index.ts:230-233）。
     expect(userTexts.some(text => text.includes('来自 lead 的团队消息：') && text.includes('[team-child-followup]'))).toBe(true)
 
-    // list_agents reports the durable row with its phase and live availability.
+    // list_agents 报持久名册行（phase）与实况可用性。
     const listed = detail.messages.find(message => message.toolName === 'list_agents')
     const rows = JSON.parse(textOf(listed)) as Array<{ name: string; role: string; phase: string }>
     expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'helper', role: 'teammate', phase: 'active' })]))
     expect(rows.map(row => row.name)).toEqual(['lead', 'helper'])
   })
 
+  // wait_agent 两态：无活跃成员立即返回 no-active-peer（timedOut=false）；
+  // 有运行中成员时等满时限报 timedOut=true（诊断带标记）。
   it('answers wait_agent with no-active-peer at once and times out while a member runs', async () => {
     const { runtime } = await fixture()
     const idle = await runtime.create({ title: 'Team wait' })
@@ -742,7 +813,7 @@ describe('Pi Durable runtime', () => {
     expect(textOf(immediate)).toContain('"timedOut": false')
     expect((immediate?.details as { noProgress?: { reason?: string } } | undefined)?.noProgress?.reason).toBe('no-active-peer')
 
-    // One running member: the call waits its bound out and reports timedOut.
+    // 一名成员在跑：调用等满时限后报 timedOut。
     const gated = await runtime.create({ title: 'Team wait timeout' })
     await runtime.submit(gated.conversation.id, { text: '[team-wait-timeout] 演示', requestId: randomUUID() })
     const timeoutDetail = await waitForDetail(runtime, gated.conversation.id,
@@ -753,6 +824,8 @@ describe('Pi Durable runtime', () => {
     expect((waited?.details as { timedOut?: boolean } | undefined)?.timedOut).toBe(true)
   }, 60_000)
 
+  // 任务看板贯通：claim（in_progress）→ 故意陈旧的 release 被拒（错误带当前修订）→
+  // complete 收尾；看板投影最终 completed、revision 3、完成后不再 ready。
   it('drives a shared task through claim, a stale rejection, and complete', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Team tasks' })
@@ -763,7 +836,7 @@ describe('Pi Durable runtime', () => {
     expect(updates).toHaveLength(3)
     expect(updates[0]?.isError).not.toBe(true)
     expect(textOf(updates[0])).toContain('"status": "in_progress"')
-    // The deliberately stale release is rejected with the current revision in the message.
+    // 故意的陈旧 release 被拒，错误信息里带当前修订号。
     expect(updates[1]?.isError).toBe(true)
     expect(textOf(updates[1])).toContain('stale team task "task-1" revision 1; current revision is 2')
     expect(updates[2]?.isError).not.toBe(true)
@@ -774,13 +847,16 @@ describe('Pi Durable runtime', () => {
     expect(tasks[0]?.ready).toBe(false)
   })
 
+  // 前台子智能体委派：子答复经工具结果回到模型；subagents 行（标签/标题/答复/时间）
+  // 投影正确；owner 边决定成员关系（子会话有独立转录、origin/parentId 明确）；
+  // 子会话不进侧栏、子会话无子会话。
   it('delegates one foreground child conversation and projects its answer', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Subagent parent' })
     await runtime.submit(parent.conversation.id, { text: '[subagent] 演示', requestId: randomUUID() })
     const detail = await waitForCompletedRun(runtime, parent.conversation.id)
 
-    // The child's answer reaches the model through the tool result, not the parent's own text.
+    // 子答复经工具结果（而非父会话自己的文本）回到模型。
     const toolResult = detail.messages.find(message => message.role === 'tool' && message.toolName === SUBAGENT_TOOL)
     expect(toolResult?.isError).not.toBe(true)
     expect(textOf(toolResult)).toContain('子智能体一期机制小结')
@@ -795,7 +871,7 @@ describe('Pi Durable runtime', () => {
     expect(child?.updatedAt).toBeGreaterThanOrEqual(child?.createdAt ?? 0)
     expect(child?.id).not.toBe(parent.conversation.id)
 
-    // The owner edge decides membership: the child is a real conversation with its own transcript.
+    // owner 边决定成员关系：子会话是拥有独立转录的真实会话。
     const childDetail = await runtime.detail(child?.id ?? '')
     expect(childDetail.conversation.title).toBe('机制归纳')
     expect(childDetail.conversation.origin).toBe('subagent')
@@ -804,12 +880,13 @@ describe('Pi Durable runtime', () => {
     expect(textOf(childDetail.messages.find(message => message.role === 'user'))).toContain('[subagent-child]')
     expect(textOf(childDetail.messages.filter(message => message.role === 'assistant').at(-1))).toContain('子智能体一期机制小结')
 
-    // Children stay out of the sidebar list, and a child owns no children of its own.
+    // 子会话不出现在侧栏，且子会话不再拥有自己的子会话。
     expect((await runtime.list()).map(item => item.id)).toEqual([parent.conversation.id])
     expect(await runtime.children(child?.id ?? '')).toEqual([])
     expect((await runtime.children(parent.conversation.id)).map(row => row.id)).toEqual([child?.id])
   })
 
+  // 只读委派：只读会话也能委派子智能体（工具无 workspace 副作用），答复正常回传。
   it('delegates from a read-only conversation, where the tool has no workspace side effect', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Read-only delegation', accessMode: 'readOnly' })
@@ -822,10 +899,12 @@ describe('Pi Durable runtime', () => {
     expect(detail.subagents?.[0]?.answer).toContain('子智能体一期机制小结')
   })
 
+  // Explore 档案委派：子会话工具收窄为只读集合、系统段换成档案提示词
+  // （「只读检索专家」）。provider 边界是观察子会话解析结果的唯一位置。
   it('delegates an Explore subagent with narrowed tools and the profile prompt', async () => {
     const { runtime } = await fixture()
-    // The provider boundary is the only place the child's resolved agent is observable: its
-    // request carries the offered tools and the system sections the profile instructions replaced.
+    // provider 边界是唯一能观察子会话已解析 agent 的位置：
+    // 请求携带可用工具与被档案指引替换后的系统段。
     const childRequests: Array<{ sections: string; tools: string[] }> = []
     const stopObserving = observeDemoRequests(request => {
       const messages = normalizeContext(request).messages
@@ -861,6 +940,8 @@ describe('Pi Durable runtime', () => {
     }
   })
 
+  // 模型覆盖：委派可指定子模型（children 行与会话详情都反映所选模型）；
+  // 目录之外的模型在任何子会话创建之前被拒绝（工具报错、无子会话产生）。
   it('overrides the child model on delegation and refuses a model outside the catalog', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Model delegation' })
@@ -875,7 +956,7 @@ describe('Pi Durable runtime', () => {
     expect(rows[0]?.model).toBe('pi-web-demo/demo-model')
     expect((await runtime.detail(rows[0]?.id ?? '')).conversation.model).toEqual({ provider: 'pi-web-demo', modelId: 'demo-model' })
 
-    // A pick that is not in the catalog is rejected before any child conversation exists.
+    // 目录之外的选型在任何子会话存在之前就被拒绝。
     const other = await runtime.create({ title: 'Unavailable model delegation' })
     await runtime.submit(other.conversation.id, { text: '[subagent-bad-model] 演示', requestId: randomUUID() })
     const failed = await waitForCompletedRun(runtime, other.conversation.id)
@@ -885,6 +966,8 @@ describe('Pi Durable runtime', () => {
     expect(await runtime.children(other.conversation.id)).toEqual([])
   })
 
+  // 子会话控制：follow-up 投递触发子会话新一轮运行、childStop 终止运行；
+  // 边缘两侧的无关会话与未知 id 一律 NOT_FOUND（不能跨边控制）。
   it('delivers follow-ups to one child and stops a running child, refusing every other target', async () => {
     const { runtime } = await fixture()
     const parent = await runtime.create({ title: 'Subagent control' })
@@ -893,14 +976,14 @@ describe('Pi Durable runtime', () => {
     const childId = (await runtime.children(parent.conversation.id))[0]?.id ?? ''
     const other = await runtime.create({ title: 'Unrelated' })
 
-    // A foreign conversation is never a control target, whichever side of the edge it sits on.
+    // 无关会话永远不是控制目标——无论它处在边缘的哪一侧。
     await expect(runtime.childMessage(parent.conversation.id, other.conversation.id, { text: '你好', requestId: randomUUID() }))
       .rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(runtime.childStop(parent.conversation.id, other.conversation.id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(runtime.childStop(other.conversation.id, childId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(runtime.childStop(parent.conversation.id, '999999')).rejects.toMatchObject({ code: 'NOT_FOUND' })
 
-    // A follow-up reaches the child and starts its next run.
+    // follow-up 到达子会话并启动其下一轮运行。
     const gate = holdNextDemoResponse()
     try {
       await runtime.childMessage(parent.conversation.id, childId, { text: '再补充一条结论', requestId: randomUUID() })
@@ -916,6 +999,8 @@ describe('Pi Durable runtime', () => {
     }
   })
 
+  // code mode：模型写的脚本能调用会话工具（嵌套 bash）；脚本输出即模型所见，
+  // 嵌套调用记录在 details 中。
   it('runs model-written code mode scripts against the conversation tools', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({ title: 'Code mode' })
@@ -923,22 +1008,24 @@ describe('Pi Durable runtime', () => {
     const completed = await waitForCompletedRun(runtime, created.conversation.id)
     const codemode = completed.messages.find(message => message.role === 'tool' && message.toolName === 'codemode')
     expect(codemode?.isError).toBeFalsy()
-    // The script's output is what the model sees, and its nested bash call is in the details.
+    // 脚本输出是模型所见的内容，嵌套 bash 调用记录在 details 里。
     expect(textOf(codemode)).toContain('codemode-ok')
     expect(JSON.stringify(codemode?.details)).toContain(SHELL_TOOL)
     expect(completed.messages.some(message => message.role === 'assistant' && textOf(message).includes('codemode-ok'))).toBe(true)
   })
 
+  // code mode 三态切换（对既有会话）：on 提供原生工具；only 只给 codemode
+  // （直接调用被拒）；off 后再 on 清掉残留的 script-only 过滤（codemode 与原生工具都恢复）。
   it('switches code mode between the native and script-only presentations for existing conversations', async () => {
     const { runtime } = await fixture()
     const created = await runtime.create({ title: 'Code mode switch' })
 
-    // Default `on`: a direct bash call is offered to the model and runs.
+    // 默认 `on`：直接 bash 调用对模型可用并执行。
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 第一次', requestId: randomUUID() })
     const on = await waitForCompletedRun(runtime, created.conversation.id)
     expect(on.messages.find(message => message.role === 'tool' && message.toolName === SHELL_TOOL)?.isError).toBeFalsy()
 
-    // `only`: the model sees just codemode, so the same direct call is refused.
+    // `only`：模型只见 codemode，同样的直接调用被拒。
     await runtime.updateSettings({ codemodeMode: 'only' })
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 第二次', requestId: randomUUID() })
     const only = await waitForCompletedRun(runtime, created.conversation.id)
@@ -946,7 +1033,7 @@ describe('Pi Durable runtime', () => {
     expect(refused?.isError).toBe(true)
     expect(runtime.settings().codemodeMode).toBe('only')
 
-    // `off` then back `on`: the stored script-only filter is cleared, so codemode works again.
+    // `off` 再回 `on`：持久化的 script-only 过滤被清除，codemode 恢复可用。
     await runtime.updateSettings({ codemodeMode: 'off' })
     await runtime.submit(created.conversation.id, { text: '[codemode] 关闭后再试', requestId: randomUUID() })
     const off = await waitForCompletedRun(runtime, created.conversation.id)
@@ -960,12 +1047,14 @@ describe('Pi Durable runtime', () => {
     expect(restored?.isError).toBeFalsy()
     expect(textOf(restored)).toContain('codemode-ok')
 
-    // `on` restores the native tools too: a stale script-only filter would refuse them.
+    // `on` 同时恢复原生工具：残留的 script-only 过滤本会拒绝它们。
     await runtime.submit(created.conversation.id, { text: '[direct-tool] 重新开启后', requestId: randomUUID() })
     const directBack = await waitForCompletedRun(runtime, created.conversation.id)
     expect([...directBack.messages].reverse().find(message => message.role === 'tool' && message.toolName === SHELL_TOOL)?.isError).toBeFalsy()
   })
 
+  // MCP 只读导入：无配置文件时报 configExists=false；坏命令的服务标 error 状态，
+  // 但绝不阻碍 runtime 继续创建会话。
   it('imports the Pi MCP file read-only and keeps serving when a server cannot start', async () => {
     const empty = await fixture()
     expect(empty.runtime.mcp().configExists).toBe(false)
@@ -980,20 +1069,19 @@ describe('Pi Durable runtime', () => {
     expect(view.servers).toHaveLength(1)
     expect(view.servers[0]?.status).toBe('error')
     expect(view.servers[0]?.error).toBeTruthy()
-    // A failing MCP server never keeps the runtime from creating conversations.
+    // 起不来的 MCP 服务绝不阻碍 runtime 创建会话。
     expect((await broken.runtime.create({ title: 'Still up' })).conversation.id).toBeTruthy()
   })
 })
 
 /**
- * The background delegation chain driven directly against the harness instead of through a demo
- * marker: the real `subagent` tool (wired to the real settlement channel) launches a child, the
- * call returns an activation at once, and the child's finished answer lands in the parent as a
- * `[subagent-settlement]` follow-up message that starts a new run.
+ * 后台委派链路直连 harness 驱动（不经 demo 标记）：真实的 `subagent` 工具
+ * （接真实结算通道）拉起子会话，调用立即返回激活回执，子会话完成后的答复
+ * 以 `[subagent-settlement]` follow-up 消息落到父会话并触发新一轮运行。
  */
 describe('background subagent delegation', () => {
-  // The tool's child conversation is task-owned, and the owner task must exist. A parked
-  // background anchor stands in for the ToolTask a real invocation would run (team.ts precedent).
+  // 工具的子会话由任务所有（task-owned），owner 任务必须存在。
+  // 用一个驻留的后台锚任务顶替真实调用会运行的 ToolTask（team.ts 先例）。
   const BgOwnerAnchor = defineTask<{ name: string }, { phase: 'anchor' }, null, object>({
     name: 'pi-web.bg-owner-anchor',
     version: 1,
@@ -1011,7 +1099,7 @@ describe('background subagent delegation', () => {
             outcome: { status: 'aborted' as const, reason: 'bg owner released' },
           }), context)
         } catch {
-          // The Harness is closing: the parked boundary has nothing left to record.
+          // Harness 正在关闭：驻留边界已无可记录的内容。
         }
       },
     },
@@ -1023,7 +1111,10 @@ describe('background subagent delegation', () => {
     },
   })
 
-  /** The visible text of every message of one role, straight off the raw context view. */
+  /**
+   * 从原始上下文视图直接读取某一角色的全部可见文本。
+   * @returns { user, assistant } 两组按转录顺序排列的文本
+   */
   async function textsOf(handle: Conversation): Promise<{ user: string[]; assistant: string[] }> {
     const view = await handle.context(CTX)
     const flat = view.contributions.flat()
@@ -1035,6 +1126,9 @@ describe('background subagent delegation', () => {
     return { user: of('user'), assistant: of('assistant') }
   }
 
+  // 主链路断言：调用立即返回激活回执（不是答案）且父会话暂无结算；
+  // 子会话完成后答复以恰好一条带标记的 follow-up 落到父会话并启动新运行；
+  // 持久标记齐全——父会话有 request receipt、子会话委派带 deliveredAt。
   it('returns an activation at once, then settles the answer into the parent as a follow-up run', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-runtime-bg-'))
     const workspace = join(root, 'workspace')
@@ -1057,7 +1151,7 @@ describe('background subagent delegation', () => {
     if (!parent) throw new Error('parent conversation is missing')
     await parent.configure({ model: { ...demo.defaultModel! } }, CTX)
     const parentId = parentRecord.id
-    // The parked task the delegation's child conversation is owned by.
+    // 委派的子会话所隶属的驻留任务。
     const ownerTask = await harness.commit((tx) => tx.createTask(BgOwnerAnchor, { name: 'bg-owner' }, {
       ownership: { kind: 'conversation' },
       conversationId: parentId,
@@ -1065,7 +1159,7 @@ describe('background subagent delegation', () => {
     }), CTX)
     const taskIdLabel = String(ownerTask as TaskId)
 
-    // The real tool over this harness, with the runtime's settlement injection in place.
+    // 接在本 harness 上的真实工具，带 runtime 的结算注入。
     const tool = createSubagentTools({
       prepareChild: async () => undefined,
       settleWhenAnswered: settlement.settleWhenAnswered,
@@ -1089,7 +1183,7 @@ describe('background subagent delegation', () => {
 
     const result = await execute({ task: '[subagent-child] 归纳一期机制', label: '机制归纳', run_in_background: true }, api, CTX)
 
-    // The call returns an activation, not the answer, and the parent holds no settlement yet.
+    // 调用返回激活回执而非答案，父会话此刻还没有任何结算。
     expect(result.isError).not.toBe(true)
     const activation = result.output?.[0]?.text ?? ''
     expect(activation).toContain('机制归纳')
@@ -1097,7 +1191,7 @@ describe('background subagent delegation', () => {
     expect(details.at(-1)).toMatchObject({ status: 'running', label: '机制归纳', background: true })
     expect((await textsOf(parent)).user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))).toHaveLength(0)
 
-    // The child finishes, and its answer arrives as exactly one tagged follow-up message.
+    // 子会话完成后，答复以恰好一条带标记的 follow-up 消息到达。
     const deadline = Date.now() + 20_000
     let settledTexts: { user: string[]; assistant: string[] }
     for (;;) {
@@ -1118,13 +1212,13 @@ describe('background subagent delegation', () => {
     expect(delivered[0]).toContain('子智能体「机制归纳」已完成任务')
     expect(delivered[0]).toContain(childAnswer)
 
-    // The injected message starts a new run on the parent, which answers and goes idle.
+    // 注入的消息在父会话上启动新一轮运行：父会话作答后回到空闲。
     await parent.waitForIdle(CTX)
     const after = await textsOf(parent)
     expect(after.user.filter(text => text.startsWith(SUBAGENT_SETTLEMENT_MARKER))).toHaveLength(1)
     expect(after.assistant.length).toBeGreaterThan(0)
 
-    // The durable markers: a receipt on the parent, a delivered delegation on the child.
+    // 持久标记：父会话侧的回执、子会话侧已投递的委派记录。
     const metadata = await harness.snapshot(META, parentId, CTX)
     expect(typeof metadata?.requestReceipts[`subagent-settle:${taskIdLabel}`]?.submissionId).toBe('number')
     const identity = await harness.snapshot(Subagents, childId!, CTX)

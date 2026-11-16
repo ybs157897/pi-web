@@ -6,18 +6,37 @@ import {
   subagentRunHeadline, type SubagentRunEntry, type SubagentRunGroup, type SubagentRunStatus,
 } from '../src/web/subagent-run-model.ts'
 
-/** Chinese-only translator, mirroring the app's own locale switch. */
+/**
+ * 子智能体运行条（run strip）渲染模型契约测试：把连续/嵌套的 subagent 调用折叠成
+ * 一个运行条、子会话 id 与标签的匹配规则（含截断/改名/未知标签的回退）、
+ * 分组标题文案、运行时长与配色索引。
+ */
+
+/** 仅中文翻译器，与应用自身的 locale 开关一致。 */
 const t = (chinese: string): string => chinese
 
+/**
+ * 构造 toolCall 内容块。
+ * @returns id/name/arguments 齐全的 toolCall 块
+ */
 function callBlock(id: string, name: string, args: Record<string, unknown> = {}): Extract<ContentBlock, { type: 'toolCall' }> {
   return { type: 'toolCall', id, name, arguments: args }
 }
 
+/**
+ * 构造工具结果消息 fixture。
+ * @returns 空文本块的 tool 消息，字段可覆盖
+ */
 function toolMessage(id: string, fields: Partial<ChatMessage> = {}): ChatMessage {
   return { id, role: 'tool', blocks: [{ type: 'text', text: '' }], timestamp: 0, ...fields }
 }
 
-/** One root tool part carrying a settled assistant call block, with optional projection result. */
+/**
+ * 构造一条根级工具 part：携带已结算的助手调用块，可选附加投影结果。
+ * @param key part 唯一键（同时派生消息/调用 id）
+ * @param name 工具名
+ * @param options args 参数、result 结果消息、children 嵌套子项、order 排序
+ */
 function toolPart(key: string, name: string, options: {
   args?: Record<string, unknown>
   result?: ChatMessage
@@ -39,7 +58,9 @@ function toolPart(key: string, name: string, options: {
   }
 }
 
-/** A settled top-level `subagent` call whose details name its child conversation. */
+/**
+ * 已结算的顶层 `subagent` 调用：details 直接命名其子会话（conversationId + status + label）。
+ */
 function settledSubagent(key: string, childId: string, label: string, failed = false): ProcessPart {
   return toolPart(key, 'subagent', {
     args: { label, task: `do ${label}` },
@@ -53,7 +74,9 @@ function settledSubagent(key: string, childId: string, label: string, failed = f
   })
 }
 
-/** A live top-level `subagent` call: the projection nests the payload under `result`. */
+/**
+ * 运行中的顶层 `subagent` 调用：运行时投影把载荷嵌套在 details.result 之下。
+ */
 function liveSubagent(key: string, childId: string, label: string): ProcessPart {
   return toolPart(key, 'subagent', {
     args: { label },
@@ -67,7 +90,9 @@ function liveSubagent(key: string, childId: string, label: string): ProcessPart 
   })
 }
 
-/** A codemode part whose script made `count` nested subagent calls, still live. */
+/**
+ * codemode part：脚本发起的嵌套 subagent 调用仍在运行，挂在 children 下。
+ */
 function liveCodemode(key: string, children: ToolItem[]): ProcessPart {
   return toolPart(key, 'codemode', {
     args: { code: 'const a = await tools.subagent(...)' },
@@ -75,6 +100,10 @@ function liveCodemode(key: string, children: ToolItem[]): ProcessPart {
   })
 }
 
+/**
+ * 构造 codemode 脚本内的嵌套 subagent 调用项。
+ * @returns parentToolCallId 指向 codemode 调用、details 带 parentCallId 的 ToolItem
+ */
 function nestedCallItem(key: string, id: string, label: string): ToolItem {
   const message = toolMessage(id, {
     toolCallId: id,
@@ -86,7 +115,9 @@ function nestedCallItem(key: string, id: string, label: string): ToolItem {
   return { key, message, result: message, children: [], order: 1 }
 }
 
-/** A settled codemode part whose `details.calls` hold the script's nested calls. */
+/**
+ * 已结算的 codemode part：脚本的嵌套调用记录存放在 details.calls（JSON 字符串 args）。
+ */
 function settledCodemode(key: string, calls: Array<{ id: string; name: string; args: string; status: string }>): ProcessPart {
   return toolPart(key, 'codemode', {
     args: { code: 'const a = await tools.subagent(...)' },
@@ -99,10 +130,17 @@ function settledCodemode(key: string, calls: Array<{ id: string; name: string; a
   })
 }
 
+/**
+ * 构造子会话摘要 fixture。
+ * @param id 子会话 id
+ * @param label 委派标签
+ * @returns status 为 inactive 的 SubagentSummary，字段可覆盖
+ */
 function summary(id: string, label: string, overrides: Partial<SubagentSummary> = {}): SubagentSummary {
   return { id, label, title: label, status: 'inactive', answer: '', createdAt: 0, updatedAt: 0, ...overrides }
 }
 
+/** 类型收窄谓词：part 是否是折叠出的运行条分组。 */
 const isStrip = (part: ProcessPart | SubagentRunGroup): part is SubagentRunGroup => part.kind === 'subagentRun'
 
 describe('subagent run model', () => {
@@ -121,6 +159,7 @@ describe('subagent run model', () => {
     expect(isStrip(strip) && strip.items.map(item => item.label)).toEqual(['essay-1', 'essay-2', 'essay-3'])
   })
 
+  // 边界：只有一个调用时不折叠，保持原 tool part 渲染。
   it('keeps a single top-level subagent call as its original tool part', () => {
     const parts = [settledSubagent('a', 'child-1', 'essay-1')]
     const grouped = groupSubagentRuns(parts, t, false, [summary('child-1', 'essay-1')])
@@ -129,6 +168,7 @@ describe('subagent run model', () => {
     expect(grouped[0]).toHaveProperty('key', 'a')
   })
 
+  // 边界：中间夹了其他工具行（bash）就不再相连，各成独立 part。
   it('does not join two top-level calls across an interleaved bash row', () => {
     const bash = toolPart('b', 'bash', { args: { command: 'ls' }, result: toolMessage('b:result', { toolCallId: 'b:call', toolName: 'bash', status: 'completed' }) })
     const parts = [settledSubagent('a', 'child-1', 'essay-1'), bash, settledSubagent('c', 'child-2', 'essay-2')]
@@ -138,6 +178,8 @@ describe('subagent run model', () => {
     expect(grouped.map(part => part.key)).toEqual(['a', 'b', 'c'])
   })
 
+  // 创建中状态：无结果的顶层调用（投影尚未生成子会话）标记 pending，
+  // 运行条条目状态为 creating 且不挂 childId。
   it('shows childless pending top-level calls as creating', () => {
     const parts = [
       toolPart('a', 'subagent', { args: { label: 'fresh-task' } }),
@@ -154,6 +196,8 @@ describe('subagent run model', () => {
     expect(entries.every(entry => entry.childId === undefined)).toBe(true)
   })
 
+  // 运行中投影的载荷形状：childId/label 从 details.result 解出，
+  // 条目状态 running 且配色按顺序索引 0/1。
   it('reads the live projection whose details nest the payload under result', () => {
     const parts = [liveSubagent('a', 'child-9', 'city'), liveSubagent('b', 'child-8', 'spring')]
     const summaries = [summary('child-9', 'city', { status: 'running' }), summary('child-8', 'spring', { status: 'running' })]
@@ -167,6 +211,8 @@ describe('subagent run model', () => {
     expect(entries[1]?.colorIndex).toBe(1)
   })
 
+  // 嵌套提升：codemode 脚本运行中的嵌套 subagent 调用被提升为运行条，
+  // 排在脚本卡片（原 codemode part）之前，source 标记为 codemode。
   it('lifts codemode live nested subagent calls into a strip before the script card', () => {
     const codemode = liveCodemode('cm', [
       nestedCallItem('n1', 'nested-1', 'essay-1'),
@@ -184,6 +230,8 @@ describe('subagent run model', () => {
     expect(isStrip(strip) && strip.items.map(item => item.label)).toEqual(['essay-1', 'essay-2'])
   })
 
+  // 已结算 codemode：details.calls 提取条目，status ok→done、error→failed；
+  // 非 subagent 调用（bash）不进运行条。
   it('extracts codemode settled calls from details.calls with ok to done and error to failed', () => {
     const codemode = settledCodemode('cm', [
       { id: '1', name: 'subagent', args: JSON.stringify({ label: 'essay-1' }), status: 'ok' },
@@ -200,6 +248,8 @@ describe('subagent run model', () => {
     expect(entries.map(entry => entry.childId)).toEqual(['child-1', 'child-2'])
   })
 
+  // 容错：details.calls 的 args 可能是被截断的 JSON 前缀（脚本日志超长），
+  // label/task 仍要从部分前缀恢复出来。
   it('recovers label and task from a truncated codemode args prefix', () => {
     const truncated = '{"label":"essay-1","task":"write a long essay about spring'
     const codemode = settledCodemode('cm', [{ id: '1', name: 'subagent', args: truncated, status: 'ok' }])
@@ -213,7 +263,8 @@ describe('subagent run model', () => {
   })
 
   it('prefix-matches a label truncated before its child was renamed or capped', () => {
-    // The details carry no conversation id, so only the label can match.
+    // details 不带会话 id，只能靠 label 匹配：调用里的 label 是子会话标签
+    // 被截断/改名前的前缀，按前缀匹配找回 childId。
     const parts = [
       settledSubagent('a', '', 'write-a-long-essay-repo'),
       settledSubagent('b', 'child-2', 'essay-2'),
@@ -228,7 +279,8 @@ describe('subagent run model', () => {
   })
 
   it('falls back to the newest unmatched children for settled calls with unknown labels', () => {
-    // Empty conversation ids keep the calls childless, so only the fallback can match.
+    // 空 conversationId 使调用无从精确匹配，只能走回退：
+    // 按尾序把两条已完成的委派映射到「最新且未匹配」的两个子会话。
     const parts = [settledSubagent('a', '', 'zzz-1'), settledSubagent('b', '', 'zzz-2')]
     const summaries = [
       summary('child-old', 'oldest'),
@@ -238,11 +290,13 @@ describe('subagent run model', () => {
     const grouped = groupSubagentRuns(parts, t, false, summaries)
     const strip = grouped[0]
     const entries = isStrip(strip) ? subagentRunEntries(strip, summaries, t) : []
-    // Two finished delegations map onto the two newest children, in tail order.
+    // 两条已完成委派按尾序映射到最新的两个子会话。
     expect(entries.map(entry => entry.childId)).toEqual(['child-2', 'child-3'])
     expect(entries.every(entry => entry.status === 'done')).toBe(true)
   })
 
+  // 安全边界：creating（无投影结果）的调用不得抢占任何已存在的子会话，
+  // 即使摘要里留有未匹配的 child 也保持 childId 为空。
   it('never lets a creating call claim an existing child conversation', () => {
     const parts = [
       toolPart('a', 'subagent', { args: { label: 'brand-new' } }),
@@ -259,6 +313,8 @@ describe('subagent run model', () => {
     expect(entries[1]?.status).toBe('done')
   })
 
+  // 分组标题矩阵：有未结束条目时显示「N/M 结束」进度；全部 done 与混合 failed
+  // 各有独立标题措辞。
   it('titles the strip for creating, running, done, and failed groups', () => {
     const entry = (status: SubagentRunStatus, key?: string): SubagentRunEntry => ({ key: key ?? status, label: 'x', status, colorIndex: 0 })
     expect(subagentRunHeadline([entry('creating'), entry('done', 'd')], t))
@@ -271,6 +327,9 @@ describe('subagent run model', () => {
       .toEqual({ tone: 'failed', title: '1 个已完成 · 1 个失败', count: '' })
   })
 
+  // 时长语义：running 条目的时长随 metricsAt 推进（now - metricsAt + durationMs 基线，
+  // now 早于 metricsAt 时保持基线）；done 条目时长固定；无 metricsAt 的 running 不显示时长。
+  // formatSubagentSeconds 按秒取整，分钟进位为「3分05秒」。
   it('advances a running entrys duration from metricsAt and keeps a settled one fixed', () => {
     expect(subagentEntryDurationMs({ key: 'a', label: 'x', status: 'running', durationMs: 1_000, metricsAt: 10_000, colorIndex: 0 }, 12_500)).toBe(3_500)
     expect(subagentEntryDurationMs({ key: 'a', label: 'x', status: 'running', durationMs: 1_000, metricsAt: 10_000, colorIndex: 0 }, 9_000)).toBe(1_000)
@@ -281,12 +340,14 @@ describe('subagent run model', () => {
     expect(formatSubagentSeconds(0)).toBe('0秒')
   })
 
+  // 配色契约：已匹配子会话按其在父列表中的位置取色（超出取色数回绕到 0）；
+  // 未匹配 id 经确定性散列落入同样的六个槽位，同 id 每次同色。
   it('colors entries by their index in the parent list and hashes unmatched ones', () => {
     const summaries = [0, 1, 2, 3, 4, 5, 6].map(index => summary(`child-${index}`, `label-${index}`))
     expect(subagentColorIndex('child-3', summaries)).toBe(3)
     expect(subagentColorIndex('child-6', summaries)).toBe(0)
     expect(subagentColorIndex('child-0', summaries)).toBe(0)
-    // An id outside the list hashes into the same six slots, deterministically.
+    // 列表之外的 id 经确定性散列落入同样的六个槽位。
     const hashed = subagentColorIndex('unmatched-child')
     expect(hashed).toBe(subagentColorIndex('unmatched-child'))
     expect(hashed).toBeGreaterThanOrEqual(0)
