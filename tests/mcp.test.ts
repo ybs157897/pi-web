@@ -17,10 +17,14 @@ import { McpRegistry } from '../src/server/mcp/registry.ts'
 import type { McpServerConfig } from '../src/server/mcp/config.ts'
 import type { PluginMcpServerConfig } from '../src/server/plugins/types.ts'
 
+/** 已创建的临时目录列表，用例结束后统一删除。 */
 const temporaryDirectories: string[] = []
+/** 打开中的 McpRegistry 列表，用例结束后统一关闭。 */
 const openManagers: McpRegistry[] = []
+/** 存活中的假服务列表，用例结束后统一关闭。 */
 const liveFakeServers: Array<{ close(): Promise<void> }> = []
 
+/** 测试用的空上下文（无遥测、无中止信号）。 */
 const EMPTY_CONTEXT: Context = {
   telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
@@ -28,6 +32,7 @@ const EMPTY_CONTEXT: Context = {
   toString: () => 'pi-web-mcp-test',
 }
 
+/** 每个用例后：关闭全部打开的 registry 与假服务、删除临时目录、清掉测试环境变量。 */
 afterEach(async () => {
   await Promise.allSettled(openManagers.splice(0).map(manager => manager.close()))
   await Promise.allSettled(liveFakeServers.splice(0).map(server => server.close()))
@@ -35,12 +40,21 @@ afterEach(async () => {
   delete process.env.MCP_TEST_TOKEN
 })
 
+/**
+ * 创建一个注册进清理队列的临时目录。
+ * @returns 临时目录绝对路径
+ */
 async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'pi-web-mcp-'))
   temporaryDirectories.push(directory)
   return directory
 }
 
+/**
+ * 把配置对象（或原始字符串）写入临时目录的 mcp.json。
+ * @param value 配置对象或 JSON 字符串
+ * @returns 配置文件绝对路径
+ */
 async function writeConfig(value: unknown): Promise<string> {
   const directory = await temporaryDirectory()
   const path = join(directory, 'mcp.json')
@@ -48,6 +62,12 @@ async function writeConfig(value: unknown): Promise<string> {
   return path
 }
 
+/**
+ * 打开一个 McpRegistry 并注册进清理队列。
+ * @param configPath 配置文件路径
+ * @param transportFactory 可选的传输工厂（按服务名映射到假服务的 transport）
+ * @returns 打开的 McpRegistry
+ */
 function openManager(
   configPath: string,
   transportFactory?: (server: McpServerConfig) => McpTransport,
@@ -58,36 +78,64 @@ function openManager(
   })
 }
 
+/**
+ * 取出 registry 扩展注册的工具列表（断言扩展名必须是 mcp）。
+ * @param manager McpRegistry 实例
+ * @returns 工具注册数组
+ */
 function extensionTools(manager: McpRegistry): readonly ToolRegistration[] {
   const extension = manager.extension()
   expect(extension?.name).toBe('mcp')
   return extension?.tools ?? []
 }
 
+/**
+ * 按名字查找已注册的工具。
+ * @param manager McpRegistry 实例
+ * @param name 工具名
+ * @returns 工具注册项；找不到时抛错
+ */
 function registeredTool(manager: McpRegistry, name: string) {
   const tool = extensionTools(manager).find(candidate => candidate.name === name)
   if (!tool) throw new Error(`tool is not registered: ${name}`)
   return tool
 }
 
+/**
+ * 直接执行一个已注册工具（不经过真实工具执行链）。
+ * @param manager McpRegistry 实例
+ * @param name 工具名
+ * @param args 调用参数
+ * @returns 工具执行结果
+ */
 async function runTool(manager: McpRegistry, name: string, args: Record<string, unknown>): Promise<ToolExecutionResult<JsonValue>> {
   return registeredTool(manager, name).execute(args, {} as ToolExecutionApi, EMPTY_CONTEXT)
 }
 
+/**
+ * 提取结果里第一个文本块的文本。
+ * @param result 工具执行结果
+ * @returns 文本内容；首块不是文本时返回空串
+ */
 function outputText(result: ToolExecutionResult<JsonValue>): string {
   const block = result.output?.[0]
   return block?.type === 'text' ? block.text : ''
 }
 
+/**
+ * 把结果的 details 断言成普通对象，便于 toMatchObject。
+ * @param result 工具执行结果
+ * @returns details 对象
+ */
 function detailsOf(result: ToolExecutionResult<JsonValue>): Record<string, unknown> {
   return result.details as Record<string, unknown>
 }
 
 // ---------------------------------------------------------------------------------------------
-// A minimal MCP server over the in-memory transport. It answers initialize, tools/list and
-// tools/call; notifications need no reply.
+// 基于内存传输的最小 MCP 假服务：应答 initialize、tools/list 与 tools/call；通知无需回复。
 // ---------------------------------------------------------------------------------------------
 
+/** 假服务可声明的工具描述。 */
 interface FakeTool {
   name: string
   title?: string
@@ -95,18 +143,25 @@ interface FakeTool {
   inputSchema?: Record<string, unknown>
 }
 
+/** tools/call 的处理函数类型：按工具名与参数返回结果或抛错。 */
 type FakeCallHandler = (name: string, args: Record<string, unknown>) => unknown | Promise<unknown>
 
+/** 假服务的行为选项。 */
 interface FakeServerOptions {
   tools?: FakeTool[]
   instructions?: string
-  /** Reject initialize with a JSON-RPC error. */
+  /** 用 JSON-RPC 错误拒绝 initialize。 */
   failInitialize?: boolean
-  /** Never answer initialize, so the client request timeout fires. */
+  /** 永不回答 initialize，让客户端请求超时触发。 */
   ignoreInitialize?: boolean
   callTool?: FakeCallHandler
 }
 
+/**
+ * 启动一个基于内存传输的假 MCP 服务。
+ * @param options 工具清单、instructions、initialize 失败/静默模式与 tools/call 处理函数
+ * @returns 客户端 transport、调用记录、closed 状态与 close 函数
+ */
 function startFakeServer(options: FakeServerOptions = {}) {
   const { client, server } = createInMemoryTransportPair()
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
@@ -115,6 +170,9 @@ function startFakeServer(options: FakeServerOptions = {}) {
     closed = true
   })
 
+  /**
+   * 按请求 id 回复 result 或 error；transport 已关闭时静默吞掉发送失败。
+   */
   const respond = async (
     id: JsonRpcId,
     payload: { result?: unknown; error?: { code: number; message: string } },
@@ -125,10 +183,11 @@ function startFakeServer(options: FakeServerOptions = {}) {
         ? { jsonrpc: '2.0', id, error: payload.error }
         : { jsonrpc: '2.0', id, result: payload.result })
     } catch {
-      // The client closed the transport while this request was in flight.
+      // 客户端在该请求仍在途时关闭了 transport。
     }
   }
 
+  /** 分发 JSON-RPC 请求：initialize/tools/list/tools/call，其他方法回 -32601。 */
   const handle = async (message: JsonRpcMessage): Promise<void> => {
     if (!isJsonRpcRequest(message)) return
     if (message.method === 'initialize' && options.ignoreInitialize) return
@@ -149,7 +208,7 @@ function startFakeServer(options: FakeServerOptions = {}) {
         return
       }
       if (message.method === 'tools/list') {
-        // MCP requires an inputSchema, so the fake fills an empty object schema when a tool omits one.
+        // MCP 要求 inputSchema，因此省略时假服务补一个空 object schema。
         const tools = (options.tools ?? []).map(tool => ({
           name: tool.name,
           ...(tool.title !== undefined ? { title: tool.title } : {}),
@@ -195,11 +254,16 @@ function startFakeServer(options: FakeServerOptions = {}) {
   return fake
 }
 
+/**
+ * 判断值是否为普通对象（非 null、非数组）。
+ * @param value 任意值
+ * @returns 类型守卫：是 Record<string, unknown> 时为 true
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** A dependency-free MCP server for the real-spawn test: newline-delimited JSON-RPC over stdio. */
+/** 真实 spawn 测试用的零依赖 MCP 服务：stdio 上的换行分隔 JSON-RPC。 */
 const STDIO_FIXTURE = `
 import { createInterface } from 'node:readline'
 
@@ -235,7 +299,17 @@ createInterface({ input: process.stdin }).on('line', line => {
 
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * McpRegistry 配置加载测试。
+ *
+ * 关键契约：
+ * - 配置文件缺失时报告空目录（configExists=false）且不视为错误；
+ * - 非法 JSON 报错但 registry 仍可用；
+ * - 非法条目被跳过、错误汇总里点名每个坏条目、合法服务保留；
+ * - env/headers/command/args 里的 ${VAR} 被展开，未设置的变量原样保留并报 not set。
+ */
 describe('McpRegistry configuration', () => {
+  // 没有 mcp.json：view 报 configExists=false、servers=[]，不产生 error、不注册扩展、无命名空间。
   it('reports a missing config file as an empty catalog without an error', async () => {
     const directory = await temporaryDirectory()
     const configPath = join(directory, 'mcp.json')
@@ -246,6 +320,7 @@ describe('McpRegistry configuration', () => {
     expect(manager.namespaces()).toEqual([])
   })
 
+  // 半截 JSON：configExists=true、servers=[]、error 含 not valid JSON，扩展不注册但 registry 不崩。
   it('reports invalid JSON and stays usable', async () => {
     const configPath = await writeConfig('{ "mcpServers": ')
     const manager = await openManager(configPath)
@@ -257,6 +332,7 @@ describe('McpRegistry configuration', () => {
     expect(manager.extension()).toBeUndefined()
   })
 
+  // 六个条目里五个非法（坏名字/空对象/未知字段/同时给 command+url/http 缺 url）被跳过并在 error 中点名，唯一合法的 node-ok 保持 connected。
   it('skips invalid entries, summarizes them in error, and keeps the valid servers', async () => {
     const ok = startFakeServer({ tools: [{ name: 'ok' }] })
     const configPath = await writeConfig({
@@ -281,6 +357,7 @@ describe('McpRegistry configuration', () => {
     }
   })
 
+  // ${MCP_TEST_TOKEN} 在 command/args/env 中全部展开为 super-secret-token；未设置变量原样保留并报 not set。
   it('expands ${VAR} in env/headers/command/args and reports unresolved variables', async () => {
     process.env.MCP_TEST_TOKEN = 'super-secret-token'
     const expandedServer = startFakeServer({ tools: [] })
@@ -320,7 +397,23 @@ describe('McpRegistry configuration', () => {
   })
 })
 
+/**
+ * McpRegistry 目录与工具注册测试。
+ *
+ * 关键契约：
+ * - view 汇总服务（传输类型、启用态、exposure、状态、每个工具的 exposure）；
+ *   工具名先净化再重名哈希消歧（`mcp__<server>__<tool>`，非 [A-Za-z0-9_] 替换为 _）；
+ *   精确名单优先于模式（read_* deferred 但 read_file direct、* hidden）；
+ *   disabled 服务不建连接；
+ * - 机密（token/env/headers）不进入序列化 view；
+ * - exposure 决定注册形态：direct 无 deferred 标记，codemode/deferred 工具标 deferred=true；
+ * - code-mode 命名空间覆盖「已连接且至少有一个可调用工具」的服务；
+ * - 单个服务失败不影响其他服务；静默服务按 timeout 报 timed out。
+ */
 describe('McpRegistry catalog', () => {
+  // 综合目录断言：三个服务的完整 view（含工具 exposure）、机密不外泄、捕获的连接配置含展开后的
+  // env/args/timeoutMs/headers、disabled 服务无传输；工具名净化+哈希消歧+exposure 注册形态；
+  // 命名空间列表与参数 schema 形态。
   it('builds the view, sanitizes tool names, resolves exposure, and registers deferred tools', async () => {
     process.env.MCP_TEST_TOKEN = 'super-secret-token'
     const demo = startFakeServer({
@@ -354,7 +447,7 @@ describe('McpRegistry catalog', () => {
           url: 'https://example.invalid/mcp',
           headers: { Authorization: 'Bearer ${MCP_TEST_TOKEN}' },
           exposure: 'hidden',
-          // Exact names beat patterns even when a matching pattern comes first.
+          // 精确名单优先于模式，即使匹配的模式排在前面。
           toolExposure: { 'read_*': 'deferred', read_file: 'direct', '*': 'hidden' },
         },
         'off-server': { command: 'node', enabled: false },
@@ -376,6 +469,7 @@ describe('McpRegistry catalog', () => {
     expect(view.error).toBeUndefined()
     expect(view.servers.map(server => server.name)).toEqual(['demo-server', 'instruction-server', 'off-server'])
 
+    // demo-server：stdio、codemode 暴露、secret-* 隐藏、hello-world 精确 direct、hello_world 净化后与前者同名。
     expect(view.servers[0]).toEqual({
       name: 'demo-server',
       transport: 'stdio',
@@ -389,6 +483,7 @@ describe('McpRegistry catalog', () => {
         { name: 'secret-tool', description: 'Hidden by pattern', exposure: 'hidden' },
       ],
     })
+    // instruction-server：http、hidden 暴露、精确名 read_file direct 压过 read_* deferred，其余按模式 hidden/deferred。
     expect(view.servers[1]).toEqual({
       name: 'instruction-server',
       transport: 'http',
@@ -401,6 +496,7 @@ describe('McpRegistry catalog', () => {
         { name: 'write_file', description: 'Write a file', exposure: 'hidden' },
       ],
     })
+    // off-server：enabled=false，状态 disabled，无工具、不建连接。
     expect(view.servers[2]).toEqual({
       name: 'off-server',
       transport: 'stdio',
@@ -410,7 +506,7 @@ describe('McpRegistry catalog', () => {
       tools: [],
     })
 
-    // Secrets stay on the server side: headers/env never cross the protocol.
+    // 机密留在服务端：headers/env 永远不跨协议出现在 view 里。
     const serialized = JSON.stringify(view)
     expect(serialized).not.toContain('super-secret-token')
     expect(serialized).not.toContain('FAKE_TOKEN')
@@ -421,10 +517,10 @@ describe('McpRegistry catalog', () => {
     expect(captured.find(server => server.name === 'demo-server')?.timeoutMs).toBe(5000)
     expect(captured.find(server => server.name === 'instruction-server')?.headers)
       .toEqual({ Authorization: 'Bearer super-secret-token' })
-    // The disabled server never got a transport.
+    // disabled 的服务从未获得传输。
     expect(captured.map(server => server.name)).toEqual(['demo-server', 'instruction-server'])
 
-    // `mcp__<server>__<tool>`, characters outside [A-Za-z0-9_] replaced, collisions get a hash suffix.
+    // `mcp__<server>__<tool>`：[A-Za-z0-9_] 之外的字符被替换，重名加 8 位哈希后缀。
     const names = extensionTools(manager).map(tool => tool.name)
     expect(names).toHaveLength(4)
     const twins = names.filter(name => name.startsWith('mcp__demo_server__hello_world'))
@@ -437,6 +533,7 @@ describe('McpRegistry catalog', () => {
     expect(names).not.toContain('mcp__instruction_server__write_file')
     expect(new Set(names).size).toBe(names.length)
 
+    // direct 工具无 deferred 标记；codemode 工具与 deferred 暴露的工具都标 deferred=true。
     const direct = registeredTool(manager, 'mcp__demo_server__hello_world')
     expect(direct.deferred).toBeUndefined()
     const twin = extensionTools(manager).find(tool => /^mcp__demo_server__hello_world__[0-9a-f]{8}$/.test(tool.name))
@@ -444,7 +541,7 @@ describe('McpRegistry catalog', () => {
     expect(registeredTool(manager, 'mcp__instruction_server__read_file').deferred).toBeUndefined()
     expect(registeredTool(manager, 'mcp__instruction_server__read_other').deferred).toBe(true)
 
-    // Code-mode namespaces cover connected servers with at least one callable tool.
+    // code-mode 命名空间覆盖已连接且至少有一个可调用工具的服务，描述来自服务器或其 instructions 首行。
     expect(manager.namespaces()).toEqual([
       { name: 'mcp__demo_server', prefix: 'mcp__demo_server__', description: 'Demo server from the fixture' },
       { name: 'mcp__instruction_server', prefix: 'mcp__instruction_server__', description: 'Instruction server heading' },
@@ -454,6 +551,8 @@ describe('McpRegistry catalog', () => {
     }
   })
 
+  // 容错：good 正常 connected；broken 的 initialize 被拒（status=error、error 含 initialize failed）；
+  // silent 永不应答按 timeout 报 timed out 且工具为空；只有 good 的工具与命名空间被注册。
   it('keeps one failing server from breaking the others and times out a silent server', async () => {
     const good = startFakeServer({ tools: [{ name: 'ok-tool' }] })
     const broken = startFakeServer({ failInitialize: true })
@@ -487,7 +586,12 @@ describe('McpRegistry catalog', () => {
   })
 })
 
+/**
+ * 真实 stdio 传输测试：spawn 一个真实的 node 子进程 MCP 服务（STDIO_FIXTURE），
+ * 列出工具并实际调用一次。
+ */
 describe('McpRegistry real stdio transport', () => {
+  // 真实子进程：连接成功、echo 工具出现在目录（codemode 暴露）、调用 mcp__real__echo 返回 stdio:hi。
   it('spawns a stdio server, lists its tools, and runs one', async () => {
     const directory = await temporaryDirectory()
     const fixturePath = join(directory, 'mcp-server.mjs')
@@ -508,7 +612,19 @@ describe('McpRegistry real stdio transport', () => {
   })
 })
 
+/**
+ * 工具执行结果映射与关闭测试。
+ *
+ * 关键契约：
+ * - 成功结果：output 为文本块、details 带 server/tool/isError=false/structuredContent/durationMs；
+ *   调用恰好到达服务一次；
+ * - 服务端 isError=true 结果映射为 isError 的工具结果；
+ * - 服务抛协议错误映射为含错误信息与「MCP tool」文案的错误结果，不向调用方抛异常；
+ * - 只有 structuredContent 的结果把结构化数据 JSON 序列化成文本并保留在 details；
+ * - close 幂等：关闭后所有连接关闭，重复 close 不报错。
+ */
 describe('McpRegistry tool execution', () => {
+  // 四类结果各映射正确：echo（成功+结构化）、fail（isError）、crash（异常转错误文本）、structured（仅结构化）。
   it('maps successful, MCP-error, thrown, and structured-only results without throwing', async () => {
     const fake = startFakeServer({
       tools: [
@@ -529,6 +645,7 @@ describe('McpRegistry tool execution', () => {
     const configPath = await writeConfig({ mcpServers: { exec: { command: 'node' } } })
     const manager = await openManager(configPath, () => fake.transport)
 
+    // 成功：pong 文本输出，details 带来源与结构化内容、耗时为数字；服务端只收到一次调用。
     const echoed = await runTool(manager, 'mcp__exec__echo', { message: 'hi' })
     expect(echoed.isError).toBeUndefined()
     expect(echoed.output).toEqual([{ type: 'text', text: 'pong:hi' }])
@@ -541,22 +658,26 @@ describe('McpRegistry tool execution', () => {
     expect(typeof detailsOf(echoed).durationMs).toBe('number')
     expect(fake.calls).toEqual([{ name: 'echo', args: { message: 'hi' } }])
 
+    // 服务端 isError 结果：isError=true，文本原样。
     const failed = await runTool(manager, 'mcp__exec__fail', {})
     expect(failed.isError).toBe(true)
     expect(outputText(failed)).toBe('expected failure')
     expect(detailsOf(failed)).toMatchObject({ server: 'exec', tool: 'fail', isError: true })
 
+    // 服务抛异常：不向调用方抛，转为含 kaboom 与 MCP tool 的错误文本。
     const crashed = await runTool(manager, 'mcp__exec__crash', {})
     expect(crashed.isError).toBe(true)
     expect(outputText(crashed)).toContain('kaboom')
     expect(outputText(crashed)).toContain('MCP tool')
 
+    // 仅结构化：结构化数据 JSON 序列化为文本输出，并保留在 details.structuredContent。
     const structured = await runTool(manager, 'mcp__exec__structured', {})
     expect(structured.isError).toBeUndefined()
     expect(JSON.parse(outputText(structured))).toEqual({ only: 'data' })
     expect(detailsOf(structured).structuredContent).toEqual({ only: 'data' })
   })
 
+  // close 关闭全部连接；再次 close 幂等不报错。
   it('closes every connection, idempotently', async () => {
     const first = startFakeServer({ tools: [{ name: 'one' }] })
     const second = startFakeServer({ tools: [{ name: 'two' }] })
@@ -578,7 +699,13 @@ describe('McpRegistry tool execution', () => {
   })
 })
 
+/**
+ * 插件服务合并测试：插件声明的 MCP 服务与用户配置合并、reload 热替换连接集、关闭时清理。
+ */
 describe('McpRegistry plugin servers', () => {
+  // 初次合并：plugin_demo_echo 连接并注册 deferred 工具（codemode 暴露），调用到达假服务；
+  // 投影换成 painter 后 reload：echo 服务消失、draw 服务 direct 暴露（无 deferred 标记）；
+  // close 后新旧两个假服务连接都关闭。
   it('merges plugin-declared servers and reloads the connection set without a restart', async () => {
     const echoServer = startFakeServer({ tools: [{ name: 'echo', description: 'Echo back' }] })
     const drawServer = startFakeServer({ tools: [{ name: 'draw' }] })
@@ -606,6 +733,7 @@ describe('McpRegistry plugin servers', () => {
     })
     openManagers.push(registry)
 
+    // 初次：echo 服务 connected、命名空间就位、工具为 deferred，调用穿透到服务。
     expect(registry.view().servers).toEqual([
       expect.objectContaining({ name: 'plugin_demo_echo', pluginId: 'demo@market', status: 'connected' }),
     ])
@@ -615,6 +743,7 @@ describe('McpRegistry plugin servers', () => {
     await echo!.execute({ text: 'hi' }, {} as ToolExecutionApi, EMPTY_CONTEXT)
     expect(echoServer.calls).toEqual([{ name: 'echo', args: { text: 'hi' } }])
 
+    // 投影整体替换为 painter 后 reload：连接集热替换，无需重启。
     projection.splice(0, projection.length, {
       pluginId: 'painter@market',
       pluginName: 'painter',
@@ -629,6 +758,7 @@ describe('McpRegistry plugin servers', () => {
     })
     await registry.reload()
 
+    // 替换后：draw 服务 direct 暴露（工具无 deferred 标记）、echo 的工具与命名空间消失。
     expect(registry.view().servers).toEqual([
       expect.objectContaining({ name: 'plugin_demo_draw', status: 'connected', exposure: 'direct' }),
     ])
@@ -636,6 +766,7 @@ describe('McpRegistry plugin servers', () => {
     expect(extensionTools(registry).some(tool => tool.name.includes('plugin_demo_echo'))).toBe(false)
     expect(extensionTools(registry).find(tool => tool.name === 'mcp__plugin_demo_draw__draw')?.deferred).toBeUndefined()
 
+    // 关闭 registry 会关闭所有插件服务的连接（含已被替换掉的 echo）。
     await registry.close()
     expect(echoServer.closed).toBe(true)
     expect(drawServer.closed).toBe(true)

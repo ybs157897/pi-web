@@ -1,3 +1,13 @@
+/**
+ * HTTP API 端到端测试：以 FakeRuntime 驱动 createApp，直接对 app.request 发起真实 HTTP 请求。
+ *
+ * 覆盖三块契约：
+ * - `/api/*` 会话路由（CRUD/提交/停止/压缩/fork/轨迹/交互问答/计划评审/子代理/团队）与 SSE 订阅生命周期；
+ * - 管理 API（设置/工作区/git 分支与提交/插件市场/UI 表面/自动化/WeTrack 反馈/文件附件），
+ *   包含严格的请求体校验、路径穿越与符号链接防护、机密不出现在响应里；
+ * - 应用状态文件（app-state.json）对 legacy 结构的读取、迁移与容量上限。
+ */
+
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -13,12 +23,20 @@ import { validateAnswers } from '../src/server/conversation/interactions.ts'
 import { WorkspaceFiles } from '../src/server/workspace/files.ts'
 import { DEFAULT_SHORTCUTS, resolveShortcuts } from '../src/web/keyboard.ts'
 
+/** 全部时间戳断言共用的固定时刻。 */
 const NOW = 1_800_000_000_000
+/** FakeRuntime 里 call-1 注册的问题组：单选 + 自由文本。 */
 const QUESTION_SET: AskUserQuestionItem[] = [
   { id: 'scope', question: 'Which scope?', options: [{ label: 'Small' }, { label: 'Large' }] },
   { id: 'notes', question: 'Anything else?' },
 ]
 
+/**
+ * 构造一份最小会话详情（空消息/队列，busy=false）。
+ * @param id 会话 id，默认 conv-1
+ * @param title 会话标题
+ * @returns ConversationDetail
+ */
 function makeDetail(id = 'conv-1', title = 'Test conversation'): ConversationDetail {
   return {
     conversation: {
@@ -37,6 +55,11 @@ function makeDetail(id = 'conv-1', title = 'Test conversation'): ConversationDet
   }
 }
 
+/**
+ * Runtime 接口的内存实现：会话详情存在 Map 里、每个方法调用都记入 calls 供断言，
+ * 另外预置了一个问题组（call-1）、两个计划评审调用与一条已完成的子代理行。
+ * 各路由测试通过它拿到确定性的响应与调用记录。
+ */
 class FakeRuntime implements Runtime {
   readonly details = new Map<string, ConversationDetail>([['conv-1', makeDetail()]])
   readonly listeners = new Map<string, Set<(value: ConversationDetail) => void>>()
@@ -81,7 +104,7 @@ class FakeRuntime implements Runtime {
 
   readonly questionSets = new Map<string, AskUserQuestionItem[]>([['call-1', QUESTION_SET]])
   readonly answeredCalls = new Set<string>()
-  /** Plan reviews the fake answers: both carry the same approve label the runtime uses. */
+  /** 计划评审调用集：两者都带与运行时一致的批准标签（「同意执行」），回答语义由假运行时实现。 */
   readonly planReviewCalls = new Set(['call-plan-1', 'call-plan-2'])
 
   async answerInteraction(id: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail> {
@@ -150,7 +173,7 @@ class FakeRuntime implements Runtime {
     return structuredClone(detail)
   }
 
-  /** One parent with one finished child; the routes only move these summaries around. */
+  /** 一个父会话带一条已完成的子代理行；路由只搬运这些摘要，不做真实委派。 */
   readonly childRows = new Map<string, Protocol.SubagentSummary[]>([['conv-1', [{
     id: 'child-1', label: '核对清单', title: '核对清单', status: 'inactive', answer: '子会话已完成核对。',
     createdAt: NOW, updatedAt: NOW,
@@ -162,7 +185,7 @@ class FakeRuntime implements Runtime {
     return structuredClone(this.childRows.get(id) ?? [])
   }
 
-  /** One Lead row plus one teammate and one blocked task; the route stays read-only. */
+  /** 一条 Lead 行、一个队员与一个被阻塞的任务；该路由只读。 */
   teamRows: Protocol.TeamView = {
     members: [
       { name: 'lead', role: 'lead', phase: 'active', status: 'inactive', conversationId: 'conv-1', label: 'Lead', model: 'demo/model' },
@@ -444,6 +467,10 @@ class FakeRuntime implements Runtime {
   }
 }
 
+/**
+ * 把 shortcuts 持久化进真实 AppStateStore 的 FakeRuntime 变体：
+ * settings 从 store 快照读取、updateSettings 只持久化 shortcuts 字段。
+ */
 class PersistedShortcutsRuntime extends FakeRuntime {
   constructor(private readonly stateStore: AppStateStore) { super() }
 
@@ -460,7 +487,7 @@ class PersistedShortcutsRuntime extends FakeRuntime {
   }
 }
 
-/** Answers the workspace file routes from a real directory so path handling runs end to end. */
+/** 用真实目录回答工作区文件路由，让路径处理跑通端到端。 */
 class WorkspaceFilesRuntime extends FakeRuntime {
   private readonly files: WorkspaceFiles
 
@@ -475,19 +502,44 @@ class WorkspaceFilesRuntime extends FakeRuntime {
   override async workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> { return this.files.asset(id, path) }
 }
 
+/** 存活的 app 实例列表，用例结束后统一 shutdown。 */
 const liveApps: Array<ReturnType<typeof createApp>> = []
 
+/**
+ * 创建测试 app（demo 模式）并注册进清理队列。
+ * @param runtime 驱动 app 的运行时实现，默认 FakeRuntime
+ * @returns app 与 runtime
+ */
 function createTestApp(runtime = new FakeRuntime()) {
   const app = createApp(runtime, { demo: true })
   liveApps.push(app)
   return { app, runtime }
 }
 
+/** 每个用例后：shutdown 本组创建的全部 app（关闭 SSE 订阅等资源）。 */
 afterEach(async () => {
   await Promise.all(liveApps.splice(0).map(app => app.shutdown()))
 })
 
+/**
+ * 会话 HTTP 路由测试。
+ *
+ * 关键契约：
+ * - health/会话 CRUD/提交（202）/stop/compact/queue 删除/fork（201）等基础操作直达 runtime，
+ *   响应不回显 provider 机密；
+ * - 模型目录变化以 SSE 推送给已连接客户端；生产静态模式下提供 favicon；
+ * - 交互问答：校验失败给具体 400 文案、成功后重复回答幂等；
+ * - 放弃问题集：已回答后 409 CONFLICT；
+ * - 计划模式开关校验请求体，计划评审批准后退出 Plan、要求修改保持 Plan；
+ * - 子代理路由与运行时同样拒绝未知/非法 id；
+ * - JSON/对象字段/id/图片 MIME/大小/请求体上限（413）/content-type（415）逐层校验；
+ * - 外部 host/origin 在触达 runtime 之前就被 403 拒绝；
+ * - SSE：先发 snapshot、断连释放 watch、shutdown 时关闭订阅、慢消费者合并为最新状态信号、
+ *   重连只清理自己的 watch。
+ */
 describe('HTTP API', () => {
+  // 健康检查、会话列表/创建(201)/详情/更新/提交(202)/停止/压缩/队列删除/轨迹(ndjson)/fork(201)、
+  // 模型目录逐个走通；保存 provider 的响应体不含 apiKey，但机密确实到达了 runtime。
   it('exposes health, conversation operations and model configuration without returning provider secrets', async () => {
     const { app, runtime } = createTestApp()
 
@@ -560,6 +612,7 @@ describe('HTTP API', () => {
     expect(runtime.lastProvider?.apiKey).toBe('private-api-key-value')
   })
 
+  // 模型目录 SSE：连接后先收到 ready 事件，runtime.emitModels() 后同一连接收到 changed 事件。
   it('streams a model-catalog change to an already connected client', async () => {
     const { app, runtime } = createTestApp()
     const response = await app.request('/api/models/events')
@@ -574,6 +627,7 @@ describe('HTTP API', () => {
     await reader.cancel()
   })
 
+  // 生产静态模式（staticRoot）：根路径的 favicon.svg 以 image/svg+xml 正确返回。
   it('serves root favicon assets in production static mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-static-'))
     try {
@@ -589,6 +643,8 @@ describe('HTTP API', () => {
     }
   })
 
+  // 交互问答：未知调用 404；漏答/未提供的选项/多余字段/selected 类型错误各给 400 与具体文案；
+  // 合法回答 200 并落成 answered 交互；重复回答幂等仍 200。
   it('answers a pending question, rejects concrete validation failures, and stays idempotent', async () => {
     const { app } = createTestApp()
     const answer = (callId: string, answers: unknown) => app.request(`/api/conversations/conv-1/interactions/${callId}/answer`, {
@@ -629,6 +685,7 @@ describe('HTTP API', () => {
     expect((await repeat.json() as ConversationDetail).interactions?.[0]?.status).toBe('answered')
   })
 
+  // 放弃问题集：未知调用 404；取消成功落成 cancelled 且重复取消幂等；已回答后再取消是 409 CONFLICT。
   it('dismisses a pending question set, conflicts once it is answered, and 404s an unknown call', async () => {
     const { app, runtime } = createTestApp()
     const cancel = (callId: string) => app.request(`/api/conversations/conv-1/interactions/${callId}/cancel`, { method: 'POST' })
@@ -655,6 +712,8 @@ describe('HTTP API', () => {
     expect((await conflict.json() as { code?: string }).code).toBe('CONFLICT')
   })
 
+  // 计划模式：开/关写进 plan 且调用记录正确；active 非布尔/缺字段/多余字段 400、未知会话 404；
+  // 计划评审「同意执行」→ approved=true 且退出 Plan，「要求修改」+ custom → approved=false 且保持 Plan。
   it('switches plan mode, validates the body, and answers a plan review', async () => {
     const { app, runtime } = createTestApp()
     const post = (path: string, body: unknown) => app.request(path, {
@@ -699,6 +758,8 @@ describe('HTTP API', () => {
     expect(revised.interactions?.[0]).toMatchObject({ id: 'call-plan-2', kind: 'plan-review', approved: false })
   })
 
+  // 子代理路由：列表返回 runtime 的行；跟进消息（202）把子代理标 running；
+  // 空文本/缺 requestId/多余字段 400，未知子代理 404；stop 回到 inactive；非法 id（空格/编码斜杠）400。
   it('lists subagents, delivers a follow-up and stops one, with the same rejections as the runtime', async () => {
     const { app, runtime } = createTestApp()
     const post = (path: string, body?: unknown) => app.request(path, {
@@ -734,6 +795,7 @@ describe('HTTP API', () => {
     expect((await post('/api/conversations/conv%2F1/children/child-1/stop')).status).toBe(400)
   })
 
+  // 团队面板只读：members/tasks 原样返回；POST 到 team 是 404（没有写路由）；未知会话 404、非法 id 400。
   it('reads the conversation team read-only, with the same id validation as the runtime', async () => {
     const { app, runtime } = createTestApp()
 
@@ -754,6 +816,8 @@ describe('HTTP API', () => {
     expect((await app.request('/api/conversations/conv%201/team')).status).toBe(400)
   })
 
+  // 请求校验矩阵：坏 JSON 400、未知字段（credential）400、路径穿越 id 400/404、SVG 图片 MIME 拒绝 400、
+  // 纯空白文本 400、超过 JSON 体积上限 413、缺 content-type 415。
   it('validates JSON, object fields, ids, image MIME and image sizes', async () => {
     const { app } = createTestApp()
     const badJson = await app.request('/api/conversations', {
@@ -798,6 +862,7 @@ describe('HTTP API', () => {
     expect(noJsonType.status).toBe(415)
   })
 
+  // 主机/来源白名单：外部 Host 与外部 Origin 都 403，且 runtime 一次都没被触达（calls 为空）。
   it('rejects foreign hosts and browser origins before runtime access', async () => {
     const { app, runtime } = createTestApp()
     const foreignHost = await app.request('/api/conversations', { headers: { host: 'remote.example' } })
@@ -808,6 +873,7 @@ describe('HTTP API', () => {
     expect(runtime.calls).toEqual([])
   })
 
+  // 会话 SSE：首帧是含会话 id 的 snapshot 事件；客户端断连后 watch 被释放（cleanupCount=1、监听器清空）。
   it('sends an initial SSE snapshot and releases its watch when the client disconnects', async () => {
     const { app, runtime } = createTestApp()
     const response = await app.request('/api/conversations/conv-1/events')
@@ -822,6 +888,7 @@ describe('HTTP API', () => {
     expect(runtime.listeners.get('conv-1')?.size).toBe(0)
   })
 
+  // 应用 shutdown 主动关闭活跃的 SSE 订阅并释放 watch。
   it('closes active SSE subscriptions during application shutdown', async () => {
     const { app, runtime } = createTestApp()
     const response = await app.request('/api/conversations/conv-1/events')
@@ -832,6 +899,7 @@ describe('HTTP API', () => {
     expect(runtime.listeners.get('conv-1')?.size).toBe(0)
   })
 
+  // 慢消费者合并：100 次快速 notify 只消费一次 detail（不逐帧缓冲）；读掉一帧后恰好再取一次新状态。
   it('coalesces slow SSE updates to a latest-state signal instead of buffering every snapshot', async () => {
     const { app, runtime } = createTestApp()
     const response = await app.request('/api/conversations/conv-1/events')
@@ -853,6 +921,7 @@ describe('HTTP API', () => {
     expect(runtime.cleanupCount).toBe(1)
   })
 
+  // 双订阅者：断开第一个只清理它自己的 watch（剩 1 个监听器、cleanupCount=1），第二个订阅不受影响。
   it('cleans up one SSE watch on reconnect without removing the other subscriber', async () => {
     const { app, runtime } = createTestApp()
     const first = await app.request('/api/conversations/conv-1/events')
@@ -874,8 +943,16 @@ describe('HTTP API', () => {
 })
 
 describe('management API', () => {
+  /**
+   * 构造带 JSON 头与序列化体的 RequestInit。
+   * @param method HTTP 方法
+   * @param body 请求体对象（自动 JSON 序列化）
+   * @returns 可直接传给 app.request 的初始化对象
+   */
   const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
+  // 错误分级：RuntimeError(CONFLICT)→409 且带原文案；未知异常→500 的「Internal server error」（不泄露细节）；
+  // RuntimeError(UNSUPPORTED)→422。
   it('preserves actionable runtime failures without exposing unexpected exception details', async () => {
     const { app, runtime } = createTestApp()
     vi.spyOn(runtime, 'stop').mockRejectedValueOnce(new RuntimeError('CONFLICT', '消息已进入当前运行，无法撤回'))
@@ -890,6 +967,8 @@ describe('management API', () => {
     expect((await app.request('/api/conversations/conv-1/stop', { method: 'POST' })).status).toBe(422)
   })
 
+  // 快捷键设置：编辑后的 12 个快捷键经 HTTP 保存并回显；恢复 DEFAULT_SHORTCUTS 后重新打开
+  // AppStateStore 仍能读到持久化的恢复结果。
   it('accepts all browser shortcuts over HTTP and restores them from persisted app state', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'pi-web-shortcuts-'))
     try {
@@ -915,6 +994,11 @@ describe('management API', () => {
     }
   })
 
+  // 类型化设置路由：capabilities、locale/fontSize、defaultModel 置空、fontSize=100 与任意快捷键名 400；
+  // modelAllowlist 只收字符串模式数组（非数组/非字符串项/超长项 400）；codemodeMode 三值校验；
+  // memoryEnabled 布尔校验；mcp/personalization 读写（严格单字段体）；工作区创建与文件/搜索；
+  // 插件市场 CRUD、安装/更新（非法 pluginId 400）、describe、事件 SSE、UI 表面/页面/调用/资源读取
+  // （坏 uri 400、不可用服务 422）与启用/卸载。
   it('updates settings and workspace bindings through typed routes', async () => {
     const { app, runtime } = createTestApp()
     expect((await (await app.request('/api/capabilities')).json()).accessModes).toContain('workspaceWrite')
@@ -998,6 +1082,8 @@ describe('management API', () => {
     expect((await app.request('/api/plugins/not-an-id', json('PATCH', { enabled: false }))).status).toBe(400)
   })
 
+  // git 路由：分支列表/切换/创建、非法分支名与 force 切换 400、status/diff（缺 path 400）、
+  // commit（空 message 400）、commit-message（非法 includeUnstaged 400）与 push 全部走通且记录调用。
   it('lists and switches local git branches for a workspace', async () => {
     const { app, runtime } = createTestApp()
     const list = await app.request('/api/workspaces/ws-1/git/branches')
@@ -1044,6 +1130,8 @@ describe('management API', () => {
     expect(runtime.calls).toContain('git-push:ws-1')
   })
 
+  // 队列编辑（whenBusy 透传）、反馈评分（非法值 400）、retry(202)、自动化创建/改规则/清理/立即运行/删除；
+  // WeTrack：缺陷列表/详情/报告（非法编号 400）、分析列表/单篇（非法编号 400）、工作区设置与启动分析（202）。
   it('supports queue changes, persisted feedback, retry and automation actions', async () => {
     const { app, runtime } = createTestApp()
     expect((await app.request('/api/conversations/conv-1/queue/sub-1', json('PATCH', { text: 'Edit', requestId: 'edit-id', whenBusy: 'steer' }))).status).toBe(202)
@@ -1095,6 +1183,7 @@ describe('management API', () => {
     expect((await app.request('/api/wetrack/analysis-runs/not-a-defect', json('POST', {}))).status).toBe(400)
   })
 
+  // 打开应用配置文件成功 200；runtime 报 NOT_FOUND 时路由转成 404 并带原文案。
   it('opens the application configuration file and reports a missing file as NOT_FOUND', async () => {
     const { app, runtime } = createTestApp()
     const opened = await app.request('/api/settings/open-config', { method: 'POST' })
@@ -1108,6 +1197,7 @@ describe('management API', () => {
     expect(await missing.json()).toMatchObject({ code: 'NOT_FOUND', error: '应用配置文件不存在' })
   })
 
+  // 运营者反馈：文本 trim 后与 user-agent 一起入库；无 UA 时省略字段；空文本/超长/多余字段/缺字段 400、缺 content-type 415。
   it('stores operator feedback with the client user agent and rejects invalid bodies', async () => {
     const { app, runtime } = createTestApp()
     const stored = await app.request('/api/feedback', {
@@ -1128,6 +1218,8 @@ describe('management API', () => {
     expect((await app.request('/api/feedback', { method: 'POST', body: JSON.stringify({ text: 'ok' }) })).status).toBe(415)
   })
 
+  // 附件：普通文本附件 202、带 .. 的文件名 400；provider 模型的 maxTokens 等元数据保留；
+  // HTML 资产带 sandbox+script-src 'none' CSP、no-store、nosniff；二进制资产强制 attachment 下载。
   it('accepts ordinary file attachments, preserves model metadata and protects active file resources', async () => {
     const { app, runtime } = createTestApp()
     const attachment = await app.request('/api/conversations/conv-1/messages', json('POST', { text: '', requestId: 'file-1', files: [{ name: 'note.txt', mimeType: 'text/plain', data: 'aGVsbG8=' }] }))
@@ -1148,6 +1240,8 @@ describe('management API', () => {
     expect(binary.headers.get('content-disposition')).toContain('attachment')
   })
 
+  // 工作区文件寻址：相对路径、绝对路径（含 realpath 规范化）、反斜杠分隔都能打开并归一化为相对路径；
+  // 目录可列出；资产可取回；越出工作区的绝对路径 400、../ 穿越 403、外来盘符/UNC 路径 400。
   it('opens workspace files addressed by absolute, backslash separated and relative paths', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
     const outside = await mkdtemp(join(tmpdir(), 'pi-web-outside-'))
@@ -1204,6 +1298,8 @@ describe('management API', () => {
     }
   })
 
+  // 无扩展名文件预览：Makefile/.gitignore 按已知文件名判 text/plain，未知名按内容嗅探；
+  // PNG 魔数的真二进制判 binary 且资产强制 attachment 下载。
   it('previews extension-less text files and keeps real binaries unrenderable', async () => {
     // 模型点开的 Makefile/Dockerfile 没有扩展名：扩展名表查不到就被当成二进制，
     // 预览只剩「无法内嵌」。已知文件名直判 text/plain，其余未知类型按内容嗅探。
@@ -1248,6 +1344,7 @@ describe('management API', () => {
     }
   })
 
+  // 缺失文件按 404 语义返回（file/asset/files 三个路由一致），而不是 500 服务器故障。
   it('answers a missing workspace file with 404 instead of a server failure', async () => {
     // 模型写的路径常常指向另一个项目，文件被删掉也是常事：这两种都不是服务器故障。
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
@@ -1268,6 +1365,7 @@ describe('management API', () => {
     }
   })
 
+  // 裸文件名/路径后缀找回：按路径后缀唯一匹配子目录里的文件；匹配到多处（a.md 在 ba.md 中作为后缀）时不误配，返回 404。
   it('opens a file the answer named without its directory', async () => {
     // 模型在回答里常只写文件名，文件其实在子目录里：按路径后缀找回来。
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
@@ -1293,6 +1391,7 @@ describe('management API', () => {
     }
   })
 
+  // 裸名命中多个同名文件：404 且错误信息列出全部候选（apps/index.ts、libs/index.ts）。
   it('lists the candidates when a bare name matches several files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
     await mkdir(join(root, 'apps'), { recursive: true })
@@ -1312,6 +1411,7 @@ describe('management API', () => {
     }
   })
 
+  // 路径指向目录时返回 kind=directory 与目录条目列表，供检查器直接列出。
   it('lists a directory the answer pointed at', async () => {
     // 回答里的路径有时是目录：给出目录内容，让检查器直接列出它。
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
@@ -1331,6 +1431,7 @@ describe('management API', () => {
     }
   })
 
+  // 符号链接逃逸：经 workspace 内的目录符号链接访问外部文件被 403 拒绝（Windows 跳过——路径规则本身会拒绝链接）。
   it('refuses a workspace path that leaves the workspace through a symlink', async () => {
     // Creating symlinks needs extra privileges on Windows, where the path rules reject the link anyway.
     if (process.platform === 'win32') return
@@ -1350,7 +1451,16 @@ describe('management API', () => {
   })
 })
 
+/**
+ * 应用状态文件（app-state.json）测试。
+ *
+ * 关键契约：
+ * - legacy 结构（feedback 为对象而非数组）能读取并迁移；首条反馈落盘为数组；
+ * - 已退役的 preset 特性（presets/defaultPresetId/presetId）在读取时剥离，首次写盘时从文件中移除；
+ * - feedback 超过 200 条上限时淘汰最旧条目；配置文件丢失后 ensureFile 能重写回来。
+ */
 describe('application state file', () => {
+  /** legacy 状态夹具：v1 结构 + workspace 列表，feedback 为空对象（旧格式）。 */
   const legacyWorkspace = { id: 'ws-legacy', name: 'Legacy', path: '/tmp/pi-web-legacy', createdAt: NOW, updatedAt: NOW }
   const legacyState = {
     version: 1,
@@ -1363,6 +1473,7 @@ describe('application state file', () => {
     plugins: {}, automations: [], feedback: {},
   }
 
+  // legacy feedback（对象格式）读取后快照里是数组；写入首条反馈落盘为 entries 数组。
   it('reads a legacy state file whose feedback record predates the entries array', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
     await writeFile(join(root, 'app-state.json'), JSON.stringify(legacyState))
@@ -1377,6 +1488,7 @@ describe('application state file', () => {
     }
   })
 
+  // 退役 preset 特性：快照里 presets/defaultPresetId/presetId 全部剥离；首次写盘后这些键从文件中消失。
   it('reads a legacy state file that still carries the retired preset feature', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
     await writeFile(join(root, 'app-state.json'), JSON.stringify({
@@ -1402,6 +1514,7 @@ describe('application state file', () => {
     }
   })
 
+  // 205 条反馈只留最新 200 条（entry-5..entry-204）；删除文件后 ensureFile 重写并保留内存中的反馈。
   it('drops the oldest feedback entries past the cap and rewrites a missing configuration file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-app-state-'))
     await writeFile(join(root, 'app-state.json'), JSON.stringify(legacyState))
@@ -1422,4 +1535,5 @@ describe('application state file', () => {
   })
 })
 
+/** 请求体上限测试值：恰好比 16 MiB 上限大 1 字节，用于触发 413。 */
 const JSON_BODY_LIMIT_FOR_TEST = 16 * 1024 * 1024 + 1

@@ -16,11 +16,16 @@ import {
 } from '../src/server/memory/extraction.ts'
 import { resolveMemoryRoot } from '../src/server/memory/store.ts'
 
+/** 临时目录清理队列，用例结束后逆序删除。 */
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
+/**
+ * 构造提取测试夹具：临时 dataDir/workspace，并解析对应的记忆根目录。
+ * @returns 夹具对象（root/dataDir/workspace/memoryRoot）
+ */
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'pi-web-memory-extraction-'))
   cleanups.push(() => rm(root, { recursive: true, force: true }))
@@ -31,23 +36,48 @@ async function fixture() {
   return { root, dataDir, workspace, memoryRoot }
 }
 
+/** 构造一个最小 Usage 记录（token 数非零、成本为零）。 */
 function usage(): Usage {
   return { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
 }
 
+/**
+ * 构造一条 assistant 消息。
+ * @param content 消息内容（文本块或工具调用数组）
+ * @param stopReason 结束原因，默认 stop（toolUse 表示还有工具调用要执行）
+ * @returns AssistantMessage
+ */
 function assistant(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
   return { role: 'assistant', content, api: 'faux', provider: 'test', model: 'demo', usage: usage(), stopReason, timestamp: Date.now() }
 }
 
+/**
+ * 构造一个工具调用块。
+ * @param name 工具名
+ * @param args 调用参数
+ * @param id 调用 id，默认 call-1
+ * @returns ToolCall
+ */
 function toolCall(name: string, args: Record<string, unknown>, id = 'call-1'): ToolCall {
   return { type: 'toolCall', id, name, arguments: args as never }
 }
 
+/**
+ * 提取运行决策测试（memorySkipReason）。
+ *
+ * 关键契约：
+ * - 主运行的 assistant 已经在记忆根内写/编（含相对路径、非 .md 文件）→ direct-memory-write，跳过后台提取；
+ * - 根外写入或对记忆根的读取不算直写，不跳过；
+ * - 用户 prose 不足三个词（纯中文短句、含图少文、只有 toolResult 文本）→ no-user-prose，跳过。
+ */
 describe('extraction run decision', () => {
+  /** 测试用的工作目录与假记忆根。 */
   const cwd = '/workspace/demo'
   const root = '/data/memories/projects/demo-0123456789abcdef/memory'
+  /** 一条表达「记住这个偏好」的用户消息。 */
   const prose: Message = { role: 'user', content: 'please remember this preference for later', timestamp: 1 }
 
+  // 三种直写形态都判 direct-memory-write：根内 write、相对路径 edit、根内非 Markdown 写入。
   it('skips a run whose assistant already wrote or edited inside the memory root', () => {
     const messages: Message[] = [
       prose,
@@ -68,6 +98,7 @@ describe('extraction run decision', () => {
     expect(memorySkipReason(nonMarkdown, root, cwd)).toBe('direct-memory-write')
   })
 
+  // 根外写（cwd/notes.txt）与对根内文件的 read 都不构成直写，返回 undefined（不跳过）。
   it('does not treat a write outside the root, or a read, as a direct memory write', () => {
     const messages: Message[] = [
       prose,
@@ -79,6 +110,7 @@ describe('extraction run decision', () => {
     expect(memorySkipReason(messages, root, cwd)).toBeUndefined()
   })
 
+  // 用户 prose 少于三个词的形态（中文两句、一词文本+图片、只有工具结果文本）都判 no-user-prose。
   it('skips a run without at least three words of user prose', () => {
     expect(memorySkipReason([{ role: 'user', content: '说中文', timestamp: 1 }], root, cwd)).toBe('no-user-prose')
     expect(memorySkipReason([{
@@ -97,11 +129,21 @@ describe('extraction run decision', () => {
   })
 })
 
+/**
+ * 提取调度器测试（createExtractionScheduler）。
+ *
+ * 关键契约：
+ * - 连续 schedule 合并为「一个运行槽 + 一个最新待办槽」：突发 3 次只跑 2 次，并发恒为 1，cursor 前进；
+ * - cursor 只在 success/skip 时前进，error/aborted 保持旧值（下次重试同一 cursor）；
+ * - shutdown 中断运行中的任务（AbortSignal 触发）且拒绝新调度。
+ */
 describe('extraction scheduler', () => {
+  // 突发 3 次 schedule：第一次立即跑，第二次合并为待办在第一次完成后跑；最大并发 1，最终 cursor=2。
   it('coalesces a burst into one running slot plus one latest-pending slot', async () => {
     let runs = 0
     let active = 0
     let maxActive = 0
+    /** 每次运行挂起的 gate，测试手动放行。 */
     const gates: Array<() => void> = []
     const scheduler = createExtractionScheduler(async () => {
       runs += 1
@@ -126,6 +168,7 @@ describe('extraction scheduler', () => {
     expect(scheduler.cursor()).toBe(2)
   })
 
+  // cursor 推进规则：success('a')→前进、error→保持 'a'、aborted→保持 'a'、skip('b')→前进到 'b'。
   it('advances the cursor on success and skip but not on error or abort', async () => {
     const seen: Array<unknown> = []
     let step = 0
@@ -151,6 +194,7 @@ describe('extraction scheduler', () => {
     expect(scheduler.cursor()).toBe('b')
   })
 
+  // shutdown 后：运行中任务收到 abort 信号（aborted=true），随后的 schedule 被拒绝（runs 仍为 1）。
   it('aborts the running task and refuses new schedules after shutdown', async () => {
     let runs = 0
     let aborted = false
@@ -176,7 +220,17 @@ describe('extraction scheduler', () => {
   })
 })
 
+/**
+ * 受限提取循环测试（runExtractionLoop）。
+ *
+ * 关键契约：
+ * - 未知工具与根外记忆写入在循环内直接拒答（带策略文案），不触达 executor；
+ * - 允许的调用正常执行，到 MEMORY_EXTRACTION_MAX_TURNS 轮上限即停（第 5 轮执行完就收尾）；
+ * - signal 已 abort 时在第一次请求前就抛错（completions=0）；
+ * - stopReason=error 视为运行失败抛错，不当作完成。
+ */
 describe('restricted extraction loop', () => {
+  /** 循环公共选项：最小消息、完整提取工具集、非中止 signal、低 token/短超时。 */
   const baseOptions = {
     systemPrompt: 'system',
     messages: [{ role: 'user', content: 'remember this preference', timestamp: 1 }] as Message[],
@@ -187,6 +241,7 @@ describe('restricted extraction loop', () => {
     timeoutMs: 1_000,
   }
 
+  // bash 不在白名单、/etc/x.md 在根外：两者都直接产出带错误文案的 toolResult（isError），executor 从未被调用。
   it('rejects an unknown tool and a memory write outside the root without calling the executor', async () => {
     const root = '/data/memories/projects/demo/memory'
     const calls: ToolCall[] = []
@@ -215,6 +270,7 @@ describe('restricted extraction loop', () => {
     expect(toolResults.every(message => message.isError)).toBe(true)
   })
 
+  // 模型连续要求 read：第 5 轮（上限）执行完后循环收尾，completions/executions/turns 都是 MAX_TURNS，usage 累计非零。
   it('executes allowed calls and stops at the turn cap after executing the fifth round', async () => {
     const root = '/data/memories/projects/demo/memory'
     let completions = 0
@@ -238,6 +294,7 @@ describe('restricted extraction loop', () => {
     expect(result.usage.totalTokens).toBeGreaterThan(0)
   })
 
+  // 已中止的 signal：发起第一次请求前就抛错，complete 回调一次都没被调。
   it('throws before the first request when the signal is already aborted', async () => {
     const controller = new AbortController()
     controller.abort()
@@ -254,6 +311,7 @@ describe('restricted extraction loop', () => {
     expect(completions).toBe(0)
   })
 
+  // 模型请求以 error 结束：循环抛「extraction request stopped with error」而不是正常完成。
   it('treats an error stop reason as a failed run instead of completing', async () => {
     await expect(runExtractionLoop(baseOptions, {
       complete: async () => assistant([], 'error'),
@@ -264,7 +322,17 @@ describe('restricted extraction loop', () => {
   })
 })
 
+/**
+ * 提取工具执行器测试（executeExtractionTool）。
+ *
+ * 关键契约：
+ * - write 只能写记忆根内的 .md，写前自动补 node_type/originSessionId 戳记；根外写入拒绝并返回策略文案；
+ * - edit 要求 oldText 唯一：非唯一拒绝不落盘；成功编辑后补戳；
+ * - delete 允许删根内事实文件，但 MEMORY.md 与根外路径受保护；删不存在文件报 File not found；
+ * - read/list_files/search_files 可读工作区与记忆根，根外读取拒绝。
+ */
 describe('extraction tool executor', () => {
+  // 根内 write 落盘带 node_type: memory 与 originSessionId: "9"；写到工作区根外的 outside.md 被拒并返回策略文案。
   it('writes a stamped fact file inside the memory root only', async () => {
     const f = await fixture()
     const result = await executeExtractionTool(toolCall('write', {
@@ -285,6 +353,7 @@ describe('extraction tool executor', () => {
     expect(rejected.content).toBe(MEMORY_EXTRACTION_POLICY_MESSAGE(f.memoryRoot))
   })
 
+  // oldText「repeat」出现两次 → 非唯一拒绝且文件未改；oldText 唯一（repeat repeat）→ 应用成功并补 originSessionId: "3"。
   it('applies a unique edit and rejects a non-unique one without writing', async () => {
     const f = await fixture()
     await mkdir(f.memoryRoot, { recursive: true })
@@ -308,6 +377,7 @@ describe('extraction tool executor', () => {
     expect(edited).toContain('originSessionId: "3"')
   })
 
+  // delete 保护：MEMORY.md 与根外 notes.md 拒绝（策略文案）；根内 stale.md 删除成功；重复删报 File not found。
   it('deletes a fact file inside the memory root but never MEMORY.md or outside paths', async () => {
     const f = await fixture()
     await mkdir(f.memoryRoot, { recursive: true })
@@ -334,6 +404,7 @@ describe('extraction tool executor', () => {
     expect(again.content).toContain('File not found')
   })
 
+  // 只读三件套：read 读记忆根文件、list_files 列工作区（含 notes.txt）、search_files 大小写不敏感命中（notes.txt:1）；读根外 /etc/hosts 拒绝。
   it('reads, lists and searches the workspace and the memory root', async () => {
     const f = await fixture()
     await mkdir(f.memoryRoot, { recursive: true })
@@ -359,7 +430,16 @@ describe('extraction tool executor', () => {
   })
 })
 
+/**
+ * 记忆清单（manifest）与提取提示词测试。
+ *
+ * 关键契约：
+ * - scanMemoryManifest 列出带 frontmatter 的 .md 事实文件，按修改时间倒序，排除 MEMORY.md 与非 .md；
+ * - extractionPrompt 注入消息数、已有记忆清单（类型/文件/时间/描述）与「Nothing to save.」退出契约；
+ *   清单为空时不出现清单标题。
+ */
 describe('memory manifest', () => {
+  // new.md（mtime 2000）排在 old.md（mtime 1000）前；frontmatter 的 type/description 进入条目；MEMORY.md 与 notes.txt 不出现。
   it('lists frontmatter facts newest first and excludes MEMORY.md', async () => {
     const f = await fixture()
     await mkdir(f.memoryRoot, { recursive: true })
@@ -377,6 +457,7 @@ describe('memory manifest', () => {
     expect(manifest[1]).toMatchObject({ type: 'project', description: 'older fact' })
   })
 
+  // 有清单的提示词含消息数（约 12 条）、清单标题与条目行、退出契约「Nothing to save.」与根路径；空清单时不含清单标题。
   it('writes the manifest and the Nothing-to-save contract into the prompt', async () => {
     const withManifest = extractionPrompt('/data/root', 12, [{ file: 'a.md', type: 'user', description: 'prefers Chinese', modifiedAt: 0 }])
     expect(withManifest).toContain('最近约 12 条消息')
