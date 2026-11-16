@@ -1,3 +1,11 @@
+/**
+ * 渲染对照 fixture 页面（浏览器手工目检入口）：在真实主题与样式下渲染 Transcript 的
+ * 各类输出场景，供视觉回归对照使用。
+ *
+ * 工具栏提供：场景切换（正文/代码图表/表格/媒体/思考与工具）、明暗主题、
+ * 展示模式（简洁/标准/详细/完全展开）、流式重播（分阶段推进思考 → 终端 → 回答）与完成跳转。
+ * 动作结果（打开文件/查看工具/查看差异）显示在 output 元素中。
+ */
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import Transcript from '../../src/web/transcript.tsx'
@@ -14,7 +22,9 @@ import '../../vendor/dsh-theme/shiki.css'
 import '../../src/web/styles.css'
 import './fixture.css'
 
+/** 静态样本字典：场景名 → Markdown 文本。 */
 const samples = { prose, code, table, media }
+/** fixture 根组件：状态驱动样本/主题/模式与流式重播。 */
 function Fixture() {
   const [sample, setSample] = useState('prose')
   const [dark, setDark] = useState(false)

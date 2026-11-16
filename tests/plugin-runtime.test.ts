@@ -1,3 +1,14 @@
+/**
+ * 插件运行时集成测试（真实 runtime + HTTP API）。
+ *
+ * 关键契约：
+ * - 安装流程：添加市场 → 两种安装路径（HTTP API 异步任务 / runtime 直装）→
+ *   技能以 "plugin@market:skill" 命名空间出现在工作区目录（source=plugin、不可写）；
+ * - 禁用插件即从技能目录移除其技能（其他插件不受影响），卸载同理会移除技能；
+ * - 安装状态跨 runtime 重启保留；坏市场来源 400，移除市场后插件转为 installed+available:false 并出现诊断；
+ * - MCP 投影：插件 manifest 声明的 stdio MCP 服务器无需重启即可连接（PLUGIN_ROOT 占位符展开），
+ *   会话中可通过 mcp__ 前缀工具调用拿到回显结果；禁用插件即断开其服务器并移除其技能。
+ */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +19,7 @@ import { createRuntime } from '../src/server/runtime/index.ts'
 import type { Runtime } from '../src/server/contracts.ts'
 import { writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 
-/** Minimal stdio MCP server used to prove a plugin server is reachable without a restart. */
+/** 最小 stdio MCP 服务器 fixture：用于证明插件服务器无需重启即可被连接。响应 initialize / tools/list / tools/call。 */
 const MCP_FIXTURE = `
 import { createInterface } from 'node:readline'
 
@@ -40,6 +51,11 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
+/**
+ * 搭建完整的插件运行时环境：临时 data/workspace/pi 目录 + 含两个插件（demo-plugin、http-plugin）
+ * 的本地市场 + demo 模式 runtime，并注册关闭/删除清理。
+ * @returns 目录路径、runtime（getter 支持 restart 后取新实例）与 restart()（关停后用同一数据目录重建）
+ */
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'pi-web-plugin-runtime-'))
   const dataDir = join(root, 'data')
@@ -71,6 +87,13 @@ async function fixture() {
   }
 }
 
+/**
+ * 轮询执行异步动作直到返回非 undefined（异步安装/连接是后台任务，无法同步等待）。
+ * @param action 每次轮询执行的探测动作，undefined 表示尚未就绪
+ * @param label 超时错误信息中的等待目标名称
+ * @param timeoutMs 总超时，默认 10 秒
+ * @returns 首个非 undefined 的探测结果
+ */
 async function eventually<T>(action: () => Promise<T | undefined>, label: string, timeoutMs = 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -81,7 +104,11 @@ async function eventually<T>(action: () => Promise<T | undefined>, label: string
   }
 }
 
+/** 安装、技能暴露、禁用与卸载的端到端集成测试。 */
 describe('plugin runtime integration', () => {
+  // 验证完整安装链路：市场接入后 overview 含 2 个插件；HTTP API 安装返回 202 + operationId
+  // 并异步完成；runtime 直装另一插件；两个插件技能都进入工作区技能目录（只读、带插件元数据）；
+  // runtime.skill 能加载技能正文；PATCH 禁用只移除该插件技能；DELETE 卸载移除另一插件技能。
   it('installs a plugin and exposes its skill through the runtime and HTTP routes', async () => {
     const f = await fixture()
     await f.runtime.addPluginMarketplace(f.market)
@@ -139,6 +166,8 @@ describe('plugin runtime integration', () => {
     expect(afterRemove.skills.some(skill => skill.id === 'http-plugin@fixture-market:review')).toBe(false)
   }, 30_000)
 
+  // 验证持久化与诊断：坏来源添加市场返回 400；安装的插件在 runtime 重启后仍 installed+enabled
+  // 且技能仍在目录中；市场 refresh 与删除正常；删除市场来源后插件变为 installed+available:false。
   it('keeps installs across a runtime restart and surfaces marketplace diagnostics', async () => {
     const f = await fixture()
     const app = createApp(f.runtime, { demo: true })
@@ -177,7 +206,12 @@ describe('plugin runtime integration', () => {
   }, 30_000)
 })
 
+/** 插件 MCP 服务器的连接、工具调用与禁用断开测试。 */
 describe('plugin MCP projection', () => {
+  // 验证 MCP 投影生命周期：安装含 stdio MCP 服务器的插件后无需重启即 connected
+  // （服务器名 plugin_mcp_plugin_echo、transport=stdio、exposure=direct、tools 含 echo）；
+  // 会话中直接调用该工具能拿到 fixture 回显（"插件工具返回：plugin:hello"）；
+  // 禁用插件后服务器从列表移除、其技能也从目录消失。
   it('connects a plugin MCP server without a restart and drops it when disabled', async () => {
     const f = await fixture()
     await writeMarketplace(f.market, {

@@ -1,4 +1,21 @@
 // @vitest-environment jsdom
+/**
+ * 真实消息渲染组件的交互测试（jsdom）：代码块、表格、图片画廊、终端、思考块、
+ * 工具行接线与 Mermaid 安全防线。
+ *
+ * 关键契约：
+ * - 代码块：复制原文到剪贴板、换行开关在流式落定后保持、未闭合围栏落定后高亮且内容不丢；
+ *   剪贴板拒绝时不显示"已复制"；Shiki 高亮经 diffs-container shadow DOM；
+ * - 表格预览对话框：行数/列对齐保留、关闭后焦点还原、复制原始 Markdown、导出 CSV blob；
+ * - 文件链接芯片接 onOpenFile（起始行），嵌在链接里的图片不产生嵌套按钮，独立图片可预览；
+ * - 相邻独立图片聚合成画廊（上一张/放大 125%）；onOpenFile 回调替换不重建代码块与换行状态；
+ * - XSS 防线：script 不注入、javascript: 链接移除、CJK 强调正常渲染；
+ * - 终端：阅读旧输出时冻结跟随、回到底部恢复跟随（data-following）；ANSI 颜色保留、
+ *   退出码显示、多行命令原文保留、HTML 不注入；
+ * - 思考块纯文本 + aria-expanded；工具行芯片接 onOpenFile/onInspectDiff，工作组折叠状态
+ *   穿透保持子行展开态；Mermaid foreignObject 标签保留但 onclick/script 剥除；
+ *   Mermaid 渲染前的输入体积防线（长度/行数/节点数上限）。
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AnswerMarkdown } from '../src/web/AnswerMarkdown.tsx'
@@ -14,11 +31,17 @@ import { diagramSanitizeConfig } from '../src/web/message-rendering/diagram-mode
 import Transcript from '../src/web/transcript.tsx'
 import { processMessages } from './rendering/samples.ts'
 import { canRenderDiagram } from '../src/web/message-rendering/Diagram.tsx'
+/** 文案函数直通：zh 文本原样返回。 */
 const t = (zh: string) => zh
+/** 每个用例前补齐 jsdom 缺失 API；结束后清理 mock 与全局 stub。 */
 beforeEach(setupRenderingDom)
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+/** 渲染组件交互契约测试。 */
 describe('real message rendering interactions', () => {
+  // 验证代码块交互：换行开关 aria-pressed 翻转且 rerender（流式落定）后状态保持；
+  // 复制按钮把原始代码写入剪贴板并短暂显示"已复制"；高亮完成（data-highlighted），
+  // Shiki 输出出现在 diffs-container shadow DOM 中。
   it('copies exact code, toggles wrapping, and keeps the toggle when the stream settles', async () => {
     const code = 'const greeting = "你好";\nconsole.log(greeting);'
     const { rerender } = render(<MessageCodeBlock code={code} language="typescript" streaming t={t} />)
@@ -32,6 +55,8 @@ describe('real message rendering interactions', () => {
     expect(document.querySelector('[data-message-code-viewer]')?.getAttribute('data-highlighted')).toBe('true')
     await waitFor(() => expect(document.querySelector('diffs-container')?.shadowRoot?.textContent).toContain('greeting'))
   })
+  // 验证未闭合围栏落定：streaming 时代码查看器未高亮（data-highlighted=false），
+  // 补上闭合 ``` 后内容完整（shadow DOM 含 const count = 1）、恰好一个代码块且转为高亮。
   it('settles an incomplete fence into highlighted code without losing content', async () => {
     const { rerender } = render(<AnswerMarkdown text={'```ts\nconst count = 1'} streaming t={t} />)
     expect(document.querySelector('[data-message-code-viewer]')?.getAttribute('data-highlighted')).toBe('false')
@@ -40,6 +65,7 @@ describe('real message rendering interactions', () => {
     expect(document.querySelectorAll('[data-message-code-block]')).toHaveLength(1)
     expect(document.querySelector('[data-message-code-viewer]')?.getAttribute('data-highlighted')).toBe('true')
   })
+  // 验证复制失败反馈：剪贴板 writeText 拒绝时出现 status 提示但不出"已复制"按钮。
   it('does not announce copy success when the clipboard rejects', async () => {
     vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error('denied'))
     render(<MessageCodeBlock code="hello" t={t} />)
@@ -47,6 +73,8 @@ describe('real message rendering interactions', () => {
     await screen.findByRole('status')
     expect(screen.queryByRole('button', { name: '已复制' })).toBeNull()
   })
+  // 验证表格预览对话框：两行数据、右对齐列头保留 align 属性、关闭后焦点回到打开按钮；
+  // "复制 Markdown"写回原始管道文本；"下载 CSV"触发一次锚点点击且 blob 类型为 text/csv。
   it('previews a table, restores focus, exports its data and retains column alignment', async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     render(<MarkdownTable t={t}><thead><tr><th align="right">编号</th><th>说明</th></tr></thead><tbody><tr><td>1</td><td>=1+2</td></tr></tbody></MarkdownTable>)
@@ -64,6 +92,8 @@ describe('real message rendering interactions', () => {
     const blob = vi.mocked(URL.createObjectURL).mock.calls[0]?.[0] as Blob
     expect(blob.type).toBe('text/csv;charset=utf-8')
   })
+  // 验证文件路径导航：点击"源文件"芯片以路径+起始行（L7→7）回调 onOpenFile；
+  // 带链接的图片内不嵌套 button（避免按钮嵌链接的无障碍违规）；独立图片可打开预览对话框。
   it('navigates exact workspace paths and avoids nested image buttons inside links', async () => {
     const onOpenFile = vi.fn()
     const pathImages = { resolve: () => 'https://assets.test/image.png' }
@@ -75,6 +105,8 @@ describe('real message rendering interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: '预览图片：单图' }))
     expect(screen.getByRole('dialog', { name: '单图' })).toBeTruthy()
   })
+  // 验证图片画廊：相邻独立图片聚合为一个画廊容器；点开第二张、上一张切回第一张、
+  // 放大操作显示 125% 缩放指示。
   it('groups adjacent standalone images and opens the selected gallery item', async () => {
     render(<AnswerMarkdown t={t} pathImages={{ resolve: path => `https://images.test${path}` }} text={'![第一张](/one.png)\n\n![第二张](/two.png)'} />)
     expect(document.querySelectorAll('[data-markdown-image-gallery]')).toHaveLength(1)
@@ -85,6 +117,8 @@ describe('real message rendering interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: '放大图片' }))
     expect(screen.getByText('125%')).toBeTruthy()
   })
+  // 验证宿主能力更新：onOpenFile 回调替换后点击文件芯片用新回调（旧回调不触发），
+  // 且代码块不重建、换行开关状态保持。
   it('updates host file capabilities without replacing code blocks or their wrap state', async () => {
     const first = vi.fn(), next = vi.fn()
     const text = '[文件](README.md)\n\n```ts\nconst n = 1\n```'
@@ -96,12 +130,16 @@ describe('real message rendering interactions', () => {
     expect(first).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: '自动换行' }).getAttribute('aria-pressed')).toBe('true')
   })
+  // 验证 XSS 防线：CJK 粗体正常渲染为 STRONG；<script> 不进入文档；
+  // javascript: 危险链接不渲染为可点击链接。
   it('keeps code and raw HTML inert while rendering CJK emphasis', () => {
     render(<AnswerMarkdown t={t} text={'中文**重点**\n\n<script>window.injected=true</script>\n\n[危险](javascript:alert(1))'} />)
     expect(screen.getByText('重点').tagName).toBe('STRONG')
     expect(document.querySelector('script')).toBeNull()
     expect(screen.queryByRole('link', { name: '危险' })).toBeNull()
   })
+  // 验证终端跟随逻辑：运行中用户在底部时新输出自动跟随（scrollTop 钉在最大值）；
+  // 用户滚回顶部后新输出被抑制（不进入 DOM、不打断阅读）；手动滚回底部后恢复跟随（data-following=true）。
   it('keeps terminal output frozen while the user reads older lines, then resumes at the bottom', () => {
     const { rerender } = render(<ProcessTerminal command="demo" output="line1\nline2" running t={t} />)
     const region = screen.getByRole('region', { name: '命令输出' })
@@ -118,6 +156,8 @@ describe('real message rendering interactions', () => {
     expect(region.textContent).toContain('line4')
     expect(region.getAttribute('data-following')).toBe('true')
   })
+  // 验证终端保真与安全：ANSI 转义渲染为颜色样式、显式退出码 7 显示"退出码 7"、
+  // 输出中的 <script> 不注入、多行命令原文（含换行）完整保留。
   it('preserves command newlines, ANSI colors and explicit failure status without HTML injection', () => {
     render(<ProcessTerminal command={'printf first\nprintf second'} output={'\u001b[31mRED\u001b[0m\n<script>unsafe</script>'} exitCode={7} running={false} t={t} />)
     expect(screen.getByText('RED').getAttribute('style')).toContain('color')
@@ -125,6 +165,8 @@ describe('real message rendering interactions', () => {
     expect(document.querySelector('script')).toBeNull()
     expect(document.querySelector('[data-message-terminal]')?.textContent).toContain('printf first\nprintf second')
   })
+  // 验证思考块：折叠按钮 aria-expanded 初始 false、点击展开为"思考内容"区域、
+  // 内容按纯文本保留（Markdown 粗体不解析）。
   it('keeps thought content as text and exposes keyboard-ready expansion state', async () => {
     render(<ReasoningBlock id="thought" text={'line1\n**not parsed**'} streaming={false} redacted={false} preview t={t} />)
     const toggle = screen.getByRole('button', { name: '思考' })
@@ -133,6 +175,9 @@ describe('real message rendering interactions', () => {
     expect(screen.getByRole('region', { name: '思考内容' }).textContent).toBe('line1\n**not parsed**')
     expect(screen.queryByRole('strong')).toBeNull()
   })
+  // 验证工具行接线与折叠穿透：read 行文件芯片回调 onOpenFile（无展开按钮）；
+  // edit 行芯片回调 onInspectDiff 携带完整 diff；bash 行展开出现"命令输出"区域；
+  // 工作组折叠/展开往返后子行的展开态保持（aria-expanded=true）且"展开已更改文件"不受影响。
   it('connects read and edit file chips to the host and preserves tool disclosure through work-group toggles', () => {
     const onOpenFile = vi.fn(), onInspectDiff = vi.fn()
     render(<Transcript messages={processMessages()} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={() => {}} />)
@@ -151,6 +196,8 @@ describe('real message rendering interactions', () => {
     expect(within(terminal).getByRole('button', { name: '收起工具详情' }).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByRole('button', { name: '展开已更改文件' }).getAttribute('aria-expanded')).toBe('false')
   })
+  // 验证 Mermaid 净化配置：foreignObject 内的文本标签（"开始"）与结构保留，
+  // onclick 事件属性与 <script> 被剥除。
   it('preserves Mermaid foreignObject labels while stripping active HTML', () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div xmlns="http://www.w3.org/1999/xhtml" onclick="alert(1)">开始<script>alert(1)</script></div></foreignObject></svg>'
     const safe = DOMPurify.sanitize(svg, diagramSanitizeConfig)
@@ -159,6 +206,8 @@ describe('real message rendering interactions', () => {
     expect(safe).not.toContain('onclick')
     expect(safe).not.toContain('<script')
   })
+  // 验证渲染前防线：正常流程图放行；超长文本（20k+）、超多行（600+）、超多节点（450+）拒绝，
+  // 避免恶意输入拖死 Mermaid 渲染器。
   it('guards expensive Mermaid input before loading the renderer', () => {
     expect(canRenderDiagram('flowchart LR\nA-->B')).toBe(true)
     expect(canRenderDiagram('x'.repeat(20_001))).toBe(false)

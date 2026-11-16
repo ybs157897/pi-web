@@ -1,3 +1,20 @@
+/**
+ * 会话渲染模型（render-model / tool-render-model / plan-preview）测试。
+ *
+ * 关键契约：
+ * - buildRenderModel 按用户请求分 run，process（reasoning/tool/content/user）/responses
+ *   布局随交互状态变化：提问 pending 时正文留在工作组，答复解决后才晋升、且间隙帧不"复活"；
+ *   嵌套工具按 parentToolCallId 挂树；steer 消息保持记录位置；error/cancelled 区分；
+ *   redacted thinking 不外泄；未知工具 details 容错回退通用卡；
+ * - DSH 卡片选取（命令/读取/编辑/搜索/网络）按 recorded 字段判定；沙箱 HTML 预览 CSP、
+ *   资产链接只放行本机 workspace API；
+ * - 行级模型：ask_user_question 的问/答配对（含畸形数据丢弃、歧义不配对）、subagent/
+ *   codemode/MCP 行标题与实时细节；计划预览取最新/回退 exit_plan_mode/列表新→旧去重；
+ * - 会话统计每回合计一次用量、输出速率只按 requestDurationMs 的模型时间；
+ * - system 行按 run 归属/时间线插位、稳定 key、恰好渲染一次；
+ * - 尾部加载指示器只在会话运行且无阻塞时显示；
+ * - 流式布局：slot 作块身份（后写入的块不挤动前面的块）、空块丢弃、工具行 live↔settled 同 key。
+ */
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, InteractionRequest } from '../src/shared/types.ts'
 import {
@@ -12,18 +29,34 @@ import { isInteractionPayloadText } from '../src/web/interaction-payload.ts'
 import type { ToolItem } from '../src/web/render-model.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from '../src/web/inspector-document.ts'
 
-/** Chinese-only translator, mirroring the app's own locale switch. */
+/** 中文直通翻译器，镜像应用自身的 locale 开关。 */
 const zh = (chinese: string): string => chinese
 
+/**
+ * 构造用户消息 fixture。
+ * @param id 消息 id
+ * @param requestId 请求 id
+ * @returns ChatMessage（role=user）
+ */
 function user(id: string, requestId: string): ChatMessage {
   return { id, requestId, role: 'user', blocks: [{ type: 'text', text: `prompt ${id}` }], timestamp: 100 }
 }
 
+/**
+ * 构造 assistant 消息 fixture。
+ * @param id 消息 id
+ * @param blocks 内容块
+ * @param overrides 覆盖字段（runId/status/streaming 等）
+ * @returns ChatMessage（role=assistant）
+ */
 function assistant(id: string, blocks: ChatMessage['blocks'], overrides: Partial<ChatMessage> = {}): ChatMessage {
   return { id, role: 'assistant', blocks, timestamp: 200, ...overrides }
 }
 
+/** 会话渲染模型的主测试（run 分组、布局、交互晋升、行模型、计划预览等）。 */
 describe('transcript render model', () => {
+  // 验证基础分组：两个用户请求 → 两个 run；run 内 process 顺序 reasoning → tool、
+  // 工具结果挂到对应调用、正文进 responses；第二个 run 记录自己的用户消息。
   it('groups each user run and preserves reasoning, tool, and answer order', () => {
     const messages: ChatMessage[] = [
       user('user-1', 'request-1'),
@@ -53,8 +86,8 @@ describe('transcript render model', () => {
       user('user-1', 'request-1'),
       assistant('assistant-1', [{ type: 'text', text: 'Working on it.' }], { runId: 'run-1', status: 'completed', timestamp: 200 }),
     ]
-    // The live turn has only thinking so far: the previous body must read BEFORE the live
-    // reasoning row, so the transcript never shows an active thinking above a finished answer.
+    // live 回合目前只有 thinking：旧正文必须排在 live reasoning 行之前，
+    // transcript 永远不会在已完成的答案上方显示活跃的思考。
     const streaming = buildRenderModel([
       ...base,
       assistant('assistant-2', [{ type: 'thinking', text: 'I will structure the answer next.' }],
@@ -64,7 +97,7 @@ describe('transcript render model', () => {
     expect(run.process.map(part => part.kind)).toEqual(['content', 'reasoning'])
     expect(run.responses).toEqual([])
 
-    // Once the live turn writes its text it owns the answer area; the older body stays process.
+    // live 回合写出正文后接管答案区；旧正文留在 process。
     const writing = buildRenderModel([
       ...base,
       assistant('assistant-2', [
@@ -76,6 +109,7 @@ describe('transcript render model', () => {
     expect(writing.runs[0]!.process.map(part => part.kind)).toEqual(['content', 'reasoning'])
   })
 
+  // 验证答复载荷开启新 run：不渲染用户行（载荷不是真用户输入），后续正文照常晋升。
   it('starts a run at an answer payload but renders no user row for it', () => {
     const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', questions: [], answers: [] })
     const messages: ChatMessage[] = [
@@ -107,11 +141,10 @@ describe('transcript render model', () => {
 
   it('keeps the post-question prose in the work group while the question waits', () => {
     const run = buildRenderModel(questionTurn(), pendingQuestion).runs[0]!
-    // The turn is paused, not over: promoting the interim prose would make it jump into the
-    // work group the moment the reply resumes the run.
+    // 回合是暂停而非结束：提前晋升过渡正文会让它在答复恢复 run 的瞬间跳进工作组。
     expect(run.responses).toEqual([])
     expect(run.process.filter(part => part.kind === 'content').map(part => part.kind === 'content' ? part.message.id : '')).toEqual(['assistant-interim'])
-    // The streaming interim prose stays process content too — it never enters the answer slot.
+    // 流式中的过渡正文同样是 process 内容——永远不进答案槽。
     const streaming = buildRenderModel([
       ...questionTurn(),
       assistant('assistant-interim-live', [{ type: 'text', text: '还在补充说明' }], { runId: 'run-1', streaming: true, status: 'running', timestamp: 310 }),
@@ -124,12 +157,11 @@ describe('transcript render model', () => {
     const replyText = JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-1', answers: [] })
     const reply = { id: 'reply-1', role: 'user' as const, blocks: [{ type: 'text' as const, text: replyText }], timestamp: 350, runId: 'run-1' }
     const answered: InteractionRequest[] = [{ id: 'call-1', kind: 'question', status: 'answered', createdAt: 240, answeredAt: 350 }]
-    // The gap between "answered" and the continuation's first token: the interim prose must
-    // not reappear in the answer area for those frames.
+    // "已回答"到续写首 token 之间的间隙帧：过渡正文不得在这些帧重新出现在答案区。
     const gap = buildRenderModel([...questionTurn(), reply], answered).runs[0]!
     expect(gap.responses).toEqual([])
     expect(gap.process.filter(part => part.kind === 'content').map(part => part.kind === 'content' ? part.message.id : '')).toEqual(['assistant-interim'])
-    // The continuation owns the answer; the interim prose stays in the work group.
+    // 续写正文接管答案区；过渡正文留在工作组。
     const continued = buildRenderModel([
       ...questionTurn(), reply,
       assistant('assistant-final', [{ type: 'text', text: '好，那就随便聊聊。' }], { runId: 'run-1', status: 'completed', timestamp: 400 }),
@@ -151,10 +183,12 @@ describe('transcript render model', () => {
     ]
     const pendingReview: InteractionRequest[] = [{ id: 'call-plan', kind: 'plan-review', status: 'pending', createdAt: 240 }]
     expect(buildRenderModel(messages, pendingReview).runs[0]!.responses).toEqual([])
-    // Without interaction records the promotion rule is unchanged (pure-message callers).
+    // 没有交互记录时晋升规则不变（纯消息调用方）。
     expect(buildRenderModel(messages).runs[0]!.responses.map(response => response.message.id)).toEqual(['assistant-plan-note'])
   })
 
+  // 验证渲染 key 稳定性：live → settled 同 run key、同 process key；工具结果不重复；
+  // 落定正文进 responses、时长来自 durationMs。
   it('keeps the streaming process and settled answer on stable render keys without duplicating tool results', () => {
     const pending = user('user-live', 'request-live')
     const assistantLive = assistant('assistant-live', [
@@ -180,6 +214,7 @@ describe('transcript render model', () => {
     expect(settled?.durationMs).toBe(1200)
   })
 
+  // 验证嵌套工具树：子调用（parentToolCallId）挂到父调用条目下，顶层只出现一个工具行。
   it('nests child tool calls under their recorded parent call', () => {
     const result = buildRenderModel([
       user('user-nested', 'request-nested'),
@@ -199,6 +234,8 @@ describe('transcript render model', () => {
     expect(parent?.kind === 'tool' ? parent.item.children[0]?.result?.id : undefined).toBe('tool-child')
   })
 
+  // 验证 steer 消息位置：同 run 的第二条用户消息按记录顺序排在 process 中（reasoning 之后），
+  // 且 run 的 users 列表同时含两条。
   it('keeps a steering message in its recorded position within the active run', () => {
     const result = buildRenderModel([
       { ...user('user-first', 'request-first'), runId: 'run-steer' },
@@ -213,6 +250,8 @@ describe('transcript render model', () => {
     expect(run?.responses).toHaveLength(1)
   })
 
+  // 验证状态区分：assistant 级 error/cancelled 各自保留；工具级错误（isError）不污染
+  // 已恢复的 run（仍为 completed）。
   it('keeps errors and cancellations distinct', () => {
     const error = buildRenderModel([user('user-error', 'request-error'), assistant('assistant-error', [], { status: 'error' })]).runs[0]
     const cancelled = buildRenderModel([user('user-stop', 'request-stop'), assistant('assistant-stop', [], { status: 'cancelled' })]).runs[0]
@@ -228,6 +267,8 @@ describe('transcript render model', () => {
     expect(recoveredToolError?.status).toBe('completed')
   })
 
+  // 验证 redacted thinking：reasoningDisplay 返回占位摘要 + 空正文，私有推理文本不出现在
+  // 任何渲染输出中，公开正文照常进 responses。
   it('does not expose redacted thinking text to the transcript renderer', () => {
     const model = buildRenderModel([assistant('assistant-redacted', [
       { type: 'thinking', text: 'private reasoning must stay hidden', redacted: true },
@@ -242,6 +283,7 @@ describe('transcript render model', () => {
     expect(model.runs[0]?.responses[0]?.blocks).toEqual([{ type: 'text', text: 'Public answer.' }])
   })
 
+  // 验证容错：details 为未知形态（数组）时不抛错，回退通用卡（output=正文、knownPresentation=false）。
   it('tolerates unknown tool details without changing the normal text result', () => {
     const call = { type: 'toolCall' as const, id: 'custom-1', name: 'custom_tool', arguments: { input: 'value' } }
     const message = assistant('assistant-tool', [call], { status: 'completed' })
@@ -255,6 +297,8 @@ describe('transcript render model', () => {
     expect(buildToolRenderModel(item, chinese => chinese, false)).toMatchObject({ output: 'custom result', knownPresentation: false })
   })
 
+  // 验证 DSH 卡片选取：bash → 运行命令（command/output/exitCode）、read → 读取（行列表/总行数）、
+  // edit → 编辑（diffs 来自 artifacts）、grep → 搜索匹配、web_search → 网络卡（answer/sources）。
   it('selects DSH command, read, diff, search, and web cards from recorded fields', () => {
     const build = (name: string, args: Record<string, unknown>, result: Partial<ChatMessage>): ReturnType<typeof buildToolRenderModel> => {
       const message = assistant(`call-message:${name}`, [{ type: 'toolCall', id: `call:${name}`, name, arguments: args }])
@@ -281,6 +325,8 @@ describe('transcript render model', () => {
       .toMatchObject({ web: { kind: 'search', answer: 'Found one result.', sources: [{ url: 'https://example.com' }] } })
   })
 
+  // 验证沙箱防线：HTML 预览 CSP 禁外联/表单/导航、不给 allow-same-origin；
+  // 资产 URL 只放行本机 /api/workspaces/ 路径（外域与 /api/settings 拒绝）。
   it('restricts HTML previews and file asset links to the isolated workspace renderer', () => {
     const preview = sandboxedHtml('<h1>preview</h1><script>window.parent.secret = true</script>')
     expect(preview).toContain("default-src 'none'")
@@ -296,8 +342,11 @@ describe('transcript render model', () => {
   })
 })
 
+/** 迟到问题答复（lateAnswerOf）的载荷解析测试。 */
 describe('late question answers', () => {
+  /** JSON 序列化辅助。 */
   const payload = (value: unknown): string => JSON.stringify(value)
+  /** 完整答复 fixture：两问两答（含多选与自定义补充）。 */
   const reply = {
     kind: 'answer_to_pending_question',
     callId: 'call-ask',
@@ -312,6 +361,7 @@ describe('late question answers', () => {
     ],
   }
 
+  // 验证完整载荷解析：callId、回显的问题（header/选项/多选）与答案全部保留。
   it('reads a reply payload and keeps every echoed question and answer', () => {
     const data = lateAnswerOf(payload(reply))
     expect(data).not.toBeNull()
@@ -326,6 +376,8 @@ describe('late question answers', () => {
     ])
   })
 
+  // 验证畸形丢弃：缺 id 的问题、非对象条目、question 非字符串、答案 selected 含非字符串、
+  // 缺 id/非对象条目均剔除，其余合法条目保留。
   it('drops malformed question and answer entries without losing the rest', () => {
     const data = lateAnswerOf(payload({
       kind: 'answer_to_pending_question',
@@ -338,6 +390,7 @@ describe('late question answers', () => {
     expect(data.answers).toEqual([{ id: 'a', selected: ['x'] }])
   })
 
+  // 验证宽容性：答案选了问题未提供的选项（外部手写）时原样保留，不做白名单过滤。
   it('keeps an option label the question never offered', () => {
     const data = lateAnswerOf(payload({
       kind: 'answer_to_pending_question',
@@ -349,6 +402,8 @@ describe('late question answers', () => {
     expect(data.answers[0]?.selected).toEqual(['手写的外部选项'])
   })
 
+  // 验证载荷识别边界：普通文本、其他 kind、损坏 JSON 均 null；
+  // questions/answers 类型错误时按空数组解析（其余字段照常）。
   it('reads only its own payload kind', () => {
     expect(lateAnswerOf('请继续')).toBeNull()
     expect(lateAnswerOf(payload({ kind: 'other', callId: 'call-ask' }))).toBeNull()
@@ -361,7 +416,9 @@ describe('late question answers', () => {
   })
 })
 
+/** ask_user_question 工具行的行级模型测试（等待/已问/配对记录）。 */
 describe('ask_user_question row model', () => {
+  /** 问题参数 fixture：两问（单选 + 开放补充）。 */
   const args = {
     questions: [
       { id: 'scope', header: '演示范围', question: '这次问答演示要覆盖哪一层？', options: [{ label: '前端交互 (Recommended)' }, { label: '后端接口' }] },
@@ -376,12 +433,15 @@ describe('ask_user_question row model', () => {
   }))
   const base = { name: 'ask_user_question', args, details: { status: 'pending', questions: args.questions }, failed: false }
 
+  // 验证等待态：pending/running（含隐式）都渲染单行"正在询问"、无正文记录。
   it('stays one asking line with no body while the question waits', () => {
     expect(askQuestionRowModel(base, zh)).toEqual({ title: '正在询问', summary: '', record: null })
     expect(askQuestionRowModel({ ...base, status: 'pending' }, zh)).toEqual({ title: '正在询问', summary: '', record: null })
     expect(askQuestionRowModel({ ...base, running: true }, zh)).toEqual({ title: '正在询问', summary: '', record: null })
   })
 
+  // 验证落定形态（ZCode 风格）：标题"已询问"、摘要"2 个问题"、记录按问题-答案配对
+  // （未答的问题也保留、answers 为空数组）。
   it('settles into ZCode\'s asked line: the question count plus the paired record', () => {
     const model = askQuestionRowModel({ ...base, reply: reply ?? undefined }, zh)
     expect(model).toEqual({
@@ -396,6 +456,7 @@ describe('ask_user_question row model', () => {
     })
   })
 
+  // 验证结果侧答案：details 里自带 answers（旧数据形态）时用它配对，custom 文本并入答案。
   it('answers from the result when the call recorded its own batch', () => {
     const model = askQuestionRowModel({
       ...base,
@@ -406,6 +467,7 @@ describe('ask_user_question row model', () => {
     expect(model?.record?.items.map(item => item.answers)).toEqual([['后端接口'], ['补充']])
   })
 
+  // 验证配对歧义兜底：答复的问题集与参数不一致、或答案 id 重复时，只显示计数行不渲染配对记录。
   it('keeps a count line without a record when pairing would be ambiguous', () => {
     const mismatched = askQuestionRowModel({
       ...base,
@@ -425,6 +487,7 @@ describe('ask_user_question row model', () => {
     expect(duplicated).toEqual({ title: '已询问', summary: '2 个问题', record: null })
   })
 
+  // 验证无可读问题：参数 question 非字符串且结果无问题时，标题落定但没有摘要与记录。
   it('has no question line when neither the arguments nor the result carry readable questions', () => {
     const model = askQuestionRowModel({
       ...base,
@@ -434,12 +497,15 @@ describe('ask_user_question row model', () => {
     expect(model).toEqual({ title: '已询问', summary: '', record: null })
   })
 
+  // 验证问题来源回退：参数缺 questions 时从结果 details 读（计数与配对照常）。
   it('reads the questions from the result when the arguments lost them', () => {
     const model = askQuestionRowModel({ ...base, args: {}, reply: reply ?? undefined }, zh)
     expect(model?.record?.items).toHaveLength(2)
     expect(model?.summary).toBe('2 个问题')
   })
 
+  // 验证失败与其他工具：失败时标题仍是"已询问"但摘要为"提问失败"、问题保留答案为空；
+  // 非 ask/request_user_input 的工具返回 null；request_user_input 一样按询问行渲染。
   it('names the failure, keeps its questions, and ignores every other tool', () => {
     const failed = askQuestionRowModel({ ...base, failed: true }, zh)
     expect(failed?.title).toBe('已询问')
@@ -450,6 +516,7 @@ describe('ask_user_question row model', () => {
       .toEqual({ title: '正在询问', summary: '', record: null })
   })
 
+  // 验证终态映射：continued/expired/cancelled 一律"未回答，已自动继续"；answered 显示计数。
   it('treats a settled set without answers as continued, and an answered set as asked', () => {
     for (const status of ['continued', 'expired', 'cancelled'] as const) {
       const model = askQuestionRowModel({ ...base, status }, zh)
@@ -461,7 +528,10 @@ describe('ask_user_question row model', () => {
   })
 })
 
+/** 交互载荷文本识别（isInteractionPayloadText）测试。 */
 describe('interaction payload detection', () => {
+  // 验证识别边界：只认运行时序列化的 answer/dismissed 两种 kind 的纯 JSON 文本；
+  // 普通消息、其他 kind、夹在正文中的 JSON 都不认。
   it('recognizes only the runtime\'s serialized answer and dismissal payloads', () => {
     expect(isInteractionPayloadText(JSON.stringify({ kind: 'answer_to_pending_question', callId: 'call-ask' }))).toBe(true)
     expect(isInteractionPayloadText(JSON.stringify({ kind: 'dismissed_pending_question', callId: 'call-ask' }))).toBe(true)
@@ -471,7 +541,9 @@ describe('interaction payload detection', () => {
   })
 })
 
+/** subagent 工具行的行级模型测试。 */
 describe('subagent row model', () => {
+  // 验证启动回执：标题"子智能体"、摘要含标签与子会话 id、携带 task/label/childId。
   it('renders the started receipt with the label and child conversation', () => {
     const model = subagentRowModel({
       name: 'subagent',
@@ -488,6 +560,7 @@ describe('subagent row model', () => {
     })
   })
 
+  // 验证 live 投影形态：载荷在 details.result 下时同样读出 childId 与 label。
   it('reads the live projection shape, where the payload sits under result', () => {
     expect(subagentRowModel({
       name: 'subagent',
@@ -497,6 +570,7 @@ describe('subagent row model', () => {
     }, zh)).toMatchObject({ childId: 'child-a', label: 'spring' })
   })
 
+  // 验证缺标签兜底（摘要只含 id）、无 details 失败态兜底、其他工具返回 null。
   it('keeps the child id when the label is missing and ignores every other tool', () => {
     expect(subagentRowModel({
       name: 'subagent',
@@ -511,9 +585,12 @@ describe('subagent row model', () => {
   })
 })
 
+/** codemode 工具行的行级模型测试。 */
 describe('codemode row model', () => {
+  /** 脚本样本。 */
   const script = "const files = await tools.glob({ pattern: '*.ts' })\nconsole.log(files.length)"
 
+  // 验证完整读取：脚本/输出/嵌套调用列表（id 字符串化、四种状态直通）/fullOutputPath。
   it('reads the script, its nested calls, and the output from the call and result', () => {
     const model = codemodeRowModel({
       name: 'codemode',
@@ -545,12 +622,13 @@ describe('codemode row model', () => {
   })
 
   it('falls back to the ordinary tool card without a call list and ignores other tools', () => {
-    // A call-only row has no result details yet: the generic card keeps the raw JSON visible.
+    // 纯调用行尚无结果 details：通用卡保持原始 JSON 可见。
     expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: undefined, output: '' }, zh)).toBeNull()
     expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: { calls: 'nope' }, output: '' }, zh)).toBeNull()
     expect(codemodeRowModel({ name: 'bash', args: {}, details: { calls: [] }, output: '' }, zh)).toBeNull()
   })
 
+  // 验证结果侧读取：args 缺 code 时摘要用输出文本；details 为 JSON 字符串时同样解析出调用列表。
   it('reads result-only records and a JSON-string details payload', () => {
     const model = codemodeRowModel({
       name: 'codemode',
@@ -563,6 +641,7 @@ describe('codemode row model', () => {
     expect(model?.fullOutputPath).toBeUndefined()
   })
 
+  // 验证调用条目校验：缺 name/status、非对象条目、未知 status 全部剔除。
   it('drops call entries without a usable name or status', () => {
     const model = codemodeRowModel({
       name: 'codemode',
@@ -587,7 +666,7 @@ describe('codemode row model', () => {
         order: 0,
       }
     }
-    // A call-only row has no details yet: the generic card still titles and summarizes the script.
+    // 纯调用行还没有 details：通用卡仍以"代码"为标题、脚本首行为摘要。
     expect(buildToolRenderModel(callItem(), zh, false))
       .toMatchObject({ title: '代码', summary: "const files = await tools.glob({ pattern: '*.ts' })" })
     expect(buildToolRenderModel(callItem({ blocks: [{ type: 'text', text: 'Script failed' }], isError: true }), zh, false))
@@ -595,7 +674,10 @@ describe('codemode row model', () => {
   })
 })
 
+/** MCP 工具行标题与活动分类测试。 */
 describe('MCP tool rows', () => {
+  // 验证 mcp__server__tool 命名拆解：标题"MCP · <server> · <tool>"、通用图标不变；
+  // 其他工具保留 DSH 标题、非 MCP 形态不改写；codemode 与 run_code 同属 code 活动分类。
   it('titles an mcp__server__tool row with the server and native tool', () => {
     const name = 'mcp__github__search_repos'
     const message = assistant('call-message:mcp', [{ type: 'toolCall', id: 'call:mcp', name, arguments: {} }])
@@ -608,30 +690,34 @@ describe('MCP tool rows', () => {
       order: 0,
     }
     expect(toolRowTitle(name, zh)).toBe('MCP · github · search_repos')
-    // The row title keeps the generic category icon; only the wording names the server and tool.
+    // 行标题保留通用类别图标，仅措辞点名 server 与 tool。
     expect(buildToolRenderModel(item, zh, false))
       .toMatchObject({ title: 'MCP · github · search_repos', summary: 'found one' })
     expect(toolRowTitle('mcp__my_server__read_file', zh)).toBe('MCP · my_server · read_file')
-    // Other tools keep their DSH titles; a name that is not the MCP shape is not rewritten.
+    // 其他工具保留 DSH 标题；非 MCP 形态的名字不改写。
     expect(toolRowTitle('bash', zh)).toBe('运行命令')
     expect(toolRowTitle('codemode', zh)).toBe('代码')
     expect(toolRowTitle('mcp_server', zh)).toBe('工具调用')
-    // Pi's codemode joins DSH's run_code in the "code" activity category.
+    // Pi 的 codemode 与 DSH 的 run_code 同属"code"活动类别。
     expect(toolActivity('codemode')).toBe('code')
     expect(toolActivity('run_code')).toBe('code')
     expect(toolActivity('mcp__github__search_repos')).toBe('tools')
   })
 
+  // 验证实时细节：codemode 取脚本首行、bash 取命令。
   it('shows the code-mode script first line as the live detail', () => {
     expect(toolLiveDetail({ code: 'const a = 1\nconst b = 2' })).toBe('const a = 1')
     expect(toolLiveDetail({ command: 'pwd' })).toBe('pwd')
   })
 })
 
+/** 计划预览模型（latestPlan/planTitle/sessionPlans）测试。 */
 describe('plan preview model', () => {
+  /** 构造 plan-review 交互记录 fixture。 */
   const review = (id: string, detail: string, createdAt: number, status: InteractionRequest['status'] = 'pending'): InteractionRequest =>
     ({ id, kind: 'plan-review', status, detail, approveLabel: '同意执行', createdAt })
 
+  // 验证最新评审选取：跳过 question 类记录、含 superseded（continued）评审，标题取一级标题。
   it('reads the newest plan review, including superseded ones, and its title', () => {
     const interactions: InteractionRequest[] = [
       review('call-a', '# 第一版\n\n步骤一', 10, 'continued'),
@@ -641,6 +727,7 @@ describe('plan preview model', () => {
     expect(latestPlan(interactions, [])).toEqual({ markdown: '# 第二版\n\n步骤二', title: '第二版', key: 'call-b', pending: true })
   })
 
+  // 验证回退来源：无交互记录时取 transcript 中最后一个 exit_plan_mode 调用（pending=false）。
   it('falls back to the last exit_plan_mode call still in the transcript', () => {
     const messages: ChatMessage[] = [
       assistant('a-1', [{ type: 'toolCall', id: 'call-old', name: 'exit_plan_mode', arguments: { plan: '# 旧计划' } }]),
@@ -650,6 +737,8 @@ describe('plan preview model', () => {
     expect(latestPlan(undefined, messages)).toEqual({ markdown: '# 新计划\n\n步骤', title: '新计划', key: 'call-new', pending: false })
   })
 
+  // 验证忽略条件：空白计划、bash 等其他工具的 plan 参数、两个来源都缺失 → undefined；
+  // 无一级标题的计划保留正文但无 title。
   it('ignores empty plans, other tools, and missing sources', () => {
     expect(latestPlan([review('call-empty', '   ', 10)], [])).toBeUndefined()
     expect(latestPlan([], [assistant('a-1', [{ type: 'toolCall', id: 'call-bash', name: 'bash', arguments: { plan: '# 不是计划' } }])])).toBeUndefined()
@@ -657,12 +746,15 @@ describe('plan preview model', () => {
     expect(latestPlan([review('call-no-heading', '没有标题', 1)], [])).toEqual({ markdown: '没有标题', key: 'call-no-heading', pending: true })
   })
 
+  // 验证标题提取：只认一级标题（忽略前言与二级标题）、空白标题无效。
   it('derives the title from the first level-1 heading only', () => {
     expect(planTitle('前言\n\n# 标题 A\n\n## 小节')).toBe('标题 A')
     expect(planTitle('## 只有二级标题')).toBeUndefined()
     expect(planTitle('#   ')).toBeUndefined()
   })
 
+  // 验证会话计划列表：所有已提交计划按新→旧排列，pending 评审的对应计划带 pending 标记；
+  // bash 等非计划调用被忽略。
   it('lists every submitted plan newest first and marks the pending review', () => {
     const messages: ChatMessage[] = [
       assistant('a-1', [{ type: 'toolCall', id: 'call-old', name: 'exit_plan_mode', arguments: { plan: '# 旧计划\n\n第一步' } }], { timestamp: 10 }),
@@ -676,6 +768,8 @@ describe('plan preview model', () => {
     ])
   })
 
+  // 验证压缩容忍与去重：计划调用被压缩掉后评审记录独立成条；同一份计划（同 call id）
+  // 在评审与 transcript 都出现时只保留一条。
   it('keeps a review whose plan call was compacted away and dedupes the same plan', () => {
     const plans = sessionPlans([review('call-gone', '# 压缩前的计划', 50, 'continued')], [])
     expect(plans).toEqual([{ markdown: '# 压缩前的计划', title: '压缩前的计划', key: 'call-gone' }])
@@ -685,9 +779,13 @@ describe('plan preview model', () => {
   })
 })
 
+/** 会话统计（conversationStats）测试。 */
 describe('conversation stats', () => {
+  /** 零费用 cost fixture。 */
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
 
+  // 验证用量汇总：usage 只出现在每回合的末条 assistant 上（每回合计一次）；
+  // 四桶求和、contextTokens 取最新回合的 totalTokens；空会话全零。
   it('sums usage once per turn and prices the window from the latest turn', () => {
     const messages: ChatMessage[] = [
       { ...user('user-1', 'request-1'), runId: 'run-1' },
@@ -717,7 +815,7 @@ describe('conversation stats', () => {
   it('computes output rate from per-request model time only, ignoring messages without one', () => {
     const messages: ChatMessage[] = [
       { ...user('user-1', 'request-1'), runId: 'run-1' },
-      // Tool-heavy run: the run-level durationMs covers tool time and must not enter the rate.
+      // 工具密集回合：run 级 durationMs 覆盖工具耗时，不得进入速率计算。
       assistant('assistant-1', [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: {} }], { runId: 'run-1', durationMs: 60_000,
         usage: { input: 10, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost } }),
       { id: 'tool-1', role: 'tool', blocks: [{ type: 'text', text: 'ok' }], timestamp: 300, runId: 'run-1',
@@ -725,18 +823,21 @@ describe('conversation stats', () => {
       assistant('assistant-2', [{ type: 'text', text: 'final' }], { runId: 'run-1', durationMs: 30_000, requestDurationMs: 5_000,
         usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30, cost } }),
       { ...user('user-2', 'request-2'), runId: 'run-2' },
-      // A legacy message without requestDurationMs contributes tokens to neither side of the rate.
+      // 缺 requestDurationMs 的旧消息对速率的分子分母都不贡献。
       assistant('assistant-3', [{ type: 'text', text: 'again' }], { runId: 'run-2',
         usage: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 35, cost } }),
     ]
 
-    // 20 output tokens over 5s of model time; the tool-heavy run's 100 tokens stay out.
+    // 5 秒模型时间里产出 20 token；工具密集回合的 100 token 不参与。
     expect(conversationStats(messages)).toMatchObject({ output: 150, tokensPerSecond: 4 })
   })
 })
 
 
+/** 可见消息过滤（visibleTranscriptMessages）测试。 */
 describe('visible transcript messages', () => {
+  // 验证压缩行可见性：新压缩进行中时旧的"已完成上下文压缩"行隐藏（reset 行保留）；
+  // 非压缩运行时原样返回消息数组。
   it('hides completed compaction rows only while a new compaction runs', () => {
     const messages: ChatMessage[] = [
       user('user-1', 'request-1'),
@@ -748,12 +849,15 @@ describe('visible transcript messages', () => {
   })
 })
 
+/** system 行在 transcript 中的归位与时间线测试。 */
 describe('system rows in the transcript', () => {
+  /** 构造 compaction 系统行 fixture（可带 runId）。 */
   const system = (id: string, timestamp: number, runId?: string): ChatMessage => ({
     id, role: 'system', systemKind: 'compaction', blocks: [{ type: 'text', text: '已完成上下文压缩' }],
     timestamp, ...(runId === undefined ? {} : { runId }),
   })
 
+  /** 构造一个最小回合（用户 + assistant 正文）。 */
   const turn = (id: string, runId: string, text: string, timestamp: number): ChatMessage[] => [
     { ...user(`user-${id}`, `request-${id}`), runId, timestamp },
     assistant(`assistant-${id}`, [{ type: 'text', text }], { runId, status: 'completed', timestamp }),
@@ -764,11 +868,12 @@ describe('system rows in the transcript', () => {
 
     expect(model.runs[0]?.systemRows.map(row => row.key)).toEqual(['system:compaction-1'])
     expect(model.runs[0]?.systemRows[0]?.message.id).toBe('compaction-1')
-    // The row follows the answer, so the transcript renders it under the reply.
+    // 行跟随答案，因此 transcript 渲染在回复之下。
     expect(model.runs[0]?.systemRows[0]?.beforeAnswer).toBe(false)
     expect(model.timeline.map(entry => entry.kind)).toEqual(['run'])
   })
 
+  // 验证答案前系统行：出现在答案之前时 beforeAnswer=true（渲染在回复上方）。
   it('keeps a system row that came before the answer above that answer', () => {
     const model = buildRenderModel([
       { ...user('user-1', 'request-1'), runId: 'run-1', timestamp: 100 },
@@ -779,6 +884,7 @@ describe('system rows in the transcript', () => {
     expect(model.runs[0]?.systemRows.map(row => row.beforeAnswer)).toEqual([true])
   })
 
+  // 验证无 run 系统行：按自身时间戳落在两个 run 之间的 timeline 上，不进任何 run 的 systemRows。
   it('places a system row without a run between the runs, by its own timestamp', () => {
     const model = buildRenderModel([
       ...turn('1', 'run-1', '一', 200),
@@ -793,6 +899,7 @@ describe('system rows in the transcript', () => {
     expect(model.runs[1]?.systemRows).toEqual([])
   })
 
+  // 验证早于所有 run 的无主系统行：排在 timeline 最前。
   it('keeps a system row without a run before every run when it predates them', () => {
     const model = buildRenderModel([system('reset-1', 10), ...turn('1', 'run-1', '一', 200)])
 
@@ -800,6 +907,7 @@ describe('system rows in the transcript', () => {
     expect(model.timeline[0]?.kind === 'system' ? model.timeline[0].row.message.id : undefined).toBe('reset-1')
   })
 
+  // 验证晚于所有 run 的无主系统行：排在 timeline 最后。
   it('keeps a system row without a run after the last run when it follows them', () => {
     const model = buildRenderModel([...turn('1', 'run-1', '一', 200), system('compaction-1', 900)])
 
@@ -807,14 +915,14 @@ describe('system rows in the transcript', () => {
   })
 
   it('keeps a row that replaced earlier history above the content that replaced it', () => {
-    // A compaction that replaced the history above the current turn sits at the head
-    // of the remaining stream, even though its summary was placed later.
+    // 替换了当前回合之前历史的压缩行位于剩余流的开头，即便其 summary 时间戳更晚。
     const model = buildRenderModel([system('compaction-1', 900), ...turn('1', 'run-1', '一', 200)])
 
     expect(model.timeline.map(entry => entry.kind)).toEqual(['system', 'run'])
     expect(model.timeline[0]?.kind === 'system' ? model.timeline[0].row.message.id : undefined).toBe('compaction-1')
   })
 
+  // 验证唯一性与稳定性：三个系统行各有唯一 key、恰好渲染一次；同一日志两次构建 timeline 顺序一致。
   it('renders every system row exactly once, with stable keys', () => {
     const messages: ChatMessage[] = [
       ...turn('1', 'run-1', '一', 200),
@@ -831,11 +939,12 @@ describe('system rows in the transcript', () => {
 
     expect(rows.sort()).toEqual(['system:compaction-1', 'system:compaction-2', 'system:compaction-3'])
     expect(new Set(rows).size).toBe(rows.length)
-    // The same log always yields the same order, so a row never jumps between renders.
+    // 同一日志永远产出同一顺序，行不会在两次渲染之间跳位。
     expect(buildRenderModel(messages).timeline.map(entry => entry.kind === 'system' ? entry.row.key : entry.run.key))
       .toEqual(model.timeline.map(entry => entry.kind === 'system' ? entry.row.key : entry.run.key))
   })
 
+  // 验证未知 run 归属：runId 指向不存在的 run 时按无主行处理（timeline 最后）。
   it('files a system row whose run is unknown with the rows that no run owns', () => {
     const model = buildRenderModel([...turn('1', 'run-1', '一', 200), system('compaction-1', 300, 'run-unknown')])
 
@@ -844,7 +953,9 @@ describe('system rows in the transcript', () => {
   })
 })
 
+/** transcript 尾部加载指示器（turnChatLoadingVisible/interactionBlocksTurnLoading）测试。 */
 describe('transcript tail loading indicator', () => {
+  /** 空闲状态基线：未运行、无交互阻塞、无维护任务阻塞。 */
   const idle = {
     isRunning: false,
     blockedByInteraction: false,
@@ -854,16 +965,18 @@ describe('transcript tail loading indicator', () => {
   it('shows the tail spinner only while the conversation runs', () => {
     expect(turnChatLoadingVisible({ ...idle, isRunning: true })).toBe(true)
     expect(turnChatLoadingVisible(idle)).toBe(false)
-    // The running fact comes from the conversation, so a turn that keeps working
-    // across several tool rounds never blinks its spinner away.
+    // running 事实来自会话本身，跨多个工具轮持续工作的回合不会让 spinner 闪烁消失。
     expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByInteraction: false })).toBe(true)
   })
 
+  // 验证阻塞隐藏：维护任务（压缩）或用户输入排队时 spinner 隐藏。
   it('hides the tail spinner while a maintenance task or a user prompt blocks the turn', () => {
     expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByActiveWork: true })).toBe(false)
     expect(turnChatLoadingVisible({ ...idle, isRunning: true, blockedByInteraction: true })).toBe(false)
   })
 
+  // 验证交互阻塞：三类 pending 交互（approval/question/plan-review）都阻塞 spinner；
+  // 无交互或空列表不阻塞。
   it('blocks the tail spinner while any pending interaction waits for the user', () => {
     const pending = (kind: InteractionRequest['kind']): InteractionRequest => ({ id: `i-${kind}`, kind, status: 'pending', createdAt: 1 })
 
@@ -877,7 +990,7 @@ describe('transcript tail loading indicator', () => {
   it('stops blocking once the interaction is settled', () => {
     const settled = (status: InteractionRequest['status']): InteractionRequest => ({ id: 'i-1', kind: 'approval', status, createdAt: 1 })
 
-    // `continued` means the permission was granted and the model moved on.
+    // continued 表示权限已授予、模型继续推进。
     expect(interactionBlocksTurnLoading([settled('continued')])).toBe(false)
     expect(interactionBlocksTurnLoading([settled('answered')])).toBe(false)
     expect(interactionBlocksTurnLoading([settled('expired')])).toBe(false)
@@ -885,12 +998,17 @@ describe('transcript tail loading indicator', () => {
   })
 })
 
+/** 流式回合布局（slot 身份、答案区归属）测试。 */
 describe('streaming turn layout', () => {
+  /** 回合的用户提示 fixture。 */
   const prompt: ChatMessage = { id: 'user-1', role: 'user', blocks: [{ type: 'text', text: 'hi' }], timestamp: 50, runId: 'run-1' }
+  /** 构造 live assistant 消息（streaming、running、固定 id）。 */
   const live = (blocks: ChatMessage['blocks']): ChatMessage => ({
     id: 'live-assistant:task-1', role: 'assistant', blocks, timestamp: 100, streaming: true, status: 'running', runId: 'run-1',
   })
 
+  // 验证答案区保持：流式中已写出的正文留在答案区，即使随后出现工具调用也不回流 process
+  // （块原地不动，不跳屏也不丢已渲染 Markdown）。
   it('keeps the answer of a streaming turn in the answer area, also once a tool call arrives', () => {
     const beforeTool = buildRenderModel([prompt, live([
       { type: 'thinking', text: 'Checking', slot: 0 },
@@ -903,13 +1021,13 @@ describe('streaming turn layout', () => {
     ])]).runs[0]
 
     expect(beforeTool?.responses.map(response => response.key)).toEqual(['live-assistant:task-1:response'])
-    // The tool call does not send the answer back into the process area: the block stays
-    // where it is, so it neither jumps on screen nor loses its rendered markdown.
+    // 工具调用不会把答案送回 process 区：块保持原位，既不跳屏也不丢已渲染的 Markdown。
     expect(afterTool?.responses.map(response => response.key)).toEqual(['live-assistant:task-1:response'])
     expect(afterTool?.responses[0]?.blocks).toEqual(beforeTool?.responses[0]?.blocks)
     expect(afterTool?.process.map(part => part.kind)).toEqual(['reasoning', 'tool'])
   })
 
+  // 验证工具轮落定：回合作为工具轮完成时（stopReason 语义），已写正文回流 process 的 content。
   it('returns the answer to the process area once the turn settles as a tool round', () => {
     const settled = buildRenderModel([prompt, {
       id: 'live-assistant:task-1', role: 'assistant', runId: 'run-1', timestamp: 100, status: 'completed',
@@ -930,8 +1048,7 @@ describe('streaming turn layout', () => {
       { type: 'text', text: 'The file says hello.', slot: 1 },
     ])]).runs[0]
     const reasoning = answered?.process.find(part => part.kind === 'reasoning')
-    // The answer already follows the reasoning, so the reasoning is done and must not
-    // keep shimmering: DSH marks the same tail as running.
+    // 答案已跟随思考出现，思考已完成、不得继续闪烁：DSH 以同一尾部为 running。
     expect(reasoning?.kind === 'reasoning' ? reasoning.streaming : undefined).toBe(false)
 
     const thinking = buildRenderModel([prompt, live([{ type: 'thinking', text: 'Checking', slot: 0 }])]).runs[0]
@@ -939,6 +1056,7 @@ describe('streaming turn layout', () => {
     expect(liveReasoning?.kind === 'reasoning' ? liveReasoning.streaming : undefined).toBe(true)
   })
 
+  // 验证子代理流：带 parentToolCallId 的流式文本属于 process content（不是 run 的答案区）。
   it('streams the text of a turn that is not the run\'s answer', () => {
     const delegated: ChatMessage = {
       id: 'live-assistant:sub-1', role: 'assistant', parentToolCallId: 'call-1', runId: 'run-1', timestamp: 100,
@@ -951,6 +1069,8 @@ describe('streaming turn layout', () => {
     expect(run?.responses).toHaveLength(0)
   })
 
+  // 验证 slot 身份：reasoning 块的 key 以 slot 结尾，后续块开始写入不改变前面的 key；
+  // 未写出的空块不进答案区，答案块保留自己的 slot。
   it('keys a block by its slot, so a block that starts later cannot shift the ones before it', () => {
     const unwritten = buildRenderModel([prompt, live([
       { type: 'thinking', text: 'Checking', slot: 0 },
@@ -963,12 +1083,12 @@ describe('streaming turn layout', () => {
 
     expect(unwritten?.process.find(part => part.kind === 'reasoning')?.key).toBe('live-assistant:task-1:reasoning:0')
     expect(written?.process.find(part => part.kind === 'reasoning')?.key).toBe('live-assistant:task-1:reasoning:0')
-    // The block the model has not written yet stays out of the answer area, and the
-    // answer that follows it keeps the slot it was pushed at.
+    // 模型还没写的块留在答案区之外，其后的答案块保持被推入时的 slot。
     expect(unwritten?.responses).toHaveLength(0)
     expect(written?.responses[0]?.blocks.map(block => block.slot)).toEqual([1])
   })
 
+  // 验证空块丢弃：落定消息中尚未写出的空 text 块不渲染。
   it('drops the empty blocks the model has not written yet', () => {
     const run = buildRenderModel([prompt, {
       id: 'assistant-1', role: 'assistant', runId: 'run-1', timestamp: 100, status: 'completed',
@@ -979,7 +1099,11 @@ describe('streaming turn layout', () => {
   })
 })
 
-/** Every tool row key in the model, including nested children and grouped rows. */
+/**
+ * 收集模型中所有工具行 key，包括嵌套子调用与分组行。
+ * @param model 渲染模型
+ * @returns key 列表（按出现顺序）
+ */
 function toolKeys(model: ReturnType<typeof buildRenderModel>): string[] {
   const keys: string[] = []
   const visit = (item: ToolItem): void => {
@@ -995,13 +1119,17 @@ function toolKeys(model: ReturnType<typeof buildRenderModel>): string[] {
   return keys
 }
 
+/** 工具行身份在 live ↔ settled 边界的一致性测试。 */
 describe('tool row identity across the live to settled boundary', () => {
+  /** 委派请求的用户消息 fixture。 */
   const user: ChatMessage = { id: 'user-1', requestId: 'request-1', role: 'user', blocks: [{ type: 'text', text: 'delegate' }], timestamp: 100 }
+  /** live 工具结果 fixture（streaming、无对应落定条目）。 */
   const liveTool: ChatMessage = {
     id: 'live-tool:call-9', role: 'tool', blocks: [], timestamp: 120, runId: 'run-1',
     toolCallId: 'call-9', toolName: 'subagent', streaming: true, status: 'running',
   }
 
+  // 验证 call id 身份：live 工具行与其落定对应物都用 tool:call-9（浏览器 DOM 复用不闪烁）。
   it('keys a live tool row and its settled pair by the same call id', () => {
     const liveModel = buildRenderModel([user, liveTool])
     expect(toolKeys(liveModel)).toEqual(['tool:call-9'])
@@ -1016,6 +1144,8 @@ describe('tool row identity across the live to settled boundary', () => {
     expect(toolKeys(buildRenderModel(settled))).toEqual(['tool:call-9'])
   })
 
+  // 验证兜底：无 toolCallId 的孤儿结果用消息 id 作 key；同 callId 的重复 live 行只有第一条
+  // 拿到 call key，其余退回消息 id key（不产生重复 DOM 身份）。
   it('keeps message-id keys for results without a call id, and falls back on duplicates', () => {
     const orphan: ChatMessage = { id: 'tool-orphan', role: 'tool', blocks: [{ type: 'text', text: 'x' }], timestamp: 120, runId: 'run-1' }
     expect(toolKeys(buildRenderModel([user, orphan]))).toEqual(['tool-result:tool-orphan'])

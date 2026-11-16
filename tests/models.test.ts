@@ -1,3 +1,20 @@
+/**
+ * 模型目录与白名单测试：allowlist 纯函数、provider 编辑持久化、端点继承往返、
+ * 推理等级映射、默认模型解析与白名单在运行时的全链路过滤。
+ *
+ * 关键契约：
+ * - allowlist 匹配：精确条目 / 尾星号前缀匹配；条目校验只允许星号收尾；归一化去空白去重；
+ *   demo 提供方不受白名单约束；
+ * - 目录编辑：删除模型写入项目覆盖并跨重启保留；saveProvider 不冻结继承端点（模型级
+ *   baseUrl/api 只在显式覆盖时出现）；白名单隐藏的模型不会被编辑器误删；
+ * - 推理等级：声明 thinkingLevelMap 即视为推理模型（未声明档位钉死不可选）、保存时补全
+ *   缺失档位为 null、会话已存等级超出新地图时向上钳制、遗留 false+map 数据自动升级、
+ *   外部改写 models.json 能触发 watchModels 通知；
+ * - 默认模型：配置的默认缺失时回退到可选目录模型；显式请求不存在的模型仍拒绝；
+ * - 白名单运行时：过滤目录/供应商配置、越界默认自动校正并持久化、create/automation/
+ *   settings/submit/compact/provider/test 各入口全部拒绝越界模型、换到允许模型即恢复；
+ * - openai 内置路由保存凭据后 configured=true 且保留 envVars 身份。
+ */
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:http'
@@ -7,9 +24,10 @@ import { createRuntime } from '../src/server/runtime/index.ts'
 import { createApp } from '../src/server/app.ts'
 import { isValidAllowlistEntry, modelWithinAllowlist, normalizeModelAllowlist } from '../src/server/model/allowlist.ts'
 
+/** 本文件创建的 runtime fixture 列表，afterEach 统一关闭并删除。 */
 const fixtures: Array<{ root: string; closers: Array<() => Promise<void>> }> = []
 
-/** Two synthetic providers so the assertions never depend on the shipped catalog's model ids. */
+/** 两个合成 provider，断言不依赖发行目录里的真实模型 id。 */
 const WL_MODELS = {
   providers: {
     'wl-alpha': {
@@ -31,6 +49,11 @@ const WL_MODELS = {
   },
 }
 
+/**
+ * 创建 runtime fixture：临时 data/workspace/pi 目录，可选写入 models.json 与 pi 设置。
+ * @param options demo 模式、models.json 内容、settings.json 内容
+ * @returns 目录路径、runtime 与 cleanup 句柄
+ */
 async function fixture(options: { demo?: boolean; models?: unknown; piSettings?: unknown } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'pi-durable-web-models-'))
   const dataDir = join(root, 'data')
@@ -45,6 +68,7 @@ async function fixture(options: { demo?: boolean; models?: unknown; piSettings?:
   return { root, dataDir, workspace, piDir, runtime, cleanup }
 }
 
+/** 清理：关闭所有 runtime 并删除临时目录。 */
 afterEach(async () => {
   const pending = fixtures.splice(0)
   await Promise.all(pending.map(async ({ closers, root }) => {
@@ -53,9 +77,13 @@ afterEach(async () => {
   }))
 })
 
+/** 模型引用的 "provider/modelId" 标识形式。 */
 const nameOf = (model: { provider: string; modelId: string }): string => `${model.provider}/${model.modelId}`
 
+/** allowlist 纯函数（匹配/校验/归一化）测试。 */
 describe('model allowlist patterns', () => {
+  // 验证匹配规则：空/未配置放行一切；精确条目匹配；前缀相同但少一截不匹配（必须尾星号）；
+  // 星号只在尾部生效；provider 不同不匹配；demo 提供方无视白名单。
   it('matches exact entries and trailing-star prefixes, and filters nothing when empty', () => {
     const deepseek = { provider: 'opencode-go', modelId: 'deepseek-v4.1-flash' }
     expect(modelWithinAllowlist(undefined, deepseek)).toBe(true)
@@ -65,10 +93,12 @@ describe('model allowlist patterns', () => {
     expect(modelWithinAllowlist(['opencode-go/deepseek*'], deepseek)).toBe(true)
     expect(modelWithinAllowlist(['opencode-go/other*'], deepseek)).toBe(false)
     expect(modelWithinAllowlist(['other-go/deepseek*'], deepseek)).toBe(false)
-    // The demo provider ignores the allowlist: the scripted instance stays usable.
+    // demo 提供方无视白名单：脚本化实例保持可用。
     expect(modelWithinAllowlist(['opencode-go/deepseek*'], { provider: 'pi-web-demo', modelId: 'demo-model' })).toBe(true)
   })
 
+  // 验证条目校验：provider/model 形态（可含多级斜杠）、星号只允许收尾；
+  // 空串、缺 model、缺 provider、星号在中间、含空格全部拒绝。
   it('accepts only provider/model entries whose star may only close the entry', () => {
     expect(isValidAllowlistEntry('opencode-go/deepseek-v4.1-flash')).toBe(true)
     expect(isValidAllowlistEntry('opencode-go/deepseek*')).toBe(true)
@@ -81,13 +111,17 @@ describe('model allowlist patterns', () => {
     expect(isValidAllowlistEntry('opencode-go/deep seek')).toBe(false)
   })
 
+  // 验证归一化：去首尾空白、丢弃空串、去重。
   it('normalizes entries by trimming, dropping blanks and de-duplicating', () => {
     expect(normalizeModelAllowlist([' opencode-go/deepseek* ', '', 'opencode-go/deepseek*', 'wl-alpha/deepseek-a']))
       .toEqual(['opencode-go/deepseek*', 'wl-alpha/deepseek-a'])
   })
 })
 
+/** 模型目录编辑与持久化测试。 */
 describe('model directory edits', () => {
+  // 验证删除持久化：删除发行目录模型写入项目覆盖（source=project）→ 重启后仍被删；
+  // defaults 里保留发行版本，恢复时把全部默认模型写回。
   it('persists a deleted model in the project override across a restart and restores it from the shipped catalog', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture()
     const shipped = await runtime.provider('opencode-go')
@@ -103,14 +137,14 @@ describe('model directory edits', () => {
     expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(false)
     expect(afterSave.models.some(model => model.provider === shipped.id && model.modelId === kept[0]!.id)).toBe(true)
 
-    // A fresh runtime reads the global models.json, and the deleted model stays gone.
+    // 新 runtime 读全局 models.json，被删模型保持消失。
     await runtime.close()
     const reopened = await createRuntime({ dataDir, workspace, piDir })
     cleanup.closers.push(() => reopened.close())
     const afterRestart = await reopened.catalog()
     expect(afterRestart.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(false)
 
-    // Restoring the shipped directory writes every default model back.
+    // 恢复发行目录会把每个默认模型写回。
     const customized = await reopened.provider(shipped.id)
     expect(customized.source).toBe('project')
     expect(customized.defaults?.some(model => model.id === removed.id)).toBe(true)
@@ -121,6 +155,8 @@ describe('model directory edits', () => {
     expect(restored.models.some(model => model.provider === shipped.id && model.modelId === removed.id)).toBe(true)
   })
 
+  // 验证白名单隐藏模型的保护：编辑器只看得见白名单内模型，保存可见目录后清空白名单，
+  // 被隐藏的模型仍在目录中（只有操作者真正删除的那一行消失）。
   it('keeps allowlist-hidden models when the visible directory is saved', async () => {
     const { runtime } = await fixture()
     await runtime.updateSettings({ modelAllowlist: ['opencode-go/deepseek*'] })
@@ -132,8 +168,7 @@ describe('model directory edits', () => {
 
     await runtime.saveProvider({ id: visible.id, name: visible.name, baseUrl: visible.baseUrl, api: visible.api, models: kept })
 
-    // Clearing the allowlist reveals the models the editor could not show;
-    // only the row the operator actually removed is gone.
+    // 清空白名单后，编辑器看不见的模型重新可见；只有操作者实际删除的那行消失。
     await runtime.updateSettings({ modelAllowlist: [] })
     const catalog = await runtime.catalog()
     const ids = catalog.models.filter(model => model.provider === visible.id).map(model => model.modelId)
@@ -143,7 +178,11 @@ describe('model directory edits', () => {
   })
 })
 
+/** provider 请求端点继承（模型级覆盖不冻结）测试。 */
 describe('provider model request inheritance', () => {
+  // 验证端点继承往返：未显式覆盖的模型不携带 api/baseUrl 字段（HTTP 响应、保存响应、
+  // 磁盘 models.json、重开后读取四处一致）；显式覆盖保留原值；
+  // 连通性探测按继承端点与显式端点分别打到正确的 mock 路径。
   it('round-trips inherited endpoints through HTTP without freezing them, while preserving explicit model overrides', async () => {
     const paths: string[] = []
     const mock = createServer((request, response) => {
@@ -195,7 +234,7 @@ describe('provider model request inheritance', () => {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           id: 'route-probe', name: 'Route probe', baseUrl: nextBaseUrl, api: 'openai-completions', apiKey: 'test-key',
-          // This is the editor's config round-trip: only actual model overrides are present.
+          // 这是编辑器配置的往返提交：只携带实际的模型级覆盖。
           models: initial.models,
         }),
       })
@@ -216,8 +255,7 @@ describe('provider model request inheritance', () => {
       expect(file.providers['route-probe']?.models[0]).not.toHaveProperty('baseUrl')
       expect(file.providers['route-probe']?.models[1]).toMatchObject({ api: 'openai-completions', baseUrl: explicitBaseUrl })
 
-      // Reopen from the persisted file so the probe proves the on-disk model
-      // entry still inherits the provider endpoint and protocol.
+      // 从持久化文件重开，探测证明磁盘上的模型条目仍继承 provider 端点与协议。
       await app.shutdown()
       await cleanup.closers.shift()?.()
       const reopenedRuntime = await createRuntime({ dataDir, workspace, piDir })
@@ -246,7 +284,11 @@ describe('provider model request inheritance', () => {
   })
 })
 
+/** provider 推理等级映射测试。 */
 describe('provider reasoning levels', () => {
+  // 验证等级映射生命周期：声明 thinkingLevelMap 即视为推理模型（picker 含 off + 已声明档位）；
+  // 保存时补全缺失档位为 null（钉死不可选）；删除某行即从 picker 移除；
+  // 关闭开关时 map 与 reasoning 标志一起消失。
   it('turns declared levels into a reasoning model with undeclared levels pinned off the picker', async () => {
     const { runtime } = await fixture()
     await runtime.saveProvider({
@@ -268,7 +310,7 @@ describe('provider reasoning levels', () => {
       minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null,
     })
 
-    // Deleting a row removes it from the picker; the absent base levels stay pinned.
+    // 删除某行即从 picker 移除；缺席的基础档位保持钉死。
     await runtime.saveProvider({
       id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
       models: [{ id: 'probe-a', name: 'Probe A', reasoning: true, input: ['text'], thinkingLevelMap: { low: 'low', high: 'high' } }],
@@ -276,7 +318,7 @@ describe('provider reasoning levels', () => {
     const narrowed = await runtime.catalog()
     expect(narrowed.models.find(candidate => candidate.modelId === 'probe-a')?.thinkingLevels).toEqual(['off', 'low', 'high'])
 
-    // Turning the switch off drops the map and the reasoning flag together.
+    // 关闭开关时 map 与 reasoning 标志一起消失。
     await runtime.saveProvider({
       id: 'probe', name: 'Probe', baseUrl: 'https://example.invalid/v1', api: 'openai-completions',
       models: [{ id: 'probe-a', name: 'Probe A', reasoning: false, input: ['text'] }],
@@ -288,6 +330,8 @@ describe('provider reasoning levels', () => {
     expect((await runtime.provider('probe')).models[0]?.thinkingLevelMap).toBeUndefined()
   })
 
+  // 验证等级钳制：地图收窄使已存的 medium 失去支持时，投影显示下一次请求实际会发送的档位
+  // （pi-ai 先尝试向上钳制 → high）；新建会话按同样规则解析。
   it('clamps a stored level when the model map stops offering it', async () => {
     const { runtime } = await fixture()
     const save = (levels: Record<string, string>) => runtime.saveProvider({
@@ -298,8 +342,7 @@ describe('provider reasoning levels', () => {
     const created = await runtime.create({ model: { provider: 'probe', modelId: 'probe-a' }, thinkingLevel: 'medium' })
     expect(created.conversation.thinkingLevel).toBe('medium')
 
-    // Narrowing the map makes Medium unsupported; the projection shows the
-    // level the next request will actually send (pi-ai clamps upward first).
+    // 地图收窄使 Medium 不受支持；投影显示下一次请求实际发送的档位（pi-ai 先向上钳制）。
     await save({ low: 'low', high: 'high' })
     expect((await runtime.detail(created.conversation.id)).conversation.thinkingLevel).toBe('high')
 
@@ -307,6 +350,8 @@ describe('provider reasoning levels', () => {
     expect(configured.conversation.thinkingLevel).toBe('high')
   })
 
+  // 验证遗留数据升级：models.json 里 reasoning=false 但带 thinkingLevelMap 的旧数据
+  // 加载时视为推理模型（off 档被 null 钉死所以不出现在 picker）。
   it('upgrades an existing saved map whose reasoning flag was left false', async () => {
     const { runtime, piDir } = await fixture()
     await writeFile(join(piDir, 'models.json'), JSON.stringify({
@@ -326,6 +371,8 @@ describe('provider reasoning levels', () => {
     expect(model?.thinkingLevels).toEqual(['low', 'medium', 'high'])
   })
 
+  // 验证外部写入感知：服务运行期间外部改写 models.json 后，catalog 读取与 watchModels
+  // 观察器汇聚到同一次重载并广播一次（新 provider 可用、等级映射生效）。
   it('picks up a model file written outside the running server and announces the change', async () => {
     const { runtime, piDir } = await fixture()
     const announced = new Promise<void>((resolve, reject) => {
@@ -341,8 +388,7 @@ describe('provider reasoning levels', () => {
       },
     }))
     await writeFile(join(piDir, 'auth.json'), JSON.stringify({ external: { type: 'api_key', key: 'test-key' } }))
-    // A catalog read is the explicit freshness point; the watcher and this
-    // read converge on the same serialized reload and only announce once.
+    // catalog 读取是显式的新鲜度锚点：观察器与这次读取汇聚到同一次串行化重载，只广播一次。
     const catalog = await runtime.catalog()
     await announced
     const model = catalog.models.find(candidate => candidate.provider === 'external' && candidate.modelId === 'external-a')
@@ -352,7 +398,9 @@ describe('provider reasoning levels', () => {
   })
 })
 
+/** 默认模型解析测试。 */
 describe('default model resolution', () => {
+  // 验证缺失默认回退：配置指向不存在的模型时解析为可选目录模型并用于新会话。
   it('replaces a missing default with a selectable catalog model and uses it for a new conversation', async () => {
     const { runtime } = await fixture({
       models: WL_MODELS,
@@ -369,6 +417,7 @@ describe('default model resolution', () => {
     expect(catalog.models.some(candidate => candidate.provider === model!.provider && candidate.modelId === model!.modelId)).toBe(true)
   })
 
+  // 验证显式请求不回退：明确指定不存在的模型仍然拒绝（MODEL_UNAVAILABLE）。
   it('still refuses an explicitly requested model that does not exist', async () => {
     const { runtime } = await fixture({ models: WL_MODELS, piSettings: { defaultProvider: 'ghost', defaultModel: 'ghost-model' } })
     await expect(runtime.create({ model: { provider: 'ghost', modelId: 'ghost-model' } }))
@@ -376,7 +425,10 @@ describe('default model resolution', () => {
   })
 })
 
+/** 白名单在运行时的全链路过滤测试。 */
 describe('model allowlist in the runtime', () => {
+  // 验证目录过滤与默认校正：白名单生效后目录只剩允许模型、provider 列表相应增删；
+  // 越界的默认模型校正为第一个可用允许模型并持久化到 app-state.json。
   it('filters the catalog and corrects a default that fell outside the allowlist', async () => {
     const { runtime, dataDir } = await fixture({
       models: WL_MODELS,
@@ -391,7 +443,7 @@ describe('model allowlist in the runtime', () => {
     expect(filtered.models.map(nameOf).sort()).toEqual(['wl-alpha/deepseek-a', 'wl-alpha/deepseek-b'])
     expect(filtered.providers.map(provider => provider.id)).toContain('wl-alpha')
     expect(filtered.providers.map(provider => provider.id)).not.toContain('wl-beta')
-    // The out-of-scope default resolves to the first available allowed model and is persisted.
+    // 越界默认解析为第一个可用允许模型并持久化。
     expect(nameOf(filtered.defaultModel ?? { provider: '', modelId: '' })).toBe('wl-alpha/deepseek-a')
     expect(runtime.settings().defaultModel).toEqual({ provider: 'wl-alpha', modelId: 'deepseek-a' })
     const persisted = JSON.parse(await readFile(join(dataDir, 'app-state.json'), 'utf8')) as { settings: { defaultModel?: unknown } }
@@ -399,8 +451,7 @@ describe('model allowlist in the runtime', () => {
   })
 
   it('refuses out-of-scope models at every selection point', async () => {
-    // The Pi-configured default sits outside the allowlist, so the derived
-    // model in buildAgentChange has to fall back instead of failing the create.
+    // Pi 配置的默认在白名单之外，因此 buildAgentChange 推导出的模型必须回退而不是让 create 失败。
     const { runtime } = await fixture({ models: WL_MODELS, piSettings: { defaultProvider: 'wl-beta', defaultModel: 'glm-x' } })
     await runtime.updateSettings({ modelAllowlist: ['wl-alpha/deepseek*'] })
 
@@ -412,13 +463,15 @@ describe('model allowlist in the runtime', () => {
     await expect(runtime.updateSettings({ defaultModel: { provider: 'wl-beta', modelId: 'glm-x' } }))
       .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('默认模型不在模型白名单内') })
 
-    // Creating without an explicit model resolves the corrected default.
+    // 不带显式模型创建时解析为校正后的默认。
     const created = await runtime.create({ title: 'Allowed' })
     expect(nameOf(created.conversation.model ?? { provider: '', modelId: '' })).toBe('wl-alpha/deepseek-a')
     await expect(runtime.update(created.conversation.id, { model: { provider: 'wl-beta', modelId: 'glm-x' } }))
       .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('所选模型不在模型白名单内') })
   })
 
+  // 验证既有会话阻断：绑定越界模型的会话无法 submit/compact，但改名等非模型配置仍可用；
+  // 切换到允许模型后恢复可用。
   it('blocks runs and reconfiguration on a conversation bound to an outside model', async () => {
     const { runtime } = await fixture({ models: WL_MODELS })
     const created = await runtime.create({ title: 'Legacy', model: { provider: 'wl-beta', modelId: 'glm-x' } })
@@ -430,11 +483,13 @@ describe('model allowlist in the runtime', () => {
     await expect(runtime.compact(id)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', message: expect.stringContaining('会话模型不在模型白名单内') })
     await expect(runtime.update(id, { title: 'Rename' })).resolves.toMatchObject({ conversation: { title: 'Rename' } })
 
-    // Switching to an allowed model recovers the conversation.
+    // 切换到允许的模型即可恢复会话。
     const switched = await runtime.update(id, { model: { provider: 'wl-alpha', modelId: 'deepseek-a' } })
     expect(nameOf(switched.conversation.model ?? { provider: '', modelId: '' })).toBe('wl-alpha/deepseek-a')
   })
 
+  // 验证 provider 配置过滤：白名单内 provider 只列出允许模型；白名单外 provider 配置为空模型列表；
+  // 越界连通性探测被拒、未知 provider 报 NOT_FOUND。
   it('filters provider configuration and refuses out-of-scope connection probes', async () => {
     const { runtime } = await fixture({ models: WL_MODELS })
     await runtime.updateSettings({ modelAllowlist: ['wl-alpha/deepseek*'] })
@@ -446,6 +501,8 @@ describe('model allowlist in the runtime', () => {
     await expect(runtime.testProvider('wl-beta')).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 
+  // 验证设置入口校验：非法条目（缺 model、星号在中间）报 INVALID_INPUT；
+  // 归一化后存储；清空白名单恢复完整目录。
   it('validates and stores the allowlist through the settings route logic', async () => {
     const { runtime } = await fixture({ models: WL_MODELS })
     await expect(runtime.updateSettings({ modelAllowlist: ['wl-alpha'] }))
@@ -458,6 +515,7 @@ describe('model allowlist in the runtime', () => {
     expect((await runtime.catalog()).models.some(model => nameOf(model) === 'wl-beta/glm-x')).toBe(true)
   })
 
+  // 验证隐藏白名单清理：app-state 中存储的白名单在重新打开时被清空（避免用户不知情的持续过滤）。
   it('clears a hidden stored allowlist when the app state is reopened', async () => {
     const { runtime, dataDir, workspace, piDir, cleanup } = await fixture({ models: WL_MODELS })
     await runtime.updateSettings({ modelAllowlist: ['wl-alpha/deepseek*'] })
@@ -469,12 +527,14 @@ describe('model allowlist in the runtime', () => {
     expect((await reopened.catalog()).models.some(model => nameOf(model) === 'wl-beta/glm-x')).toBe(true)
   })
 
+  // 验证凭据环境名与目录身份：内置 openai 报告 envVars（OPENAI_API_KEY）与 builtin/custom=false；
+  // 为发行路由保存带密钥的 profile 后 source=project、configured/storedCredential=true，envVars 保留。
   it('reports auth environment names and keeps catalog identity after a profile save', async () => {
     const { runtime } = await fixture()
     const openai = (await runtime.catalog()).providers.find(provider => provider.id === 'openai')
     expect(openai?.envVars).toContain('OPENAI_API_KEY')
     expect(openai).toMatchObject({ source: 'builtin', custom: false, configured: false })
-    // A shipped route with a stored profile is configured, not hand-declared.
+    // 带存储凭据的发行路由算 configured，而不是手工声明。
     await runtime.saveProvider({
       id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: 'test-key',
       models: [{ id: 'gpt-test', name: 'GPT Test' }],
@@ -484,6 +544,7 @@ describe('model allowlist in the runtime', () => {
     expect(saved?.envVars).toContain('OPENAI_API_KEY')
   })
 
+  // 验证 demo 模型豁免：无论白名单内容如何，脚本化 demo 模型保持可选且为默认。
   it('keeps the scripted demo model selectable whatever the allowlist says', async () => {
     const { runtime } = await fixture({ demo: true })
     await runtime.updateSettings({ modelAllowlist: ['opencode-go/deepseek-v4.1-flash'] })

@@ -1,3 +1,15 @@
+/**
+ * 插件 UI 服务端链路测试：描述符投影、surface 列表、页面 HTML 与运行时宿主策略。
+ *
+ * 关键契约：
+ * - pluginUiDescriptorFromMeta 只保留文档化的 `_meta.ui` 字段（多余键如 secret 丢弃）、
+ *   heightHint 取整、可选字段类型非法时丢弃该字段；必填缺失（身份/空 resourceUri）整体拒绝；
+ *   扁平的 `ui/resourceUri` 拼写也被接受；真实 MCP tools/call 结果被投影成 details.ui 且不泄露 _meta 其他键；
+ * - 商店层面：uiSurfaces 只列已启用插件，pluginServer 按 serverName 解析归属；
+ * - 页面 HTML 注入沙箱 CSP（幂等，不重复注入）；资源文本取第一个 text 内容；
+ * - 运行时宿主：页面/资源/调用三类入口可用；跨插件借服务器、readOnly 会话（ACCESS_DENIED）、
+ *   计划模式（PLAN_BLOCKED）、hidden exposure 服务器一律拒绝；禁用插件后 surface 与页面全部不可用。
+ */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,11 +28,15 @@ import type { PluginMcpServerConfig } from '../src/server/plugins/types.ts'
 import { pluginUiDescriptorFromMeta } from '../src/shared/plugin-ui.ts'
 import { writeMarketplace, writePlugin } from './plugin-fixtures.ts'
 
+/** 页面 HTML 必须携带的沙箱 CSP（无 connect-src、无表单、无 base 注入）。 */
 const EXPECTED_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+/** fixture 页面的资源 URI。 */
 const PAGE_URI = 'ui://ui-plugin/canvas'
+/** fixture 页面的完整 HTML。 */
 const PAGE_HTML = '<!doctype html><html><head><title>Canvas</title></head><body><div id="app">canvas</div></body></html>'
 
-/** A real stdio MCP server: one plugin server answers tools and the page resource. */
+/** 真实 stdio MCP 服务器 fixture：一个插件服务器同时应答工具调用与页面资源；
+ *  各工具返回不同形态的 _meta（嵌套 ui 对象 / 扁平 ui/resourceUri / 无 resourceUri）并附带 secret 泄露探测键。 */
 const MCP_UI_FIXTURE = `
 import { createInterface } from 'node:readline'
 
@@ -93,6 +109,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 })
 `
 
+/** ui-plugin manifest：direct 与 hidden 两个 MCP 服务器 + 一个 UI surface。 */
 const UI_MANIFEST = {
   name: 'ui-plugin',
   version: '1.0.0',
@@ -104,6 +121,7 @@ const UI_MANIFEST = {
   ui: { surfaces: [{ id: 'canvas', title: 'Canvas', server: 'canvas', resourceUri: PAGE_URI }] },
 }
 
+/** 工具执行用的最小 Context（遥测空实现、无中止信号）。 */
 const EMPTY_CONTEXT: Context = {
   telemetry: NOOP_TELEMETRY_CONTEXT,
   abortSignal: undefined,
@@ -111,11 +129,19 @@ const EMPTY_CONTEXT: Context = {
   toString: () => 'pi-web-plugin-ui-test',
 }
 
+/** 临时目录 / runtime / MCP 管理器的清理函数，afterEach 逆序执行。 */
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
+/**
+ * 轮询异步动作直到返回非 undefined。
+ * @param action 探测动作，undefined 表示未就绪
+ * @param label 超时错误中的等待目标
+ * @param timeoutMs 总超时，默认 15 秒
+ * @returns 首个非 undefined 结果
+ */
 async function eventually<T>(action: () => Promise<T | undefined> | T | undefined, label: string, timeoutMs = 15_000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -126,12 +152,21 @@ async function eventually<T>(action: () => Promise<T | undefined> | T | undefine
   }
 }
 
+/**
+ * 创建临时目录并注册清理。
+ * @param prefix mkdtemp 前缀
+ * @returns 目录绝对路径
+ */
 async function temporaryDirectory(prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   return directory
 }
 
+/**
+ * 构建已安装 ui-plugin 的 PluginStore（市场接入 + 异步安装等待完成）。
+ * @returns 就绪的 PluginStore
+ */
 async function storeFixture(): Promise<PluginStore> {
   const root = await temporaryDirectory('pi-web-plugin-ui-store-')
   const market = join(root, 'market')
@@ -144,11 +179,16 @@ async function storeFixture(): Promise<PluginStore> {
   return store
 }
 
+/** runtime fixture 句柄：runtime 与市场目录路径。 */
 interface UiRuntimeFixture {
   runtime: Runtime
   market: string
 }
 
+/**
+ * 构建完整 runtime fixture：临时目录 + 含 ui-plugin（真实 stdio MCP 服务器）的市场 + demo runtime。
+ * @returns runtime 与市场路径
+ */
 async function runtimeFixture(): Promise<UiRuntimeFixture> {
   const root = await temporaryDirectory('pi-web-plugin-ui-runtime-')
   const dataDir = join(root, 'data')
@@ -165,12 +205,16 @@ async function runtimeFixture(): Promise<UiRuntimeFixture> {
   return { runtime, market }
 }
 
+/** 取工具执行结果第一个 text 块的文本（无则空串）。 */
 function outputText(result: ToolExecutionResult<JsonValue>): string {
   const block = result.output?.[0]
   return block?.type === 'text' ? block.text : ''
 }
 
+/** 描述符投影（pluginUiDescriptorFromMeta）与真实 MCP 结果投影测试。 */
 describe('plugin UI descriptor projection', () => {
+  // 验证白名单投影：只保留文档化字段、heightHint 小数取整、插件身份（pluginId/serverName）由调用方注入，
+  // _meta 中未文档化的键（secret、other）不进入描述符。
   it('keeps only the documented `_meta.ui` fields and adds the plugin identity', () => {
     const descriptor = pluginUiDescriptorFromMeta({
       ui: {
@@ -197,6 +241,9 @@ describe('plugin UI descriptor projection', () => {
     expect(Object.keys(descriptor ?? {})).not.toContain('secret')
   })
 
+  // 验证校验：缺身份、空 resourceUri、空 ui、_meta 缺失 → 整体 undefined；
+  // 可选字段类型非法（displayMode 非法枚举/heightHint 负数/showInline 非布尔/title 非字符串）
+  // 时仅丢弃该字段，其余合法字段照常投影。
   it('rejects missing identity, empty resource URIs, and invalid optional fields', () => {
     expect(pluginUiDescriptorFromMeta({ ui: { resourceUri: 'ui://demo' } }, { pluginId: undefined, serverName: 's' })).toBeUndefined()
     expect(pluginUiDescriptorFromMeta({ ui: { resourceUri: '' } }, { pluginId: 'demo@market', serverName: 's' })).toBeUndefined()
@@ -211,6 +258,7 @@ describe('plugin UI descriptor projection', () => {
     })
   })
 
+  // 验证扁平拼写：`ui/resourceUri` 键（部分 MCP 实现的写法）同样解析出描述符。
   it('accepts the flattened `ui/resourceUri` spelling', () => {
     expect(pluginUiDescriptorFromMeta(
       { 'ui/resourceUri': 'ui://demo/flat' },
@@ -218,6 +266,9 @@ describe('plugin UI descriptor projection', () => {
     )).toEqual({ pluginId: 'demo@market', serverName: 'plugin_demo_canvas', resourceUri: 'ui://demo/flat' })
   })
 
+  // 验证真实链路投影：McpRegistry 加载插件服务器后执行 echo 工具，结果 details.ui 携带完整描述符
+  // 且 secret 不泄露；flat 工具的扁平 ui/resourceUri 也投影（无 title 等可选字段）；
+  // 无 resourceUri 的工具结果不产出 details.ui。
   it('projects a real MCP tools/call result into details.ui', async () => {
     const root = await temporaryDirectory('pi-web-plugin-ui-mcp-')
     const serverPath = join(root, 'server.mjs')
@@ -270,7 +321,10 @@ describe('plugin UI descriptor projection', () => {
   }, 30_000)
 })
 
+/** 商店层面的 UI surface 列表与服务器归属解析测试。 */
 describe('plugin UI surfaces in the store', () => {
+  // 验证 surface 列表（命名空间 id、来源插件、serverName、resourceUri）与 pluginServer 归属解析
+  // （未知 serverName → undefined）；禁用插件后 surface 清空、归属解析失效。
   it('lists enabled surfaces and resolves their owning plugin server', async () => {
     const store = await storeFixture()
     const surfaces = store.uiSurfaces()
@@ -295,13 +349,17 @@ describe('plugin UI surfaces in the store', () => {
   })
 })
 
+/** 页面 HTML 包装（buildPluginUiPageHtml）与资源文本提取测试。 */
 describe('plugin UI page HTML', () => {
+  // 验证片段包装：裸 HTML 片段被包进带沙箱 CSP meta 的完整文档，片段原样保留。
   it('wraps a fragment with the sandbox CSP', () => {
     const html = buildPluginUiPageHtml('<div id="app">hi</div>')
     expect(html).toContain(`content="${EXPECTED_CSP}"`)
     expect(html).toContain('<div id="app">hi</div>')
   })
 
+  // 验证 CSP 注入幂等：已有 <head> 的完整页面只注入一次 CSP（紧跟 head 开标签）；
+  // pluginUiResourceText 取 uri 匹配的第一个 text 内容（跳过 blob 条目），全 blob 时为 undefined。
   it('injects the CSP into an existing head and reads the first text resource', () => {
     const html = buildPluginUiPageHtml(PAGE_HTML)
     expect(html.match(/Content-Security-Policy/gu)).toHaveLength(1)
@@ -311,7 +369,11 @@ describe('plugin UI page HTML', () => {
   })
 })
 
+/** 运行时宿主（pluginUiPage/ReadResource/Call）的服务与策略测试。 */
 describe('plugin UI runtime host', () => {
+  // 验证宿主全链路：surface 列表、页面 HTML（带 CSP + 页面内容）、资源读取、工具转发（_meta.ui 保留）；
+  // 策略矩阵——跨插件借服务器拒绝、readOnly 会话 ACCESS_DENIED、计划模式 PLAN_BLOCKED、
+  // hidden 服务器不可调用；禁用插件后 surface 清空且页面不可用。
   it('serves a page, forwards calls, and applies read-only and Plan policy', async () => {
     const f = await runtimeFixture()
     await f.runtime.addPluginMarketplace(f.market)
@@ -365,7 +427,7 @@ describe('plugin UI runtime host', () => {
       arguments: { text: 'blocked' },
     })).rejects.toMatchObject({ code: 'PLAN_BLOCKED' })
 
-    // A hidden server is connected but its tools are never callable from a page.
+    // hidden 服务器虽已连接，但其工具永远不能从页面调用。
     await expect(f.runtime.pluginUiCall({
       pluginId,
       serverName: 'plugin_ui_plugin_hidden',
@@ -373,7 +435,7 @@ describe('plugin UI runtime host', () => {
       arguments: { text: 'blocked' },
     })).rejects.toMatchObject({ code: 'PLUGIN_UI_UNAVAILABLE' })
 
-    // A page from another plugin cannot borrow this plugin's server.
+    // 其他插件的页面不能借用本插件的服务器。
     await expect(f.runtime.pluginUiCall({
       pluginId: 'other@fixture-market',
       serverName: 'plugin_ui_plugin_canvas',
