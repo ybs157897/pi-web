@@ -1,6 +1,6 @@
 # memory
 
-sections (9389 chars): runtime-core 2955, project-instructions 260, work-policy 722, memory 1187, memory-index 309, schedule-policy 82, wetrack-analysis 611, goal-policy 184, skills-policy 1485, delegation-policy 786, codemode 808
+sections (9619 chars): runtime-core 2955, project-instructions 260, work-policy 722, memory 1187, memory-index 309, schedule-policy 82, wetrack-analysis 611, goal-policy 184, skills-policy 1485, delegation-policy 786, codemode 1038
 tools (40; descriptions 9536 chars; parameters 12186 chars): read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
@@ -214,6 +214,9 @@ metadata:
 <codemode>
 单项操作使用直接工具；批量操作或脚本编排有帮助时使用 codemode。两种调用方式具有相同权限。
 调用本请求中未提供完整声明的嵌套工具前，用 describeTool(name) 查看其参数和返回类型。不要根据工具名或使用示例猜测参数结构。
+每次 codemode 调用都是一次完整模型往返，脚本内的工具调用不产生额外往返：把本轮决策可能需要的信息在同一个脚本里收集齐，独立只读调用用 Promise.all 并发，有依赖或写操作按顺序 await。
+只 return 现在要读的内容：大输出先在脚本里切片或聚合；超预算输出会被首尾截断（全文落临时文件），不要直接 return 大文件全文。
+嵌套调用失败会 reject，可 try/catch 后继续；未捕获错误终止整个脚本，已完成的调用不回滚。
 脚本也可以按相同的参数结构调用这些直接提供的工具：read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update。
 调用形式为 await tools.<name>(args)。用 describeTool(name) 查看脚本声明和返回类型；用 searchTools(query) 查找其他可调用工具。
 </codemode>

@@ -1,6 +1,6 @@
 # codemode-only
 
-sections (12653 chars): runtime-core 2955, project-instructions 260, work-policy 1179, schedule-policy 82, wetrack-analysis 611, goal-policy 254, skills-policy 1533, delegation-policy 812, codemode 4967
+sections (12883 chars): runtime-core 2955, project-instructions 260, work-policy 1179, schedule-policy 82, wetrack-analysis 611, goal-policy 254, skills-policy 1533, delegation-policy 812, codemode 5197
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -181,6 +181,9 @@ tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 <codemode>
 本请求只直接提供 codemode 工具，其他工具须在其脚本内调用。仍可输出普通助手文本：多步工作在第一次工具调用前，先在脚本外简短说明进度；工具输出和待办更新不能代替这条消息。
 调用本请求中未提供完整声明的嵌套工具前，用 describeTool(name) 查看其参数和返回类型。不要根据工具名或使用示例猜测参数结构。
+每次 codemode 调用都是一次完整模型往返，脚本内的工具调用不产生额外往返：把本轮决策可能需要的信息在同一个脚本里收集齐，独立只读调用用 Promise.all 并发，有依赖或写操作按顺序 await。
+只 return 现在要读的内容：大输出先在脚本里切片或聚合；超预算输出会被首尾截断（全文落临时文件），不要直接 return 大文件全文。
+嵌套调用失败会 reject，可 try/catch 后继续；未捕获错误终止整个脚本，已完成的调用不回滚。
 Tools scripts can call (`await tools.<name>(args)`):
 
 Some tools are not listed: find them with `searchTools()`.

@@ -18,7 +18,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 | goal-policy | ✓ | ✓ | ✓ | — | — | 184 | [`src/server/tools/goal.ts`](../src/server/tools/goal.ts) |
 | skills-policy | ✓ | ✓ | ✓ | ✓ | — | 1345 | [`src/server/tools/skill.ts`](../src/server/tools/skill.ts) |
 | delegation-policy | ✓ | ✓ | ✓ | — | — | 786 | [`src/server/tools/subagent.ts`](../src/server/tools/subagent.ts) |
-| codemode | ✓ | ✓ | ✓ | ✓ | — | 808 | (vendor) @earendil-works/pi-durable |
+| codemode | ✓ | ✓ | ✓ | ✓ | — | 1038 | (vendor) @earendil-works/pi-durable |
 | plan-policy | — | ✓ | — | — | — | — | [`src/server/tools/plan.ts`](../src/server/tools/plan.ts) |
 | instructions | — | — | — | ✓ | ✓ | — | (vendor) @earendil-works/pi-durable |
 | personal-instructions | — | — | — | — | — | — | [`src/server/conversation/work-policy.ts`](../src/server/conversation/work-policy.ts) |
@@ -79,7 +79,7 @@ sections 是每次模型请求按真实能力动态注入的提示词块：工�
 ### section codemode
 
 - 注入条件：codemode 工具在 agent 工具集中时由 vendored 扩展注入 codemode 使用规则；模式 on/only/off 改变其中条款。
-- 实测长度（字符）：default 808 · plan 493 · readonly 674 · subagent-general 509
+- 实测长度（字符）：default 1038 · plan 723 · readonly 904 · subagent-general 739
 - 定义处：(vendor) @earendil-works/pi-durable
 
 ### section plan-policy

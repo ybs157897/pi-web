@@ -1,7 +1,7 @@
 import { createCodemodeExtension, CODEMODE_TOOL_NAME, type CodemodeToolOptions } from '@earendil-works/pi-durable/codemode'
 import type { Extension } from '@earendil-works/pi-durable'
 
-/** codemode 内嵌工具声明的字符预算：仅限嵌套（不直接提供完整声明的）工具；直接工具本身已带完整 schema。 */
+/** codemode 内嵌工具声明的 token 预算（pi-durable 按 ceil(字符数/4) 计费，1200 ≈ 4800 字符）：仅限嵌套工具；直接工具本身已带完整 schema。 */
 export const CODEMODE_INLINE_BUDGET = 1_200
 
 /**
@@ -11,7 +11,8 @@ export const CODEMODE_INLINE_BUDGET = 1_200
  * @param options 透传给 createCodemodeExtension 的选项；inlineBudget 被强制覆写为 CODEMODE_INLINE_BUDGET。
  * @returns 改写后的扩展；若原 section 存在，渲染时会拼接本请求的路由政策文本。
  * 内部逻辑：先把直接工具集排除后交给原渲染（避免重复声明），再按"是否只有 codemode 工具"给出不同首行，
- * 并在存在可直接调用的共享工具时列出它们；未暴露 codemode 工具时该 section 返回 undefined。
+ * 注入脚本纪律（往返成本与并发、输出截断、错误语义），并在存在可直接调用的共享工具时列出它们；
+ * 未暴露 codemode 工具时该 section 返回 undefined。
  */
 export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Extension {
   const extension = createCodemodeExtension({ ...options, inlineBudget: CODEMODE_INLINE_BUDGET })
@@ -33,6 +34,9 @@ export function createRuntimeCodemodeExtension(options: CodemodeToolOptions): Ex
             ? '本请求只直接提供 codemode 工具，其他工具须在其脚本内调用。仍可输出普通助手文本：多步工作在第一次工具调用前，先在脚本外简短说明进度；工具输出和待办更新不能代替这条消息。'
             : '单项操作使用直接工具；批量操作或脚本编排有帮助时使用 codemode。两种调用方式具有相同权限。',
           '调用本请求中未提供完整声明的嵌套工具前，用 describeTool(name) 查看其参数和返回类型。不要根据工具名或使用示例猜测参数结构。',
+          '每次 codemode 调用都是一次完整模型往返，脚本内的工具调用不产生额外往返：把本轮决策可能需要的信息在同一个脚本里收集齐，独立只读调用用 Promise.all 并发，有依赖或写操作按顺序 await。',
+          '只 return 现在要读的内容：大输出先在脚本里切片或聚合；超预算输出会被首尾截断（全文落临时文件），不要直接 return 大文件全文。',
+          '嵌套调用失败会 reject，可 try/catch 后继续；未捕获错误终止整个脚本，已完成的调用不回滚。',
           ...(shared.length === 0 ? [] : [
             `脚本也可以按相同的参数结构调用这些直接提供的工具：${shared.map(tool => tool.name).join(', ')}。`,
             '调用形式为 await tools.<name>(args)。用 describeTool(name) 查看脚本声明和返回类型；用 searchTools(query) 查找其他可调用工具。',
