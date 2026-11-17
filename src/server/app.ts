@@ -10,6 +10,7 @@ import type { Runtime } from './contracts.ts'
 import { isDefectNumber } from './automation/wetrack.ts'
 import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugins/ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
+import { hooksEntrySchema, hooksSaveSchema, hooksTrustSchema } from './runtime/hooks.ts'
 
 /** 应用版本号，/api/health 返回。 */
 const packageVersion: string = packageJson.version
@@ -679,6 +680,19 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     return c.json(await runtime.savePersonalization(input.content))
   })
   app.get('/api/mcp', c => c.json(runtime.mcp()))
+  // 钩子设置页：双来源清单、配置写回、项目级信任批准/撤销、条目删除与启停。
+  app.get('/api/hooks', async c => c.json(await runtime.hooks(c.req.query('workspaceId'))))
+  app.put('/api/hooks', async c => c.json(await runtime.saveHooks(await readJson(c.req.raw, hooksSaveSchema))))
+  app.post('/api/hooks/trust', async c => {
+    await runtime.trustHook(await readJson(c.req.raw, hooksTrustSchema))
+    return c.json({ ok: true })
+  })
+  app.delete('/api/hooks/trust', async c => {
+    await runtime.revokeHook(await readJson(c.req.raw, hooksTrustSchema))
+    return c.json({ ok: true })
+  })
+  app.post('/api/hooks/remove', async c => c.json(await runtime.removeHookEntry(await readJson(c.req.raw, hooksEntrySchema))))
+  app.post('/api/hooks/enabled', async c => c.json(await runtime.setHookEnabled(await readJson(c.req.raw, hooksEntrySchema.extend({ enabled: z.boolean() })))))
   app.post('/api/settings/open-config', async c => {
     await runtime.openConfigFile()
     return c.json({ ok: true })

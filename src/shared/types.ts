@@ -164,6 +164,39 @@ export interface PersonalizationView {
   limitBytes: number
 }
 
+/** One configured hook as the settings panel sees it; `index` matches the manage_hooks tool numbering. */
+export interface HookEntryView {
+  event: string
+  matcher?: string
+  index: number
+  entry: {
+    type: 'process' | 'command'
+    command: string
+    args?: string[]
+    timeoutMs?: number
+    enabled?: boolean
+    includeNested?: boolean
+    statusMessage?: string
+  }
+  digest: string
+  /** User hooks need no trust; project hooks are trusted/pending, or blocked when the trust store is corrupt. */
+  trust: 'not_required' | 'trusted' | 'pending' | 'blocked'
+}
+/** One hook configuration source (user-level or project-level). */
+export interface HookSourceView {
+  path: string
+  enabled: boolean
+  timeoutMs: number
+  maxOutputBytes: number
+  error?: string
+  entries: HookEntryView[]
+}
+/** The hooks settings view: user source always present, project source only with a workspace. */
+export interface HooksListView {
+  user: HookSourceView
+  project?: HookSourceView
+}
+
 /** The Pi MCP configuration as the browser sees it. */
 export interface McpView {
   /** Absolute path of the user-level Pi MCP file the runtime imported. */

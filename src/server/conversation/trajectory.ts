@@ -22,6 +22,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { AssistantMessage, AssistantMessageEventStream, Message } from '@earendil-works/pi-ai'
 import type { Context } from '@earendil-works/chord/context'
+import type { HookRunRecord } from '../hooks/schema.ts'
 
 /** 轨迹扩展注册名，供装配与测试引用。 */
 export const TRAJECTORY_EXTENSION_NAME = 'pi-web-trajectory'
@@ -423,6 +424,22 @@ export async function captureSideCall<T extends AssistantMessage>(
 /* ------------------------------------------------------------------ */
 /* Export                                                              */
 /* ------------------------------------------------------------------ */
+
+/**
+ * 功能：创建 hooks 执行记录采集器——与轨迹同一 JSONL 通道（`<conversationId>.jsonl`），
+ * 写 `type:'hook'` 行；assembleTrajectory 的通用 capture 合并按 ts 排序天然纳入。
+ * @param dir 采集目录（与轨迹扩展同目录）。
+ * @returns fire-and-forget 的记录函数；写入失败静默停写，绝不影响会话运行。
+ * 内部逻辑：enabled 在创建时读 PI_WEB_TRAJECTORY（与轨迹扩展同款开关语义）；
+ * 复用 enqueueCaptureLine 的串行链与故障禁用机制。
+ */
+export function createHookCapture(dir: string): (record: HookRunRecord) => void {
+  const enabled = process.env.PI_WEB_TRAJECTORY !== '0'
+  return (record: HookRunRecord): void => {
+    if (!enabled) return
+    enqueueCaptureLine(join(dir, `${record.conversationId}.jsonl`), { type: 'hook', ...record })
+  }
+}
 
 /** 轨迹导出选项：sqlite 库路径、采集目录与会话 id。 */
 export interface TrajectoryExportOptions {

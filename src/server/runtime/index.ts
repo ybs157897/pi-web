@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { Harness, UsageDoc } from '@earendil-works/pi-durable'
 import type { Cursor } from '@earendil-works/pi-durable'
+import type { Context } from '@earendil-works/chord/context'
 import { CodingTools } from '../tools/shell/tools.ts'
 import { createRegistry } from '@earendil-works/pi-durable'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
@@ -42,12 +43,16 @@ import { MAX_PERSONALIZATION_BYTES, readPersonalization, writePersonalization } 
 import { createSkillTools } from '../tools/skill.ts'
 import { createWorkPolicyExtension } from '../conversation/work-policy.ts'
 import { createExecutionPolicyExtension, EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
+import { HooksStore } from '../hooks/store.ts'
+import { createHooksExtension } from '../hooks/extension.ts'
+import { createManageHooksTool } from '../hooks/tool.ts'
+import { createHooksFeature } from './hooks.ts'
 import { createRuntimeCodemodeExtension } from '../codemode-policy.ts'
 import { BrowserTools } from '../tools/browser.ts'
 import { ResearchTools } from '../tools/research.ts'
 import { COMPACTION_POLICY, createCompactionExtension } from '../conversation/compaction.ts'
 import {
-  TRAJECTORY_CAPTURE_DIR, TRAJECTORY_EXTENSION_NAME, assembleTrajectory, createTrajectoryExtension, drainTrajectoryCapture,
+  TRAJECTORY_CAPTURE_DIR, TRAJECTORY_EXTENSION_NAME, assembleTrajectory, createHookCapture, createTrajectoryExtension, drainTrajectoryCapture,
   wrapModelsWithTrajectory,
 } from '../conversation/trajectory.ts'
 import { MEMORY_EXTRACTION_DRAIN_MS, createMemoryExtraction } from '../memory/extraction.ts'
@@ -132,6 +137,21 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const workspaceFiles = new WorkspaceFiles(() => appState.snapshot().workspaces)
   const gitBranches = new GitBranches(() => appState.snapshot().workspaces)
   const gitWorktree = new GitWorktree(() => appState.snapshot().workspaces)
+  // hooks 双来源存储：用户级 hooks.json 放 dataDir 根（与 personalization 同款，测试/演示自动隔离；
+  // 生产 dataDir 默认即 ~/.pi-web）；项目级随仓库；信任集存 dataDir（不进仓库）。
+  const hooksStore = new HooksStore(dataDir, dataDir)
+  /** 会话 → 工作区引用：hooks 扩展与 manage_hooks 共用的解析口径（META.workspaceId）。 */
+  const resolveHooksWorkspace = async (conversationId: ReturnType<typeof parseConversationId>, context: Context) => {
+    const metadata = await harness.snapshot(META, conversationId, context)
+    const workspaceId = metadata?.workspaceId
+    if (workspaceId === undefined) return undefined
+    const workspace = appState.snapshot().workspaces.find(item => item.id === workspaceId)
+    return workspace === undefined ? undefined : { id: workspace.id, path: workspace.path }
+  }
+  const hooksFeature = createHooksFeature({
+    store: hooksStore,
+    workspacePath: id => appState.snapshot().workspaces.find(item => item.id === id)?.path,
+  })
   let onPluginChange: (event: PluginChangeEvent) => void = () => undefined
   const pluginStore = await PluginStore.open({ dataDir, onChange: event => onPluginChange(event) })
   const skillStore = new SkillStore({
@@ -241,6 +261,22 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   registry.install(createPlanExtension({ readAccessMode: async (tx, conversationId) => (await tx.doc(META, conversationId)).accessMode }))
   registry.install(createSkillTools({
     store: skillStore,
+    canWrite: async (conversationId, context) => {
+      const metadata = await harness.snapshot(META, conversationId, context)
+      const plan = await harness.snapshot(Plans, conversationId, context)
+      return metadata !== undefined && (metadata.accessMode === 'fullAccess' || metadata.accessMode === 'workspaceWrite') && plan?.active !== true
+    },
+  }))
+  // hooks 扩展常驻：配置在每次触发时热读，创建即生效（无需 reconfigure）；
+  // 运行记录走 trajectory 同一 JSONL 通道。manage_hooks 的写授权门与 skill 同款。
+  registry.install(createHooksExtension({
+    store: hooksStore,
+    resolveWorkspace: resolveHooksWorkspace,
+    capture: createHookCapture(join(dataDir, TRAJECTORY_CAPTURE_DIR)),
+  }))
+  registry.install(createManageHooksTool({
+    store: hooksStore,
+    resolveWorkspace: resolveHooksWorkspace,
     canWrite: async (conversationId, context) => {
       const metadata = await harness.snapshot(META, conversationId, context)
       const plan = await harness.snapshot(Plans, conversationId, context)
@@ -692,6 +728,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       await writePersonalization(dataDir, content)
       return personalizationView()
     },
+    /** 钩子清单：用户级与项目级来源、逐条信任状态。 */
+    hooks: (workspaceId?: string) => hooksFeature.list(workspaceId),
+    /** 整体替换来源钩子配置（项目级编辑不自动批准）。 */
+    saveHooks: (input: Parameters<typeof hooksFeature.save>[0]) => hooksFeature.save(input),
+    /** 批准一条项目级钩子。 */
+    trustHook: (input: Parameters<typeof hooksFeature.trust>[0]) => hooksFeature.trust(input),
+    /** 撤销一条项目级钩子的信任。 */
+    revokeHook: (input: Parameters<typeof hooksFeature.revoke>[0]) => hooksFeature.revoke(input),
+    /** 删除一条钩子（事件内 index 定位）。 */
+    removeHookEntry: (input: Parameters<typeof hooksFeature.removeEntry>[0]) => hooksFeature.removeEntry(input),
+    /** 启停一条钩子。 */
+    setHookEnabled: (input: Parameters<typeof hooksFeature.setEnabled>[0]) => hooksFeature.setEnabled(input),
     /** MCP 视图：服务、工具与连接状态。 */
     mcp: () => mcp.view(),
     /** 能力声明：可选的访问模式。 */

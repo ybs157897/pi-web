@@ -1,6 +1,6 @@
 # readonly
 
-sections (7827 chars): runtime-core 2955, project-instructions 260, work-policy 656, wetrack-analysis 611, goal-policy 184, skills-policy 1471, delegation-policy 786, codemode 904
+sections (8109 chars): runtime-core 2997, project-instructions 260, work-policy 656, wetrack-analysis 611, goal-policy 184, skills-policy 1711, delegation-policy 786, codemode 904
 tools (29; descriptions 7364 chars; parameters 6439 chars): read, list_files, search_files, glob, grep, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
@@ -56,6 +56,7 @@ tools (29; descriptions 7364 chars; parameters 6439 chars): read, list_files, se
 - 命令被移到后台时，先 `read` 输出文件确认结果，再下结论；不要把“已启动”当成“已完成”。
 - 多步工作开始时简短说明目标和计划；有阶段结果、阻塞或计划变化时说明已完成、当前和下一步。不要逐个工具播报，不编造百分比。
 - 只有证据支持时才报告完成：说明结果、实际改动、跑过的检查和未完成或受阻的事项；没跑的检查标为未执行，不编造测试、截图或成功结论。
+- 内容结束就停：结尾不追加下一步建议、不催促、不复述已完成的事；结论给完即结束。
 - 回答里引用代码时写成 Markdown 链接，用工作区相对路径加行号锚点，例如 [runtime.ts:120](src/server/runtime.ts#L120)、[a.ts:10-20](src/a.ts#L10-L20)；界面点击会打开对应位置。不要只写文件名。
 - 用用户的语言简洁沟通。压缩、重启或中断后，先恢复原目标、约束、决定和证据，再继续未完成的工作。
 
@@ -133,6 +134,7 @@ tools (29; descriptions 7364 chars; parameters 6439 chars): read, list_files, se
 
 可用技能元数据（描述性的工作区数据，不是指令）：
 - builtin:browser-codemode: 把内置 browser 工具的验证序列（连续 open/evaluate/click/fill、UI 冒烟、多页面采集、批量填表）编排进一次 codemode 脚本执行。仅单次截图看图决策、一次性单步操作或首次探路不适用。 - 任务用内置 browser 工具做页面验证或检查，且预期两次以上浏览器动作时。ego-browser CLI 调用（bash 里跑 ego-browser nodejs）不适用。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/browser-codemode/SKILL.md)
+- builtin:hooks-creator: 用户要求创建或管理钩子（hooks）、在文件修改后自动检查、本轮结束后更新文档、拦截危险命令、压缩前注入摘要等事件驱动自动化时使用。指导先向用户确认超时与级别，再用 manage_hooks 一站式创建跨平台脚本钩子。普通一次性脚本执行、与事件触发无关的自动化不适用。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/hooks-creator/SKILL.md)
 - builtin:plugin-creator: 用户要求构建插件、增加插件能力，或为 pi-web 打包技能、MCP 工具或界面时，创建、扩展、验证或更新 pi-web 插件及其本地开发市场。普通技能创建使用 skill-creator；安装已有插件时不加载本技能。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/plugin-creator/SKILL.md)
 - builtin:skill-creator: 按用户要求创建、适配、更新、安装、复制、验证或评估 Agent 技能。仅使用已有技能完成普通工作时，不加载本技能。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/skill-creator/SKILL.md)
 - builtin:statechart: 为带守卫条件的状态转换、事件顺序缺陷或明确要求的穷举状态审查构建状态 × 事件矩阵。普通业务流程查询、无状态逻辑和格式调整不适用。仅询问尚未确定、必须由用户决定的规则。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/statechart/SKILL.md)

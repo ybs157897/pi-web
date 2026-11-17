@@ -1,5 +1,14 @@
 # DSH Web 一致性清单（实时）
 
+## ZCode 钩子系统对照（2026-11-17）
+
+**动机**：用户要求「agent 自动创建钩子 + 用户/项目双级别 + 创建即生效 + 三平台 + 异常处理对齐成熟方案」。实现以 ZCode hooks 运行时为契约基准（源码核实：其 `docs/hooks-runtime-contract.md` 与 `core/src/hooks/` 执行引擎、workspace trust 三件套），现状见 [subsystems/hooks.md](subsystems/hooks.md)。
+
+- **对齐**：ZCode 七事件中的五个内核钩子点（PreToolUse/PostToolUse/PostToolUseFailure/Stop/PreCompact）；stdin 单行 JSON snake_case、stdout `{` 开头才解析、exit 0/2/其他、matcher 精确列表/正则/非法不匹配、串行执行与逐条错误隔离、进程树 kill（SIGKILL 进程组 / taskkill /F /T）、additionalContext 24k 截断、Stop 续跑上限 3 次、项目级 digest 信任（覆盖执行参数、dispatch 重验、store 损坏 fail-closed）、`hooks.enabled` 来源开关、条目级 enabled 真跳过、`process`/`command` 两种 hook 型。
+- **有意差异**：① 配置热读（每次触发读最新）而非 per-session 快照——需求是「创建即生效」；稳定性靠执行层契约保证。② 信任批准两条通道：agent 经 `manage_hooks` 创建自动 admit（用户已在对话确认），设置页编辑保存不自动批准（安全边界）；ZCode 只有设置页/CLI 批准。③ matcher 语义合并两处口径（纯名称列表精确匹配 + 正则），ZCode 运行时契约与 CLI 文档两处描述不一致。④ Stop 续跑计数按会话持久、真实用户消息重置（ZCode 是 turn-loop 状态）。
+- **不实现**：`PermissionRequest`（pi-web 权限模型为 accessMode，无逐工具 ask 路径，不同构）；`UserPromptSubmit`/`SessionStart` 首批未接线（schema 已声明）；`prompt`/`agent`/`http`/`callback` hook 型与 `asyncRewake`/`once`/`if` 预过滤（ZCode 同样未实现）。插件 hooks 仍不在支持集（`UNSUPPORTED_CAPABILITIES`），用户级/项目级为本期范围。
+- **验证**：76 个 hooks 单测 + 全套 `npm run check`；对话创建/管理矩阵（`test:live:hooks:matrix`）在 deepseek-v4.1-flash 与 glm-5.3-flash 两模型上 S1（用户级明确）/S2（弱指令自觉确认超时）/S3（对话管理生命周期）全过；`npm run test:live:hooks` 端到端闭环通过；Windows 实机未执行。
+
 ## Windows 字体观感：system-ui 与用户字体设置（2026-11-05）
 
 **动机**：同一套 UI 在 macOS 上观感良好、Windows 上偏细偏硬。三家实现均为纯系统字体栈（无 UI webfont）：ZCode 主 UI 用 `-apple-system, system-ui, "Segoe UI", sans-serif`；DSH 用 `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', … 'Microsoft YaHei', …`，pi-web 的 `vendor/dsh-theme/base.css` 与 DSH 逐字节一致。Windows 上差异来自：Segoe UI 静态字重没有 500（`font-synthesis: none` 下落到 400）、ClearType 子像素渲染、96 DPI/非整数缩放，以及雅黑与苹方的宽度/基线差。

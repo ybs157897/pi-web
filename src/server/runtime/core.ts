@@ -25,6 +25,8 @@ import { TRAJECTORY_EXTENSION_NAME } from '../conversation/trajectory.ts'
 import { MEMORY_EXTENSION_NAME } from '../memory/policy.ts'
 import { PLUGIN_REFERENCE_EXTENSION_NAME } from '../plugins/reference.ts'
 import { EXECUTION_POLICY_EXTENSION_NAME } from '../conversation/execution-policy.ts'
+import { HOOKS_EXTENSION_NAME } from '../hooks/extension.ts'
+import { MANAGE_HOOKS_EXTENSION_NAME } from '../hooks/tool.ts'
 import {
   CONVERSATION_KIND, CTX, META, SUPPORTED_THINKING, cloneMetadata, liveRunTaskId, parseConversationId, type ConversationMetadata,
 } from './helpers.ts'
@@ -262,7 +264,7 @@ export function createCore(deps: CoreDeps) {
     const codemodeMode = state.settings.codemodeMode
     // 所有已装扩展全量开启：插件开关不再暴露，遗留的按插件状态不得停用任何扩展。
     // Pi code mode 是唯一呈现开关：`off` 到处移除该扩展，`on`/`only` 保留原生工具可见。
-    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, ...installed.map(extension => extension.name)])]
+    const extensionNames = [...new Set([WORK_POLICY_EXTENSION_NAME, COMPACTION_EXTENSION_NAME, TRAJECTORY_EXTENSION_NAME, MEMORY_EXTENSION_NAME, PLUGIN_REFERENCE_EXTENSION_NAME, EXECUTION_POLICY_EXTENSION_NAME, HOOKS_EXTENSION_NAME, MANAGE_HOOKS_EXTENSION_NAME, ...installed.map(extension => extension.name)])]
       .filter(name => codemodeMode !== 'off' || name !== CODEMODE_EXTENSION_NAME)
     const extensions: Extension[] = extensionNames.map(name => {
       const extension = installedByName.get(name)

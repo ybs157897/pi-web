@@ -16,10 +16,11 @@ import { ModelsPanel } from './ModelSettings.tsx'
 import PersonalizationPanel from './PersonalizationPanel.tsx'
 import SkillsPanel from './SkillsPanel.tsx'
 import PluginsPanel from './PluginsPanel.tsx'
+import HooksPanel from './HooksPanel.tsx'
 import css from './SettingsDialog.module.css'
 
-/** 设置对话框的页签：常规 / 个性化 / 模型 / MCP / 技能 / 插件。 */
-export type SettingsTab = 'general' | 'personalization' | 'models' | 'mcp' | 'skills' | 'plugins'
+/** 设置对话框的页签：常规 / 个性化 / 模型 / MCP / 技能 / 插件 / 钩子。 */
+export type SettingsTab = 'general' | 'personalization' | 'models' | 'mcp' | 'skills' | 'plugins' | 'hooks'
 /** SettingsDialog 的属性定义：对话框状态、模型目录、设置读写回调与各页签上下文。 */
 export interface SettingsDialogProps {
   open: boolean; catalog: ModelCatalog | null; saving: boolean; onClose: () => void
@@ -99,6 +100,11 @@ export default function SettingsDialog(props: SettingsDialogProps) {
       id: 'skills', label: t('技能', 'Skills'), group: t('扩展', 'Extensions'),
       description: t('查看、创建与校验可复用的技能。', 'Browse, create, and validate reusable skills.'),
       icon: <IconSkillOutlineRegular size={16} aria-hidden="true" />,
+    },
+    {
+      id: 'hooks', label: t('钩子', 'Hooks'), group: t('扩展', 'Extensions'),
+      description: t('用户级与项目级钩子：在工具调用、轮末等时机自动执行脚本；项目级声明需批准。', 'User and project hooks run scripts at tool calls, turn end, and more; project declarations need approval.'),
+      icon: <IconApiOutlineRegular size={16} aria-hidden="true" />,
     },
   ]
   const currentTab = tabs.find(item => item.id === tab) ?? tabs[0]!
@@ -238,6 +244,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
             </>}
           </div>}
           {open && tab === 'skills' && <SkillsPanel initialWorkspaceId={props.workspaceId} />}
+          {open && tab === 'hooks' && <HooksPanel workspaceId={props.workspaceId} />}
         </div>
       </section>
     </Modal>

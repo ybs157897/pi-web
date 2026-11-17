@@ -65,6 +65,7 @@ const TOOL_SOURCES: Record<string, string> = {
   create_goal: 'src/server/tools/goal.ts',
   update_goal: 'src/server/tools/goal.ts',
   ask_user_question: 'src/server/tools/interaction.ts',
+  manage_hooks: 'src/server/hooks/tool.ts',
   enter_plan_mode: 'src/server/tools/plan.ts',
   exit_plan_mode: 'src/server/tools/plan.ts',
   skill_list: 'src/server/tools/skill.ts',

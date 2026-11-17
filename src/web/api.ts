@@ -1,6 +1,7 @@
 import type {
   AccessMode, AddWorkspaceInput, AppSettings, AskUserQuestionAnswerItem, Automation, AutomationRun, ChildMessageInput, ConversationDetail, ConversationSummary,
   CreateAutomationInput, CreateConversationInput, DirectoryListing, EditQueueInput, FeedbackInput, GitBranchMutation, GitBranchSnapshot, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult, GitWorktreeDiff, GitWorktreeStatus, GoalUpdateRequest,
+  HooksListView,
   McpView, ModelCatalog, PersonalizationView, ProviderConfigSummary, ProviderInput, ProviderTestResult,
   RenameWorkspaceInput, SubmitInput, SubagentSummary, TeamView, ThinkingLevel, UpdateAutomationInput, UpdateConversationInput,
   UpdateAppSettingsInput, WetrackAnalysisIndex, WetrackAnalysisRecord, WetrackAnalysisRun, WetrackAnalysisSettings, WetrackAnalysisStartInput,
@@ -201,6 +202,26 @@ export const api = {
   /** 导入的 Pi MCP 目录：配置路径、各服务器及其工具与连接状态。 */
   getMcp(): Promise<McpView> {
     return request('/api/mcp')
+  },
+  /** 钩子清单：用户级与项目级来源、逐条信任状态。 */
+  getHooks(workspaceId?: string): Promise<HooksListView> {
+    return request(workspaceId === undefined ? '/api/hooks' : `/api/hooks?workspaceId=${encodeURIComponent(workspaceId)}`)
+  },
+  /** 批准一条项目级钩子（写 digest 进信任集）。 */
+  trustHook(input: { workspaceId: string; digest: string }): Promise<{ ok: boolean }> {
+    return request('/api/hooks/trust', { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** 撤销一条项目级钩子的信任。 */
+  revokeHook(input: { workspaceId: string; digest: string }): Promise<{ ok: boolean }> {
+    return request('/api/hooks/trust', { method: 'DELETE', body: JSON.stringify(input) })
+  },
+  /** 删除一条钩子（事件内 index 定位）。 */
+  removeHookEntry(input: { scope: 'user' | 'project'; workspaceId?: string; event: string; index: number }): Promise<HooksListView> {
+    return request('/api/hooks/remove', { method: 'POST', body: JSON.stringify(input) })
+  },
+  /** 启停一条钩子。 */
+  setHookEnabled(input: { scope: 'user' | 'project'; workspaceId?: string; event: string; index: number; enabled: boolean }): Promise<HooksListView> {
+    return request('/api/hooks/enabled', { method: 'POST', body: JSON.stringify(input) })
   },
   updateSettings(patch: UpdateAppSettingsInput): Promise<AppSettings> {
     return request('/api/settings', { method: 'PATCH', body: JSON.stringify(patch) })

@@ -296,6 +296,13 @@ class FakeRuntime implements Runtime {
     this.personalizationValue = { ...this.personalizationValue, content }
     return this.personalizationValue
   }
+  hooksValue: Protocol.HooksListView = { user: { path: '/tmp/pi-web-test/hooks.json', enabled: true, timeoutMs: 15000, maxOutputBytes: 32768, entries: [] } }
+  async hooks(workspaceId?: string) { this.calls.push(`hooks:${workspaceId ?? ''}`); return this.hooksValue }
+  async saveHooks(input: Parameters<Runtime['saveHooks']>[0]) { this.calls.push('save-hooks'); return this.hooksValue }
+  async trustHook(input: Parameters<Runtime['trustHook']>[0]) { this.calls.push('trust-hook') }
+  async revokeHook(input: Parameters<Runtime['revokeHook']>[0]) { this.calls.push('revoke-hook') }
+  async removeHookEntry(input: Parameters<Runtime['removeHookEntry']>[0]) { this.calls.push('remove-hook-entry'); return this.hooksValue }
+  async setHookEnabled(input: Parameters<Runtime['setHookEnabled']>[0]) { this.calls.push('set-hook-enabled'); return this.hooksValue }
   mcp(): Protocol.McpView {
     return { configPath: '/tmp/pi-web-test/mcp.json', configExists: false, servers: [] }
   }

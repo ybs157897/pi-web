@@ -10,6 +10,7 @@
 
 | 工具 | 来源 | default | plan | readonly | subagent-general | subagent-explore |
 | --- | --- | --- | --- | --- | --- | --- |
+| manage_hooks | [src/server/hooks/tool.ts](../src/server/hooks/tool.ts) | ✓ | — | — | ✓ | — |
 | read | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | write | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — |
 | edit | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — |
@@ -50,6 +51,174 @@
 | team_task_get | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
 | team_task_update | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — |
 | codemode | [src/server/codemode-policy.ts](../src/server/codemode-policy.ts) | ✓ | ✓ | ✓ | ✓ | — |
+
+## tool manage_hooks
+
+管理用户级与项目级钩子：在工具调用前后、本轮结束（Stop）、压缩前（PreCompact）等事件自动运行脚本，实现检查、拦截、更新文档等自动化。 创建或修改钩子前，必须先用 ask_user_question 向用户确认超时时间（默认推荐 15 秒，可选 5/30/60 秒或自定义）与级别（用户级/项目级）；未获答复不得创建。 脚本推荐 node .mjs 跨平台写法：读 stdin 单行 JSON，exit 0 成功 / 2 阻断 / 其他失败，stdout 输出 JSON 决策。 action=list 列出双来源全部条目、index 与信任状态（只读）；create 创建（可带 script 一站式落盘）；update 按 index 替换；delete 删除；set_enabled 启停。 项目级钩子随仓库共享：经本工具确认创建的自动信任；外部带来的（如 git clone）默认 pending 不执行，须用户在设置页批准。
+
+```json
+{
+  "type": "object",
+  "required": [
+    "action",
+    "scope"
+  ],
+  "properties": {
+    "action": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "list"
+        },
+        {
+          "type": "string",
+          "const": "create"
+        },
+        {
+          "type": "string",
+          "const": "update"
+        },
+        {
+          "type": "string",
+          "const": "delete"
+        },
+        {
+          "type": "string",
+          "const": "set_enabled"
+        }
+      ],
+      "description": "list 列出双来源条目与信任状态；create 创建；update 按 index 替换；delete 删除；set_enabled 启停。"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "type": "string",
+          "const": "project"
+        }
+      ],
+      "description": "user 用户级（本机个人习惯）；project 项目级（随仓库共享）。"
+    },
+    "event": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "SessionStart"
+        },
+        {
+          "type": "string",
+          "const": "UserPromptSubmit"
+        },
+        {
+          "type": "string",
+          "const": "PreToolUse"
+        },
+        {
+          "type": "string",
+          "const": "PostToolUse"
+        },
+        {
+          "type": "string",
+          "const": "PostToolUseFailure"
+        },
+        {
+          "type": "string",
+          "const": "Stop"
+        },
+        {
+          "type": "string",
+          "const": "PreCompact"
+        }
+      ],
+      "description": "钩子事件名。"
+    },
+    "matcher": {
+      "type": "string",
+      "description": "工具名匹配（精确列表如 Write|Edit，或正则）；缺省匹配全部。create/update 用。"
+    },
+    "hook": {
+      "type": "object",
+      "required": [
+        "type",
+        "command"
+      ],
+      "properties": {
+        "type": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "process"
+            },
+            {
+              "type": "string",
+              "const": "command"
+            }
+          ],
+          "description": "process 型 argv 直传不经 shell（跨平台首选）；command 型整条 shell 字符串。"
+        },
+        "command": {
+          "type": "string",
+          "description": "process 型为程序路径（如 node）；command 型为 shell 命令。"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "process 型参数列表（如 [\"hook-scripts/check.mjs\"]）。"
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "超时毫秒；缺省用来源级默认（全局默认 15000）。须经用户确认。"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "includeNested": {
+          "type": "boolean",
+          "description": "仅 PreToolUse 有意义：true 时也拦 codemode 嵌套调用，缺省 false 只拦模型直发。"
+        },
+        "statusMessage": {
+          "type": "string",
+          "description": "运行时展示给用户的状态文案。"
+        }
+      },
+      "description": "钩子定义；create/update 必填。"
+    },
+    "script": {
+      "type": "object",
+      "required": [
+        "name",
+        "content"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "脚本文件名（如 check.mjs），落入对应来源的 hook-scripts 目录。"
+        },
+        "content": {
+          "type": "string",
+          "description": "脚本内容；推荐 node .mjs 跨平台写法。"
+        }
+      },
+      "description": "可选：create 时一站式落盘脚本。"
+    },
+    "index": {
+      "type": "number",
+      "description": "事件内条目序号（list 返回的 index，从 0 连续计数）；update/delete/set_enabled 必填。"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "set_enabled 的目标状态。"
+    }
+  }
+}
+```
+
+Source: [src/server/hooks/tool.ts](../src/server/hooks/tool.ts)
 
 ## tool read
 

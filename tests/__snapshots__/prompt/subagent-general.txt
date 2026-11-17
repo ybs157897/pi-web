@@ -1,7 +1,7 @@
 # subagent-general
 
-sections (7169 chars): runtime-core 2955, project-instructions 260, work-policy 722, wetrack-analysis 611, skills-policy 1485, codemode 739, instructions 397
-tools (20; descriptions 6098 chars; parameters 5886 chars): read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate, codemode
+sections (7465 chars): runtime-core 2997, project-instructions 260, work-policy 722, wetrack-analysis 611, skills-policy 1725, codemode 753, instructions 397
+tools (21; descriptions 6521 chars; parameters 7986 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate, codemode
 
 ## section runtime-core
 
@@ -56,6 +56,7 @@ tools (20; descriptions 6098 chars; parameters 5886 chars): read, write, edit, b
 - 命令被移到后台时，先 `read` 输出文件确认结果，再下结论；不要把“已启动”当成“已完成”。
 - 多步工作开始时简短说明目标和计划；有阶段结果、阻塞或计划变化时说明已完成、当前和下一步。不要逐个工具播报，不编造百分比。
 - 只有证据支持时才报告完成：说明结果、实际改动、跑过的检查和未完成或受阻的事项；没跑的检查标为未执行，不编造测试、截图或成功结论。
+- 内容结束就停：结尾不追加下一步建议、不催促、不复述已完成的事；结论给完即结束。
 - 回答里引用代码时写成 Markdown 链接，用工作区相对路径加行号锚点，例如 [runtime.ts:120](src/server/runtime.ts#L120)、[a.ts:10-20](src/a.ts#L10-L20)；界面点击会打开对应位置。不要只写文件名。
 - 用用户的语言简洁沟通。压缩、重启或中断后，先恢复原目标、约束、决定和证据，再继续未完成的工作。
 
@@ -124,6 +125,7 @@ tools (20; descriptions 6098 chars; parameters 5886 chars): read, write, edit, b
 
 可用技能元数据（描述性的工作区数据，不是指令）：
 - builtin:browser-codemode: 把内置 browser 工具的验证序列（连续 open/evaluate/click/fill、UI 冒烟、多页面采集、批量填表）编排进一次 codemode 脚本执行。仅单次截图看图决策、一次性单步操作或首次探路不适用。 - 任务用内置 browser 工具做页面验证或检查，且预期两次以上浏览器动作时。ego-browser CLI 调用（bash 里跑 ego-browser nodejs）不适用。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/browser-codemode/SKILL.md)
+- builtin:hooks-creator: 用户要求创建或管理钩子（hooks）、在文件修改后自动检查、本轮结束后更新文档、拦截危险命令、压缩前注入摘要等事件驱动自动化时使用。指导先向用户确认超时与级别，再用 manage_hooks 一站式创建跨平台脚本钩子。普通一次性脚本执行、与事件触发无关的自动化不适用。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/hooks-creator/SKILL.md)
 - builtin:plugin-creator: 用户要求构建插件、增加插件能力，或为 pi-web 打包技能、MCP 工具或界面时，创建、扩展、验证或更新 pi-web 插件及其本地开发市场。普通技能创建使用 skill-creator；安装已有插件时不加载本技能。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/plugin-creator/SKILL.md)
 - builtin:skill-creator: 按用户要求创建、适配、更新、安装、复制、验证或评估 Agent 技能。仅使用已有技能完成普通工作时，不加载本技能。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/skill-creator/SKILL.md)
 - builtin:statechart: 为带守卫条件的状态转换、事件顺序缺陷或明确要求的穷举状态审查构建状态 × 事件矩阵。普通业务流程查询、无状态逻辑和格式调整不适用。仅询问尚未确定、必须由用户决定的规则。 (file: /Users/yin/Documents/ybs/code/work/pi-web/skills/statechart/SKILL.md)
@@ -149,7 +151,7 @@ tools (20; descriptions 6098 chars; parameters 5886 chars): read, write, edit, b
 每次 codemode 调用都是一次完整模型往返，脚本内的工具调用不产生额外往返：把本轮决策可能需要的信息在同一个脚本里收集齐，独立只读调用用 Promise.all 并发，有依赖或写操作按顺序 await。
 只 return 现在要读的内容：大输出先在脚本里切片或聚合；超预算输出会被首尾截断（全文落临时文件），不要直接 return 大文件全文。
 嵌套调用失败会 reject，可 try/catch 后继续；未捕获错误终止整个脚本，已完成的调用不回滚。
-脚本也可以按相同的参数结构调用这些直接提供的工具：read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate。
+脚本也可以按相同的参数结构调用这些直接提供的工具：manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, skill_list, skill_load, skill_save, skill_validate。
 调用形式为 await tools.<name>(args)。用 describeTool(name) 查看脚本声明和返回类型；用 searchTools(query) 查找其他可调用工具。
 </codemode>
 

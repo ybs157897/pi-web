@@ -1,4 +1,5 @@
-import type { GoalUpdateRequest } from '../shared/types.ts'
+import type { GoalUpdateRequest, HooksListView } from '../shared/types.ts'
+import type { HooksEntryInput, HooksSaveInput, HooksTrustInput } from './runtime/hooks.ts'
 import type { MutableModels } from '@earendil-works/pi-ai'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
@@ -101,6 +102,13 @@ export interface Runtime {
   /** 用户级个性化指令：应用主目录下的 `AGENTS.md`，从设置页编辑。 */
   personalization(): Promise<PersonalizationView>
   savePersonalization(content: string): Promise<PersonalizationView>
+  /** 用户/项目级钩子：清单投影、配置写回、信任批准/撤销、条目删除与启停。 */
+  hooks(workspaceId?: string): Promise<HooksListView>
+  saveHooks(input: HooksSaveInput): Promise<HooksListView>
+  trustHook(input: HooksTrustInput): Promise<void>
+  revokeHook(input: HooksTrustInput): Promise<void>
+  removeHookEntry(input: HooksEntryInput): Promise<HooksListView>
+  setHookEnabled(input: HooksEntryInput & { enabled: boolean }): Promise<HooksListView>
   /** 导入的用户级 Pi MCP 配置及各服务器的连接状态。 */
   mcp(): McpView
   capabilities(): { accessModes: AccessMode[] }
