@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 import {
-  Button, Checkbox, FileTypeIcon, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconSkillOutlineRegular,
-  IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconDatabaseOutlineRegular, IconEditOutlineRegular,
-  IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconGaugeOutlineRegular, IconPlanOutlineRegular, IconPlusOutlineRegular,
-  IconSendOutlineRegular, IconStopFillRegular, IconWarningOutlineRegular, Input, Menu, MenuItemButton,
-  Modal, PermissionIconFullAccessRegular, PermissionIconReadOnlyRegular, PermissionIconWorkspaceWriteRegular,
-  Tooltip, observeComposition,
+  Button, Checkbox, FileTypeIcon, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronUpOutlineRegular,
+  IconSkillOutlineRegular, IconChevronRightOutlineRegular, IconCloseOutlineRegular, IconDatabaseOutlineRegular,
+  IconEditOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconGaugeOutlineRegular,
+  IconPlanOutlineRegular, IconPlusOutlineRegular, IconSendOutlineRegular, IconStopFillRegular, IconTrashOutlineRegular,
+  IconWarningOutlineRegular, Input, Menu, MenuItemButton, Modal, PermissionIconFullAccessRegular,
+  PermissionIconReadOnlyRegular, PermissionIconWorkspaceWriteRegular, Tooltip, observeComposition,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccessMode, ModelCatalog, ModelOption, QueueActionInput, QueueItem, ThinkingLevel, WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
 import type { PluginContextEntry } from '../shared/plugin-ui.ts'
@@ -38,6 +38,10 @@ export interface ComposerProps {
   hero?: boolean; workspace?: WorkspaceSummary; workspaces?: WorkspaceSummary[]; onSelectWorkspace?: (id: string) => void; onAddWorkspace?: () => void
   accessMode?: AccessMode; accessModes?: AccessMode[]; onAccessMode?: (mode: AccessMode) => void
   onUpdateQueue?: (id: string, action: QueueActionInput) => Promise<void>
+  /** 停止响应后的队列暂停态：为 true 且空闲时在队列上方显示「队列已暂停」条。 */
+  queuePaused?: boolean
+  /** 恢复被暂停的队列（以原内容重投最后一条激活队列处理）。 */
+  onResumeQueue?: () => void
   onOpenSettings?: () => void; onNewConversation?: () => void; onCompact?: () => void
   /** Plan mode as the server projects it; the chip closes it through `onPlan`. */
   plan?: boolean; onPlan?: (active: boolean) => void
@@ -79,14 +83,15 @@ function pluginContextPreview(text: string, max = 80): string {
  * 方向键/Enter/Tab 在面板内导航与确认；onKeyDown 遵守输入法守卫（observeComposition）、
  * 自定义换行快捷键与繁忙时的发送/插入语义；hero 问候语按固定小时滚动，字号随容器
  * 宽度自适应（ResizeObserver）；document 级拖放计数管理 drop 遮罩；切换到完全权限
- * 需经风险确认弹窗勾选确认；队列项支持就地编辑与「立即插入」。
+ * 需经风险确认弹窗勾选确认；队列条为 ZCode 风格单行（拖拽点 + 文本 + 「立即」/编辑/删除），
+ * 停止响应后显示「队列已暂停」条并可一键恢复。
  */
 export default function Composer(props: ComposerProps) {
   const { value, images, catalog, model, thinkingLevel, busy, disabled = false, queue, sendMode, sending,
     onChange, onAddImages, onRemoveImage, onSend, onStop, onRemoveQueue, onSelectModel, onThinkingLevel,
     hero = false, workspace, workspaces = [], accessMode = 'fullAccess',
     accessModes = ['readOnly', 'fullAccess'], onUpdateQueue, onSearchFiles, onSearchSkills, plan = false, onPlan,
-    pluginContexts = [], onRemovePluginContext } = props
+    pluginContexts = [], onRemovePluginContext, queuePaused = false, onResumeQueue } = props
   const { t, settings } = useUiPreferences()
   const textarea = useRef<HTMLTextAreaElement>(null)
   const card = useRef<HTMLDivElement>(null)
@@ -378,19 +383,24 @@ export default function Composer(props: ComposerProps) {
       </div>
     </>}
     {queue.length > 0 && <div className={css.queue} aria-label={t('待处理消息', 'Queued messages')}>
-      <div className={css.queueHeading}>{t('接下来', 'Up next')} <span>{queue.length}</span></div>
-      {!busy && <p className={css.queueNotice}>{t('队列已保留，发送下一条消息后继续处理。', 'Queue preserved. Send your next message to continue.')}</p>}
       {queueError && <p className={css.queueError} role="alert">{queueError}</p>}
+      {queuePaused && !busy && onResumeQueue && <div className={css.queuePausedRow}>
+        <span className={css.queuePausedText}>{t('由于你中断了当前响应，队列已暂停', 'You interrupted the response; the queue is paused')}</span>
+        <button className={css.queueResume} type="button" onClick={onResumeQueue}>{t('继续', 'Resume')}</button>
+      </div>}
       {queue.map(item => <div className={css.queueItem} key={item.id}>
         {editingQueue === item.id ? <form className={css.queueEdit} onSubmit={event => { event.preventDefault(); if (queueText.trim() || item.images?.length || item.files?.length) void submitQueueEdit(item, queueText) }}>
           <textarea value={queueText} disabled={queueSaving === item.id} onChange={event => setQueueText(event.currentTarget.value)} aria-label={t('编辑排队消息', 'Edit queued message')} rows={2} />
           <Button size="sm" variant="ghost" type="button" disabled={queueSaving === item.id} onClick={() => { setEditingQueue(null); setQueueError('') }}>{t('取消', 'Cancel')}</Button><Button size="sm" variant="primary" type="submit" disabled={queueSaving === item.id}>{queueSaving === item.id ? t('保存中…', 'Saving…') : t('保存', 'Save')}</Button>
-        </form> : <>{item.images?.length ? <span className={css.queueMedia}>{item.images.map((image, index) => <img key={index} className={css.queueThumb} src={`data:${image.mimeType};base64,${image.data}`} alt={t('附件图片', 'Attached image')} />)}</span> : null}
+        </form> : <>{onUpdateQueue && <svg className={css.queueGrip} viewBox="0 0 8 14" width="8" height="14" aria-hidden="true">
+          {[2, 7, 12].map(y => [2, 6].map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.1" fill="currentColor" />))}
+        </svg>}
+          {item.images?.length ? <span className={css.queueMedia}>{item.images.map((image, index) => <img key={index} className={css.queueThumb} src={`data:${image.mimeType};base64,${image.data}`} alt={t('附件图片', 'Attached image')} />)}</span> : null}
           {item.files?.length ? <span className={css.queueFiles}>{item.files.map((file, index) => <span key={index} className={css.queueFile}><FileTypeIcon path={file.name} size={12} /><span className={css.queueFileName}>{file.name}</span><span className={css.queueFileSize}>{formatBytes(file.size)}</span></span>)}</span> : null}
-          <span className={css.queueText}>{item.text || (item.images?.length || item.files?.length ? '' : t('附件消息', 'Attachments'))}</span><span className={css.queueMode}>{item.mode === 'steer' ? t('插入', 'Steer') : t('排队', 'Queued')}</span>
-          {onUpdateQueue && <><button className={css.queueAction} type="button" disabled={queueSaving !== null} aria-label={t('编辑排队消息', 'Edit queued message')} onClick={() => { setEditingQueue(item.id); setQueueText(item.text); setQueueError('') }}><IconEditOutlineRegular size={14} /></button>
-          {item.mode !== 'steer' && <button className={css.queueAction} type="button" disabled={queueSaving !== null} onClick={() => { void submitQueueEdit(item, item.text, 'steer') }}>{t('立即插入', 'Steer now')}</button>}</>}
-          <button className={css.queueAction} type="button" aria-label={t('移除排队消息', 'Remove queued message')} onClick={() => onRemoveQueue(item.id)}><IconCloseOutlineRegular size={14} /></button></>}
+          <span className={css.queueText}>{item.text || (item.images?.length || item.files?.length ? '' : t('附件消息', 'Attachments'))}</span>
+          {onUpdateQueue && <><button className={css.queueSteer} type="button" disabled={queueSaving !== null} aria-label={t('立即插入这条消息', 'Steer this message in now')} onClick={() => { void submitQueueEdit(item, item.text, 'steer') }}><IconChevronUpOutlineRegular size={12} />{t('立即', 'Now')}</button>
+          <button className={css.queueAction} type="button" disabled={queueSaving !== null} aria-label={t('编辑排队消息', 'Edit queued message')} onClick={() => { setEditingQueue(item.id); setQueueText(item.text); setQueueError('') }}><IconEditOutlineRegular size={14} /></button></>}
+          <button className={css.queueAction} type="button" aria-label={t('移除排队消息', 'Remove queued message')} onClick={() => onRemoveQueue(item.id)}><IconTrashOutlineRegular size={14} /></button></>}
       </div>)}
     </div>}
     {dragActive && <div className={`${css.dropOverlay} ${disabled ? css.dropReject : ''}`} role="status" aria-live="polite">
@@ -438,7 +448,7 @@ export default function Composer(props: ComposerProps) {
           </span>
         })}
       </div>}
-      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : t('发消息或创建任务，/ 调用指令、@ 文件、$ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
+      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : busy ? t('继续输入以排队后续修改', 'Keep typing to queue follow-up changes') : t('发消息或创建任务，/ 调用指令、@ 文件、$ 技能', 'Send a message or create a task, / commands, @ files, $ for skills')}
         value={value} disabled={disabled || sending} rows={hero ? 2 : 1} onChange={event => updateValue(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={onKeyDown}
         onPaste={event => { const files = event.clipboardData.files; if (files.length) { event.preventDefault(); onAddImages(files) } }} />
       {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : trigger.type === 'skill' ? t('技能', 'Skills') : t('文件与文件夹', 'Files and folders')}>

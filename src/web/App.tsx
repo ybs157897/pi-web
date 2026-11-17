@@ -988,12 +988,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     window.open(url, '_blank', 'noopener,noreferrer')
   }, [])
 
-  /** 停止当前会话正在进行的回答。 */
+  /** 停止当前会话正在进行的回答；队列非空时进入「队列已暂停」态（可从 composer 恢复）。 */
   const stop = useCallback(async (): Promise<void> => {
     if (selectedId === null) return
+    const hasQueue = (detailRef.current?.queue?.length ?? 0) > 0
     try {
       await api.stop(selectedId)
-      announce(t('已停止运行。排队消息已保留，发送下一条消息即可继续处理', 'Stopped. Queued messages are preserved; send another message to continue them'), true)
+      if (hasQueue) setQueuePausedMap(current => ({ ...current, [selectedId]: true }))
+      announce(t('已停止运行', 'Stopped'), true)
     } catch (cause) { announce(errorText(cause, t('停止失败', 'Could not stop'))) }
   }, [announce, selectedId, t])
 
@@ -1049,6 +1051,28 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       await api.removeQueued(selectedId, submissionId)
       setPending(existing => existing.filter(item => item.submissionId !== submissionId))
     } catch (cause) { announce(errorText(cause, t('无法撤回这条排队消息', 'Could not withdraw this queued message'))) }
+  }, [announce, selectedId, t])
+
+  /** 各会话的「队列已暂停」标记：停止响应时若队列非空则置位，点「继续」或会话恢复运行后清除。 */
+  const [queuePausedMap, setQueuePausedMap] = useState<Record<string, boolean>>({})
+  /**
+   * 恢复被停止暂停的队列。内核 scheduler 在任何提交后都会按 FIFO 落位队列头部，因此
+   * 必须替换「最后一条」来激活：撤回它触发的落位是头部第一条（顺序正确），重投的原
+   * 最后一条排回队尾，全局顺序不变；替换第一条则会在撤回窗口让第二条抢先落位。
+   * 乐观清除暂停标记，失败则回滚并提示。
+   */
+  const resumeQueue = useCallback(async (): Promise<void> => {
+    if (selectedId === null) return
+    const queue = detailRef.current?.queue ?? []
+    const last = queue[queue.length - 1]
+    setQueuePausedMap(current => ({ ...current, [selectedId]: false }))
+    if (last === undefined) return
+    try {
+      await api.updateQueued(selectedId, last.id, { text: last.text, requestId: crypto.randomUUID(), whenBusy: last.mode })
+    } catch (cause) {
+      setQueuePausedMap(current => ({ ...current, [selectedId]: true }))
+      announce(errorText(cause, t('无法恢复队列，请重试', 'Could not resume the queue. Try again.')))
+    }
   }, [announce, selectedId, t])
 
   /**
@@ -1481,6 +1505,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
     return []
   }, [activeDetail])
+  // 会话重新进入运行（用户发消息或点了「继续」）即视为队列恢复流转，清掉暂停标记。
+  useEffect(() => {
+    if (!busy || selectedId === null) return
+    setQueuePausedMap(current => (current[selectedId] === true ? { ...current, [selectedId]: false } : current))
+  }, [busy, selectedId])
 
   const startRename = (item: ConversationSummary): void => {
     setEditingId(item.id)
@@ -2260,6 +2289,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                       onSelectModel={model => { void chooseModel(model) }} onThinkingLevel={level => { void chooseThinking(level) }}
                       onSendMode={setSendMode} onSelectWorkspace={id => { void selectWorkspace(id) }} onAddWorkspace={() => { void addWorkspaceFromPicker() }}
                       onAccessMode={mode => { void selectAccessMode(mode) }}
+                      queuePaused={queuePausedMap[activeDetail.conversation.id] === true} onResumeQueue={() => { void resumeQueue() }}
                       onUpdateQueue={updateQueue} onOpenSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
                       onCompact={() => { void compact() }}
                       onNewConversation={startNewConversation} onSearchFiles={searchWorkspaceFiles} onSearchSkills={searchSkills} onPreviewFile={path => { void openWorkspaceFile(path) }}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { CSSProperties, FocusEvent, KeyboardEvent } from 'react'
 import clsx from 'clsx'
 import {
-  IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, MenuSurface, StateDot,
+  IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, MenuSurface,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ModelOption, ThinkingLevel } from '../shared/types.ts'
 import type { Translate } from './render-labels.ts'
@@ -249,7 +249,7 @@ export default function ModelSelect({
         aria-label={triggerAria} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? `${id}-menu` : undefined}
         title={triggerLabel} aria-busy={busy} onClick={() => { if (open) close(true); else show() }}>
         <span className={css.triggerModel}>{modelLabel}</span><span className={css.triggerLevel}>{levelName(level)}</span>
-        {busy ? <StateDot state="ongoing" /> : <IconChevronDownOutlineRegular size={11} />}
+        <IconChevronDownOutlineRegular size={11} />
       </button>
       {open && createPortal(
         <MenuSurface ref={menuRef} id={`${id}-menu`} className={css.card} style={menuPos ?? MEASURE_STYLE}
