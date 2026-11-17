@@ -214,6 +214,26 @@ describe('transcript render model', () => {
     expect(settled?.durationMs).toBe(1200)
   })
 
+  // 回归：毫秒级工具的 durationMs=0 不得把 run 级时长钉成 0（折叠头会显示「已工作 0 秒」）；
+  // 全零视为未知，正时长正常取最大。
+  it('treats zero message durations as unknown at the run level', () => {
+    const onlyZero = buildRenderModel([
+      user('user-zero', 'request-zero'),
+      assistant('assistant-zero', [{ type: 'toolCall', id: 'call-zero', name: 'bash', arguments: { command: 'true' } }],
+        { runId: 'run-zero', status: 'completed' }),
+      { id: 'tool-zero', role: 'tool', blocks: [{ type: 'text', text: 'ok' }], timestamp: 250,
+        runId: 'run-zero', toolCallId: 'call-zero', toolName: 'bash', durationMs: 0 },
+    ]).runs[0]
+    expect(onlyZero?.durationMs).toBeUndefined()
+    const mixed = buildRenderModel([
+      user('user-mixed', 'request-mixed'),
+      assistant('assistant-mixed', [{ type: 'text', text: 'done' }], { runId: 'run-mixed', status: 'completed', durationMs: 4000 }),
+      { id: 'tool-mixed', role: 'tool', blocks: [{ type: 'text', text: 'ok' }], timestamp: 250,
+        runId: 'run-mixed', toolCallId: 'call-x', toolName: 'bash', durationMs: 0 },
+    ]).runs[0]
+    expect(mixed?.durationMs).toBe(4000)
+  })
+
   // 验证嵌套工具树：子调用（parentToolCallId）挂到父调用条目下，顶层只出现一个工具行。
   it('nests child tool calls under their recorded parent call', () => {
     const result = buildRenderModel([

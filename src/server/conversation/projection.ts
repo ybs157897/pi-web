@@ -1087,7 +1087,16 @@ export function projectConversation(
 
   for (const [runId, message] of finalAssistantByRun) {
     const startedAt = runStartedAt.get(runId)
-    if (startedAt !== undefined) message.durationMs = Math.max(0, message.timestamp - startedAt)
+    if (startedAt !== undefined) {
+      // entry 时间差只在 assistant entry 于 run 结束时落盘的常规路径上等于墙钟时长；
+      // 队列落位/流式转正的 entry 保留请求开始时刻（partial 的 timestamp），差值会塌缩
+      // 成毫秒级并渲染出「已工作 0 秒」。消息上投影出的纯请求时长（requestDurationMs）
+      // 不受 entry 时间戳影响，失真时取它兜底。
+      const wallClock = Math.max(0, message.timestamp - startedAt)
+      message.durationMs = message.requestDurationMs !== undefined && wallClock < message.requestDurationMs
+        ? message.requestDurationMs
+        : wallClock
+    }
     message.status ??= message.isError ? 'error' : 'completed'
   }
 

@@ -70,7 +70,10 @@ export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t:
   if (live) return t('工作中', 'Working')
   if (run.status === 'error') return t('处理失败', 'Turn failed')
   if (run.status === 'cancelled') return t('已停止', 'Stopped')
-  const duration = run.durationMs === undefined || !Number.isFinite(run.durationMs) ? undefined : Math.max(0, Math.floor(run.durationMs / 1000))
+  // 0 与未知同义（毫秒级 run 不值得展示「0 秒」），回落到不带耗时的「已工作」。
+  const duration = run.durationMs === undefined || !Number.isFinite(run.durationMs) || run.durationMs <= 0
+    ? undefined
+    : Math.floor(run.durationMs / 1000)
   const time = duration === undefined ? undefined : duration >= 60
     ? t(`${Math.floor(duration / 60)} 分 ${duration % 60} 秒`, `${Math.floor(duration / 60)} min ${duration % 60} sec`)
     : t(`${duration} 秒`, `${duration} sec`)

@@ -37,6 +37,11 @@ describe('work and thought presentation', () => {
     expect(workGroupTitle({ status: 'error', durationMs: 1000 }, zh)).toBe('处理失败')
     expect(workGroupTitle({ status: 'cancelled' }, zh)).toBe('已停止')
   })
+  // 回归：毫秒级 run 的 durationMs=0 与未知同义，不得渲染「已工作 0 秒」。
+  it('treats a zero duration as unknown instead of showing 0 sec', () => {
+    expect(workGroupTitle({ status: 'completed', durationMs: 0 }, zh)).toBe('已工作')
+    expect(workGroupTitle({ status: 'completed', durationMs: -5 }, zh)).toBe('已工作')
+  })
   // 验证展开默认值（defaultProcessOpen）：compact 下活组默认开、非最新回合收起（有排队输入则保持开）、
   // detailed 下最新回合开/历史回合收；standard+next-input 下保持开。
   it('preserves live work, interleaved user input, and detailed or deferred collapse', () => {
