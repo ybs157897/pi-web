@@ -286,8 +286,10 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  border: .5px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  border: 0;
+  box-shadow: var(--dsw-elevation-soft);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  border-radius: 16px;
   background: var(--dsw-alias-bg-layer-1);
 }
 .skillHead { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -446,6 +448,6 @@
 .diffCounts > :last-child { color: #dc2626; }
 .rowInspect { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; padding: 0; border-radius: 4px; background: transparent; color: var(--message-muted); cursor: pointer; opacity: 0; }
 .root:hover .rowInspect, .rowInspect:focus-visible { opacity: 1; }
-.fileContent { max-height: 240px; overflow: auto; border: 1px solid var(--message-border); border-radius: 12px; background: var(--message-card); }
+.fileContent { max-height: 240px; overflow: auto; border: 0; box-shadow: var(--message-card-elevation); border-radius: 16px; background: var(--message-card); }
 
 .summary > :last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

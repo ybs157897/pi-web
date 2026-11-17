@@ -46,7 +46,8 @@
   align-items: center;
   gap: 6px;
   padding: 0 12px;
-  border: .5px solid var(--dsw-alias-border-l2);
+  border: 0;
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
   border-radius: 999px;
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: var(--dsw-elevation-soft);

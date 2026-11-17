@@ -19,7 +19,7 @@
   flex-direction: column;
   box-sizing: border-box;
   padding: 6px 12px;
-  border-right: .5px solid var(--dsw-alias-border-l3);
+  border-right: .5px solid var(--dsw-alias-border-l1);
   background: var(--dsw-specific-sidebar-fill);
   color: var(--dsw-alias-label-primary);
 }
@@ -67,8 +67,8 @@
 .brandName { min-width: 0; }
 .brandName strong,
 .brandName small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.brandName strong { font-size: 12px; font-weight: 600; line-height: 13px; }
-.brandName small { width: fit-content; margin-top: 1px; padding: 0 3px; border-radius: 2px; background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-base); font-size: 6px; font-weight: 500; line-height: 10px; }
+.brandName strong { font-size: 13px; font-weight: 600; line-height: 16px; }
+.brandName small { width: fit-content; margin-top: 2px; padding: 0 4px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-tertiary); font-size: 9px; font-weight: 500; line-height: 14px; }
 
 .newChat {
   position: relative;
@@ -103,9 +103,9 @@
   line-height: 22px;
 }
 .navItem > svg { flex: none; color: var(--dsw-alias-label-secondary); }
-.navItem:hover,
-.navItem[data-active] { background: var(--dsw-alias-interactive-bg-hover); }
-.navItem[data-active] { color: var(--dsw-alias-label-primary); }
+.navItem:hover { background: var(--dsw-alias-interactive-bg-hover); }
+/* active 白卡托起 + 极弱阴影（细腻批次）：灰底上的纸感分层，hover 仍走灰。 */
+.navItem[data-active] { background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-elevation-soft); --dsw-elevation-stroke-color: var(--dsw-alias-border-l1); color: var(--dsw-alias-label-primary); }
 .navItem:focus-visible,
 .workspaceToggle:focus-visible,
 .sessionSelect:focus-visible,
@@ -146,16 +146,17 @@
 .workspaceRow {
   position: relative;
   min-width: 0;
-  height: 34px;
+  height: 36px;
   border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
+/* 组头不托起：与选中的会话行相邻时两块白卡会粘成一体，active 白卡只留给会话行。 */
 .workspaceRow:hover,
 .workspaceRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
 .workspaceToggle {
   flex: 1;
   min-width: 0;
-  height: 34px;
+  height: 36px;
   gap: 5px;
   border: 0;
   border-radius: inherit;
@@ -173,13 +174,13 @@
 .chevronOpen { transform: rotate(90deg); }
 .workspaceName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspaceSessions { min-width: 0; margin: 0 0 2px; }
-.workspaceLabel { gap: 7px; height: 34px; border-radius: var(--dsw-radius-md); padding: 0 8px; color: var(--dsw-alias-label-secondary); font-size: 14px; }
+.workspaceLabel { gap: 7px; height: 36px; border-radius: var(--dsw-radius-md); padding: 0 8px; color: var(--dsw-alias-label-secondary); font-size: 14px; }
 .workspaceLabel > svg { color: var(--dsw-alias-label-tertiary); }
 
 .sessionRow {
   position: relative;
   min-width: 0;
-  height: 32px;
+  height: 36px;
   gap: 0;
   margin: 1px 0;
   padding: 0 8px;
@@ -188,7 +189,7 @@
 }
 .sessionRow:hover:not([data-selected]),
 .sessionRow:focus-within:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
-.sessionRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
+.sessionRow[data-selected] { background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-elevation-soft); --dsw-elevation-stroke-color: var(--dsw-alias-border-l1); }
 .sessionSelect {
   display: flex;
   flex: 1;
@@ -290,7 +291,7 @@
 .crumbItem { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .crumbItemTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crumbTag { flex: none; padding: 0 4px; font-size: 10px; line-height: 15px; }
-.conversationTitle { max-width: min(58vw, 680px); overflow: hidden; font-size: 13px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.conversationTitle { max-width: min(58vw, 680px); overflow: hidden; font-size: 16px; font-weight: 600; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
 .cwd { display: flex; align-items: center; gap: 8px; max-width: min(60vw, 720px); overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .running { flex: none; color: var(--dsw-alias-state-business-primary); }
 .topbarActions { flex: none; gap: 4px; }

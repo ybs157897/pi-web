@@ -53,3 +53,12 @@ button {
 ::selection {
   background: var(--dsw-alias-bg-document-selection);
 }
+
+/* 视觉细腻批次（2026-11-16）：相对 DSH 基准的有意偏离。
+   侧栏底灰加强到与主区 #fafafa 可分辨，active 白卡托起才有层次；
+   主 CTA 用近黑做视觉锚点（vendor 的 contrast light 档是中灰）。
+   暗色保持 vendor 值（sidebar 900 / contrast 50）。 */
+body {
+  --dsw-specific-sidebar-fill: rgb(243, 244, 246);
+  --dsw-alias-button-contrast-fill: var(--dsw-static-neutral-bluish-950);
+}

@@ -1,15 +1,15 @@
-.root { position: relative; min-width: 0; margin: 16px 0; max-width: 100%; font-size: var(--message-font); color: var(--message-fg); line-height: 1.5; letter-spacing: normal; }
+.root { position: relative; min-width: 0; margin: 20px 0; max-width: 100%; font-size: var(--message-font); color: var(--message-fg); line-height: 1.5; letter-spacing: normal; }
 .frame { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 100%; min-width: 0; }
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .actions button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; padding: 0; color: var(--message-subtle); background: transparent; cursor: pointer; }
 .actions svg { flex: none; }
 .actions button:hover { background: var(--message-hover); color: var(--message-fg); }
 .actions button:focus-visible, .scroll:focus-visible, .scrollbar input:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
-.border { position: relative; max-width: 100%; min-width: 0; border: 1px solid var(--message-border); border-radius: 12px; overflow: hidden; }
+.border { position: relative; max-width: 100%; min-width: 0; border: 0; box-shadow: var(--message-card-elevation); border-radius: 16px; overflow: hidden; }
 .scroll { min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: visible; scrollbar-width: none; }
 .scroll::-webkit-scrollbar { display: none; }
 .scroll table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font: inherit; color: inherit; }
-.scroll th, .scroll td { min-width: 64px; max-width: 448px; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--message-border); white-space: normal; overflow-wrap: break-word; text-align: left; }
+.scroll th, .scroll td { min-width: 64px; max-width: 448px; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--message-border); white-space: normal; overflow-wrap: break-word; text-align: left; }
 .scroll th { font-weight: 400; color: var(--message-subtle); }
 .scroll td { vertical-align: top; }
 .scroll tr:last-child td { border-bottom: 0; }

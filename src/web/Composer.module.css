@@ -5,7 +5,7 @@
 .greeting {position:relative;z-index:1;box-sizing:border-box;width:100%;margin:0;padding:0 16px;font-size:var(--greeting-font-size,30px);line-height:1.2;font-weight:500;text-align:center;color:var(--dsw-alias-label-primary);}
 .greetingMeasure {position:absolute;visibility:hidden;pointer-events:none;white-space:nowrap;font-size:30px;line-height:1.2;}
 .heroContext {display:flex;align-items:center;gap:2px;min-width:0;width:100%;padding:0 4px;margin:4px 0 8px;}
-.contextButton,.select {display:inline-flex;align-items:center;gap:4px;height:28px;max-width:360px;min-width:0;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;font-weight:500;cursor:pointer;white-space:nowrap;}
+.contextButton,.select {display:inline-flex;align-items:center;gap:4px;height:28px;max-width:360px;min-width:0;padding:0 12px;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px;font-weight:500;cursor:pointer;white-space:nowrap;}
 .contextButton {color:var(--dsw-alias-label-primary);}
 .contextButton span {min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .card {position:relative;display:flex;flex-direction:column;gap:12px;box-sizing:border-box;width:100%;max-width:var(--dsh-composer-card-max-width,774px);padding-top:8px;border:0;--dsw-elevation-stroke-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-panel);background:var(--dsw-specific-input-major);box-shadow:var(--dsw-elevation-soft);font-size:var(--dsh-content-font-size,14px);line-height:calc(24px + var(--dsh-content-font-delta,0px));}
@@ -17,7 +17,7 @@
 .trailing {margin-left:auto;flex:none;}
 .add {display:grid;place-items:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);cursor:pointer;}
 .planChip {display:inline-flex;align-items:center;gap:4px;height:28px;flex:none;padding:0 9px;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-state-business-tertiary);color:var(--dsw-alias-label-primary-bluish);font-size:13px;line-height:20px;font-weight:500;cursor:pointer;}
-.send {display:grid;place-items:center;width:34px;height:34px;flex:none;padding:0;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-button-info-fill);color:#fff;cursor:pointer;transform:translateY(-2px);}
+.send {display:grid;place-items:center;width:34px;height:34px;flex:none;padding:0;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-button-contrast-fill);color:var(--dsw-alias-label-primary-inverted,#fff);cursor:pointer;transform:translateY(-2px);}
 .send:disabled {opacity:.4;cursor:default;}
 .stopSecondary {display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:50%;corner-shape:round;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-secondary);cursor:pointer;}
 .fileInput {display:none;}
@@ -102,7 +102,7 @@
 .stat {display:inline-flex;align-items:center;gap:4px;}
 .statRow {display:flex;width:100%;align-items:center;justify-content:space-between;gap:18px;font-variant-numeric:tabular-nums;}
 .contextRing {flex:none;}
-@media(hover:hover){.contextButton:hover,.select:hover,.queueAction:hover,.pluginContextRemove:hover{background:var(--dsw-alias-interactive-bg-hover);}.add:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}.send:hover:not(:disabled){background:var(--dsw-alias-button-info-hover);}}
+@media(hover:hover){.contextButton:hover,.select:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}.queueAction:hover,.pluginContextRemove:hover{background:var(--dsw-alias-interactive-bg-hover);}.add:hover{background:var(--dsw-alias-interactive-bg-hover-solid);}.send:hover:not(:disabled){opacity:.85;}}
 @media(pointer:coarse){.attachmentRemove{opacity:1;}}
 @media(prefers-reduced-motion:reduce){.spinner{animation:none;}}
 @container(max-width:560px){.tools,.trailing{gap:8px;}.accessText{display:none;}}
