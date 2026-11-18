@@ -240,8 +240,15 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
       aria-label={t(`打开计划：${planTitleText}`, `Open plan: ${planTitleText}`)}
       onClick={event => { event.stopPropagation(); planOpen() }}>{t('打开', 'Open')}</button>
 
+  const openToolFile = (): void => {
+    if (!onOpenFile || !model.path) return
+    const diff = model.diffs?.[0]
+    if (diff && onInspectDiff) onInspectDiff(toInspectorDiff(diff))
+    else if (model.read?.line !== undefined) onOpenFile(model.path, model.read.line)
+    else onOpenFile(model.path)
+  }
   const fileSummary = (fileRead || model.diffs !== undefined) && model.path && !model.failed && !model.cancelled ? <span className={css.fileSummary}>
-    {onOpenFile ? <button type="button" className={css.fileChip} title={model.path} onClick={() => { const diff = model.diffs?.[0]; if (diff && onInspectDiff) onInspectDiff(toInspectorDiff(diff)); else onOpenFile(model.path!) }}><MessageFileIcon path={model.path} /><span>{model.path.split(/[/\\]/u).at(-1)}</span></button>
+    {onOpenFile ? <button type="button" className={css.fileChip} title={model.path} onClick={openToolFile}><MessageFileIcon path={model.path} /><span>{model.path.split(/[/\\]/u).at(-1)}</span></button>
       : <span className={css.fileChip}><MessageFileIcon path={model.path} /><span>{model.path.split(/[/\\]/u).at(-1)}</span></span>}
     {directoryOf(model.path) !== undefined && <span className={css.directory}>{directoryOf(model.path)}</span>}
     {model.diffs && <span className={css.diffCounts}>{(() => { const lines = model.diffs.flatMap(diff => toolDiffLines(diff.oldText, diff.newText)); return <><span>+{lines.filter(line => line.kind === 'add').length}</span><span>−{lines.filter(line => line.kind === 'remove').length}</span></> })()}</span>}
@@ -283,7 +290,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
               onOpenLink={onPluginOpenLink ?? openExternalLink} />
           )}
           {model.path !== undefined && fileSummary === undefined && onOpenFile !== undefined && !model.failed && !model.cancelled && (
-            <button type="button" className={css.pathLink} onClick={() => { onOpenFile(model.path ?? '') }}>{model.path}</button>
+            <button type="button" className={css.pathLink} onClick={openToolFile}>{model.path}</button>
           )}
           {record !== null && <QuestionRecord record={record} t={t} />}
           {codemode !== null && <CodemodeBody row={codemode} onOpenFile={onOpenFile} t={t} />}

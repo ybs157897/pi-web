@@ -397,7 +397,8 @@ function artifactFromTool(name: string, args: Record<string, unknown> | undefine
   if (!args || !isString(args.path)) return []
   const result = jsonRecord(details)
   if (name === 'read') {
-    return [{ kind: 'read', path: args.path, ...(isNumber(args.offset) ? { lineStart: args.offset + 1 } : {}) }]
+    const offset = args.offset
+    return [{ kind: 'read', path: args.path, ...(typeof offset === 'number' && Number.isSafeInteger(offset) && offset > 0 ? { lineStart: offset } : {}) }]
   }
   if (name === 'write') {
     return isString(args.content) ? [{ kind: 'write', path: args.path, after: args.content }] : [{ kind: 'write', path: args.path }]

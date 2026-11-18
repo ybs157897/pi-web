@@ -12,9 +12,9 @@ import type { AccessMode, ModelCatalog, ModelOption, QueueActionInput, QueueItem
 import type { PluginContextEntry } from '../shared/plugin-ui.ts'
 import type { SkillSummary } from '../shared/skills.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
-import { cacheHitPercent, formatTokens } from './render-labels.ts'
 import ModelSelect from './ModelSelect.tsx'
 import GitBranchSwitcher from './GitBranchSwitcher.tsx'
+import ComposerUsage from './ComposerUsage.tsx'
 import type { ConversationStats } from './render-model.ts'
 import { matchesShortcut, resolveShortcuts } from './keyboard.ts'
 import { CHAT_EMPTY_GREETINGS, chatEmptyGreeting, greetingFontSizePx, nextGreetingDelayMs } from './greeting.ts'
@@ -99,7 +99,7 @@ export default function Composer(props: ComposerProps) {
   const queueAttempt = useRef<{ key: string; requestId: string } | null>(null)
   const guard = useRef<ReturnType<typeof observeComposition> | null>(null)
   const modelSearch = useRef<HTMLInputElement>(null)
-  const [menu, setMenu] = useState<'model' | 'search' | 'access' | 'add' | 'workspace' | 'mode' | 'usage' | 'context' | null>(null)
+  const [menu, setMenu] = useState<'model' | 'search' | 'access' | 'add' | 'workspace' | 'mode' | null>(null)
   const [modelQuery, setModelQuery] = useState('')
   const [editingQueue, setEditingQueue] = useState<string | null>(null)
   const [queueText, setQueueText] = useState('')
@@ -127,12 +127,6 @@ export default function Composer(props: ComposerProps) {
   const providerName = (id: string): string => catalog?.providers.find(item => item.id === id)?.name ?? id
   const attachmentsPending = images.some(image => image.status !== 'ready')
   const canSend = (value.trim() !== '' || images.length > 0) && !disabled && !sending && !attachmentsPending
-  const stats = props.stats
-  const contextWindow = selectedModel?.contextWindow
-  const cacheHit = stats === undefined ? undefined : cacheHitPercent(stats.cacheRead, stats.input + stats.cacheRead + stats.cacheWrite)
-  const contextPercent = stats !== undefined && contextWindow !== undefined && contextWindow > 0 && stats.contextTokens > 0
-    ? Math.min(100, Math.round(stats.contextTokens / contextWindow * 100))
-    : undefined
   const accessLabel = (mode: AccessMode) => mode === 'readOnly' ? t('仅可查看', 'Read only') : mode === 'workspaceWrite' ? t('工作区内修改', 'Workspace write') : t('完全权限', 'Full access')
   const accessIcon = (mode: AccessMode): ReactNode => mode === 'readOnly' ? <PermissionIconReadOnlyRegular size={14} /> : mode === 'workspaceWrite' ? <PermissionIconWorkspaceWriteRegular size={14} /> : <PermissionIconFullAccessRegular size={14} />
 
@@ -531,31 +525,9 @@ export default function Composer(props: ComposerProps) {
       </div>
     </div>
     {!hero && <div className={css.statusStrip}>
-      {stats !== undefined && (stats.runCount > 0 || stats.stepCount > 0) && <span className={css.stat}>
-        <IconGaugeOutlineRegular size={12} />
-        <span>{stats.runCount} {t('轮', 'runs')} {stats.stepCount} {t('步', 'steps')}</span>
-        {stats.tokensPerSecond !== undefined && <span>· {Math.round(stats.tokensPerSecond)} tok/s</span>}
-      </span>}
-      {stats !== undefined && stats.totalTokens > 0 && <Menu open={menu === 'usage'} onClose={() => setMenu(null)} side="top" portal
-        anchor={<button type="button" aria-label={t('Token 用量', 'Token usage')} onClick={() => setMenu(menu === 'usage' ? null : 'usage')}>
-          <IconDatabaseOutlineRegular size={12} />
-          <span>{formatTokens(stats.totalTokens)} tok</span>
-          {cacheHit !== undefined && <span>· {t(`缓存命中 ${cacheHit}%`, `cache hit ${cacheHit}%`)}</span>}
-        </button>}>
-        {cacheHit !== undefined && <StatRow label={t('缓存命中', 'Cache hit')} value={`${cacheHit}%`} onClose={() => setMenu(null)} />}
-        <StatRow label={t('未缓存输入', 'Uncached input')} value={stats.input.toLocaleString()} onClose={() => setMenu(null)} />
-        <StatRow label={t('缓存读取', 'Cache read')} value={stats.cacheRead.toLocaleString()} onClose={() => setMenu(null)} />
-        {stats.cacheWrite > 0 && <StatRow label={t('缓存写入', 'Cache write')} value={stats.cacheWrite.toLocaleString()} onClose={() => setMenu(null)} />}
-        <StatRow label={t('输出', 'Output')} value={stats.output.toLocaleString()} onClose={() => setMenu(null)} />
-      </Menu>}
-      {contextPercent !== undefined && stats !== undefined && contextWindow !== undefined && <Menu open={menu === 'context'} onClose={() => setMenu(null)} side="top" portal
-        anchor={<button type="button" aria-label={t(`上下文已用 ${contextPercent}%`, `Context used ${contextPercent}%`)} onClick={() => setMenu(menu === 'context' ? null : 'context')}>
-          <ContextRing percent={contextPercent} /><span>{contextPercent}%</span>
-        </button>}>
-        <StatRow label={t('上下文已用', 'Context used')} value={`~${formatTokens(stats.contextTokens)} / ${formatTokens(contextWindow)}`} onClose={() => setMenu(null)} />
-      </Menu>}
+      {props.stats !== undefined && <ComposerUsage stats={props.stats} contextWindow={selectedModel?.contextWindow} />}
       {busy && <Menu open={menu === 'mode'} onClose={() => setMenu(null)} side="top" portal selectedId={sendMode} items={[{ id: 'followUp', label: t('排队发送', 'Queue message') }, { id: 'steer', label: t('立即插入', 'Steer now') }]}
-        onSelect={id => { props.onSendMode(id as BusySendMode); setMenu(null) }} anchor={<button type="button" onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>{sendMode === 'steer' ? t('插入', 'Steer') : t('排队', 'Queue')}<IconChevronDownOutlineRegular size={10} /></button>} />}
+        onSelect={id => { props.onSendMode(id as BusySendMode); setMenu(null) }} anchor={<button className={css.modeButton} type="button" onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>{sendMode === 'steer' ? t('插入', 'Steer') : t('排队', 'Queue')}<IconChevronDownOutlineRegular size={10} /></button>} />}
     </div>}
     <Modal open={accessConfirm} onClose={() => { setAccessConfirm(false); setAccessAck(false) }} title={t('确认启用完全权限?', 'Enable full access?')} closeLabel={t('关闭', 'Close')}
       footer={<div className={css.riskActions}>
@@ -574,23 +546,4 @@ export default function Composer(props: ComposerProps) {
       <Checkbox label={t('我已了解风险，并愿意继续', 'I understand the risk and want to continue')} checked={accessAck} onChange={setAccessAck} />
     </Modal>
   </div>
-}
-
-/** 用量面板中的单个只读统计行。 */
-function StatRow({ label, value, onClose }: { label: string; value: string; onClose: () => void }) {
-  return <MenuItemButton onSelect={onClose}>
-    <span className={css.statRow}><span>{label}</span><span>{value}</span></span>
-  </MenuItemButton>
-}
-
-/** DSH 的上下文占用圆环：14px 表盘，弧长表示已用比例。 */
-function ContextRing({ percent }: { percent: number }) {
-  const radius = 5.5
-  const circumference = 2 * Math.PI * radius
-  const used = Math.min(1, Math.max(0, percent / 100))
-  return <svg className={css.contextRing} width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-    <circle cx="7" cy="7" r={radius} fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.25" />
-    <circle cx="7" cy="7" r={radius} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
-      strokeDasharray={`${circumference * used} ${circumference}`} transform="rotate(-90 7 7)" />
-  </svg>
 }

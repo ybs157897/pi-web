@@ -177,7 +177,7 @@ describe('real message rendering interactions', () => {
   })
   // 验证工具行接线与折叠穿透：read 行文件芯片回调 onOpenFile（无展开按钮）；
   // edit 行芯片回调 onInspectDiff 携带完整 diff；bash 行展开出现"命令输出"区域；
-  // 工作组折叠/展开往返后子行的展开态保持（aria-expanded=true）且"展开已更改文件"不受影响。
+  // 工作组折叠/展开后子行保持展开；改动文件摘要可独立开合并打开差异。
   it('connects read and edit file chips to the host and preserves tool disclosure through work-group toggles', () => {
     const onOpenFile = vi.fn(), onInspectDiff = vi.fn()
     render(<Transcript messages={processMessages()} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={() => {}} />)
@@ -194,7 +194,16 @@ describe('real message rendering interactions', () => {
     const group = screen.getByRole('button', { name: '已工作 11 秒' })
     fireEvent.click(group); fireEvent.click(group)
     expect(within(terminal).getByRole('button', { name: '收起工具详情' }).getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByRole('button', { name: '展开已更改文件' }).getAttribute('aria-expanded')).toBe('false')
+    const changes = screen.getByRole('button', { name: '展开已更改文件' })
+    expect(changes.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: '查看 example.ts 的改动' })).toBeNull()
+    fireEvent.click(changes)
+    expect(changes.getAttribute('aria-expanded')).toBe('true')
+    onInspectDiff.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '查看 example.ts 的改动' }))
+    expect(onInspectDiff).toHaveBeenCalledWith(expect.objectContaining({ path: 'src/example.ts', oldText: 'const count = 1\n', newText: 'const count = 2\n' }))
+    fireEvent.click(changes)
+    expect(screen.queryByRole('button', { name: '查看 example.ts 的改动' })).toBeNull()
   })
   // 验证 Mermaid 净化配置：foreignObject 内的文本标签（"开始"）与结构保留，
   // onclick 事件属性与 <script> 被剥除。

@@ -2,7 +2,7 @@ import type {
   DiffHunk, ReadBlockLine, SearchBlockProps, WebBlockProps,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { FileArtifact, InteractionStatus } from '../shared/types.ts'
-import { asRecord, messageOutput, toolActivity, type ActivityCount, type ToolItem, type ToolActivity } from './render-model.ts'
+import { asRecord, messageOutput, parseJsonRecord, parseRecordedCodemodeCalls, toolActivity, type ActivityCount, type RecordedCodemodeCall, type RecordedCodemodeStatus, type ToolItem, type ToolActivity } from './render-model.ts'
 import type { Translate } from './render-labels.ts'
 
 /** pending 提问被应答时，运行时注入会话的载荷 kind。 */
@@ -41,7 +41,7 @@ export interface ToolRenderModel {
   readonly language?: string
   readonly exitCode?: number | null
   readonly signal?: string
-  readonly read?: { readonly lines: readonly ReadBlockLine[]; readonly totalLines: number } | undefined
+  readonly read?: { readonly lines: readonly ReadBlockLine[]; readonly totalLines: number; readonly line?: number } | undefined
   readonly diffs?: readonly DiffHunk[] | undefined
   readonly search?: SearchBlockProps | undefined
   readonly web?: WebBlockProps | undefined
@@ -232,7 +232,8 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     ? [{ path: primaryArtifact.path, oldText: primaryArtifact.before, newText: primaryArtifact.after }]
     : undefined
   const diffValues = details.diffs ?? fileArtifactDiff ?? argsDiff(args)
-  const path = details.path ?? stringField(args, ['path', 'filePath', 'file_path', 'file']) ?? primaryArtifact?.path
+  const readArtifact = artifactValues.find(artifact => artifact.kind === 'read')
+  const path = details.path ?? stringField(args, ['path', 'filePath', 'file_path', 'file']) ?? primaryArtifact?.path ?? readArtifact?.path
   const command = details.command ?? stringField(args, ['command', 'cmd', 'script'])
   const cwd = details.cwd ?? stringField(args, ['cwd', 'workingDirectory'])
   const language = details.language ?? stringField(args, ['language', 'lang']) ?? languageFromPath(path)
@@ -250,8 +251,8 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     || diffValues !== undefined && diffValues.length > 0
     || details.search !== undefined
     || details.web !== undefined
-  const read = READ_NAMES.has(normalizedName) || artifacts.some(artifact => artifact.kind === 'read')
-    ? buildRead(details, path, output, artifacts)
+  const read = READ_NAMES.has(normalizedName) || readArtifact !== undefined
+    ? buildRead(details, output, readArtifact, normalizedName === 'read' ? args.offset : undefined)
     : undefined
   return {
     name,
@@ -293,16 +294,6 @@ function detailsRecordFor(value: unknown, output: string): Record<string, unknow
     if (parsed !== undefined) return parsed
   }
   return parseJsonRecord(output)
-}
-
-/** 解析字符串为 record；超 1MB 或语法错误返回 undefined（非 SyntaxError 照常抛出）。 */
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  if (value.length > 1_000_000) return undefined
-  try { return asRecord(JSON.parse(value)) }
-  catch (error) {
-    if (!(error instanceof SyntaxError)) throw error
-    return undefined
-  }
 }
 
 /**
@@ -472,14 +463,15 @@ const placeholderWebLabels = {
  * 功能：构建 read 行：行数据依次取 details.lines、read 产物全文、输出文本按行编号。
  * @returns 行数组与总行数；无法构建返回 undefined
  */
-function buildRead(details: ToolDetails, path: string | undefined, output: string, artifacts: readonly FileArtifact[]) {
-  const artifact = artifacts.find(item => item.kind === 'read' && item.after !== undefined)
+function buildRead(details: ToolDetails, output: string, artifact: FileArtifact | undefined, offset: unknown) {
+  const requestedLine = typeof offset === 'number' && Number.isSafeInteger(offset) && offset > 0 ? offset : undefined
+  const reportedLine = details.lines?.[0]?.number ?? artifact?.lineStart
+  const line = requestedLine ?? (reportedLine !== undefined && reportedLine > 1 ? reportedLine : undefined)
   const artifactLines = artifact?.after?.split(/\r?\n/u)
-  const lines = details.lines ?? (artifactLines !== undefined
-    ? artifactLines.map((text, index) => ({ number: (artifact?.lineStart ?? 1) + index, text }))
-    : output === '' ? undefined : output.split(/\r?\n/u).map((text, index) => ({ number: index + 1, text })))
+  const readLines = artifactLines ?? (output === '' ? undefined : output.split(/\r?\n/u))
+  const lines = details.lines ?? readLines?.map((text, index) => ({ number: (line ?? 1) + index, text }))
   if (lines === undefined) return undefined
-  return { lines, totalLines: details.totalLines ?? artifactLines?.length ?? lines.length }
+  return { lines, totalLines: details.totalLines ?? artifactLines?.length ?? lines.length, line }
 }
 
 /** 从编辑类参数（path + oldText/newText）兜底构造单文件 diff。 */
@@ -903,19 +895,12 @@ export function subagentRowModel(input: {
 /* ---------- 代码模式：`codemode` 行与其脚本发起的工具调用 ---------- */
 
 /** 脚本发起的一次工具调用，对应 Pi 的 `CodemodeNestedCall` 结果 details。 */
-export type CodemodeCallStatus = 'running' | 'ok' | 'error' | 'cancelled'
+export type CodemodeCallStatus = RecordedCodemodeStatus
 
 /** codemode 行内展示的一次嵌套调用视图。 */
-export interface CodemodeCallView {
-  /** VM 的调用序号，作为稳定的列表 key。 */
-  readonly id: string
-  readonly name: string
+export interface CodemodeCallView extends Omit<RecordedCodemodeCall, 'args'> {
   /** 调用参数的紧凑 JSON，保留为行悬停文本。 */
   readonly args: string
-  readonly status: CodemodeCallStatus
-  readonly durationMs?: number
-  /** 失败文本，显示在调用行下方。 */
-  readonly error?: string
 }
 
 /** `codemode` 行的全部展示信息：脚本、嵌套调用与结果文本。 */
@@ -933,8 +918,6 @@ export interface CodemodeRowModel {
   /** 结果文本被截到 token 预算时的完整输出文件。 */
   readonly fullOutputPath?: string
 }
-
-const CODEMODE_CALL_STATUSES = new Set<string>(['running', 'ok', 'error', 'cancelled'])
 
 /**
  * 功能：从调用的脚本参数与结果的 details 构建 `codemode` 行。
@@ -961,32 +944,9 @@ export function codemodeRowModel(input: {
     summary: firstLine(script) || firstLine(input.output),
     script,
     output: input.output,
-    calls: parseCodemodeCalls(details.calls),
+    calls: parseRecordedCodemodeCalls(details.calls).map(call => ({ ...call, args: codemodeCallArgs(call.args) })),
     ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
   }
-}
-
-/** 嵌套调用列表；严格读取器展示不了的条目丢弃，id 缺省按序号补。 */
-function parseCodemodeCalls(value: readonly unknown[]): CodemodeCallView[] {
-  const calls: CodemodeCallView[] = []
-  for (const entry of value) {
-    const call = asRecord(entry)
-    if (call === undefined || typeof call.name !== 'string' || call.name === '') continue
-    if (typeof call.status !== 'string' || !CODEMODE_CALL_STATUSES.has(call.status)) continue
-    const id = typeof call.id === 'string' ? call.id
-      : typeof call.id === 'number' && Number.isFinite(call.id) ? String(call.id)
-        : String(calls.length)
-    const durationMs = finiteNumber(call.durationMs)
-    calls.push({
-      id,
-      name: call.name,
-      args: codemodeCallArgs(call.args),
-      status: call.status as CodemodeCallStatus,
-      ...(durationMs === undefined ? {} : { durationMs }),
-      ...(typeof call.error === 'string' && call.error !== '' ? { error: call.error } : {}),
-    })
-  }
-  return calls
 }
 
 /** 紧凑的参数文本；数组与对象序列化，读不了的值显示为空。 */

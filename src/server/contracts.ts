@@ -125,7 +125,7 @@ export interface Runtime {
   createDirectory(parent: string, name: string): Promise<void>
   workspaceFiles(id: string, path: string, query?: string): Promise<WorkspaceFileEntry[]>
   searchWorkspace(id: string, query: string): Promise<WorkspaceFileEntry[]>
-  workspaceFile(id: string, path: string): Promise<WorkspaceFile>
+  workspaceFile(id: string, path: string, line?: number): Promise<WorkspaceFile>
   workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }>
   /** 一个工作区的本地 Git 分支，外加 HEAD 当前指向。 */
   gitBranches(id: string): Promise<GitBranchSnapshot>

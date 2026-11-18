@@ -1,3 +1,5 @@
+import type { WorkspaceTextWindow } from '../shared/types.ts'
+
 // 右侧 Inspector 面板的 tab 纯模型：判重、关闭回退、launcher 原地替换与 workspace 级内存记忆。
 // 语义对齐 ZCode side pane（useAppPanels / commitOpenedSidePaneState / closeSidePaneTab）。
 
@@ -13,6 +15,9 @@ export interface TabFile {
   mimeType?: string
   language?: string
   line?: number
+  /** Every explicit line jump has a new request id, including a repeated jump to the same line. */
+  lineRequestId?: number
+  textWindow?: WorkspaceTextWindow
   size?: number
   workspaceId?: string
   url?: string
@@ -167,6 +172,7 @@ export function openFromLauncher(state: PaneState, tab: InspectorTab): PaneState
   if (state.tabs.some(candidate => candidate.id === tab.id)) {
     // 目标已存在：移除 launcher 占位 tab，已有 tab 留在原位并聚焦。
     const tabs = state.tabs.filter(candidate => candidate.id !== active.id)
+    if (tab.doc?.kind === 'file') return upsertTab({ tabs, activeTabId: tab.id }, tab)
     return { tabs, activeTabId: tab.id }
   }
   // launcher tab 在原位置被新 tab 替换（flatMap 保位）。

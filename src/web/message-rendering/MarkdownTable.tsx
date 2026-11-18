@@ -82,13 +82,13 @@ export function MarkdownTable({ children, t }: { children?: ReactNode; t: Transl
   return <div className={css.root} ref={root} data-message-table>
     <div className={css.frame} style={widthStyle}>
       <div className={css.actions}>
-        <button type="button" aria-label={state === 'copied' ? t('已复制', 'Copied') : t('复制 Markdown', 'Copy Markdown')} title={t('复制 Markdown', 'Copy Markdown')} onClick={() => { void copy(tableMarkdown(readTableRows(table.current))) }}>{state === 'copied' ? <Check size={14} /> : <Copy size={14} />}</button>
-        <button type="button" aria-label={t('下载 CSV', 'Download CSV')} title={t('下载 CSV', 'Download CSV')} onClick={download}><Download size={14} /></button>
-        <button type="button" aria-label={t('预览表格', 'Preview table')} title={t('预览表格', 'Preview table')} onClick={() => setPreview(true)}><Maximize2 size={14} /></button>
-        {canExpand && <button type="button" aria-label={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} title={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <ArrowRightFromLine size={14} /> : <ArrowLeftFromLine size={14} />}</button>}
+        <button type="button" aria-label={state === 'copied' ? t('已复制', 'Copied') : t('复制 Markdown', 'Copy Markdown')} title={t('复制 Markdown', 'Copy Markdown')} onClick={() => { void copy(tableMarkdown(readTableRows(table.current))) }}>{state === 'copied' ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}</button>
+        <button type="button" aria-label={t('下载 CSV', 'Download CSV')} title={t('下载 CSV', 'Download CSV')} onClick={download}><Download size={14} aria-hidden="true" /></button>
+        <button type="button" aria-label={t('预览表格', 'Preview table')} title={t('预览表格', 'Preview table')} onClick={() => setPreview(true)}><Maximize2 size={14} aria-hidden="true" /></button>
+        {canExpand && <button type="button" aria-label={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} title={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <ArrowRightFromLine size={14} aria-hidden="true" /> : <ArrowLeftFromLine size={14} aria-hidden="true" />}</button>}
       </div>
       {state === 'error' && <span className={css.error} role="status">{t('复制失败', 'Copy failed')}</span>}
-      <div className={css.border}>
+      <div className={css.viewport}>
         <div className={css.scroll} ref={viewport} tabIndex={0} role="region" aria-label={t('表格，可横向滚动', 'Table, horizontally scrollable')} onKeyDown={keyboardScroll}
           onScroll={event => { const left = event.currentTarget.scrollLeft; setGeometry(old => ({ ...old, left })) }}>
           <table ref={table}>{children}</table>

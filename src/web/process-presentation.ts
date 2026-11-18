@@ -1,4 +1,4 @@
-import type { RenderRun } from './render-model.ts'
+import type { RenderRun, ToolActivity } from './render-model.ts'
 import type { ChatPresentationPolicy } from './presentation-policy.ts'
 import type { Translate } from './render-labels.ts'
 
@@ -83,24 +83,48 @@ export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t:
 
 /**
  * 功能：取折叠的工作组会「吞掉」的正文摘要——run 过程里模型伴随工具调用写的文字块
- * （提问的引子、验证前的解释），取最长一段的首行；不写正文的 run 返回 undefined，
- * 折叠头保持只有耗时。
+ * （提问的引子、验证前的解释），取含正文的最长一段的首行。
  * @param run 渲染 run（只需 process）
  * @param limit 最大字符数（码点计），超出截断加省略号，默认 120
  * @returns 预览文本；无可读正文时 undefined
  */
 export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120): string | undefined {
-  let longest = ''
+  let line = ''
+  let longest = 0
   for (const part of run.process) {
     if (part.kind !== 'content' || part.block.type !== 'text') continue
     const text = part.block.text.trim()
-    if (text.length > longest.length) longest = text
+    if (text.length <= longest) continue
+    const prose = firstProseLine(text)
+    if (!prose) continue
+    line = prose
+    longest = text.length
   }
-  if (longest === '') return undefined
-  const line = firstProseLine(longest)
-  if (line === '') return undefined
+  if (!line) return undefined
   const characters = [...line]
   return characters.length > limit ? `${characters.slice(0, limit).join('')}…` : line
+}
+
+/** 折叠组没有可读正文时，按真实工具调用次数显示工作摘要。 */
+export function foldedActivitySummary(run: Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'>, t: Translate): string | undefined {
+  const counts = new Map(run.activityCounts.map(({ kind, count }) => [kind, count]))
+  const times = (...kinds: ToolActivity[]): number => kinds.reduce((sum, kind) => sum + (counts.get(kind) ?? 0), 0)
+  const parts: string[] = []
+  const add = (count: number, zh: string, en: string): void => {
+    if (count > 0) parts.push(t(`${zh} ${count} 次`, `${en} ${count}`))
+  }
+  add(times('read', 'readImage'), '读取', 'Reads')
+  add(times('search', 'webSearch'), '搜索', 'Searches')
+  add(times('webFetch'), '查阅网页', 'Page fetches')
+  add(times('commands', 'code'), '执行', 'Executions')
+  add(times('write', 'edit'), '改动', 'Edits')
+  add(times('subagents'), '协调子智能体', 'Subagent calls')
+  add(times('plan'), '处理计划或目标', 'Plan and goal calls')
+  add(times('questions'), '提问', 'Questions')
+  add(times('tools'), '调用其他工具', 'Other tool calls')
+  add(run.failedTools, '失败', 'Failed')
+  add(run.stoppedTools, '停止', 'Stopped')
+  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 /**
@@ -108,11 +132,17 @@ export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120)
  * @returns 清洗后的首行正文；没有则空串
  */
 function firstProseLine(markdown: string): string {
-  let fenced = false
+  let fence: string | undefined
   for (const source of markdown.split('\n')) {
     const line = source.trim()
-    if (line.startsWith('```')) { fenced = !fenced; continue }
-    if (fenced) continue
+    const marker = /^(\x60{3,}|~{3,})(.*)$/u.exec(line)
+    if (marker !== null) {
+      const [, opening, info] = marker
+      if (fence === undefined) fence = opening
+      else if (info === '' && opening?.startsWith(fence)) fence = undefined
+      continue
+    }
+    if (fence !== undefined) continue
     const prose = plainProse(line)
     if (prose !== '') return prose
   }

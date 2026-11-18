@@ -48,15 +48,15 @@ const TEAM_TOOL_NAMES = new Set(['spawn_teammate', 'wait_agent', 'send_message',
  */
 export function toolActivity(name: string): ToolActivity {
   const id = name.toLocaleLowerCase()
-  if (id === 'read') return 'read'
+  if (['read', 'read_file', 'readfile', 'read_text_file', 'cat'].includes(id)) return 'read'
   if (id === 'read_image') return 'readImage'
-  if (id === 'grep' || id === 'glob' || id === 'list_files' || id === 'find' || id === 'find_files' || id.endsWith('_inspect')) return 'search'
-  if (id === 'write') return 'write'
-  if (id === 'edit' || id === 'apply_patch') return 'edit'
-  if (['bash', 'pwsh', 'exec_command', 'write_stdin'].includes(id) || id.startsWith('terminal_')) return 'commands'
+  if (['grep', 'ripgrep', 'glob', 'search', 'search_files', 'list_files', 'find', 'find_files'].includes(id) || id.endsWith('_inspect')) return 'search'
+  if (['write', 'write_file', 'writefile', 'create_file'].includes(id)) return 'write'
+  if (['edit', 'edit_file', 'nativeedit', 'native_edit', 'apply_patch', 'patch'].includes(id)) return 'edit'
+  if (['bash', 'pwsh', 'shell', 'shell_session', 'exec', 'exec_command', 'run_command', 'terminal', 'write_stdin'].includes(id) || id.startsWith('terminal_')) return 'commands'
   if (id === 'run_code' || id === 'codemode') return 'code'
-  if (id === 'web_search') return 'webSearch'
-  if (id === 'web_fetch') return 'webFetch'
+  if (['web_search', 'search_web', 'browser_search'].includes(id)) return 'webSearch'
+  if (['web_fetch', 'fetch_url', 'fetch'].includes(id)) return 'webFetch'
   if (id === 'subagent' || id.startsWith('subagent_') || TEAM_TOOL_NAMES.has(id)) return 'subagents'
   if (['todo_write', 'create_goal', 'update_goal', 'get_goal', 'exit_plan_mode', 'enter_plan_mode'].includes(id)) return 'plan'
   if (id === 'ask_user_question' || id === 'request_user_input') return 'questions'
@@ -99,6 +99,8 @@ export interface RenderRun {
   readonly artifacts: readonly FileArtifact[]
   /** 工具分类按去重调用数排序，平手按首次出现（DSH 规则）。 */
   readonly activityCounts: readonly ActivityCount[]
+  readonly failedTools: number
+  readonly stoppedTools: number
   readonly status: 'running' | 'completed' | 'error' | 'cancelled'
   readonly durationMs?: number
   readonly usage?: MessageUsage
@@ -435,7 +437,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     responses,
     systemRows,
     artifacts,
-    activityCounts: rankActivities(roots),
+    ...summarizeToolActivities(roots),
     status,
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage === undefined ? {} : { usage }),
@@ -507,23 +509,85 @@ function liveTailIndex(blocks: readonly ContentBlock[]): number {
   return -1
 }
 
-/**
- * 功能：按 DSH 给落定过程组命名的方式统计排序本 run 的工具分类。
- * @returns 按调用数降序的分类计数（Map 保序 + 稳定排序，平手保持首次出现序）
- */
-function rankActivities(roots: readonly MutableToolItem[]): ActivityCount[] {
+/** 从调用树计数，显示分组不增加调用数。已有子调用的 codemode 只贡献内部活动。 */
+function summarizeToolActivities(roots: readonly MutableToolItem[]): Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'> {
   const counts = new Map<ToolActivity, number>()
-  const visit = (item: MutableToolItem): void => {
-    const name = item.call?.name ?? item.result?.toolName
+  const visited = new Set<MutableToolItem>()
+  const counted = new Set<string>()
+  let failedTools = 0
+  let stoppedTools = 0
+  const record = (id: string, name: string | undefined, status: string | undefined): void => {
+    if (counted.has(id)) return
+    counted.add(id)
     if (name !== undefined) {
       const kind = toolActivity(name)
       counts.set(kind, (counts.get(kind) ?? 0) + 1)
     }
+    if (status === 'error') failedTools += 1
+    else if (status === 'cancelled') stoppedTools += 1
+  }
+  const toolStatus = (item: MutableToolItem) => item.result?.isError ? 'error' : item.result?.status ?? item.message.status
+  const visit = (item: MutableToolItem): void => {
+    if (visited.has(item)) return
+    visited.add(item)
+    const id = item.call?.id ?? item.result?.toolCallId ?? item.key
+    const name = item.call?.name ?? item.result?.toolName
+    const status = toolStatus(item)
+    const codemode = name?.toLowerCase() === 'codemode'
+    const details = item.result?.details
+    const recorded = codemode ? asRecord(details) ?? (typeof details === 'string' ? parseJsonRecord(details) : undefined) : undefined
+    const calls = parseRecordedCodemodeCalls(recorded?.calls)
+    const wrapsCalls = codemode && (calls.length > 0 || item.children.length > 0)
+    if (name !== undefined && !wrapsCalls) {
+      record(id, name, status)
+    } else if (wrapsCalls && (status === 'error' || status === 'cancelled')
+      && !calls.some(call => call.status === status) && !item.children.some(child => toolStatus(child) === status)) {
+      record(id, undefined, status)
+    }
+    // Durable codemode results keep the VM call number; live child rows use the qualified ID.
+    for (const call of calls) record(`${id}/c${call.id}`, call.name, call.status)
     for (const child of item.children) visit(child)
   }
   for (const root of roots) visit(root)
   // Map 保留首次出现顺序，稳定排序让平手计数也保持该顺序。
-  return [...counts].map(([kind, count]) => ({ kind, count })).sort((left, right) => right.count - left.count)
+  const activityCounts = [...counts].map(([kind, count]) => ({ kind, count })).sort((left, right) => right.count - left.count)
+  return { activityCounts, failedTools, stoppedTools }
+}
+
+export type RecordedCodemodeStatus = 'running' | 'ok' | 'error' | 'cancelled'
+
+export interface RecordedCodemodeCall {
+  readonly id: string
+  readonly name: string
+  readonly args: unknown
+  readonly status: RecordedCodemodeStatus
+  readonly durationMs?: number
+  readonly error?: string
+}
+
+const recordedCodemodeStatuses = new Set<string>(['running', 'ok', 'error', 'cancelled'])
+
+/** Decode the durable codemode call list shared by the tool row and the work summary. */
+export function parseRecordedCodemodeCalls(value: unknown): RecordedCodemodeCall[] {
+  if (!Array.isArray(value)) return []
+  const calls: RecordedCodemodeCall[] = []
+  for (const entry of value) {
+    const call = asRecord(entry)
+    if (call === undefined || typeof call.name !== 'string' || call.name === '') continue
+    if (typeof call.status !== 'string' || !recordedCodemodeStatuses.has(call.status)) continue
+    const id = typeof call.id === 'string' ? call.id
+      : typeof call.id === 'number' && Number.isFinite(call.id) ? String(call.id)
+        : String(calls.length)
+    calls.push({
+      id,
+      name: call.name,
+      args: call.args,
+      status: call.status as RecordedCodemodeStatus,
+      ...(typeof call.durationMs === 'number' && Number.isFinite(call.durationMs) ? { durationMs: call.durationMs } : {}),
+      ...(typeof call.error === 'string' && call.error !== '' ? { error: call.error } : {}),
+    })
+  }
+  return calls
 }
 
 /**
@@ -637,6 +701,16 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+/** 解析工具 JSON record；忽略无效或超过展示预算的载荷。 */
+export function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  if (value.length > 1_000_000) return undefined
+  try { return asRecord(JSON.parse(value)) }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return undefined
+  }
 }
 
 /**

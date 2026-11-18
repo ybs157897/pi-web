@@ -1,20 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, MarkdownText, ReadBlock,
+  CodeBlock, DiffBlock, IconBrowseOutlineRegular, IconCloseOutlineRegular, MarkdownText, languageForPath,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { FileDiff, FolderOpen, Globe, Maximize2, MessageSquareText, Minimize2, Plus, Puzzle, Waypoints } from 'lucide-react'
 import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
-import type { InspectorTab } from './inspector-tabs.ts'
+import type { InspectorTab, TabFile } from './inspector-tabs.ts'
 import type { GitChangeSourceId, LastTurnChange } from './GitPane.tsx'
 import type { SideChatMessage } from './SelectionChatPane.tsx'
 import GitPane from './GitPane.tsx'
 import BrowserPane from './BrowserPane.tsx'
 import TrajectoryPane from './TrajectoryPane.tsx'
 import SelectionChatPane from './SelectionChatPane.tsx'
-import { diffLabels, markdownLabels, readLabels } from './render-labels.ts'
+import { diffLabels, markdownLabels } from './render-labels.ts'
 import { safeWorkspaceAssetUrl, sandboxedHtml } from './inspector-document.ts'
+import InspectorSource from './InspectorSource.tsx'
 import { useUiPreferences } from './ui-preferences.tsx'
 import PlanPreview, { type PlanDocument } from './PlanPreview.tsx'
 import WorkspaceBrowserPage from './WorkspaceBrowserPage.tsx'
@@ -26,18 +27,7 @@ import type { InspectorDiff } from './transcript.tsx'
 import css from './Inspector.module.css'
 
 /** Inspector 内嵌查看的文件对象：路径、可选内容/类型/语言/定位行/大小与资源地址。 */
-export interface InspectorFile {
-  path: string
-  content?: string
-  mimeType?: string
-  language?: string
-  line?: number
-  size?: number
-  /** 该路径所属的工作区，用于解析本地 Markdown 图片。 */
-  workspaceId?: string
-  /** 服务端返回的同源、工作区范围内的资源 URL。 */
-  url?: string
-}
+export type InspectorFile = TabFile
 
 export type { InspectorDiff } from './transcript.tsx'
 
@@ -215,6 +205,7 @@ export default function Inspector({
   // 标签右键菜单放在组件级状态：它会 portal 到面板之外。
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null)
   const tabMenuRef = useRef<HTMLDivElement>(null)
+  const tabStripRef = useRef<HTMLDivElement>(null)
   // ZCode 外壳：存在任意标签或可触达的启动器时，header 变为标签条。
   const shellMode = tabs.length > 0 || onOpenNewTab !== undefined
   const planView = view === 'plan'
@@ -237,6 +228,24 @@ export default function Inspector({
   const showTabs = onView !== undefined
     && (browse !== null || hasDocument || pluginPages.length > 0 || subagentTabs.length > 0
       || subagentDirectory !== null || onRefreshPluginSurfaces !== undefined)
+  useLayoutEffect(() => {
+    const strip = tabStripRef.current
+    if (strip === null) return
+    const active = strip.querySelector('[data-active="true"]')
+    if (active === null) return
+    const revealActiveTab = (): void => {
+      if (strip.scrollWidth <= strip.clientWidth) return
+      const viewport = strip.getBoundingClientRect()
+      const tab = active.getBoundingClientRect()
+      if (tab.left < viewport.left) strip.scrollLeft += tab.left - viewport.left
+      else if (tab.right > viewport.right) strip.scrollLeft += tab.right - viewport.right
+    }
+    revealActiveTab()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(revealActiveTab)
+    observer.observe(strip)
+    return () => { observer.disconnect() }
+  }, [activeTabId, tabs.length])
   useEffect(() => {
     if (!surfacesOpen) return
     const close = (event: MouseEvent): void => {
@@ -323,7 +332,7 @@ export default function Inspector({
     return (
       <aside className={`${css.root}${fullView ? ` ${css.fullscreen}` : ''}`} aria-label={t('检查器', 'Inspector')} data-inspector-shell>
         <header className={css.tabBar}>
-          <div className={css.tabStrip} role="group" aria-label={t('检查器标签', 'Inspector tabs')}>
+          <div ref={tabStripRef} className={css.tabStrip} role="group" aria-label={t('检查器标签', 'Inspector tabs')}>
             {tabs.map(tab => {
               const active = tab.id === activeTabId
               return (
@@ -351,12 +360,14 @@ export default function Inspector({
             <IconCloseOutlineRegular size={15} />
           </button>
         </header>
+        {loading && <div className={css.message} role="status">{t('正在读取文件…', 'Reading file…')}</div>}
+        {!loading && error && <div className={css.error} role="alert">{error}</div>}
         <div className={css.tabSurfaces}>
           {tabs.map(tab => {
             const active = tab.id === activeTabId
             return <div key={tab.id} className={css.tabSurface} data-inspector-tab={tab.id} hidden={!active}>
               {tabContent(tab, {
-                active, t, plan, loading, error, browse, pluginPages, pluginPageHosts, sidePageIds, onReleasePluginPageHost,
+                active, t, plan, browse, pluginPages, pluginPageHosts, sidePageIds, onReleasePluginPageHost,
                 onPluginContext, onPluginMessage, onPluginOpenLink, subagentDirectory,
                 workspaceId, gitPane, browserPane, selectionChat, onNotice, launcher,
               })}
@@ -484,8 +495,6 @@ interface TabContentDeps {
   active: boolean
   t: (chinese: string, english: string) => string
   plan: PlanDocument | null
-  loading: boolean
-  error: string | null
   browse: InspectorBrowse | null
   pluginPages: readonly PluginUiPage[]
   pluginPageHosts: Readonly<Record<string, HTMLElement>>
@@ -510,9 +519,9 @@ function tabContent(tab: InspectorTab, deps: TabContentDeps): ReactNode {
     case 'document': {
       const doc = tab.doc
       if (doc === undefined) return <div className={css.empty}>{t('没有可显示的内容', 'Nothing to show')}</div>
-      if (doc.kind === 'file') return <FileContents key={doc.file.path} file={doc.file} />
+      if (doc.kind === 'file') return <FileContents key={doc.file.path} file={doc.file} active={active} />
       if (doc.kind === 'diff') return <DiffContents diff={doc.diff} />
-      return <PlanPreview plan={deps.plan} loading={deps.loading} error={deps.error} />
+      return <PlanPreview plan={deps.plan} />
     }
     case 'browse':
       return deps.browse !== null
@@ -616,7 +625,7 @@ function DiffContents({ diff }: { diff: InspectorDiff }) {
       toolbarLabels={markdownLabels(t).code.toolbarLabels} /></div>
   }
   if (diff.newText !== undefined) {
-    return <div className={css.content}><CodeBlock code={diff.newText} lang={languageFromPath(diff.path)}
+    return <div className={css.content}><CodeBlock code={diff.newText} lang={languageForPath(diff.path)}
       copyLabel={t('复制内容', 'Copy content')} copiedLabel={t('已复制', 'Copied')} /></div>
   }
   return <div className={css.empty}>{t('没有可显示的文件差异', 'No file diff was recorded')}</div>
@@ -625,10 +634,14 @@ function DiffContents({ diff }: { diff: InspectorDiff }) {
 /** 文件内容渲染：按 MIME/扩展名分派——图片、HTML（预览/源码切换、沙箱 iframe）、
  * PDF（iframe + 新窗口/下载）、Markdown（预览/源码切换、本地图片按 Markdown 目录解析）、
  * 文本源码视图；不可内嵌的类型给出打开/下载链接。 */
-function FileContents({ file }: { file: InspectorFile }) {
+function FileContents({ file, active = true }: { file: InspectorFile; active?: boolean }) {
   const { t } = useUiPreferences()
-  const [htmlMode, setHtmlMode] = useState<'preview' | 'source'>('preview')
-  const [markdownMode, setMarkdownMode] = useState<'preview' | 'source'>(file.line === undefined ? 'preview' : 'source')
+  const [viewOverride, setViewOverride] = useState<{ line?: number; request?: number; mode: 'preview' | 'source' }>()
+  const viewMode = viewOverride !== undefined && viewOverride.line === file.line && viewOverride.request === file.lineRequestId
+    ? viewOverride.mode : file.line === undefined ? 'preview' : 'source'
+  const setViewMode = (mode: 'preview' | 'source'): void => {
+    setViewOverride({ line: file.line, request: file.lineRequestId, mode })
+  }
   const mime = file.mimeType?.split(';')[0]?.trim().toLocaleLowerCase() ?? ''
   const assetUrl = safeWorkspaceAssetUrl(file.url, window.location.href)
   const imageUrl = mime.startsWith('image/') ? safeImageUrl(file.url) : undefined
@@ -657,27 +670,31 @@ function FileContents({ file }: { file: InspectorFile }) {
       },
     }
   }, [file.path, file.workspaceId])
-  if (imageUrl !== undefined) return <div className={css.imageSurface}><img src={imageUrl} alt={file.path} /></div>
-  if (isHtmlFile(file, mime) && file.content !== undefined) return (
+  const withLineNotice = (preview: ReactNode): ReactNode => file.line === undefined ? preview : <div className={css.documentSurface}>
+    <div className={css.message} role="status">{t('此文件无法按行定位', 'Line navigation is unavailable for this file')}</div>
+    {preview}
+  </div>
+  if (imageUrl !== undefined) return withLineNotice(<div className={css.imageSurface}><img src={imageUrl} alt={file.path} /></div>)
+  const html = isHtmlFile(file, mime)
+  if ((html || isMarkdownFile(file, mime)) && file.content !== undefined && file.textWindow === undefined) return (
     <div className={css.documentSurface}>
-      <div className={css.documentToolbar} role="group" aria-label={t('HTML 查看方式', 'HTML view mode')}>
-        <button type="button" aria-pressed={htmlMode === 'preview'} onClick={() => { setHtmlMode('preview') }}>
+      <div className={css.documentToolbar} role="group" aria-label={html ? t('HTML 查看方式', 'HTML view mode') : t('Markdown 查看方式', 'Markdown view mode')}>
+        <button type="button" aria-pressed={viewMode === 'preview'} onClick={() => setViewMode('preview')}>
           {t('预览', 'Preview')}
         </button>
-        <button type="button" aria-pressed={htmlMode === 'source'} onClick={() => { setHtmlMode('source') }}>
+        <button type="button" aria-pressed={viewMode === 'source'} onClick={() => setViewMode('source')}>
           {t('源码', 'Source')}
         </button>
       </div>
-      {htmlMode === 'source' ? (
-        <div className={css.content}><CodeBlock code={file.content} lang="html" lineNumbers
-          copyLabel={t('复制源码', 'Copy source')} copiedLabel={t('已复制', 'Copied')} /></div>
-      ) : (
+      {viewMode === 'source' ? <InspectorSource file={file} active={active} /> : html ? (
         <iframe className={css.htmlPreview} title={file.path} sandbox="allow-scripts"
           referrerPolicy="no-referrer" srcDoc={sandboxedHtml(file.content)} />
-      )}
+      ) : <div className={`${css.content} ${css.markdownPreview}`}>
+        <MarkdownText text={file.content} labels={markdownLabels(t)} pathImages={pathImages} />
+      </div>}
     </div>
   )
-  if (isPdfFile(file, mime)) return <div className={css.documentSurface}>
+  if (isPdfFile(file, mime)) return withLineNotice(<div className={css.documentSurface}>
     {assetUrl !== undefined && <iframe className={css.pdfPreview} title={file.path}
       referrerPolicy="no-referrer" src={assetUrl} />}
     <div className={css.documentActions}>
@@ -686,30 +703,13 @@ function FileContents({ file }: { file: InspectorFile }) {
         <a href={assetUrl} download={baseName(file.path)}>{t('下载 PDF', 'Download PDF')}</a>
       </> : <span>{t('没有可用的文件资源地址', 'No file asset URL is available')}</span>}
     </div>
-  </div>
-  if (isMarkdownFile(file, mime) && file.content !== undefined) return (
-    <div className={css.documentSurface}>
-      <div className={css.documentToolbar} role="group" aria-label={t('Markdown 查看方式', 'Markdown view mode')}>
-        <button type="button" aria-pressed={markdownMode === 'preview'} onClick={() => { setMarkdownMode('preview') }}>
-          {t('预览', 'Preview')}
-        </button>
-        <button type="button" aria-pressed={markdownMode === 'source'} onClick={() => { setMarkdownMode('source') }}>
-          {t('源码', 'Source')}
-        </button>
-      </div>
-      {markdownMode === 'source'
-        ? <SourceView file={file} t={t} />
-        : <div className={`${css.content} ${css.markdownPreview}`}>
-          <MarkdownText text={file.content} labels={markdownLabels(t)} pathImages={pathImages} />
-        </div>}
-    </div>
-  )
-  if (isTextMime(mime) && file.content !== undefined) return <SourceView file={file} t={t} />
-  if (mime.startsWith('image/')) return <div className={css.empty}>
+  </div>)
+  if (file.content !== undefined) return <InspectorSource file={file} active={active} assetUrl={assetUrl} />
+  if (mime.startsWith('image/')) return withLineNotice(<div className={css.empty}>
     <strong>{t('图片预览地址不可用', 'Image preview URL is unavailable')}</strong>
     <span>{file.mimeType}</span>
-  </div>
-  return <div className={css.empty}>
+  </div>)
+  return withLineNotice(<div className={css.empty}>
     <strong>{t('无法以内嵌方式预览此文件', 'This file cannot be previewed inline')}</strong>
     <span>{file.mimeType ?? t('未知文件类型', 'Unknown file type')}</span>
     {file.size !== undefined && <span>{formatFileSize(file.size)}</span>}
@@ -717,19 +717,7 @@ function FileContents({ file }: { file: InspectorFile }) {
       <a href={assetUrl} target="_blank" rel="noopener noreferrer">{t('打开文件', 'Open file')}</a>
       <a href={assetUrl} download={baseName(file.path)}>{t('下载文件', 'Download file')}</a>
     </span>}
-  </div>
-}
-
-/** 纯文本源码视图：逐行编号的 ReadBlock，支持定位行提示。 */
-function SourceView({ file, t }: { file: InspectorFile; t: (chinese: string, english: string) => string }) {
-  const content = file.content ?? ''
-  const language = file.language ?? languageFromPath(file.path)
-  const lines = content.split(/\r?\n/u)
-  return <div className={css.content}>
-    {file.line !== undefined && <div className={css.lineNote}>{t(`定位到第 ${file.line} 行`, `Requested line ${file.line}`)}</div>}
-    <ReadBlock label={file.path} lines={lines.map((text, index) => ({ number: index + 1, text }))}
-      totalLines={lines.length} lang={language} labels={readLabels(t)} maxLines={Math.max(lines.length, 1)} />
-  </div>
+  </div>)
 }
 
 /** 图片地址安全化：data:image 直通，其余必须是同源工作区资源 URL。 */
@@ -752,21 +740,6 @@ function isMarkdownFile(file: InspectorFile, mime: string): boolean {
 /** 是否按 PDF 文件渲染（MIME 或扩展名判断）。 */
 function isPdfFile(file: InspectorFile, mime: string): boolean {
   return mime === 'application/pdf' || /\.pdf$/iu.test(file.path)
-}
-
-/** 是否为可作纯文本渲染的 MIME 类型（text/* 与常见代码/配置类型）。 */
-function isTextMime(mime: string): boolean {
-  return mime.startsWith('text/') || /(?:json|xml|javascript|typescript|yaml|toml|x-sh|x-python|x-rust|x-c|x-c\+\+)/u.test(mime)
-}
-
-/** 从扩展名推断语言名（含 cjs/md/py/rs/sh 等别名），供代码块着色。 */
-function languageFromPath(path: string): string | undefined {
-  const extension = path.split('.').at(-1)?.toLocaleLowerCase()
-  if (extension === undefined || extension === path.toLocaleLowerCase()) return undefined
-  const aliases: Record<string, string> = {
-    cjs: 'javascript', htm: 'html', md: 'markdown', mjs: 'javascript', py: 'python', rs: 'rust', sh: 'bash', tsx: 'tsx', yml: 'yaml',
-  }
-  return aliases[extension] ?? extension
 }
 
 /** 字节数格式化为 B/KB/MB 文案；非法值返回空串。 */

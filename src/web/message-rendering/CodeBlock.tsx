@@ -7,7 +7,7 @@ import { useCopyFeedback } from './hooks.ts'
 import css from './CodeBlock.module.css'
 
 /**
- * 消息正文里的代码块卡片：与 Markdown fenced code 渲染对应，带语言图标标题、自动换行开关与复制按钮。
+ * 消息正文里的代码块：与 Markdown fenced code 渲染对应，带语言图标标题、自动换行开关与复制按钮。
  *
  * @param code 代码文本（由 Markdown 渲染管线传入）
  * @param language fenced 标注的语言名；空白时回落 `text`

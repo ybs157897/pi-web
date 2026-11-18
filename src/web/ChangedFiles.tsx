@@ -19,7 +19,7 @@ export interface ChangedFilesProps {
   readonly t: Translate
 }
 /**
- * 功能：宿主侧文件改动摘要卡（对应 ZCode 折叠的「已更改文件」汇总行），
+ * 功能：宿主侧文件改动摘要（对应 ZCode 折叠的「已更改文件」汇总行），
  * 出现在消息流中：头部显示改动文件数与总增删行数，展开后逐行列出文件及各自增删。
  * @param props artifacts 文件写入/编辑工件列表；onInspectDiff 点击某文件时回调
  *              （携带路径与 old/new/diff 之一）；t 双语翻译函数。
@@ -34,7 +34,7 @@ export default function ChangedFiles({ artifacts, onInspectDiff, t }: ChangedFil
   const added = files.reduce((sum, file) => sum + file.added, 0), deleted = files.reduce((sum, file) => sum + file.deleted, 0)
   const inspect = (file: ChangedFileEntry) => onInspectDiff?.({ path: file.path,
     ...(file.before === undefined ? {} : { oldText: file.before }), ...(file.after === undefined ? {} : { newText: file.after }), ...(file.diff === undefined ? {} : { diff: file.diff }) })
-  return <section className={css.card} data-message-changes>
+  return <section className={css.changes} data-message-changes>
     <button type="button" className={css.header} aria-label={open ? t('收起已更改文件', 'Collapse changed files') : t('展开已更改文件', 'Expand changed files')} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
       <ChevronRight size={14} data-open={open || undefined} aria-hidden="true" /><span>{t(`${files.length} 个文件已更改`, `${files.length} ${files.length === 1 ? 'file' : 'files'} changed`)}</span>
       <span className={css.counts}><span>+{added}</span><span>−{deleted}</span></span>

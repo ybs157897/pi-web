@@ -1,30 +1,135 @@
-/**
- * 解析回答里的工作区文件链接，支持 GitHub 风格的 `#L12` / `#L12-L34` 行号。
- * @param value 链接原文，可能是 `file://` 形式或裸路径
- * @returns 成功返回 `{ path, line? }`（line 为起始行，range 时同时表示区间端点）；含 query、控制字符、未知协议等一律 undefined
- * 内部逻辑：file:// 先转普通路径（剥 IPv4 映射前导斜杠）；`?` 视为非法；行号必须是 L 开头的正整数且区间不倒序。
- */
-export function parseAnswerFileLink(value: string): { path: string; line?: number } | undefined {
+export interface AnswerFileReference {
+  path: string
+  line?: number
+}
+
+const windowsPath = /^[a-z]:[\\/]/iu
+const scheme = /^[a-z][a-z\d+.-]*:/iu
+const lineFragment = /^L(\d+)(?:-L?(\d+))?$/iu
+const lineSuffix = /^(.*?):(\d+)(?:([:-])(\d+))?$/u
+const sourceLocation = /^(?:#L\d+(?:-L?\d+)?|:\d+(?:[:-]\d+)?)(?![\w:#-])/iu
+const standardFilename = /^(?:Dockerfile|Makefile|Gemfile|Rakefile|Justfile|README|LICENSE|\.[a-z][\w.-]*)$/iu
+const commonExtension = /\.(?:[cm]?[jt]sx?|jsonc?|ya?ml|toml|ini|xml|html?|s?css|vue|svelte|mdx?|rst|txt|csv|py|rb|go|rs|java|kt|swift|[ch]|cpp|hpp|sh|ps1|sql|lock|pdf|docx?|xlsx?|pptx?|png|jpe?g|svg|webp|gif|log)$/iu
+const extension = /\.[\p{L}][\p{L}\p{N}_-]*$/u
+
+/** 解析链接目标。行区间及行列坐标统一导航到起始行。 */
+export function parseAnswerFileLink(value: string): AnswerFileReference | undefined {
+  return parseFileDestination(value, true)
+}
+
+function parseFileDestination(value: string, decode: boolean): AnswerFileReference | undefined {
   if (/^file:\/\//iu.test(value)) {
     try {
       const url = new URL(value)
-      if (url.hostname && url.hostname !== 'localhost' || url.search) return undefined
+      if ((url.hostname && url.hostname !== 'localhost') || url.search) return undefined
       value = url.pathname.replace(/^\/([a-z]:\/)/iu, '$1') + url.hash
+      decode = true
     } catch { return undefined }
   }
+  if (value.includes('?')) return undefined
   const hash = value.indexOf('#')
-  const destination = hash < 0 ? value : value.slice(0, hash)
-  if (destination.includes('?')) return undefined
+  let destination = value
+  let line: number | undefined
+  if (hash >= 0) {
+    const match = lineFragment.exec(value.slice(hash + 1))
+    if (!match) return undefined
+    destination = value.slice(0, hash)
+    line = Number(match[1])
+    const end = Number(match[2] ?? match[1])
+    if (!Number.isSafeInteger(end) || end < line) return undefined
+  } else {
+    const match = lineSuffix.exec(value)
+    if (match) {
+      destination = match[1]!
+      // Bare names such as README.md:12 can be treated as schemes by the HTML sanitizer.
+      // Require a recognizable filename before interpreting an apparent scheme as a line suffix.
+      if (scheme.test(value) && !windowsPath.test(value) && !extension.test(destination) && !standardFilename.test(destination)) return undefined
+      line = Number(match[2])
+      if (match[4] !== undefined) {
+        const endOrColumn = Number(match[4])
+        if (!Number.isSafeInteger(endOrColumn) || endOrColumn < 1 || (match[3] === '-' && endOrColumn < line)) return undefined
+      }
+    }
+  }
+  if (line !== undefined && (!Number.isSafeInteger(line) || line < 1)) return undefined
   let path: string
-  try { path = decodeURIComponent(destination) } catch { return undefined }
-  if (!path || /[\u0000-\u001f\u007f]/u.test(path) || /^[\\/]{2}/u.test(path)
-    || (/^[a-z][a-z\d+.-]*:/iu.test(path) && !/^[a-z]:[\\/]/iu.test(path))) return undefined
-  if (hash < 0) return { path }
-  const match = /^L([1-9]\d*)(?:-L([1-9]\d*))?$/u.exec(value.slice(hash + 1))
-  if (!match) return undefined
-  const line = Number(match[1]); const end = Number(match[2] ?? match[1])
-  if (!Number.isSafeInteger(line) || !Number.isSafeInteger(end) || end < line) return undefined
-  return { path, line }
+  try { path = decode ? decodeURIComponent(destination) : destination } catch { return undefined }
+  if (!path.trim() || /[\u0000-\u001f\u007f]/u.test(path) || /^[\\/]{2}/u.test(path)
+    || (scheme.test(path) && !windowsPath.test(path))) return undefined
+  return line === undefined ? { path } : { path, line }
+}
+
+/** 整段行内代码或已分词的正文候选；先匹配当前回合已知路径，再处理明显的路径形态。 */
+export function resolveAnswerFileReference(value: string, paths: readonly string[] = [], knownOnly = false): AnswerFileReference | undefined {
+  value = value.trim()
+  if (!value) return undefined
+  const raw = parseFileDestination(value, false)
+  const decoded = value.includes('%') ? parseAnswerFileLink(value) : raw
+  for (const reference of [raw, decoded]) {
+    if (!reference) continue
+    const normalized = normalizedReferencePath(reference.path)
+    const exact = paths.find(path => normalizedReferencePath(path) === normalized)
+    if (exact !== undefined) return { ...reference, path: exact }
+    // A short name can refer to an artifact only when it identifies a single file in the turn.
+    if (!/[\\/]/u.test(reference.path)) {
+      const matches = paths.filter(path => normalizedReferencePath(path).split('/').at(-1) === normalized)
+      if (matches.length === 1) return { ...reference, path: matches[0]! }
+      if (matches.length > 1) return undefined
+    }
+  }
+  if (knownOnly) return undefined
+  const reference = decoded ?? raw
+  if (!reference || /^(?:~[^\\/]*[\\/]|[\\/]?$)/u.test(reference.path)
+    || !/^[\p{L}\p{N}\p{M}\p{S}_.@()%+ ,/\\:-]+$/u.test(reference.path)) return undefined
+  const basename = reference.path.split(/[\\/]/u).at(-1)!
+  if (standardFilename.test(basename) || commonExtension.test(basename)) return reference
+  const qualified = basename !== reference.path
+  return (qualified && extension.test(basename)) || (reference.line !== undefined && (qualified || extension.test(basename))) ? reference : undefined
+}
+
+function normalizedReferencePath(path: string): string {
+  return path.replace(/\\/gu, '/').replace(/^(?:\.\/)+/u, '')
+}
+
+/** 捕获 `file.ts`:12 形式中位于反引号外的行号。 */
+export function followingFileLocation(text: string): string {
+  return sourceLocation.exec(text)?.[0] ?? ''
+}
+
+interface TextFileReference {
+  start: number
+  end: number
+  target: string
+  label: string
+  markdown: boolean
+  knownOnly?: boolean
+}
+
+// Only scan Markdown text nodes. Explicit quoting separates paths containing spaces from prose.
+const textFileCandidate = /(?:^|[\s([{<"'“‘，。！？；：、,;])(?:\[([^\]\n]+)\]\(([^()\n]+)\)|"([^"\n]+)"|'([^'\n]+)'|“([^”\n]+)”|‘([^’\n]+)’|([\p{L}\p{N}\p{M}\p{S}_.%@+~\/\\#:-]+))/gu
+
+export function textFileReferences(text: string): TextFileReference[] {
+  const references: TextFileReference[] = []
+  for (const match of text.matchAll(textFileCandidate)) {
+    const [full, markdownLabel, markdownTarget, double, single, smartDouble, smartSingle, token] = match
+    if (markdownTarget !== undefined) {
+      // CommonMark falls back to text when models omit angle brackets around a destination with spaces.
+      if (!/[ \t]/u.test(markdownTarget) || !resolveAnswerFileReference(markdownTarget)) continue
+      const start = match.index + full.indexOf('[')
+      references.push({ start, end: match.index + full.length, target: markdownTarget, label: markdownLabel!, markdown: true })
+      continue
+    }
+    const quoted = double ?? single ?? smartDouble ?? smartSingle
+    const value = quoted ?? token?.replace(/[.:]+$/u, '')
+    if (!value || (!/[.\\/#:]/u.test(value) && !standardFilename.test(value))) continue
+    const reference = resolveAnswerFileReference(value)
+    if (!reference) continue
+    // A bare filename in prose needs a position, a directory, or a matching artifact.
+    const knownOnly = quoted === undefined && reference.line === undefined && !/[\\/]/u.test(value)
+    const start = match.index + full.lastIndexOf(quoted ?? token!)
+    references.push({ start, end: start + value.length, target: value, label: value, markdown: false, knownOnly })
+  }
+  return references
 }
 
 /**

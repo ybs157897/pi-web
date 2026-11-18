@@ -109,6 +109,8 @@
 .navItem:focus-visible,
 .workspaceToggle:focus-visible,
 .sessionSelect:focus-visible,
+.rowIconButton:focus-visible,
+.mobileSidebarButton:focus-visible,
 .accountRow:focus-visible {
   outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
   outline-offset: -2px;
@@ -122,8 +124,9 @@
   margin: 2px -4px 4px;
   border-radius: var(--dsw-radius-md);
   padding-left: 4px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 14px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 500;
   line-height: 20px;
 }
 .workspaceHeader > span { flex: none; }
@@ -143,57 +146,72 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 .workspaceGroup { min-width: 0; }
+.workspaceGroup + .workspaceGroup { margin-top: 4px; }
 .workspaceRow {
-  position: relative;
   min-width: 0;
   height: 36px;
   border-radius: var(--dsw-radius-md);
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
 }
-/* 组头不托起：与选中的会话行相邻时两块白卡会粘成一体，active 白卡只留给会话行。 */
 .workspaceRow:hover,
-.workspaceRow[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
+.workspaceRow:focus-within,
+.workspaceRow[data-menu-open] { background: var(--dsw-alias-interactive-bg-hover); }
+.workspaceRow[data-selected] { color: var(--dsw-alias-label-primary); }
 .workspaceToggle {
   flex: 1;
   min-width: 0;
-  height: 36px;
+  height: 100%;
   gap: 5px;
   border: 0;
   border-radius: inherit;
-  padding: 0 30px 0 6px;
+  padding: 0 4px 0 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
   font: inherit;
   font-size: 14px;
+  font-weight: 600;
   line-height: 22px;
 }
 .workspaceToggle > svg:first-child { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform 150ms var(--ds-ease-in-out); }
-.workspaceToggle > svg:nth-child(2) { flex: none; color: var(--dsw-alias-state-business-primary); }
+.workspaceToggle > svg:nth-child(2) { flex: none; }
+.workspaceRow[data-selected] .workspaceToggle > svg:nth-child(2) { color: var(--dsw-alias-state-business-primary); }
 .chevronOpen { transform: rotate(90deg); }
 .workspaceName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspaceSessions { min-width: 0; margin: 0 0 2px; }
-.workspaceLabel { gap: 7px; height: 36px; border-radius: var(--dsw-radius-md); padding: 0 8px; color: var(--dsw-alias-label-secondary); font-size: 14px; }
+.workspaceSessions { min-width: 0; margin: 2px 0 4px 24px; }
+.workspaceLabel { gap: 5px; height: 36px; padding: 0 6px 0 24px; color: var(--dsw-alias-label-secondary); font-size: 14px; font-weight: 600; }
 .workspaceLabel > svg { color: var(--dsw-alias-label-tertiary); }
 
 .sessionRow {
   position: relative;
   min-width: 0;
   height: 36px;
-  gap: 0;
   margin: 1px 0;
-  padding: 0 8px;
+  padding: 0 6px;
   border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
 .sessionRow:hover:not([data-selected]),
-.sessionRow:focus-within:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
+.sessionRow:focus-within:not([data-selected]),
+.sessionRow[data-menu-open]:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
 .sessionRow[data-selected] { background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-elevation-soft); --dsw-elevation-stroke-color: var(--dsw-alias-border-l1); }
+.sessionRow[data-selected]::before {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--dsw-alias-state-business-primary);
+  transform: translateY(-50%);
+  content: '';
+}
 .sessionSelect {
   display: flex;
   flex: 1;
   min-width: 0;
+  align-self: stretch;
   align-items: center;
   gap: 0;
   border: 0;
@@ -206,46 +224,50 @@
   font: inherit;
 }
 .sessionTitle { flex: 1; min-width: 0; margin: 0 6px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: normal; }
+.sessionRow[data-selected] .sessionTitle { font-weight: 600; }
 /* ZCode's leading 16px cell: a spinning loader while the turn runs, nothing when idle. */
 .sessionSlot { display: inline-flex; flex: none; width: 16px; height: 20px; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); }
-.sessionPin { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-label-tertiary); }
+.sessionPin { display: inline-flex; flex: none; align-items: center; margin-right: 4px; color: var(--dsw-alias-label-tertiary); }
 .sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
 .sessionUnread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
-.sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
-/* DSH's trailing action strip: hidden until the row is hovered, then the
-   time cell and the strip swap places so nothing shifts. */
+.sessionTail { display: grid; flex: none; align-items: center; justify-items: end; }
+.sessionTail > * { grid-area: 1 / 1; }
+.sessionMeta { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 16px; white-space: nowrap; }
+/* 时间和操作共用尾部格，标题宽度在悬停和键盘操作时保持一致。 */
 .rowActions {
-  display: none;
+  display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 15px;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
 }
+.workspaceRow .rowActions { margin-right: 4px; }
 
-.sessionRow:hover .rowActions,
-.sessionRow[data-menu-open] .rowActions,
-.sessionRow:focus-within .rowActions,
-.workspaceRow:hover .rowActions,
-.workspaceRow:focus-within .rowActions { display: inline-flex; }
+.sessionRow:is(:hover, :focus-within, [data-menu-open]) .rowActions,
+.workspaceRow:is(:hover, :focus-within, [data-menu-open]) .rowActions { opacity: 1; pointer-events: auto; }
 
-.sessionRow:hover .sessionMeta,
-.sessionRow[data-menu-open] .sessionMeta { display: none; }
+@media (hover: hover) {
+  .sessionRow:is(:hover, :focus-within, [data-menu-open]) .sessionMeta { opacity: 0; }
+}
 
 .rowIconButton {
   flex: none;
   display: inline-flex;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: var(--dsw-radius-xs);
   padding: 0;
   background: transparent;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--dsw-alias-label-secondary);
   cursor: pointer;
 }
-.rowIconButton:hover { color: var(--dsw-alias-label-primary); }
+.rowIconButton:is(:hover, :focus-visible, [aria-expanded='true']),
+.workspaceTools :global(button[aria-expanded='true']) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .renameForm { display: flex; flex: 1; min-width: 0; align-items: center; gap: 4px; padding: 3px; }
 .renameForm input { flex: 1; min-width: 0; height: 26px; border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); padding: 0 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
 .renameForm button { flex: none; border: 0; border-radius: var(--dsw-radius-sm); padding: 4px 6px; background: transparent; color: var(--dsw-alias-link); cursor: pointer; font-size: 11px; }
@@ -261,7 +283,8 @@
 
 /* DSH's footer row: one full-width account button an avatar and a name wide. */
 .accountRow { display: flex; width: 100%; min-width: 0; height: 44px; align-items: center; gap: 8px; padding: 6px; border: 0; border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
-.accountRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.accountRow:hover,
+.accountRow[aria-expanded='true'] { background: var(--dsw-alias-interactive-bg-hover); }
 .accountAvatar { display: inline-flex; width: 24px; height: 24px; flex: none; align-items: center; justify-content: center; border-radius: 999px; background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 500; }
 .accountLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accountMenuAnchor { display: block; width: 100%; }
@@ -271,12 +294,15 @@
 .mainPanel { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; outline: none; background: var(--dsw-alias-bg-base); }
 /* 避免文件定位的 scrollIntoView 把整个网格（含顶栏）滚出视口。只有内容区负责滚动。 */
 .mainBody { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); flex: 1; min-width: 0; min-height: 0; overflow: clip; container-type: inline-size; }
-.withInspector { grid-template-columns: minmax(0, 1fr) 5px var(--inspector-width, 360px); }
+.withInspector { grid-template-columns: minmax(0, 1fr) var(--inspector-divider-width) var(--inspector-width); }
+.mainBody[data-inspector-dragging] { cursor: col-resize; user-select: none; }
 .inspectorResizer { position: relative; z-index: 3; cursor: col-resize; touch-action: none; background: transparent; }
-.inspectorResizer::after { content: ''; position: absolute; top: 0; right: 2px; bottom: 0; width: 1px; background: var(--dsw-alias-border-l2); transition: width 80ms var(--ds-ease-in-out), background 80ms var(--ds-ease-in-out); }
-.inspectorResizer:hover::after, .inspectorResizer:focus-visible::after { right: 1px; width: 3px; background: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3)); }
+.inspectorResizer::after { content: ''; position: absolute; inset: 0 auto 0 50%; width: 1px; background: var(--dsw-alias-border-l2); transform: translateX(-50%); }
+.inspectorResizer:is(:hover, :focus-visible)::after,
+.mainBody[data-inspector-dragging] .inspectorResizer::after { width: 3px; background: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3)); }
 .inspectorResizer:focus-visible { outline: none; }
 .primaryPanel { display: flex; min-width: 0; min-height: 0; flex-direction: column; margin-right: 2px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+.withInspector > .primaryPanel { margin-right: 0; }
 .panelToggleIcon { transform: scaleX(-1); }
 .heroHeader { display: flex; flex: none; align-items: center; justify-content: space-between; height: 40px; padding: 0 10px 0 16px; }
 .topbar { flex: none; min-width: 0; height: 42px; justify-content: space-between; gap: 12px; padding: 0 18px 0 20px; }
@@ -380,8 +406,8 @@
    flex 容器：display:block 时这些属性不生效，根节点会被长文件撑到内容高度，
    内部的内容区反而没有可滚动的高度（表现为「展开文件后无法滚动」）。 */
 .inspectorPane { z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: var(--dsw-alias-bg-base); }
-/* ZCode 的完整视图：面板覆盖整个主行，而不是占用自己的栅格列。 */
-.inspectorPaneFullscreen { position: absolute; inset: 0; z-index: 30; }
+/* 完整视图和窄主区使用同一个面板，保留已打开的标签和滚动状态。 */
+.withInspectorOverlay .inspectorPane { position: absolute; inset: 0; z-index: 30; }
 .settingsNotice { position: absolute; z-index: 10; right: 14px; bottom: 12px; max-width: min(420px, calc(100% - 28px)); border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); padding: 8px 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
 .appLoading { display: grid; width: 100%; height: 100%; place-items: center; background: var(--dsw-alias-bg-base); }
 .appLoading .spinner { width: 18px; height: 18px; }
@@ -409,8 +435,7 @@
 .sidebarCollapsed .workspaceList { display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
 .sidebarCollapsed .workspaceRow { width: 36px; }
 .sidebarCollapsed .workspaceToggle { width: 36px; justify-content: center; padding: 0; }
-.sidebarCollapsed .workspaceLabel { justify-content: center; }
-.sidebarCollapsed .workspaceRow .rowActions { display: none; }
+.sidebarCollapsed .workspaceLabel { justify-content: center; padding: 0; }
 .sidebarCollapsed .sidebarFoot { justify-content: center; }
 .sidebarCollapsed .accountRow { width: 36px; justify-content: center; padding: 0; }
 
@@ -433,9 +458,11 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (hover: none) {
-  /* Without hover the strip has to stand in for the time cell permanently. */
-  .rowActions { display: inline-flex; }
-  .sessionRow .sessionMeta { display: none; }
+  .workspaceRow,
+  .sessionRow { height: 40px; }
+  .rowActions { opacity: 1; pointer-events: auto; }
+  .rowIconButton { width: 32px; height: 36px; }
+  .sessionTail { display: flex; align-items: center; gap: 2px; }
 }
 
 @media (max-width: 760px) {
@@ -452,9 +479,6 @@
   .conversationTitle { max-width: 60vw; }
   .cwd { max-width: 58vw; }
   .topbarActions { gap: 0; }
-  .withInspector { display: block; }
-  .inspectorResizer { display: none; }
-  .inspectorPane { position: absolute; inset: 0; width: 100%; height: 100%; border-left: 0; }
   .heroHeader { height: 40px; padding-right: 8px; }
   .heroArea { padding: 0; }
 }
@@ -463,8 +487,6 @@
   .brandName small { display: none; }
   .workspaceHeader { margin-top: 0; }
   .workspaceSearchInput { font-size: 12px; }
-  .sessionMeta { max-width: 30px; right: 30px; }
-  .sessionSelect { padding-right: 64px; }
   .topbarActions :global([data-connection-indicator]) { max-width: 24px; }
   .conversationTitle { max-width: 47vw; }
   .cwd { max-width: 45vw; }

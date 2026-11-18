@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, IconChevronRightOutlineRegular, IconFolderCloseRegular, IconFolderOpenOutlineRegular, IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronRightOutlineRegular, IconFolderCloseRegular, IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { MessageFileIcon } from './message-rendering/FileIcon.tsx'
 import type { WorkspaceFileEntry, WorkspaceSummary } from '../shared/types.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
@@ -64,29 +65,32 @@ export default function WorkspaceBrowserPage({ workspace, onOpenFile, path: init
   const crumbs = useMemo(() => path === '' ? [] : path.split('/').filter(Boolean).map((name, index, items) => ({
     name, path: items.slice(0, index + 1).join('/'),
   })), [path])
+  const fullPath = path === '' ? workspace.path : `${workspace.path}/${path}`
 
   return <div className={`${css.page}${compact ? ` ${css.compact}` : ''}`}>
     <header className={css.header}>
       <div className={css.heading}>
         <div className={css.crumbs} aria-label={t('当前目录', 'Current folder')}>
-          <button type="button" onClick={() => { setPath('') }}>{workspace.name}</button>
+          <button type="button" title={workspace.name} aria-current={path === '' ? 'location' : undefined}
+            onClick={() => { setPath('') }}>{workspace.name}</button>
           {crumbs.map(crumb => <span className={css.crumb} key={crumb.path}>
-            <IconChevronRightOutlineRegular size={13} />
-            <button type="button" onClick={() => { setPath(crumb.path) }}>{crumb.name}</button>
+            <IconChevronRightOutlineRegular size={13} aria-hidden="true" />
+            <button type="button" title={crumb.name} aria-current={crumb.path === path ? 'location' : undefined}
+              onClick={() => { setPath(crumb.path) }}>{crumb.name}</button>
           </span>)}
         </div>
-        <p>{workspace.path}{path === '' ? '' : `/${path}`}</p>
+        <p title={fullPath}>{fullPath}</p>
       </div>
       <Button variant="ghost" size="sm" aria-label={t('刷新目录', 'Refresh folder')}
         icon={<IconRefreshOutlineRegular size={15} />} onClick={() => { setReload(value => value + 1) }} />
     </header>
     <div className={css.list} ref={listRef}>
-      {path !== '' && <button type="button" className={css.entry} onClick={() => {
+      {path !== '' && <button type="button" className={css.entry} aria-label={t('返回上级目录', 'Go to parent folder')} onClick={() => {
         const parts = path.split('/').filter(Boolean)
         parts.pop()
         setPath(parts.join('/'))
       }}>
-        <IconFolderCloseRegular size={16} /> <span>..</span>
+        <IconFolderCloseRegular size={16} aria-hidden="true" /> <span className={css.name}>..</span>
       </button>}
       {loading && <div className={css.skeleton}><i /><i /><i /><i /></div>}
       {!loading && error !== '' && <div className={css.notice} role="alert">
@@ -102,11 +106,13 @@ export default function WorkspaceBrowserPage({ workspace, onOpenFile, path: init
 /** 单个文件/目录条目行：图标 + 名称 + 类型或大小 + 修改时间；点击经 onOpen 进入或打开。 */
 function FileEntry({ entry, onOpen }: { entry: WorkspaceFileEntry; onOpen: () => void }) {
   const { t, settings } = useUiPreferences()
-  return <button type="button" className={css.entry} onClick={onOpen}>
-    {entry.type === 'directory' ? <IconFolderCloseRegular size={16} /> : <span className={css.fileIcon} aria-hidden>·</span>}
+  const directory = entry.type === 'directory'
+  return <button type="button" className={css.entry} title={entry.name} onClick={onOpen}>
+    {directory ? <IconFolderCloseRegular size={16} aria-hidden="true" /> : <MessageFileIcon path={entry.path} />}
     <span className={css.name}>{entry.name}</span>
-    <small>{entry.type === 'directory' ? t('文件夹', 'Folder') : formatBytes(entry.size)}</small>
+    <small>{directory ? t('文件夹', 'Folder') : formatBytes(entry.size)}</small>
     <time>{entry.modifiedAt === undefined ? '' : formatDate(entry.modifiedAt, settings.locale)}</time>
+    <span className={css.entryAction} aria-hidden="true">{directory && <IconChevronRightOutlineRegular size={14} />}</span>
   </button>
 }
 

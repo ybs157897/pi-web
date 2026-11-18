@@ -505,7 +505,7 @@ class WorkspaceFilesRuntime extends FakeRuntime {
 
   workspaces(): Protocol.WorkspaceSummary[] { return [{ id: 'ws-1', name: 'Workspace', path: this.root, createdAt: NOW, updatedAt: NOW }] }
   override async workspaceFiles(id: string, path: string): Promise<Protocol.WorkspaceFileEntry[]> { return this.files.list(id, path) }
-  override async workspaceFile(id: string, path: string): Promise<Protocol.WorkspaceFile> { return this.files.read(id, path) }
+  override async workspaceFile(id: string, path: string, line?: number): Promise<Protocol.WorkspaceFile> { return this.files.read(id, path, line) }
   override async workspaceAsset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> { return this.files.asset(id, path) }
 }
 
@@ -1302,6 +1302,33 @@ describe('management API', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('returns bounded large-file excerpts with original line numbers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
+    const rows = Array.from({ length: 4500 }, (_, index) => `${index + 1}: ${'x'.repeat(index === 3800 ? 3000 : 480)}`)
+    await writeFile(join(root, 'notes.txt'), rows.map((row, index) => `${row}${index % 2 === 0 ? '\r\n' : '\r'}`).join(''))
+    try {
+      const { app } = createTestApp(new WorkspaceFilesRuntime(root))
+      const url = '/api/workspaces/ws-1/file?path=notes.txt'
+      const located = await app.request(`${url}&line=3801`)
+      expect(located.status).toBe(200)
+      const excerpt = await located.json() as Protocol.WorkspaceFile
+      expect(excerpt).toMatchObject({ kind: 'text', textWindow: { startLine: 3721, totalLines: 4501, clippedLines: true } })
+      expect(excerpt.data).toBeUndefined()
+      const lines = excerpt.content?.split('\n')
+      expect(lines).toHaveLength(161)
+      expect(lines?.[80]).toBe(rows[3800]!.slice(0, 2048))
+
+      const outOfRange = await app.request(`${url}&line=9007199254740991`)
+      expect(await outOfRange.json()).toMatchObject({ textWindow: { startLine: 1, totalLines: 4501, clippedLines: false } })
+      for (const line of ['0', '-3', '1.5', '2e2', '9007199254740992']) {
+        expect((await app.request(`${url}&line=${line}`)).status).toBe(400)
+      }
+      expect((await app.request('/api/workspaces/ws-1/file?path=../notes.txt&line=3801')).status).toBe(403)
+    } finally {
+      await rm(root, { recursive: true, force: true })
     }
   })
 

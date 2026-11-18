@@ -5,7 +5,7 @@ import {
   IconDislikeOutlineRegular, IconLikeFillRegular, IconLikeOutlineRegular, IconLoadingOutlineRegular, ImageLightbox, MarkdownDelegateProvider,
   Menu, MenuItemButton, IconRefreshOutlineRegular, MarkdownText, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MarkdownFileMentions, MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, SubagentSummary } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import { api } from './api.ts'
@@ -25,7 +25,7 @@ import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-br
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { ChevronRight } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, foldedProsePreview, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
+import { defaultProcessOpen, foldedActivitySummary, foldedProsePreview, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -251,6 +251,15 @@ function RunTranscript({
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
+  const filePaths = useMemo(() => {
+    const paths = new Set<string>()
+    for (const message of run.messages) {
+      if (message.isError || message.status === 'error' || message.status === 'cancelled') continue
+      for (const artifact of message.artifacts ?? []) paths.add(artifact.path)
+      for (const block of message.blocks) if (block.type === 'file') paths.add(block.path)
+    }
+    return [...paths]
+  }, [run.messages])
   return (
     <section className={css.run} data-run-id={run.runId}>
       {run.users[0] !== undefined && <MessageRow key={run.users[0].id} message={run.users[0]}
@@ -260,14 +269,14 @@ function RunTranscript({
           onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
           onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
           onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
-          resolveFileImage={resolveFileImage} labels={labels} replies={replies} interactions={interactions} />
+          resolveFileImage={resolveFileImage} filePaths={filePaths} labels={labels} replies={replies} interactions={interactions} />
       )}
       {run.systemRows.filter(row => row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {run.responses.map((response, index) => (
         <AssistantResponse key={response.key} response={response} run={run} last={index === run.responses.length - 1} live={live}
           showChanges={showChanges} onInspectDiff={onInspectDiff}
           onFork={onFork} onRetry={onRetry} onFeedback={onFeedback} onOpenFile={onOpenFile}
-          labels={labels} resolveFileImage={resolveFileImage} t={t} />
+          labels={labels} resolveFileImage={resolveFileImage} filePaths={filePaths} t={t} />
       ))}
       {run.systemRows.filter(row => !row.beforeAnswer).map(row => <SystemMessageRow key={row.key} message={row.message} />)}
       {/* DSH 的回合尾计划卡（`ui-plan/index.ts:79-96`）由 `exit_plan_mode` 工具行承载，
@@ -353,10 +362,10 @@ function MessageRow({ message, onOpenFile, resolveFileImage, t }: {
  * @param policy 呈现策略（stepGrouping 决定折叠形态，liveReasoningPreview 传给思考块）
  * @param subagents 会话的活跃子智能体投影（供内联条带）
  * 其余为过程部件渲染所需的回调与载荷。
- * 内部逻辑：autoOpen 只在 live/latest 边界移动（run 接管/落定/被取代），普通重投影帧保持不动，组不会自己开合抖动；manualOpen 是用户手动翻转；夹带用户输入时强制展开且 header 禁点；折叠时头部显示 foldedProsePreview（装饰性）；带内联插件页的成功工具行钉在折叠区外（pinned），避免折叠时页面消失；连续子智能体调用在 groupSubagentRuns 中折叠成条带。
+ * 内部逻辑：autoOpen 只在 live/latest 边界移动（run 接管/落定/被取代），manualOpen 记录用户手动翻转；夹带用户输入时强制展开。折叠时头部优先显示正文预览，其次显示调用计数；成功的内联插件页固定在折叠区外，连续子智能体调用折叠成条带。
  */
 function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
-  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, replies, interactions }: {
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, filePaths, labels, replies, interactions }: {
   run: RenderRun
   latest: boolean
   /** 会话仍在运行这个最新回合。 */
@@ -375,6 +384,7 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   onPluginMessage?: TranscriptProps['onPluginMessage']
   onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
+  filePaths: readonly string[]
   labels: ReturnType<typeof markdownLabels>
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
@@ -399,9 +409,7 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
-  // 折叠的分组还会藏起模型伴随工具调用写的正文；在头部点出这段正文，
-  // 让实质内容保持一键可达，而不是藏在耗时后面。
-  const preview = open || live ? undefined : foldedProsePreview(run)
+  const preview = open || live ? undefined : foldedProsePreview(run) ?? foldedActivitySummary(run, t)
   // ZCode 把带内联插件页的成功工具行留在折叠历史区之外。否则分组收起时页面
   // 会消失，最终答案顶替它的位置。
   type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
@@ -422,7 +430,7 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
       policy={policy} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
       onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
       onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
-      resolveFileImage={resolveFileImage} labels={labels} t={t} replies={replies} interactions={interactions} />
+      resolveFileImage={resolveFileImage} filePaths={filePaths} labels={labels} t={t} replies={replies} interactions={interactions} />
   const body = parts.map(renderPart)
   const pinnedBody = pinned.map(renderPart)
   if (!grouped) {
@@ -438,13 +446,13 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   return <>
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
+        aria-labelledby={`${bodyId}-title`} aria-describedby={preview === undefined ? undefined : `${bodyId}-summary`}
         data-preview={preview === undefined ? undefined : ''}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
-        <span className={css.processTitle} data-running={live || undefined}>{title}</span>
+        <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
         <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-        {/* 装饰性提示：可访问名称仍是头部自带的耗时。 */}
-        {preview !== undefined && <span className={css.processPreview} data-process-preview="" aria-hidden="true">{preview}</span>}
+        {preview !== undefined && <span id={`${bodyId}-summary`} className={css.processPreview} data-process-preview="" title={preview}>{preview}</span>}
       </button>
       <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
     </div>}
@@ -460,7 +468,7 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
  * 其余为透传回调与载荷。
  */
 function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
-  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, replies, interactions }: {
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, filePaths, labels, t, replies, interactions }: {
   part: ProcessPart
   runRunning: boolean
   policy: ChatPresentationPolicy
@@ -474,6 +482,7 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
   onPluginMessage?: TranscriptProps['onPluginMessage']
   onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
+  filePaths: readonly string[]
   labels: ReturnType<typeof markdownLabels>
   t: Translate
   replies: ReadonlyMap<string, LateAnswer>
@@ -490,7 +499,7 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
     onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan} t={t} />
   if (part.kind === 'content') return <div className={css.processOutput} data-message-id={part.message.id}>
     <ContentBlockView block={part.block} streaming={part.streaming} answer
-      onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} labels={labels} t={t} />
+      onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} filePaths={filePaths} labels={labels} t={t} />
   </div>
   return <ReasoningBlock id={part.key} text={part.text} streaming={part.streaming} redacted={part.redacted} preview={policy.liveReasoningPreview} t={t} />
 }
@@ -503,9 +512,9 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
  * @param last 是否为本 run 最后一段响应（重试/改动文件/用量只挂最后一段）
  * @param live 会话仍在运行这个最新回合
  * @param showChanges 是否开启编码视图（含改动文件卡）
- * 内部逻辑：streaming = 消息流式或 run 状态 running 或会话 live——run 状态在两次工具轮之间会短暂回落 completed，会话级 live 让末态操作、用量与改动文件保持隐藏直到真正落定；fileMentions 把 run 产出的文件路径接进 Markdown 行内代码。
+ * 内部逻辑：streaming = 消息流式或 run 状态 running 或会话 live——run 状态在两次工具轮之间会短暂回落 completed，会话级 live 让末态操作、用量与改动文件保持隐藏直到真正落定。
  */
-function AssistantResponse({ response, run, last, live, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, t }: {
+function AssistantResponse({ response, run, last, live, showChanges, onInspectDiff, onFork, onRetry, onFeedback, onOpenFile, labels, resolveFileImage, filePaths, t }: {
   response: ResponsePart
   run: RenderRun
   last: boolean
@@ -520,6 +529,7 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
   onOpenFile?: TranscriptProps['onOpenFile']
   labels: ReturnType<typeof markdownLabels>
   resolveFileImage?: TranscriptProps['resolveFileImage']
+  filePaths: readonly string[]
   t: Translate
 }) {
   const { settings } = useUiPreferences()
@@ -531,13 +541,6 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
   // 用量与改动文件保持隐藏，直到回合真正落定。
   const streaming = message.streaming === true || run.status === 'running' || live
   const entryId = message.entryId
-  const mentionPaths = useMemo(() => [...new Set(run.artifacts
-    .filter(artifact => artifact.kind !== 'read')
-    .map(artifact => artifact.path))], [run.artifacts])
-  const fileMentions = useMemo(() => {
-    if (onOpenFile === undefined || mentionPaths.length === 0) return undefined
-    return producedFileMentions(mentionPaths, path => { onOpenFile(path) }, path => t(`打开文件 ${path}`, `Open file ${path}`))
-  }, [mentionPaths, onOpenFile, t])
   const pathImages = useMemo(() => {
     if (resolveFileImage === undefined) return undefined
     return { resolve: (value: string) => localPathMediaUrl(value, resolveFileImage) }
@@ -564,7 +567,7 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
       <div className={css.assistantBody}>
         {response.blocks.map((block, index) => <ContentBlockView key={`${message.id}:response:${block.slot ?? index}`} block={block}
           streaming={streaming} answer onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} t={t} labels={labels}
-          fileMentions={fileMentions} pathImages={pathImages} />)}
+          filePaths={filePaths} pathImages={pathImages} />)}
         {!streaming && run.status === 'cancelled' && <div className={css.runNotice} data-status="cancelled" role="status">
           {t('回答已停止', 'Response stopped')}
         </div>}
@@ -634,7 +637,7 @@ function AssistantResponse({ response, run, last, live, showChanges, onInspectDi
  * @param plainText 用户气泡内的纯文本模式
  * @param answer 答案区模式（用 AnswerMarkdown，带文件提及与图片路径解析）
  */
-function ContentBlockView({ block, streaming = false, plainText = false, answer = false, onOpenFile, resolveFileImage, t, labels, fileMentions, pathImages }: {
+function ContentBlockView({ block, streaming = false, plainText = false, answer = false, onOpenFile, resolveFileImage, t, labels, filePaths, pathImages }: {
   block: ContentBlock
   streaming?: boolean
   plainText?: boolean
@@ -643,16 +646,16 @@ function ContentBlockView({ block, streaming = false, plainText = false, answer 
   resolveFileImage?: TranscriptProps['resolveFileImage']
   t: Translate
   labels?: ReturnType<typeof markdownLabels>
-  fileMentions?: MarkdownFileMentions
+  filePaths?: readonly string[]
   pathImages?: MarkdownPathImages
 }) {
   switch (block.type) {
     case 'text':
       return plainText ? <div className={css.userText}>{block.text}</div>
         : answer ? <AnswerMarkdown text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)} t={t}
-          fileMentions={fileMentions} pathImages={pathImages} onOpenFile={onOpenFile} />
+          filePaths={filePaths} pathImages={pathImages} onOpenFile={onOpenFile} />
         : <MarkdownText text={block.text} streaming={streaming} labels={labels ?? markdownLabels(t)}
-          fileMentions={fileMentions} pathImages={pathImages} />
+          pathImages={pathImages} />
     case 'thinking':
       return null
     case 'image':
@@ -743,32 +746,6 @@ function UsageRow({ label, value, money = false, separatorBefore = false, onSele
   return <MenuItemButton separatorBefore={separatorBefore} onSelect={onSelect}>
     <span className={css.usageRow}><span>{label}</span><span>{money ? `$${value.toFixed(5)}` : value.toLocaleString()}</span></span>
   </MenuItemButton>
-}
-
-/**
- * 功能：把行内代码 token 解析成本 run 写过的文件，形成 Markdown 文件提及（对齐 DSH 词表）。
- * @param paths 本 run 产出的去重路径
- * @param open 点击提及时的打开回调
- * @param label 提及的展示文案
- * 内部逻辑：完整路径直接匹配；否则按 basename 唯一匹配（多个同名文件不解析）。
- */
-function producedFileMentions(paths: readonly string[], open: (path: string) => void, label: (path: string) => string): MarkdownFileMentions {
-  const onlyWithBasename = (value: string): string | undefined => {
-    const matches = paths.filter(path => pathBasename(path) === value)
-    return matches.length === 1 ? matches[0] : undefined
-  }
-  return {
-    resolve(value) {
-      const path = paths.includes(value) ? value : onlyWithBasename(value)
-      if (path === undefined) return undefined
-      return { open: () => { open(path) }, label: label(path), title: path }
-    },
-  }
-}
-
-/** 路径的 basename（兼容 Windows 反斜杠）。 */
-function pathBasename(path: string): string {
-  return path.split(/[/\\]/u).at(-1) ?? path
 }
 
 /** 把模型写出的图片目标地址解析成本工作区的资产 URL。 */

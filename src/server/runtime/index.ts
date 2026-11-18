@@ -767,7 +767,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     /** 全工作区搜索。 */
     searchWorkspace: (id, query) => workspacesService.search(id, query),
     /** 读取工作区文本文件。 */
-    workspaceFile: (id, path) => workspacesService.file(id, path),
+    workspaceFile: (id, path, line) => workspacesService.file(id, path, line),
     /** 读取工作区二进制资源。 */
     workspaceAsset: (id, path) => workspacesService.asset(id, path),
     /** 分支快照。 */

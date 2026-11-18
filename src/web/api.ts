@@ -310,8 +310,9 @@ export const api = {
     const query = new URLSearchParams({ path })
     return request(`/api/workspaces/${encodeURIComponent(id)}/files?${query.toString()}`)
   },
-  getWorkspaceFile(id: string, path: string): Promise<WorkspaceFile> {
+  getWorkspaceFile(id: string, path: string, line?: number): Promise<WorkspaceFile> {
     const query = new URLSearchParams({ path })
+    if (line !== undefined) query.set('line', String(line))
     return request(`/api/workspaces/${encodeURIComponent(id)}/file?${query.toString()}`)
   },
   searchWorkspaceFiles(id: string, queryText: string): Promise<{ entries: WorkspaceFileEntry[] }> {

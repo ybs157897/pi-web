@@ -1,6 +1,13 @@
 .markdown { min-width: 0; width: 100%; color: var(--message-fg); font-size: var(--message-font); line-height: 1.75; letter-spacing: .025em; overflow-wrap: anywhere; line-break: strict; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
+/* Only newly arrived text fades. Its full layout is present from the first frame. */
+@media (prefers-reduced-motion: no-preference) {
+  .markdown [data-sd-animate] {
+    animation: reveal-text var(--sd-duration) ease-out min(var(--sd-delay, 0ms), 180ms) backwards;
+  }
+}
+@keyframes reveal-text { from { opacity: 0; } to { opacity: 1; } }
 .paragraph { margin: 16px 0; }
 .h1, .h2, .h3, .h4, .h5, .h6 { margin: 24px 0 16px; font-weight: 600; line-height: inherit; }
 .h1 { font-size: calc(var(--message-font) + 4px); }

@@ -1,10 +1,19 @@
-.block { position: relative; width: 100%; min-width: 0; margin: 20px 0; overflow: hidden; border: 0; box-shadow: var(--message-card-elevation); border-radius: 16px; background: var(--message-card); color: var(--message-fg); }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 10px 10px 16px; font-size: 15px; line-height: 1.5; }
-.title { display: inline-flex; min-width: 0; align-items: center; gap: 8px; font-family: var(--message-mono); }
+.block {
+  --message-code-viewer-background: color-mix(in srgb, var(--message-background), var(--message-fg) 5%);
+  width: 100%;
+  min-width: 0;
+  margin: 16px 0;
+  border-radius: 8px;
+  background: var(--message-code-viewer-background);
+  color: var(--message-fg);
+}
+.header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 4px 12px; font-size: calc(var(--message-font) - 2px); line-height: 1.5; }
+.title { display: inline-flex; min-width: 0; align-items: center; gap: 6px; font-family: var(--message-mono); }
 .title > span { overflow: hidden; text-overflow: ellipsis; text-transform: lowercase; white-space: nowrap; }
-.actions { display: flex; flex: none; align-items: center; gap: 4px; margin: -4px -4px -4px 0; }
-.actions button { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; border: 0; border-radius: 8px; padding: 0; background: transparent; color: var(--message-subtle); cursor: pointer; }
+.actions { display: flex; flex: none; align-items: center; gap: 3px; }
+.actions button { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0; border-radius: 6px; padding: 0; background: transparent; color: var(--message-subtle); cursor: pointer; }
 .actions button:hover, .actions button[aria-pressed='true'] { background: var(--message-hover); color: var(--message-fg); }
 .actions button:focus-visible { outline: 2px solid var(--message-link); outline-offset: 1px; }
-.body { padding: 0 12px 14px; min-width: 0; }
+.body { padding: 0 8px 10px; min-width: 0; }
 .error { padding: 0 12px 8px; font-size: 12px; color: var(--message-danger); }
+@media (hover: none), (pointer: coarse) { .actions button { width: 44px; height: 44px; } }

@@ -37,6 +37,7 @@ import type { InspectorDiff, InspectorFile } from './Inspector.tsx'
 import { activateTab, closeAllTabs, closeOtherTabs, closeTabs, nextSelectionChatOrdinal, normalizePaneState,
   openFromLauncher, readPaneMemory, stripConversationScoped, upsertTab, writePaneMemory,
   type InspectorTab, type PaneState } from './inspector-tabs.ts'
+import { INSPECTOR_DIVIDER_WIDTH, inspectorLayout } from './inspector-layout.ts'
 import type { GitChangeSourceId, LastTurnChange } from './GitPane.tsx'
 import { collectChangeFiles } from './ChangedFiles.tsx'
 import SelectionAskPopover from './SelectionAskPopover.tsx'
@@ -247,7 +248,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   /** The plan document the reader explicitly opened; falls back to the conversation's latest. */
   const [inspectorPlan, setInspectorPlan] = useState<PlanDocument | undefined>()
-  const [inspectorWidth, setInspectorWidth] = useState(360)
+  const [preferredInspectorWidth, setPreferredInspectorWidth] = useState<number>()
+  const [mainBodyWidth, setMainBodyWidth] = useState(0)
+  const [inspectorDragging, setInspectorDragging] = useState(false)
   const [inspectorLoading, setInspectorLoading] = useState(false)
   const [inspectorError, setInspectorError] = useState('')
   /** Plugin pages the inspector keeps mounted, one per plugin call site. The tab itself lives in `pane`. */
@@ -286,6 +289,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 760px)').matches)
   const sidebarRef = useRef<HTMLElement | null>(null)
   const mainPanelRef = useRef<HTMLElement | null>(null)
+  const mainBodyRef = useRef<HTMLDivElement | null>(null)
+  const primaryPanelRef = useRef<HTMLDivElement | null>(null)
+  const inspectorPanelRef = useRef<HTMLElement | null>(null)
   const sidebarTriggerRef = useRef<HTMLButtonElement | null>(null)
   const workspaceSearchRef = useRef<HTMLInputElement | null>(null)
   /** Real row rects keep a workspace menu anchored when its ellipsis hides on hover-out. */
@@ -294,7 +300,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** Hosts the transcript selection popover's anchor area. */
   const selectionHostRef = useRef<HTMLDivElement | null>(null)
   const inspectorRequestId = useRef(0)
-  const inspectorResize = useRef<{ startX: number; startWidth: number } | null>(null)
+  const inspectorResize = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   /** DSH's `markOpened` (`PlanCard.tsx:72-80`): the one conversation whose plan already opened by itself. */
   const planAutoOpenedFor = useRef<string | null>(null)
   const wasAtBottom = useRef(true)
@@ -371,40 +377,51 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** Every pane mutation goes through here so the workspace memory bucket stays in sync. */
   /** 提交一次 Inspector 标签状态变更：更新 React 状态并写入工作区记忆桶。 */
   const commitPane = useCallback((next: PaneState): void => {
+    paneRef.current = next
     setPaneState(next)
     const workspaceId = currentWorkspaceIdRef.current
     if (workspaceId !== undefined) writePaneMemory(workspaceId, next)
   }, [])
+  const cancelInspectorFileRead = useCallback((): void => {
+    inspectorRequestId.current += 1
+    setInspectorLoading(false)
+    setInspectorError('')
+  }, [])
   /** Open one tab (ZCode's open semantics: an active launcher tab is consumed in place). */
   /** 在 Inspector 打开一个标签（已存在则激活），并展开面板。 */
   const openPaneTab = useCallback((tab: InspectorTab): void => {
+    cancelInspectorFileRead()
     commitPane(openFromLauncher(paneRef.current, tab))
     setInspectorOpen(true)
-  }, [commitPane])
+  }, [cancelInspectorFileRead, commitPane])
   /** Close tabs; an emptied pane collapses, like ZCode's commitSidePaneState. */
   /** 关闭指定标签；关闭当前激活标签时自动落到最后一个剩余标签。 */
   const closePaneTabs = useCallback((ids: readonly string[]): void => {
+    cancelInspectorFileRead()
     const { state } = closeTabs(paneRef.current, ids)
     commitPane(state)
     if (state.tabs.length === 0) {
       setInspectorOpen(false)
       setInspectorFullView(false)
     }
-  }, [commitPane])
+  }, [cancelInspectorFileRead, commitPane])
   /** 关闭除指定标签外的全部标签。 */
   const closeOtherPaneTabs = useCallback((id: string): void => {
+    cancelInspectorFileRead()
     commitPane(closeOtherTabs(paneRef.current, id))
-  }, [commitPane])
+  }, [cancelInspectorFileRead, commitPane])
   /** 关闭全部标签并收起面板。 */
   const closeAllPaneTabs = useCallback((): void => {
+    cancelInspectorFileRead()
     commitPane(closeAllTabs(paneRef.current))
     setInspectorOpen(false)
     setInspectorFullView(false)
-  }, [commitPane])
+  }, [cancelInspectorFileRead, commitPane])
   /** 激活指定标签并展开面板。 */
   const selectPaneTab = useCallback((id: string): void => {
+    cancelInspectorFileRead()
     commitPane(activateTab(paneRef.current, id))
-  }, [commitPane])
+  }, [cancelInspectorFileRead, commitPane])
   // 切换到某个工作区时先展开一次；之后其自身的箭头可以收起它，
   // 包括它仍是选中/当前工作区的情况。
   useLayoutEffect(() => {
@@ -1239,11 +1256,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   /** 在 Inspector 打开某工作区的文件浏览器标签。 */
   const openWorkspaceBrowser = useCallback((workspaceId: string, path = ''): void => {
-    inspectorRequestId.current += 1
     const workspace = workspaces.find(item => item.id === workspaceId)
     openPaneTab({ id: 'browse', type: 'browse', title: workspace?.name ?? t('文件', 'Files'), openedAt: Date.now(), workspaceId, path })
-    setInspectorError('')
-    setInspectorLoading(false)
     setSidebarOpen(false)
   }, [openPaneTab, workspaces, t])
 
@@ -1259,25 +1273,28 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setInspectorError('')
     setInspectorLoading(true)
     try {
-      const file = await api.getWorkspaceFile(workspaceId, path)
+      const file = await api.getWorkspaceFile(workspaceId, path, line)
+      if (requestId !== inspectorRequestId.current) return
       if (file.kind === 'directory') {
+        if (line !== undefined) throw new Error(t('目录没有可定位的行号', 'Directories do not have line numbers'))
         // 回答里的路径有时指向一个目录：直接在文件浏览器里列出它。
-        if (requestId === inspectorRequestId.current) openWorkspaceBrowser(workspaceId, file.path)
+        openWorkspaceBrowser(workspaceId, file.path)
         return
       }
-      const assetUrl = file.kind !== 'text'
+      const assetUrl = file.kind !== 'text' || file.textWindow !== undefined
         ? `/api/workspaces/${encodeURIComponent(workspaceId)}/asset?${new URLSearchParams({ path: file.path }).toString()}`
         : undefined
-      if (requestId === inspectorRequestId.current) {
-        const payload: InspectorFile = { path: file.path, content: file.content ?? '', mimeType: file.mimeType, size: file.size, workspaceId, ...(line === undefined ? {} : { line }), ...(assetUrl === undefined ? {} : { url: assetUrl }) }
-        openPaneTab({
-          id: `doc:file:${workspaceId}:${file.path}`,
-          type: 'document',
-          title: file.path.split(/[\\/]/u).pop() ?? file.path,
-          openedAt: Date.now(),
-          doc: { kind: 'file', file: payload },
-        })
+      const payload: InspectorFile = {
+        path: file.path, content: file.content, textWindow: file.textWindow, mimeType: file.mimeType, size: file.size,
+        workspaceId, line, lineRequestId: line === undefined ? undefined : requestId, url: assetUrl,
       }
+      openPaneTab({
+        id: `doc:file:${workspaceId}:${file.path}`,
+        type: 'document',
+        title: file.path.split(/[\\/]/u).pop() ?? file.path,
+        openedAt: Date.now(),
+        doc: { kind: 'file', file: payload },
+      })
     } catch (cause) {
       if (requestId === inspectorRequestId.current) setInspectorError(errorText(cause, t('无法打开此文件', 'Could not open this file')))
     } finally { if (requestId === inspectorRequestId.current) setInspectorLoading(false) }
@@ -1286,7 +1303,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** One diff document per workspace+path; repeated opens focus and refresh the same tab. */
   /** 在 Inspector 打开一个差异视图（数据已备好直接入标签）。 */
   const inspectDiff = useCallback((diff: InspectorDiff): void => {
-    inspectorRequestId.current += 1
     const workspaceId = currentWorkspaceIdRef.current
     openPaneTab({
       id: `doc:diff:${workspaceId ?? 'new'}:${diff.path}`,
@@ -1295,8 +1311,6 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       openedAt: Date.now(),
       doc: { kind: 'diff', diff },
     })
-    setInspectorError('')
-    setInspectorLoading(false)
   }, [openPaneTab])
 
   /** 「@」触发时搜索当前工作区文件，供 composer 建议面板。 */
@@ -1475,6 +1489,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const showConversationHeader = page === 'chat' && hasMessages
   // 每条面板打开路径都保证先有标签页，因此仅凭 open 标志即可决定可见性。
   const showInspector = inspectorOpen
+  const inspectorSizes = mobile ? null : inspectorLayout(mainBodyWidth, preferredInspectorWidth)
+  const dockedInspector = showInspector && !inspectorFullView ? inspectorSizes : null
+  const inspectorOverlay = showInspector && dockedInspector === null
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
   /** 当前会话最近一次提交的计划（供 Inspector 缺省展示）。 */
   const conversationPlan = useMemo(() => activeDetail === null
@@ -1543,10 +1560,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     setSideQuotes({})
     setInspectorOpen(false)
     setInspectorFullView(false)
-    inspectorRequestId.current += 1
+    cancelInspectorFileRead()
     setSidebarOpen(false)
     if (mobile) requestAnimationFrame(() => { if (messagesViewport.current !== null) focusWithoutRing(messagesViewport.current) })
-  }, [commitPane, mobile, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
+  }, [cancelInspectorFileRead, commitPane, mobile, settings.defaultAccessMode, settings.defaultThinkingLevel, settings.defaultWorkspaceId])
 
   /** The plugin creator is a new task with the bundled Skill already in the draft. */
   /** 以「插件创建技能」预载开启新会话。 */
@@ -1621,7 +1638,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     { id: 'archive', shortcut: shortcutFor(settings, 'archive'), label: item.archived ? t('取消归档', 'Unarchive session') : t('归档会话', 'Archive session'), icon: item.archived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
   ]
 
-  const renderSession = (item: ConversationSummary) => <SessionRow key={item.id} item={item} selected={item.id === selectedId}
+  const renderSession = (item: ConversationSummary) => <SessionRow key={item.id} item={item} selected={page === 'chat' && item.id === selectedId}
     editing={editingId === item.id} editTitle={editTitle} menuOpen={rowMenuId === item.id}
     onSelect={() => { selectConversation(item.id) }} onEditTitle={setEditTitle}
     onSaveTitle={() => { saveRename(item.id) }} onCancelTitle={() => { setEditingId(null) }}
@@ -1652,11 +1669,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
    * lands where the reader left off; conversation-scoped cleanup happens on session switch instead.
    */
   const closeInspector = (): void => {
-    inspectorRequestId.current += 1
+    cancelInspectorFileRead()
     setInspectorOpen(false)
     setInspectorFullView(false)
-    setInspectorError('')
-    setInspectorLoading(false)
   }
 
   /** Close one plugin tab: drop the page and its inline-card host, then let the model pick the fallback. */
@@ -1869,35 +1884,66 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     return () => { document.removeEventListener('keydown', onShortcut, true) }
   }, [settings.shortcuts, toggleInspector, toggleInspectorFullView])
 
-  const clampInspectorWidth = (value: number): number =>
-    Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7))
+  useLayoutEffect(() => {
+    const container = mainBodyRef.current
+    if (container === null) return
+    const measure = (): void => { setMainBodyWidth(container.clientWidth) }
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => { window.removeEventListener('resize', measure) }
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(container)
+    return () => { observer.disconnect() }
+  }, [sidebarCollapsed])
+
+  useLayoutEffect(() => {
+    const primary = primaryPanelRef.current
+    const panel = inspectorPanelRef.current
+    if (!inspectorOverlay || primary === null || panel === null) return
+    const opener = document.activeElement
+    const fromPrimary = opener instanceof HTMLElement && primary.contains(opener)
+    if (fromPrimary) focusWithoutRing(panel)
+    setElementInert(primary, true)
+    return () => {
+      setElementInert(primary, false)
+      if (fromPrimary && opener.isConnected && (document.activeElement === document.body || document.activeElement === panel)) {
+        focusWithoutRing(opener)
+      }
+    }
+  }, [inspectorOverlay])
+
+  const inspectorCanResize = dockedInspector !== null
+  useLayoutEffect(() => {
+    if (inspectorCanResize || inspectorResize.current === null) return
+    inspectorResize.current = null
+    setInspectorDragging(false)
+  }, [inspectorCanResize])
+
+  const resizeInspectorTo = (width: number): void => {
+    if (dockedInspector === null) return
+    setPreferredInspectorWidth(Math.min(dockedInspector.max, Math.max(dockedInspector.min, width)))
+  }
   const beginInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0) return
+    if (event.button !== 0 || inspectorResize.current !== null || dockedInspector === null) return
     event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
-    inspectorResize.current = { startX: event.clientX, startWidth: inspectorWidth }
+    inspectorResize.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: dockedInspector.width }
+    setInspectorDragging(true)
   }
   const moveInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     const start = inspectorResize.current
-    if (start === null) return
+    if (start === null || start.pointerId !== event.pointerId) return
     // 分隔条位于 Inspector 左缘，向左拖动即加宽它。
-    setInspectorWidth(clampInspectorWidth(start.startWidth + (start.startX - event.clientX)))
+    resizeInspectorTo(Math.round(start.startWidth + start.startX - event.clientX))
   }
   const endInspectorResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (inspectorResize.current?.pointerId !== event.pointerId) return
     inspectorResize.current = null
+    setInspectorDragging(false)
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   }
-  const nudgeInspector = (delta: number): void => {
-    setInspectorWidth(value => clampInspectorWidth(value + delta))
-  }
-  // 宽度拖宽后窗口变窄时，不允许挤压主栏。
-  useEffect(() => {
-    const onResize = (): void => {
-      setInspectorWidth(value => Math.min(Math.max(value, 280), Math.min(760, window.innerWidth * 0.7)))
-    }
-    window.addEventListener('resize', onResize)
-    return () => { window.removeEventListener('resize', onResize) }
-  }, [])
   /**
    * DSH's `openPlan` (`ui-plan/src/client/PlanCard.tsx:48-57`): focus the exact submitted plan in
    * the right sidebar. `auto` is the one automatic open per conversation (`PlanCard.tsx:72-80`).
@@ -1908,11 +1954,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       if (selectedId === null || planAutoOpenedFor.current === selectedId) return
       planAutoOpenedFor.current = selectedId
     }
-    inspectorRequestId.current += 1
     setInspectorPlan(plan)
     openPaneTab({ id: 'doc:plan', type: 'document', title: t('计划', 'Plan'), openedAt: Date.now(), doc: { kind: 'plan' } })
-    setInspectorError('')
-    setInspectorLoading(false)
   }, [openPaneTab, selectedId, t])
 
   // DSH 对每个待审计划自动打开一次，读者关闭后不再自动打开
@@ -1937,16 +1980,22 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   // 标签按工作区记忆（ZCode 的 taskSidePaneMemory）；在工作区之间移动即切换桶，
   // 未知工作区从空桶开始。空作用域会收起面板
   // (ZCode's resolveSidePaneScopeState), so switching to a fresh workspace never shows a bare shell.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (currentWorkspaceId === undefined) {
-      setPaneState({ tabs: [], activeTabId: null })
+      const emptyPane = { tabs: [], activeTabId: null }
+      paneRef.current = emptyPane
+      setPaneState(emptyPane)
       setInspectorOpen(false)
       return
     }
     const restored = readPaneMemory(currentWorkspaceId) ?? { tabs: [], activeTabId: null }
+    paneRef.current = restored
     setPaneState(restored)
     if (restored.tabs.length === 0) setInspectorOpen(false)
   }, [currentWorkspaceId])
+  useLayoutEffect(() => {
+    cancelInspectorFileRead()
+  }, [cancelInspectorFileRead, currentWorkspaceId, page, selectedId])
   useEffect(() => {
     if (selectedId === null || conversationPlan === undefined || conversationPlan.pending !== true) return
     if (planAutoOpenedFor.current === selectedId) return
@@ -2012,6 +2061,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                 { id: 'archived', label: showArchived ? t('显示最近会话', 'Show active conversations') : t('显示已归档会话', 'Show archived conversations'), icon: showArchived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} /> },
               ]} portal anchor={<Tooltip label={t('视图选项', 'View options')} side="top" portal>
                 <Button variant="ghost" size="sm" aria-label={t('视图选项', 'View options')} icon={<IconSlidersTwoOutlineRegular size={15} />}
+                  aria-haspopup="menu" aria-expanded={themeMenuOpen}
                   onClick={() => { setThemeMenuOpen(value => !value) }} />
               </Tooltip>} />
             <Tooltip label={t('添加工作区', 'Add workspace')} side="top" portal>
@@ -2032,23 +2082,38 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               ? conversations.filter(item => (settings.showAnalysisConversations || item.kind !== 'defectAnalysis') && item.archived === showArchived && matchesWorkspace(item))
               : filteredConversations.filter(matchesWorkspace)).sort(compareConversations)
             const isExpanded = expandedWorkspaces.has(workspace.id) || workspaceNeedle !== ''
+            const isCurrentWorkspace = workspace.id === currentWorkspaceId
+            const workspaceMenuOpen = workspaceMenuId === workspace.id
             const viewEntries = workspaceActions(workspace)
             return <div className={css.workspaceGroup} key={workspace.id}>
-              <div className={css.workspaceRow} data-selected={workspace.id === currentWorkspaceId || undefined}
+              <div className={css.workspaceRow} data-selected={isCurrentWorkspace || undefined} data-menu-open={workspaceMenuOpen || undefined}
                 data-workspace-row={workspace.id}
                 ref={node => {
                   if (node === null) workspaceRowRefs.current.delete(workspace.id)
                   else workspaceRowRefs.current.set(workspace.id, node)
                 }}>
-                <button type="button" className={css.workspaceToggle} aria-label={workspace.name} aria-expanded={isExpanded} onClick={() => {
-                  setExpandedWorkspaces(current => { const next = new Set(current); if (next.has(workspace.id)) next.delete(workspace.id); else next.add(workspace.id); return next })
-                }}>
+                <button type="button" className={css.workspaceToggle} aria-label={workspace.name}
+                  aria-current={isCurrentWorkspace ? 'location' : undefined}
+                  aria-expanded={isExpanded && (!sidebarCollapsed || mobile)} title={sidebarCollapsed && !mobile ? workspace.name : undefined}
+                  onClick={() => {
+                    if (sidebarCollapsed && !mobile) {
+                      setSidebarCollapsed(false)
+                      setExpandedWorkspaces(current => new Set(current).add(workspace.id))
+                      return
+                    }
+                    setExpandedWorkspaces(current => {
+                      const next = new Set(current)
+                      if (next.has(workspace.id)) next.delete(workspace.id)
+                      else next.add(workspace.id)
+                      return next
+                    })
+                  }}>
                   <IconChevronRightOutlineRegular className={isExpanded ? css.chevronOpen : ''} size={13} />
                   {isExpanded ? <IconFolderOpenOutlineRegular size={16} /> : <IconFolderCloseRegular size={16} />}
                   <span className={css.workspaceName}>{workspace.name}</span>
                 </button>
                 <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                <Menu open={workspaceMenuId === workspace.id} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal align="end"
+                <Menu open={workspaceMenuOpen} onClose={() => { setWorkspaceMenuId(null) }} items={viewEntries} portal align="end"
                   getAnchorRect={() => {
                     const row = workspaceRowRefs.current.get(workspace.id)
                       ?? document.querySelector<HTMLElement>(`[data-workspace-row="${CSS.escape(workspace.id)}"]`)
@@ -2062,6 +2127,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     else if (id === 'delete') setDeleteWorkspace(workspace)
                   }} anchor={<button type="button" className={css.rowIconButton}
                     aria-label={t(`工作区“${workspace.name}”的操作`, `Actions for ${workspace.name}`)}
+                    aria-haspopup="menu" aria-expanded={workspaceMenuOpen}
                     onClick={() => { setWorkspaceMenuId(value => value === workspace.id ? null : workspace.id) }}><IconEllipsisOutlineRegular size={16} /></button>} />
                 <Tooltip label={t('新会话', 'New session')} side="bottom" align="end" delayMs={500} portal>
                   <button type="button" className={css.rowIconButton}
@@ -2118,16 +2184,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
       <section ref={mainPanelRef} className={css.mainPanel} tabIndex={-1} aria-label={t('主内容', 'Main content')}
         aria-hidden={mobile && sidebarOpen ? true : undefined}>
-        {mobile && !showConversationHeader && <button type="button" className={css.mobileSidebarButton}
+        {mobile && !showConversationHeader && <button ref={sidebarTriggerRef} type="button" className={css.mobileSidebarButton}
           aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
           <IconPanelLeftOutlineRegular size={16} />
         </button>}
         <PluginPageHostContext.Provider value={pluginPagePool}>
         <div ref={pluginPageHolding} aria-hidden="true"
           style={{ position: 'fixed', left: '-10000px', top: 0, width: 0, height: 0, overflow: 'hidden' }} />
-        <div className={`${css.mainBody} ${showInspector ? css.withInspector : ''}`}
-          style={showInspector ? ({ '--inspector-width': `${inspectorWidth}px` } as CSSProperties) : undefined}>
-          <div className={css.primaryPanel}>
+        <div ref={mainBodyRef} className={`${css.mainBody} ${inspectorOverlay ? css.withInspectorOverlay : dockedInspector !== null ? css.withInspector : ''}`}
+          data-inspector-dragging={inspectorDragging || undefined}
+          style={dockedInspector === null ? undefined : ({
+            '--inspector-width': `${dockedInspector.width}px`,
+            '--inspector-divider-width': `${INSPECTOR_DIVIDER_WIDTH}px`,
+          } as CSSProperties)}>
+          <div ref={primaryPanelRef} className={css.primaryPanel}>
             {page === 'chat' && <>
               {showConversationHeader && <>
                 <header className={css.topbar}>
@@ -2305,25 +2375,33 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>
           {showInspector && <>
-            {!inspectorFullView && <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
+            {dockedInspector !== null && <div className={css.inspectorResizer} role="separator" aria-orientation="vertical"
               aria-label={t('调整侧栏宽度', 'Resize inspector')}
-              aria-valuenow={inspectorWidth} aria-valuemin={280} aria-valuemax={760} tabIndex={0}
+              aria-controls="workspace-inspector"
+              aria-valuenow={dockedInspector.width} aria-valuemin={dockedInspector.min} aria-valuemax={dockedInspector.max} tabIndex={0}
+              aria-valuetext={t(`${dockedInspector.width} 像素`, `${dockedInspector.width} pixels`)}
               onPointerDown={beginInspectorResize} onPointerMove={moveInspectorResize}
-              onPointerUp={endInspectorResize} onPointerCancel={endInspectorResize}
-              onDoubleClick={() => { setInspectorWidth(360) }}
+              onPointerUp={endInspectorResize} onPointerCancel={endInspectorResize} onLostPointerCapture={endInspectorResize}
+              onDoubleClick={() => { setPreferredInspectorWidth(undefined) }}
               onKeyDown={event => {
-                if (event.key === 'ArrowLeft') { event.preventDefault(); nudgeInspector(16) }
-                else if (event.key === 'ArrowRight') { event.preventDefault(); nudgeInspector(-16) }
+                switch (event.key) {
+                  case 'ArrowLeft': resizeInspectorTo(dockedInspector.width + 16); break
+                  case 'ArrowRight': resizeInspectorTo(dockedInspector.width - 16); break
+                  case 'Home': resizeInspectorTo(dockedInspector.min); break
+                  case 'End': resizeInspectorTo(dockedInspector.max); break
+                  default: return
+                }
+                event.preventDefault()
               }} />}
-            <aside className={`${css.inspectorPane} ${inspectorFullView && !mobile ? css.inspectorPaneFullscreen : ''}`}
-              aria-label={t('侧边面板', 'Side pane')}>
+            <aside ref={inspectorPanelRef} id="workspace-inspector" className={css.inspectorPane}
+              aria-label={t('侧边面板', 'Side pane')} tabIndex={-1}>
               <Inspector
                 workspaceId={currentWorkspaceId}
                 tabs={pane.tabs} activeTabId={pane.activeTabId}
                 onSelectTab={selectPaneTab} onCloseTab={id => { closePaneTabs([id]) }}
                 onCloseOtherTabs={closeOtherPaneTabs} onCloseAllTabs={closeAllPaneTabs}
                 onOpenNewTab={openNewTabPane}
-                fullView={inspectorFullView} onToggleFullView={toggleInspectorFullView}
+                fullView={inspectorFullView} onToggleFullView={inspectorSizes === null ? undefined : toggleInspectorFullView}
                 launcher={{
                   surfaces: pluginSurfaces,
                   surfacesLoading: false,
@@ -2510,16 +2588,17 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
                 ) : null}</span>
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
               </button>
-              <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
               {/* 置顶状态保留在行本身；其余动作都收在尾随菜单里。 */}
               {item.pinned && <span className={css.sessionPin} role="img" aria-label={t('已置顶', 'Pinned')} title={t('已置顶', 'Pinned')}><IconPinFillRegular size={14} /></span>}
-              {/* 悬浮行时 DSH 把尾随时间格切换为该行的操作条。 */}
-              <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
-                  onSelect={id => { onAction(id) }}
-                  anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
-                    aria-haspopup="menu" aria-expanded={menuOpen}
-                    onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
+              <span className={css.sessionTail}>
+                <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
+                <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
+                  <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
+                    onSelect={id => { onAction(id) }}
+                    anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
+                      aria-haspopup="menu" aria-expanded={menuOpen}
+                      onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
+                </span>
               </span>
             </>}
         </div>

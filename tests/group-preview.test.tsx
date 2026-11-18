@@ -79,12 +79,12 @@ describe('folded work group preview', () => {
     expect(previewOf(newer as HTMLElement)).toBeNull()
   })
 
-  // 运行里没有 prose（assistant 消息只含工具调用块）时，折叠头部保持裸露，不渲染预览。
-  it('keeps the bare header for a run that wrote no prose', () => {
+  it('summarizes the question call when the collapsed run has no prose', () => {
     const messages = turn('tools', 548_000)
     messages[1] = { ...messages[1]!, blocks: [messages[1]!.blocks[1]!] }
     render(<Transcript messages={messages} policy={presentationPolicyFor('standard')} />)
 
-    expect(previewOf(screen.getByRole('button', { name: '已工作 9 分 8 秒' }))).toBeNull()
+    const header = screen.getByRole('button', { name: '已工作 9 分 8 秒', description: '提问 1 次' })
+    expect(previewOf(header)).toBe('提问 1 次')
   })
 })

@@ -210,6 +210,7 @@ export interface McpView {
 
 export interface WorkspaceSummary { id: string; name: string; path: string; createdAt: number; updatedAt: number }
 export interface WorkspaceFileEntry { name: string; path: string; type: 'file' | 'directory'; size?: number; modifiedAt?: number; mimeType?: string }
+export interface WorkspaceTextWindow { startLine: number; totalLines: number; clippedLines: boolean }
 export interface WorkspaceFile {
   path: string
   kind: 'text' | 'image' | 'binary' | 'directory'
@@ -217,6 +218,8 @@ export interface WorkspaceFile {
   size: number
   modifiedAt: number
   content?: string
+  /** Present when content is a bounded excerpt of a large text file. */
+  textWindow?: WorkspaceTextWindow
   data?: string
   /** The entries of a directory, when the requested path is one. */
   entries?: WorkspaceFileEntry[]

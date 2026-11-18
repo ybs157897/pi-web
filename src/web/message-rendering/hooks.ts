@@ -23,17 +23,21 @@ export function useMessageTheme() {
 /**
  * 功能：复制到剪贴板的三态反馈（idle → copied/error，1.6s 后自动回 idle）。
  * @returns `{ state, copy }`；copy(text) 返回是否成功
- * 内部逻辑：反馈与计时器都挂在调用它的控件本地；剪贴板 API 不可用或写入被拒时直接置 error，绝不显示成功；组件卸载清掉挂起定时器。
+ * 内部逻辑：反馈与计时器都挂在调用它的控件本地；可传入既有写入函数以保留回退行为；组件卸载清掉挂起定时器。
  */
-export function useCopyFeedback() {
+export function useCopyFeedback(write?: (text: string) => Promise<boolean>) {
   const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => () => clearTimeout(timer.current), [])
   const copy = useCallback(async (text: string) => {
     clearTimeout(timer.current)
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
-      await navigator.clipboard.writeText(text)
+      if (write !== undefined) {
+        if (!await write(text)) throw new Error('Clipboard unavailable')
+      } else {
+        if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
+        await navigator.clipboard.writeText(text)
+      }
       setState('copied')
       timer.current = setTimeout(() => setState('idle'), 1600)
       return true
@@ -41,7 +45,7 @@ export function useCopyFeedback() {
       setState('error')
       return false
     }
-  }, [])
+  }, [write])
   return { state, copy }
 }
 

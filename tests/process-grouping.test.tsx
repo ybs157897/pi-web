@@ -10,10 +10,11 @@
  * - 失败行保留状态徽标；list_files 行可展开披露结果，但不重复"调用参数"区块。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ChatMessage } from '../src/shared/types.ts'
 import { buildRenderModel } from '../src/web/render-model.ts'
 import { exploreBucket, groupProcessParts, shellCommands, toolGroupKind } from '../src/web/process-grouping.ts'
+import { presentationPolicyFor } from '../src/web/presentation-policy.ts'
 import Transcript from '../src/web/transcript.tsx'
 import { setupRenderingDom } from './rendering/setup.ts'
 
@@ -67,6 +68,39 @@ function result(id: string, toolCallId: string, name: string, text = 'ok', extra
 
 /** 过程行分组与折叠渲染测试。 */
 describe('ZCode process grouping', () => {
+  it.each(['live', 'durable', 'overlap'] as const)('describes collapsed work with %s codemode records', (source) => {
+    const details = source === 'live' ? undefined : { calls: [{ id: 1, name: 'read', args: '{"path":"doc.md"}', status: 'ok' }] }
+    const children = source === 'durable' ? [] : [
+      result('child-result', 'code/c1', 'read', 'hello', { parentToolCallId: 'code' }),
+      result('child-repeat', 'code/c1', 'read', 'hello', { parentToolCallId: 'code' }),
+    ]
+    const values = messages([
+      call('read', 'read', { path: 'README.md' }),
+      call('search', 'search_files', { pattern: 'title' }),
+      call('shell', 'bash', { command: 'exit 1' }),
+      call('edit', 'edit', { path: 'README.md' }),
+      call('code', 'codemode', { code: 'code' }),
+    ], [
+      result('read-result', 'read', 'read'),
+      result('search-result', 'search', 'search_files'),
+      result('shell-result', 'shell', 'bash', 'boom', { isError: true, status: 'error' }),
+      result('edit-result', 'edit', 'edit'),
+      result('code-result', 'code', 'codemode', 'ok', { details }),
+      ...children,
+    ])
+    render(<Transcript messages={values} policy={presentationPolicyFor('standard')} />)
+    const summary = '读取 2 次 · 搜索 1 次 · 执行 1 次 · 改动 1 次 · 失败 1 次'
+    const work = screen.getByRole('button', { name: '已工作', description: summary })
+    expect(work.getAttribute('aria-expanded')).toBe('false')
+    expect(within(work).getByText(summary)).toBeTruthy()
+    expect(screen.getByText('查看文件并运行命令。')).toBeTruthy()
+
+    fireEvent.click(work)
+    expect(work.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('执行失败')).toBeTruthy()
+    expect(within(work).queryByText(summary)).toBeNull()
+  })
+
   // 验证只读折叠：连续 read/grep/list_files 归入一个 explore 组（子项按原顺序）；
   // 单个只读工具保持独立 tool 行不折叠。
   it('folds consecutive read-only rows into 查阅 and keeps a single row flat', () => {

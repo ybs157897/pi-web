@@ -12,6 +12,8 @@ export type AttachmentReference = { name: string; mimeType: string; size: number
 
 const MAX_FILE_PREVIEW_BYTES = 8 * 1024 * 1024
 const MAX_FILE_TEXT_BYTES = 2 * 1024 * 1024
+const TEXT_WINDOW_CONTEXT = 80
+const TEXT_WINDOW_LINE_LENGTH = 2048
 const MAX_SEARCH_FILES = 5_000
 /** 常见扩展名到 MIME 的映射表。 */
 const MIME_BY_EXTENSION: Record<string, string> = {
@@ -244,6 +246,42 @@ function isTextType(type: string): boolean {
   return type.startsWith('text/') || type === 'application/json' || type === 'application/xml' || type === 'application/sql'
 }
 
+/** Retain a bounded source excerpt with its original line numbers. */
+function textPreview(source: string, target = 1): Pick<WorkspaceFile, 'content' | 'textWindow'> {
+  const count = TEXT_WINDOW_CONTEXT * 2 + 1
+  const start = Math.max(1, target - TEXT_WINDOW_CONTEXT)
+  const head: string[] = []
+  const nearTarget: string[] = []
+  let offset = 0
+  let line = 1
+  let headClipped = false
+  let targetClipped = false
+  const retainLine = (end: number): void => {
+    const atStart = line <= count
+    const near = line >= start && line - start < count
+    if (!atStart && !near) return
+    const clipped = end - offset > TEXT_WINDOW_LINE_LENGTH
+    const cap = Math.min(end, offset + TEXT_WINDOW_LINE_LENGTH)
+    // Keep a UTF-16 surrogate pair together when clipping an unusually long row.
+    const previous = source.charCodeAt(cap - 1)
+    const boundary = clipped && previous >= 0xd800 && previous <= 0xdbff ? cap - 1 : cap
+    const text = source.slice(offset, boundary)
+    if (atStart) { head.push(text); headClipped ||= clipped }
+    if (near) { nearTarget.push(text); targetClipped ||= clipped }
+  }
+  for (const separator of source.matchAll(/\r\n|[\r\n]/gu)) {
+    retainLine(separator.index)
+    offset = separator.index + separator[0].length
+    line += 1
+  }
+  retainLine(source.length)
+  const located = target <= line
+  return {
+    content: (located ? nearTarget : head).join('\n'),
+    textWindow: { startLine: located ? start : 1, totalLines: line, clippedLines: located ? targetClipped : headClipped },
+  }
+}
+
 /** 提供有上限、规范化的工作区读取，并把用户上传文件存进其会话的工作区。 */
 export class WorkspaceFiles {
   constructor(private readonly workspaces: () => readonly WorkspaceSummary[]) {}
@@ -318,11 +356,11 @@ export class WorkspaceFiles {
 
   /**
    * 功能：读取一个工作区文件/目录用于预览。
-   * @returns 按类型返回 image（内联 base64）/ text（UTF-8，≤ 2 MiB 且无 NUL）/ binary（base64）/ directory（列目录）
+   * @returns 图片、文本、二进制或目录列表。超过 2 MiB 的文本仅返回目标行附近的片段。
    * 内部逻辑：路径先经 resolveEntry 兜底后缀匹配；预览上限 8 MiB；目录请求返回
    * 其内容列表让检查器直接展示。
    */
-  async read(id: string, path: string): Promise<WorkspaceFile> {
+  async read(id: string, path: string, line?: number): Promise<WorkspaceFile> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
     const requested = resolveWorkspacePath(root, path, workspace.path)
@@ -341,8 +379,12 @@ export class WorkspaceFiles {
     const type = effectiveMimeType(resolved.canonical, buffer)
     const common = { path: resolved.path, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
     if (INLINE_IMAGE_TYPES.has(type)) return { ...common, kind: 'image', data: buffer.toString('base64') }
-    if (isTextType(type) && info.size <= MAX_FILE_TEXT_BYTES && !buffer.includes(0)) {
-      return { ...common, kind: 'text', content: buffer.toString('utf8') }
+    if (isTextType(type) && !buffer.includes(0)) {
+      const content = buffer.toString('utf8')
+      return {
+        ...common, kind: 'text',
+        ...(buffer.length > MAX_FILE_TEXT_BYTES ? textPreview(content, line) : { content }),
+      }
     }
     return { ...common, kind: 'binary', data: buffer.toString('base64') }
   }

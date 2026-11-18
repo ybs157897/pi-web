@@ -96,6 +96,15 @@ describe('openFromLauncher', () => {
     expect(next.activeTabId).toBe('browse')
   })
 
+  it('updates an already open document with the requested line and content from the launcher', () => {
+    const id = 'doc:file:ws:docs/readme.md'
+    const existing = tab(id, { doc: { kind: 'file', file: { path: 'docs/readme.md', content: 'old' } } })
+    const file = { path: 'docs/readme.md', content: '# New\nTarget', line: 2, lineRequestId: 3 }
+    const next = openFromLauncher(stateOf([existing, launcher]), tab(id, { openedAt: 999, doc: { kind: 'file', file } }))
+    expect(next.tabs).toEqual([{ ...existing, doc: { kind: 'file', file } }])
+    expect(next.activeTabId).toBe(id)
+  })
+
   // 激活页不是启动页时回退 upsertTab 语义：启动页保留，新标签追加末尾并激活。
   it('falls back to upsertTab when the active tab is not the launcher', () => {
     const input = stateOf([launcher, tab('git', { type: 'git' })], 'git')

@@ -202,9 +202,9 @@
 .processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }
-.processBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
-.processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; color: var(--message-muted); }
-.pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
+.processBody, .processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding-top: 20px; }
+.processFlatBody { color: var(--message-muted); }
+.pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .processOutput { min-width: 0; color: var(--message-fg); }
 @keyframes work-sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @media (prefers-reduced-motion: reduce) { .processCollapse, .processChevron { transition: none; } .processTitle[data-running] { animation: none; background: none; color: var(--message-subtle); } }
@@ -319,7 +319,7 @@
   }
 
   .userBubble { max-width: min(calc(100% - 32px), 92%); }
-  .processBody { max-height: 45vh; padding-left: 14px; }
+  .processBody { padding-left: 14px; }
 }
 
 .compactionRunning {

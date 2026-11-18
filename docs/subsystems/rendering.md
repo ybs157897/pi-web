@@ -14,7 +14,13 @@ system 行按归属两分：有 run 的行按其在日志里相对最终回答�
 
 assistant 消息 id 是 `assistant:${byTaskId}:${timestamp}`（`assistantMessageId`，[projection.ts:228](../../src/server/conversation/projection.ts#L228)）。Pi Durable 给 generation task 写的每个 entry 盖上该 task 的 id（`EntryRecord.byTaskId`），live run 携带同一个 id，partial 与最终 message 时间戳相同，因此落盘帧（[projection.ts:254](../../src/server/conversation/projection.ts#L254)）与流式帧（[projection.ts:973](../../src/server/conversation/projection.ts#L973)）算出同一 id——生成结束时消息节点不重挂载，整棵子树保持 DOM。重试写下的两条 entry 靠时间戳区分；没有 task scope 的 entry（调度器 fault 路径）退回 entry id，它没有流式对应体需要保持一致（[projection.ts:252](../../src/server/conversation/projection.ts#L252)）。
 
+## 回答中的文件引用
+
+回答里的 Markdown 链接、行内代码和正文文件引用共用工作区文件预览。带 `#L37`、`:37:8` 或行区间的引用打开源码并高亮起始行。当前回合中只给出文件名时，优先匹配已读写文件的唯一同名项。重新点击同一位置会再次滚动到目标行。Markdown 和 HTML 的行号在源码视图中定位。[引用识别](../../src/web/answer-markdown-model.ts) · [源码视图](../../src/web/InspectorSource.tsx)
+
 ## 块级流式状态
+
+流式正文在现有 Markdown 块内按字或词淡入，文本从到达时就参与布局。长文本回填和静态历史直接显示，代码块与公式保持完整；系统启用减少动态效果时关闭淡入。[流式渲染](../../src/web/message-rendering/StreamingMarkdownBlock.tsx)
 
 块身份用模型 content 数组里的位置 `slot`：投影层给每个块盖上写入时的下标并保留空块（`assistantBlocks`，[projection.ts:209](../../src/server/conversation/projection.ts#L209)）——删掉空块会移动后续块的 slot；空块的过滤下放到渲染层（`blockCarriesContent`，[render-model.ts:466](../../src/web/render-model.ts#L466)）。React key 用 slot 拼接（如 `${message.id}:process:${slot}`，[render-model.ts:366](../../src/web/render-model.ts#L366)），不随「空块变非空」漂移。
 
@@ -46,6 +52,8 @@ Composer 上方的浮动卡片（`QuestionComposer`，不属于 transcript）只
 | none | 其余任意帧 | 保持原值 |
 
 转移函数 `processGroupAutoOpen`（[process-presentation.ts:30](../../src/web/process-presentation.ts#L30)）；`defaultProcessOpen` 由展示策略、是否最新回合、是否有插间用户输入共同决定（[process-presentation.ts:6](../../src/web/process-presentation.ts#L6)）。挂载时以 `defaultProcessOpen(当前 props)` 初始化（[transcript.tsx:358](../../src/web/transcript.tsx#L358)）；`manualOpen` 一经设置，自动因子不再改写开合，直到组件随 run key 变化重挂载。
+
+折叠头优先展示过程正文，无可读正文时显示工具活动计数。计数来自实际调用，连续工具分组内的调用各计一次。代码模式有子调用时计入子调用，直播记录与落盘记录按调用 ID 去重。展开的过程行和组内子行使用 4 px 间距。 [process-presentation.ts](../../src/web/process-presentation.ts) · [render-model.ts](../../src/web/render-model.ts)
 
 ## 状态机三：工具行 live→settled 身份（S3）
 

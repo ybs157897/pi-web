@@ -115,7 +115,7 @@ export function createWorkspaces(deps: WorkspacesDeps) {
   /** 全工作区内容搜索。 */
   const searchWorkspace = (id: string, query: string) => workspaceFiles.list(id, '', query)
   /** 读取工作区内的文本文件。 */
-  const workspaceFile = (id: string, path: string) => workspaceFiles.read(id, path)
+  const workspaceFile = (id: string, path: string, line?: number) => workspaceFiles.read(id, path, line)
   /** 读取工作区内的二进制资源。 */
   const workspaceAsset = (id: string, path: string) => workspaceFiles.asset(id, path)
 

@@ -206,6 +206,15 @@ describe('folded work group preview', () => {
     expect(foldedProsePreview(run)).toBe('结论：方案 A')
   })
 
+  it('finds shorter prose when the longest block only contains fenced code', () => {
+    const run = runOf([
+      { type: 'text', text: '检查索引。' },
+      { type: 'text', text: '~~~ts\nconst muchLongerCode = true\n~~~' },
+      read,
+    ])
+    expect(foldedProsePreview(run)).toBe('检查索引。')
+  })
+
   // 验证链接解包：[label](url) 只保留 label 文本，URL 不进入预览。
   it('unwraps a markdown link target into its label', () => {
     const run = runOf([

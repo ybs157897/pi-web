@@ -35,7 +35,7 @@ export function contentHash(text: string): string {
  * @param wrap 自动换行（false 时横向滚动）
  * @param lineNumbers 是否显示行号
  * @param className 附加样式类
- * 内部逻辑：File 组件 lazy 加载（Shiki WASM 高亮器按需拉起），加载中回落纯 <pre>；cacheKey 由主题/语言/流式/内容哈希构成；CSS 变量把 diff 渲染主题接到消息卡片主题上。
+ * 内部逻辑：File 组件 lazy 加载（Shiki WASM 高亮器按需拉起），加载中回落纯 <pre>；cacheKey 由主题/语言/流式/内容哈希构成；CSS 变量让代码背景与宿主一致。
  */
 export function CodeViewer({ code, language = 'text', streaming = false, wrap = false, lineNumbers = false, className = '' }: {
   code: string; language?: string; streaming?: boolean; wrap?: boolean; lineNumbers?: boolean; className?: string
@@ -51,9 +51,10 @@ export function CodeViewer({ code, language = 'text', streaming = false, wrap = 
     theme: codeTheme, preferredHighlighter: 'shiki-wasm', lineHoverHighlight: 'disabled',
     enableLineSelection: false, enableGutterUtility: false,
   }), [codeTheme, lineNumbers, wrap])
+  const background = 'var(--message-code-viewer-background, var(--message-card))'
   const style = {
     colorScheme: dark ? 'dark' : 'light',
-    '--diffs-bg': 'var(--message-card)', '--diffs-light-bg': 'var(--message-card)', '--diffs-dark-bg': 'var(--message-card)',
+    '--diffs-bg': background, '--diffs-light-bg': background, '--diffs-dark-bg': background,
     '--diffs-font-family': 'var(--message-mono)', '--diffs-font-size': `${settings.codeFontSize}px`, '--diffs-gap-block': '0px',
   } as CSSProperties
   return <div className={`${css.viewer} ${className}`} data-message-code-viewer data-language={language} data-wrap={wrap} data-highlighted={!streaming} style={style}>

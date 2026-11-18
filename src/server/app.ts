@@ -832,7 +832,14 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
     if (query.length > 256) throw new ApiFault(400, 'invalid_query', 'Search query is too long')
     return c.json({ entries: await runtime.searchWorkspace(pathId(c.req.param('id')), query) })
   })
-  app.get('/api/workspaces/:id/file', async c => c.json(await runtime.workspaceFile(pathId(c.req.param('id')), filePath(c.req.query('path')))))
+  app.get('/api/workspaces/:id/file', async c => {
+    const rawLine = c.req.query('line')
+    const line = rawLine === undefined ? undefined : Number(rawLine)
+    if (rawLine !== undefined && (!/^[1-9]\d{0,15}$/u.test(rawLine) || !Number.isSafeInteger(line))) {
+      throw new ApiFault(400, 'invalid_line', 'File line must be a positive integer')
+    }
+    return c.json(await runtime.workspaceFile(pathId(c.req.param('id')), filePath(c.req.query('path')), line))
+  })
   app.get('/api/workspaces/:id/asset', async c => {
     const path = filePath(c.req.query('path'))
     const asset = await runtime.workspaceAsset(pathId(c.req.param('id')), path)
