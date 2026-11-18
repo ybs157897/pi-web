@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
   IconCopyOutlineRegular, IconDatabaseOutlineRegular, IconDislikeFillRegular,
@@ -11,20 +12,21 @@ import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import ChangedFiles from './ChangedFiles.tsx'
-import ToolCard from './ToolCard.tsx'
+import ToolCard, { toolIcon } from './ToolCard.tsx'
+import { MessageFileIcon } from './message-rendering/FileIcon.tsx'
 import { formatTokens, markdownLabels, type Translate } from './render-labels.ts'
 import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
 import { presentationPolicyFor, type ChatPresentationPolicy } from './presentation-policy.ts'
-import { lateAnswerOf, type LateAnswer } from './tool-render-model.ts'
+import { buildToolRenderModel, lateAnswerOf, type LateAnswer } from './tool-render-model.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
 import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
 import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-bridge.ts'
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
-import { ChevronRight, ListChecks } from 'lucide-react'
+import { Brain, ChevronRight, ListChecks, Sparkles } from 'lucide-react'
 import './message-rendering/theme.css'
-import { currentWorkLine, defaultProcessOpen, foldedProsePreview, otherActivitySummary, processGroupAutoOpen, processGroupBoundary, workGroupTitle, workSummaryCounts, workSummaryText } from './process-presentation.ts'
+import { defaultProcessOpen, foldedProsePreview, latestReasoningLine, otherActivitySummary, processGroupAutoOpen, processGroupBoundary, runningPart, workGroupTitle, workSummaryCounts, workSummaryText } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -408,14 +410,20 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
-  // ZCode summary group：折叠头两层——「已工作 X」在上，统计文案（或运行中的当前动作）在下；
-  // 模型在工具轮之间写的说明另起一行，折叠时也保持可见（ZCode 把它们放在组外）。
+  // ZCode summary group 的折叠头只有两行。完成后是「已工作 X」+ 统计；运行中（收起时）
+  // 变成「当前动作行」+「工作中 X」，动作行随执行中的工具/思考自动切换。
   const statistics = workSummaryText(workSummaryCounts(run), t, live) ?? otherActivitySummary(run, t)
-  const prose = open ? undefined : foldedProsePreview(run)
-  const liveLine = open || !live ? undefined : currentWorkLine(run, t, live)
-  const statisticsLine = open ? undefined
-    : liveLine ?? statistics ?? (live || prose !== undefined ? undefined : t('思考', 'Reasoning'))
-  const describedBy = statisticsLine === undefined && prose === undefined ? undefined : `${bodyId}-summary`
+  const liveRow = open || !live ? undefined : currentWorkRow(run, t, live)
+  const statisticsLine = open || liveRow !== undefined ? undefined
+    : statistics ?? (live ? undefined : foldedProsePreview(run) ?? t('思考', 'Reasoning'))
+  const describedBy = liveRow !== undefined || statisticsLine !== undefined ? `${bodyId}-summary` : undefined
+  const liveRowNode = liveRow === undefined ? undefined : <span id={`${bodyId}-summary`} className={css.currentWorkRow} data-current-work="">
+    <span className={css.currentWorkIcon} aria-hidden="true">{liveRow.icon}</span>
+    <span className={css.currentWorkLabel}>{liveRow.label}</span>
+    {liveRow.path !== undefined
+      ? <span className={css.currentWorkChip}><MessageFileIcon path={liveRow.path} /><span>{liveRow.path.split(/[/\\]/u).at(-1)}</span></span>
+      : liveRow.detail !== undefined ? <code className={css.currentWorkDetail}>{liveRow.detail}</code> : null}
+  </span>
   // ZCode 把带内联插件页的成功工具行留在折叠历史区之外。否则分组收起时页面
   // 会消失，最终答案顶替它的位置。
   type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
@@ -455,20 +463,64 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
         aria-labelledby={`${bodyId}-title`} aria-describedby={describedBy}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
-        <span className={css.processTitleRow}>
-          <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
-          <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-        </span>
-        {statisticsLine !== undefined && <span id={`${bodyId}-summary`} className={css.processPreviewRow} data-process-statistics="">
-          <ListChecks className={css.processPreviewIcon} size={14} aria-hidden="true" />
-          <span className={css.processPreview} title={statisticsLine}>{statisticsLine}</span>
-        </span>}
-        {prose !== undefined && <span className={css.processProseRow} data-process-preview="" title={prose}>{prose}</span>}
+        {liveRowNode !== undefined ? <>
+          {liveRowNode}
+          <span className={css.processPreviewRow} data-process-status="">
+            <IconLoadingOutlineRegular className={css.processPreviewIcon} size={14} aria-hidden="true" />
+            <span id={`${bodyId}-title`} className={css.processPreview} data-running>{title}</span>
+            <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
+          </span>
+        </> : <>
+          <span className={css.processTitleRow}>
+            <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
+            <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
+          </span>
+          {statisticsLine !== undefined && <span id={`${bodyId}-summary`} className={css.processPreviewRow} data-process-statistics="">
+            <ListChecks className={css.processPreviewIcon} size={14} aria-hidden="true" />
+            <span className={css.processPreview} title={statisticsLine}>{statisticsLine}</span>
+          </span>}
+        </>}
       </button>
       <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody} data-work-list>{body}</div></div></div>
     </div>}
     {pinnedBody.length > 0 && <div className={css.pinnedProcess} data-pinned-plugin-ui>{pinnedBody}</div>}
   </>
+}
+
+/** 运行中折叠头的当前动作行模型：图标、动词与详情（文件 chip 或命令/思考片段）。 */
+interface CurrentWorkRowModel {
+  icon: ReactNode
+  label: string
+  detail?: string
+  path?: string
+}
+
+/**
+ * 功能：把运行中的过程部件折成折叠头第一行（ZCode 的动作行在上、耗时在下）。
+ * @param run 渲染 run
+ * @param t 双语标签函数
+ * @param running run 是否在运行
+ * @returns 当前动作行模型；没有运行中的部件返回 undefined
+ * 内部逻辑：工具行复用工具渲染模型（同一套状态与文案，路径走文件 chip），思考取最新
+ * 一行，流式正文取首行文本。
+ */
+function currentWorkRow(run: RenderRun, t: Translate, running: boolean): CurrentWorkRowModel | undefined {
+  const part = runningPart(run, running)
+  if (part === undefined) return undefined
+  if (part.kind === 'reasoning') {
+    const line = latestReasoningLine(part.text)
+    return { icon: <Brain size={16} />, label: t('正在思考', 'Thinking'), ...(line === '' ? {} : { detail: line }) }
+  }
+  if (part.kind === 'content') {
+    const line = part.block.type === 'text' ? part.block.text.trim().split('\n')[0]?.trim() ?? '' : ''
+    return { icon: <Sparkles size={16} />, label: t('正在回复', 'Responding'), ...(line === '' ? {} : { detail: line }) }
+  }
+  const model = buildToolRenderModel(part.item, t, running)
+  return {
+    icon: toolIcon(model.name),
+    label: model.title,
+    ...(model.path !== undefined ? { path: model.path } : { detail: model.command ?? model.summary }),
+  }
 }
 
 /**

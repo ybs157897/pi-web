@@ -904,6 +904,10 @@ export function projectConversation(
   const questionCalls = new Map<string, QuestionCall>()
   const questionReplies: QuestionReply[] = []
   const runStartedAt = new Map<string, number>()
+  /** 每个 run 的结束时刻：下一次 run 的第一条消息时间；最后一个 run 用会话最后更新时间。 */
+  const runEndAt = new Map<string, number>()
+  /** 每个 run 里最后一条消息的时间（工具消息是完成时刻，assistant 是开始时刻）。 */
+  const runLastMessageAt = new Map<string, number>()
   const finalAssistantByRun = new Map<string, ChatMessage>()
   /** 每次交互调用归属的运行，保证其回复与后续留在同一轮。 */
   const interactionRunByCallId = new Map<string, string>()
@@ -924,28 +928,38 @@ export function projectConversation(
     // 交互回复续起 ask/plan 工具暂停的那一轮，因此并入"提出调用的那次运行"，
     // 而不是以回复请求另开一轮（对齐 ZCode 的形态）。
     const replyRunId = interactionReplyRunId(entry, interactionRunByCallId)
+    /**
+     * 切换到某个 run：离开旧 run 时把新消息的时刻记为旧 run 的结束。
+     * @param next 目标 run id
+     * @param at 触发切换的消息时间戳
+     */
+    const beginRun = (next: string, at: number): void => {
+      if (currentRunId !== undefined && currentRunId !== next) runEndAt.set(currentRunId, at)
+      currentRunId = next
+      if (!runStartedAt.has(next)) runStartedAt.set(next, at)
+    }
     for (const [index, message] of entryMessages.entries()) {
       lastTimestamp = message.timestamp
       latestEntryTimestamp = Math.max(latestEntryTimestamp, message.timestamp)
       if (message.role === 'system' || statusText !== undefined) continue
       if (message.role === 'user') {
         const placedDuringToolRound = entry.byTaskId !== undefined && entry.byTaskId === previousAssistantTask && previousAssistantCallsTools
-        if (replyRunId !== undefined) currentRunId = replyRunId
-        else if (!placedDuringToolRound || !currentRunId) currentRunId = `run:${requestId ?? id}`
-        if (!runStartedAt.has(currentRunId)) runStartedAt.set(currentRunId, message.timestamp)
+        if (replyRunId !== undefined) beginRun(replyRunId, message.timestamp)
+        else if (!placedDuringToolRound || !currentRunId) beginRun(`run:${requestId ?? id}`, message.timestamp)
+        else if (!runStartedAt.has(currentRunId)) runStartedAt.set(currentRunId, message.timestamp)
         // 结算输入没有自己的气泡：下方的 entry 状态行承载它。上方的 run 记账仍然生效，
         // 行因此落在它所属的运行内——交互回复落在它所回答的调用的那轮里。
         if (settlementText !== undefined) continue
       } else if (!currentRunId) {
-        currentRunId = `run:${requestId ?? id}`
-        runStartedAt.set(currentRunId, message.timestamp)
+        beginRun(`run:${requestId ?? id}`, message.timestamp)
       }
       const projected = messageFromPi(message, id, index, requestId, entry.byTaskId)
       if (projected) {
         projected.runId = currentRunId
+        if (currentRunId !== undefined) runLastMessageAt.set(currentRunId, message.timestamp)
         if (message.role === 'user') projected.blocks.push(...fileBlocks(entryFiles(entry)))
         if (metadata.feedback[id] !== undefined) projected.feedback = metadata.feedback[id]
-        if (projected.role === 'assistant') finalAssistantByRun.set(currentRunId, projected)
+        if (projected.role === 'assistant' && currentRunId !== undefined) finalAssistantByRun.set(currentRunId, projected)
         if (projected.role === 'tool' && projected.toolCallId) {
           const call = callArguments.get(projected.toolCallId)
           if (call) projected.artifacts = artifactFromTool(call.name, call.arguments, projected.details)
@@ -1097,6 +1111,14 @@ export function projectConversation(
       message.durationMs = message.requestDurationMs !== undefined && wallClock < message.requestDurationMs
         ? message.requestDurationMs
         : wallClock
+      // run 级跨度：assistant entry 的时间戳是开始时刻，纯文本回合的 durationMs 只剩请求
+      // 耗时（常不足 1 秒）。结束时刻优先用最后一条消息（工具结果是完成时刻）＋该轮请求时长；
+      // 不足 1 秒视为塌缩，改用下一次 run 的起点（最后一个 run 用会话最后更新时间）。
+      const observedEnd = Math.max(runLastMessageAt.get(runId) ?? startedAt, message.timestamp + (message.durationMs ?? 0))
+      const fallbackEnd = runEndAt.get(runId) ?? Math.max(metadata.updatedAt, latestEntryTimestamp)
+      const end = observedEnd - startedAt >= 1000 ? observedEnd : Math.max(observedEnd, fallbackEnd)
+      const span = Math.max(0, end - startedAt)
+      if (span > 0) message.runDurationMs = span
     }
     message.status ??= message.isError ? 'error' : 'completed'
   }
@@ -1119,8 +1141,8 @@ export function projectConversation(
     ? undefined
     : live.run
       ? Math.max(0, Date.now() - summaryRunStartedAt)
-      : latestAssistant
-        ? Math.max(0, latestAssistant.timestamp - summaryRunStartedAt)
+      : latestAssistant && summaryRunId !== undefined
+        ? Math.max(0, (runEndAt.get(summaryRunId) ?? Math.max(metadata.updatedAt, latestEntryTimestamp)) - summaryRunStartedAt)
         : undefined
   const conversation: ConversationSummary = {
     id: String(view.conversation.id),

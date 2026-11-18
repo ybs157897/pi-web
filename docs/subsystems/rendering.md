@@ -53,7 +53,7 @@ Composer 上方的浮动卡片（`QuestionComposer`，不属于 transcript）只
 
 转移函数 `processGroupAutoOpen`（[process-presentation.ts:30](../../src/web/process-presentation.ts#L30)）；`defaultProcessOpen` 由展示策略、是否最新回合、是否有插间用户输入共同决定（[process-presentation.ts:6](../../src/web/process-presentation.ts#L6)）。挂载时以 `defaultProcessOpen(当前 props)` 初始化（[transcript.tsx:358](../../src/web/transcript.tsx#L358)）；`manualOpen` 一经设置，自动因子不再改写开合，直到组件随 run key 变化重挂载。
 
-折叠头两层：上行「已工作 X」，下行是 ZCode summary group 口径的统计（`workSummaryText`：已查阅 N 项、已执行 N 命令、已修改 N 文件，运行中去掉「已」改显示当前动作 `currentWorkLine`）；模型在工具轮之间写的说明另起第三行，展开体里可见。没有三类工作时回退到其他活动计数（`otherActivitySummary`）或正文预览。展开体是扁平工作列表：左侧竖线、行距 8 px、行头图标隐藏，行文案用完成态动词（已读取/已执行/已修改）。 [process-presentation.ts](../../src/web/process-presentation.ts) · [transcript.tsx](../../src/web/transcript.tsx)
+折叠头固定两行：完成后上行「已工作 X」，下行是 ZCode summary group 口径的统计（`workSummaryText`：已查阅 N 项、已执行 N 命令、已修改 N 文件）；统计为空时回退到其他活动计数（`otherActivitySummary`）或过程正文预览，都没有才显示「思考」。运行中收起时两行换成「当前动作行」（`runningPart` + 工具渲染模型：图标、正在读取/执行、文件 chip 或命令）+「工作中 X」，动作随执行中的工具/思考自动切换；展开时不显示动作行（与 ZCode 一致）。时长优先用服务端投影的 `runDurationMs`（整轮墙钟跨度：最后一条消息或下一次 run 起点），`durationMs` 在文本回合会因 entry 时间戳塌缩而只剩请求耗时。展开体是扁平工作列表：左侧竖线、行距 8 px、行头图标隐藏，行文案用完成态动词（已读取/已执行/已修改）。 [process-presentation.ts](../../src/web/process-presentation.ts) · [transcript.tsx](../../src/web/transcript.tsx)
 
 ## 状态机三：工具行 live→settled 身份（S3）
 

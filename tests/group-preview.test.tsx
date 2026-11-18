@@ -36,15 +36,6 @@ function turn(tag: string, durationMs?: number): ChatMessage[] {
 }
 
 /**
- * 读取折叠分组头部里的过程预览文本。
- * @param header 分组头部按钮元素
- * @returns data-process-preview 节点文本，没有预览时为 null
- */
-function previewOf(header: HTMLElement): string | null {
-  return header.querySelector('[data-process-preview]')?.textContent ?? null
-}
-
-/**
  * 读取折叠分组头部里的 ZCode 统计条文本。
  * @param header 分组头部按钮元素
  * @returns data-process-statistics 节点文本，没有统计时为 null
@@ -57,35 +48,35 @@ function statisticsOf(header: HTMLElement): string | null {
  * 折叠工作分组预览测试。
  *
  * 关键契约：
- * - 折叠的分组头部展示该轮的 prose 预览；展开后预览消失（正文可见）；
- * - detailed 策略下降级（demote）较旧的一轮并显示预览，最新一轮保持展开且头部裸露无预览；
- * - 没写 prose 的纯工具运行保持裸头部（无预览文本）。
+ * - 折叠的分组头部只保留 ZCode 两行形态：「已工作 X」+ 统计（该轮只有提问时是「提问 1 次」）；
+ *   展开后统计行消失（正文与工作列表可见）；
+ * - detailed 策略下降级（demote）较旧的一轮并显示统计，最新一轮保持展开且头部没有第二行。
  */
 describe('folded work group preview', () => {
-  // 折叠态 aria-expanded=false 且头部带 prose 预览；点击展开后 aria-expanded=true、预览移除、正文节点标记 data-open。
-  it('names the folded prose in a collapsed header and drops it while open', () => {
+  // 折叠态 aria-expanded=false 且头部带统计行；点击展开后 aria-expanded=true、统计行移除、正文节点标记 data-open。
+  it('summarizes a collapsed header and drops the summary while open', () => {
     render(<Transcript messages={turn('one', 548_000)} policy={presentationPolicyFor('standard')} />)
     const header = screen.getByRole('button', { name: '已工作 9 分 8 秒' })
 
     expect(header.getAttribute('aria-expanded')).toBe('false')
-    expect(previewOf(header)).toBe(prose)
+    expect(statisticsOf(header)).toBe('提问 1 次')
 
     fireEvent.click(header)
 
     expect(header.getAttribute('aria-expanded')).toBe('true')
-    expect(previewOf(header)).toBeNull()
+    expect(statisticsOf(header)).toBeNull()
     expect(document.getElementById(header.getAttribute('aria-controls') ?? '')?.hasAttribute('data-open')).toBe(true)
   })
 
-  // 多轮场景：较旧的一轮被降级为折叠（带预览），最新一轮（3 秒）保持展开且头部没有预览。
-  it('previews a demoted turn and leaves the newest open one bare', () => {
+  // 多轮场景：较旧的一轮被降级为折叠（带统计），最新一轮（3 秒）保持展开且头部没有统计行。
+  it('summarizes a demoted turn and leaves the newest open one bare', () => {
     render(<Transcript messages={[...turn('older', 548_000), ...turn('newer', 3_000)]} policy={presentationPolicyFor('detailed')} />)
     const [older, newer] = screen.getAllByRole('button', { name: /^已工作/ })
 
     expect(older?.getAttribute('aria-expanded')).toBe('false')
-    expect(previewOf(older as HTMLElement)).toBe(prose)
+    expect(statisticsOf(older as HTMLElement)).toBe('提问 1 次')
     expect(newer?.getAttribute('aria-expanded')).toBe('true')
-    expect(previewOf(newer as HTMLElement)).toBeNull()
+    expect(statisticsOf(newer as HTMLElement)).toBeNull()
   })
 
   it('summarizes the question call when the collapsed run has no prose', () => {
@@ -95,7 +86,6 @@ describe('folded work group preview', () => {
 
     const header = screen.getByRole('button', { name: '已工作 9 分 8 秒', description: '提问 1 次' })
     expect(statisticsOf(header)).toBe('提问 1 次')
-    expect(previewOf(header)).toBeNull()
   })
 
   // ZCode summary group：折叠头给出「已查阅 N 项，已执行 N 命令」，展开后是一条带行文案的
@@ -126,5 +116,29 @@ describe('folded work group preview', () => {
     expect(body?.textContent).toContain('a.ts')
     expect(body?.textContent).toContain('已执行')
     expect(body?.textContent).toContain('npm test')
+  })
+
+  // 运行中收起时，折叠头两行换成「当前动作行」+「工作中 X」，动作行随执行中的工具切换；
+  // 展开或完成后不出现这一行。
+  it('shows the running action row above the working title while collapsed', () => {
+    const messages: ChatMessage[] = [
+      { id: 'user-live', role: 'user', requestId: 'req-live', timestamp: 1000, blocks: [{ type: 'text', text: '跑测试' }] },
+      { id: 'work-live', role: 'assistant', runId: 'run-live', timestamp: 1030, streaming: true, blocks: [
+        { type: 'toolCall', id: 'bash-live', name: 'bash', arguments: { command: 'npm test' } },
+      ] },
+    ]
+    render(<Transcript messages={messages} policy={presentationPolicyFor('standard')} running />)
+    const header = screen.getByRole('button', { name: /^工作中/ })
+
+    // live 组默认展开；手动收起后才显示动作行。
+    expect(header.getAttribute('aria-expanded')).toBe('true')
+    expect(header.querySelector('[data-current-work]')).toBeNull()
+
+    fireEvent.click(header)
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    const currentWork = header.querySelector('[data-current-work]')
+    expect(currentWork?.textContent).toContain('正在执行')
+    expect(currentWork?.textContent).toContain('npm test')
+    expect(header.textContent).toContain('工作中')
   })
 })

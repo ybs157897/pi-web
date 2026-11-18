@@ -649,6 +649,8 @@ export interface ChatMessage {
   requestId?: string
   runId?: string
   durationMs?: number
+  /** Wall-clock span of the whole run (first user input to the next run's start or the conversation's last update), carried by the run's final assistant message. Unlike `durationMs` this survives entry-timestamp collapse on text-only turns. */
+  runDurationMs?: number
   /** Decode wall time of this model request (TTFT subtracted, tool time excluded) for the composer's tok/s. Absent on legacy entries; in-flight rows approximate with elapsed request time. */
   requestDurationMs?: number
   status?: MessageStatus

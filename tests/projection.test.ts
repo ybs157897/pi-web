@@ -272,7 +272,8 @@ describe('Pi Durable conversation projection', () => {
       accessMode: 'fullAccess',
       runId: 'run:request-123',
       runStartedAt: 200,
-      durationMs: 100,
+      // 跨度口径：run 从 200 开始，到下一次 run（reset entry 的 500）为止 = 300ms。
+      durationMs: 300,
       status: 'completed',
     })
     expect(first.messages.map(message => [message.id, message.timestamp])).toEqual(second.messages.map(message => [message.id, message.timestamp]))
@@ -514,6 +515,22 @@ describe('Pi Durable conversation projection', () => {
     ]
     expect(activeDurationMs(messages)).toBe(3_500)
     expect(activeDurationMs(messages.filter(message => message.role !== 'assistant'))).toBeUndefined()
+  })
+
+  // 文本回合的 entry 时间戳塌缩（assistant 记录的是开始时刻，与用户输入只差几十毫秒）：
+  // runDurationMs 用「下一次 run 的起点 / 会话最后更新时间」兜底，折叠头才能显示真实工作时长。
+  it('carries the wall-clock run span on the final assistant message of text turns', () => {
+    const entries = [
+      entry(1, 'pi-web.user', [{ role: 'user', content: 'A', timestamp: 1_000 }], { requestId: 'a' }),
+      entry(2, 'pi.assistant', [assistant([{ type: 'text', text: '答 A' }], 1_037)]),
+      entry(3, 'pi-web.user', [{ role: 'user', content: 'B', timestamp: 5_000 }], { requestId: 'b' }),
+      entry(4, 'pi.assistant', [assistant([{ type: 'text', text: '答 B' }], 5_037)]),
+    ]
+    const projected = projectConversation(view(entries), metadata({ updatedAt: 8_000 }), { workspace: WORKSPACE })
+    const assistants = projected.messages.filter(message => message.role === 'assistant')
+    expect(assistants.map(message => message.runDurationMs)).toEqual([4_000, 3_000])
+    // durationMs 仍是请求时长（塌缩后的 37ms），不被 run 跨度污染。
+    expect(assistants[0]?.durationMs).toBe(37)
   })
 })
 

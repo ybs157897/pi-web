@@ -413,10 +413,12 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
 
   const status = runStatus(run.messages)
   // 毫秒级工具与刚开跑的 partial 都会带 durationMs: 0；run 级时长要么为正、
-  // 要么视为未知（undefined），否则折叠头会渲染出「已工作 0 秒」。
-  const durationMs = run.messages.reduce<number | undefined>((latest, message) => (
-    message.durationMs === undefined || message.durationMs <= 0 ? latest : Math.max(latest ?? 0, message.durationMs)
-  ), undefined)
+  // 要么视为未知（undefined），否则折叠头会渲染出「已工作 0 秒」。服务端给出的
+  // runDurationMs 是整轮墙钟跨度，优先参与比较（纯文本回合只有请求时长时会塌缩）。
+  const durationMs = run.messages.reduce<number | undefined>((latest, message) => {
+    const value = Math.max(message.durationMs ?? 0, message.runDurationMs ?? 0)
+    return value <= 0 ? latest : Math.max(latest ?? 0, value)
+  }, undefined)
   const usage = sumUsage(run.messages)
   const artifacts = uniqueArtifacts(run.messages.flatMap(message => message.artifacts ?? []))
   return {

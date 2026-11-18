@@ -1,4 +1,4 @@
-import type { RenderRun, ToolActivity, ToolItem } from './render-model.ts'
+import type { ProcessPart, RenderRun, ToolActivity, ToolItem } from './render-model.ts'
 import { toolActivity } from './render-model.ts'
 import { buildToolRenderModel } from './tool-render-model.ts'
 import type { ChatPresentationPolicy } from './presentation-policy.ts'
@@ -64,21 +64,23 @@ export function latestReasoningLine(text: string): string {
  * @param t 双语标签函数
  * @param live 是否仍在工作（默认取 run.status === 'running'）
  * @returns 双语标题字符串
- * 内部逻辑：只用已记录的 durationMs，拿不到时长不从墙钟猜；≥60s 显示「X 分 Y 秒」。
+ * 内部逻辑：只用已记录的 durationMs，拿不到时长不从墙钟猜；不足 1 秒的亚秒 run
+ * 与未知同义（否则显示「已工作 0 秒」）；≥60s 显示「X 分 Y 秒」。
  */
 export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t: Translate, live = run.status === 'running'): string {
-  // 两次工具轮之间 run.status 会短暂回落为 completed；会话级 live 标志
-  // 让标题保持「工作中」，直到回合真正落定。
-  if (live) return t('工作中', 'Working')
-  if (run.status === 'error') return t('处理失败', 'Turn failed')
-  if (run.status === 'cancelled') return t('已停止', 'Stopped')
-  // 0 与未知同义（毫秒级 run 不值得展示「0 秒」），回落到不带耗时的「已工作」。
-  const duration = run.durationMs === undefined || !Number.isFinite(run.durationMs) || run.durationMs <= 0
+  // 0 与未知同义（毫秒级 run 不值得展示「0 秒」），不足 1 秒同理，回落到不带耗时的「工作中/已工作」；
+  // 其余四舍五入到秒（2.8 秒的回合显示「3 秒」更贴近实际工作时长）。
+  const duration = run.durationMs === undefined || !Number.isFinite(run.durationMs) || run.durationMs < 1000
     ? undefined
-    : Math.floor(run.durationMs / 1000)
+    : Math.max(1, Math.round(run.durationMs / 1000))
   const time = duration === undefined ? undefined : duration >= 60
     ? t(`${Math.floor(duration / 60)} 分 ${duration % 60} 秒`, `${Math.floor(duration / 60)} min ${duration % 60} sec`)
     : t(`${duration} 秒`, `${duration} sec`)
+  // 两次工具轮之间 run.status 会短暂回落为 completed；会话级 live 标志让标题保持「工作中」，
+  // 直到回合真正落定（ZCode 的运行中折叠头同样带实时时长）。
+  if (live) return time === undefined ? t('工作中', 'Working') : t(`工作中 ${time}`, `Working ${time}`)
+  if (run.status === 'error') return t('处理失败', 'Turn failed')
+  if (run.status === 'cancelled') return t('已停止', 'Stopped')
   if (run.status === 'running') return time === undefined ? t('工作中', 'Working') : t(`工作中 ${time}`, `Working ${time}`)
   return time === undefined ? t('已工作', 'Worked') : t(`已工作 ${time}`, `Worked ${time}`)
 }
@@ -179,22 +181,44 @@ export function workSummaryText(counts: WorkSummaryCounts, t: Translate, live: b
  * 用当前动作代替统计文案。
  */
 export function currentWorkLine(run: Pick<RenderRun, 'process'>, t: Translate, runRunning: boolean): string | undefined {
+  const part = runningPart(run, runRunning)
+  if (part === undefined) return undefined
+  if (part.kind === 'reasoning') {
+    const line = latestReasoningLine(part.text)
+    return line === '' ? undefined : line
+  }
+  if (part.kind === 'content') {
+    const line = part.block.type === 'text' ? firstProseLine(part.block.text) : ''
+    return line === '' ? undefined : line
+  }
+  const model = buildToolRenderModel(part.item, t, runRunning)
+  return `${model.title} ${model.command ?? model.summary}`.trim()
+}
+
+/** 过程里可能处于运行态的部件种类（runningPart 的返回类型）。 */
+export type RunningPart = Extract<ProcessPart, { kind: 'reasoning' } | { kind: 'content' } | { kind: 'tool' }>
+
+/**
+ * 功能：找出过程里正在运行的部件（供折叠头显示当前动作行）。
+ * @param run 渲染 run
+ * @param runRunning run 是否在运行
+ * @returns 最后一个运行中的 reasoning / 流式正文 / 工具行；没有返回 undefined
+ * 内部逻辑：从末尾向前找，思考看 streaming、正文看 streaming text 块、工具行用与
+ * 工具渲染模型一致的运行中判定。ZCode 的运行中折叠头就是这一行的动态展示。
+ */
+export function runningPart(run: Pick<RenderRun, 'process'>, runRunning: boolean): RunningPart | undefined {
   for (let index = run.process.length - 1; index >= 0; index -= 1) {
     const part = run.process[index]
-    if (part === undefined) continue
+    if (part === undefined || part.kind === 'user') continue
     if (part.kind === 'reasoning') {
-      if (!part.streaming) continue
-      const line = latestReasoningLine(part.text)
-      return line === '' ? undefined : line
+      if (part.streaming) return part
+      continue
     }
     if (part.kind === 'content') {
-      if (!part.streaming || part.block.type !== 'text') continue
-      const line = firstProseLine(part.block.text)
-      return line === '' ? undefined : line
+      if (part.streaming && part.block.type === 'text') return part
+      continue
     }
-    if (part.kind !== 'tool' || !toolItemRunning(part.item, runRunning)) continue
-    const model = buildToolRenderModel(part.item, t, runRunning)
-    return `${model.title} ${model.command ?? model.summary}`.trim()
+    if (toolItemRunning(part.item, runRunning)) return part
   }
   return undefined
 }

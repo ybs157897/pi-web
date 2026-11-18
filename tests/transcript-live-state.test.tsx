@@ -35,8 +35,8 @@ describe('live transcript state', () => {
 
     // 会话仍在进行（running）时：单条消息状态可能已是 completed（工具轮次之间），
     // 但终态动作（复制）、用量、耗时与变更文件都必须隐藏；rerender 去掉 running 后全部出现。
-    expect(screen.getByText('工作中')).toBeTruthy()
-    expect(screen.getByText('工作中').closest('button')?.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText(/^工作中/)).toBeTruthy()
+    expect(screen.getByText(/^工作中/).closest('button')?.getAttribute('aria-expanded')).toBe('true')
     expect(screen.queryByRole('button', { name: '复制回答' })).toBeNull()
     expect(screen.queryByRole('button', { name: /用量/ })).toBeNull()
     expect(document.querySelector('[data-message-changes]')).toBeNull()

@@ -442,7 +442,7 @@ function openExternalLink(url: string): void {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
-function toolIcon(name: string) {  const normalized = name.toLowerCase()
+export function toolIcon(name: string) {  const normalized = name.toLowerCase()
   if (/^(bash|pwsh|shell|exec|exec_command|write_stdin|terminal|run_command)$/u.test(normalized)) return <SquareTerminal size={16} />
   if (/^(read|read_file|readfile|cat|read_image)$/u.test(normalized) || /search|grep|glob|find/u.test(normalized)) return <Search size={16} />
   if (/write|create_file/u.test(normalized)) return <FilePlus2 size={16} />

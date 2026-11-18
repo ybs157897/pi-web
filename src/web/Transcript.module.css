@@ -193,17 +193,23 @@
 /* 第二行是 ZCode summary group 的统计条：图标 + 「已查阅 N 项，已执行 N 命令」。 */
 .processPreviewRow { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .processPreviewIcon { flex: none; color: var(--message-muted); }
+/* 运行中折叠头的当前动作行：图标 + 动词 + 文件 chip / 命令，位置在「工作中 X」之上。 */
+.currentWorkRow { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--message-muted); }
+.currentWorkIcon { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--message-muted); }
+.currentWorkIcon > svg { width: 16px; height: 16px; }
+.currentWorkLabel { flex: none; white-space: nowrap; color: var(--message-muted); }
+.currentWorkChip { display: inline-flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; color: var(--message-subtle); }
+.currentWorkChip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.currentWorkDetail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--message-mono); font-size: calc(var(--message-font) - 2px); color: var(--message-muted); }
 .processFlatStatus { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); color: var(--message-subtle); font-size: var(--message-font); line-height: 1.5; }
 .processGroup[data-state='error'] .processFlatStatus { color: var(--message-danger); }
 .processGroup[data-state='error'] .processHeader { color: var(--message-danger); }
 .processGroup[data-state='cancelled'] .processHeader { color: var(--message-subtle); }
 .processTitle { flex: none; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.processTitle[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
+.processTitle[data-running], .processPreview[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
 .processChevron { flex: none; color: var(--message-muted); transition: transform .2s ease-out; }
 .processChevron[data-open] { transform: rotate(90deg); }
 .processPreview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--message-muted); text-overflow: ellipsis; white-space: nowrap; }
-/* 模型在工具轮之间的说明：统计条之下的第三行，最淡；展开后移到过程体。 */
-.processProseRow { min-width: 0; overflow: hidden; color: var(--message-muted); opacity: .85; text-overflow: ellipsis; white-space: nowrap; }
 .processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }

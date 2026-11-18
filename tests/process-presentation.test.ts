@@ -28,12 +28,13 @@ describe('work and thought presentation', () => {
     expect(latestReasoningLine('前一句\r\n\r\n')).toBe('前一句')
     expect(latestReasoningLine('  ')).toBe('')
   })
-  // 验证组标题：完成态格式化时长（63.1s → "已工作 1 分 3 秒"）、运行中为"工作中"、
-  // 流式进行中的完成组仍显示"工作中"、无时长为"已工作"、错误/取消各保留专属标题。
+  // 验证组标题：完成态格式化时长（63.1s → "已工作 1 分 3 秒"）、运行中带实时时长
+  // （"工作中 1 分 3 秒"，与 ZCode 一致）、流式进行中的完成组仍显示"工作中"、
+  // 无时长为"已工作"、错误/取消各保留专属标题。
   it('shows recorded duration and retains error and stop states', () => {
     expect(workGroupTitle({ status: 'completed', durationMs: 63_100 }, zh)).toBe('已工作 1 分 3 秒')
     expect(workGroupTitle({ status: 'running' }, zh)).toBe('工作中')
-    expect(workGroupTitle({ status: 'completed', durationMs: 63_100 }, zh, true)).toBe('工作中')
+    expect(workGroupTitle({ status: 'completed', durationMs: 63_100 }, zh, true)).toBe('工作中 1 分 3 秒')
     expect(workGroupTitle({ status: 'completed' }, zh)).toBe('已工作')
     expect(workGroupTitle({ status: 'error', durationMs: 1000 }, zh)).toBe('处理失败')
     expect(workGroupTitle({ status: 'cancelled' }, zh)).toBe('已停止')
