@@ -21,14 +21,13 @@ const labels = markdownLabels(t)
  */
 /** 回答区 Markdown 契约：链接安全、导出格式、流式惰性与富内容渲染。 */
 describe('answer markdown contracts', () => {
-  it('reveals live prose while leaving code, settled answers and replayed history intact', () => {
+  it('renders incoming text immediately with inline Markdown intact', () => {
     const text = '价格规则\n\nSee `pricing.ts`'
     const live = renderToStaticMarkup(<AnswerMarkdown text={text} t={t} streaming />)
-    expect(live).toContain('data-sd-animate')
+    expect(live).toContain('价格规则')
+    expect(live).not.toContain('data-sd-animate')
     expect(live).toMatch(/<code[^>]*>pricing\.ts<\/code>/)
     expect(renderToStaticMarkup(<AnswerMarkdown text={text} t={t} />)).not.toContain('data-sd-animate')
-    const history = '一段已存在的历史记录。\n\n'.repeat(70)
-    expect(renderToStaticMarkup(<AnswerMarkdown text={history} t={t} streaming />)).not.toContain('data-sd-animate')
   })
 
   // 文件行号链接解析成功路径（含 URL 编码文件名、行区间取起始行），并拒绝 javascript:/协议相对/倒序区间/带查询/非法编码等目标。

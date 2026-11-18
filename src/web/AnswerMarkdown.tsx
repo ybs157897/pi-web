@@ -14,7 +14,6 @@ import { MessageDiagram } from './message-rendering/Diagram.tsx'
 import { ImagePreview, type PreviewImage } from './message-rendering/ImagePreview.tsx'
 import { ImageOff, Image as ImageIcon } from 'lucide-react'
 import { MessageFileIcon } from './message-rendering/FileIcon.tsx'
-import { MAX_INITIAL_REVEAL_LENGTH, StreamingMarkdownBlock } from './message-rendering/StreamingMarkdownBlock.tsx'
 import './message-rendering/theme.css'
 import 'katex/dist/katex.min.css'
 import css from './AnswerMarkdown.module.css'
@@ -233,13 +232,10 @@ class MarkdownBoundary extends Component<{ children: ReactNode; text: string }, 
  */
 export const AnswerMarkdown = memo(function AnswerMarkdown({ text, streaming = false, t, filePaths, pathImages, onOpenFile }: AnswerMarkdownProps) {
   const normalizedText = useMemo(() => normalizeImageParagraphs(text), [text])
-  // A reconnect can mount a long answer made up of many short paragraphs.
-  const [revealLiveText] = useState(() => text.length <= MAX_INITIAL_REVEAL_LENGTH)
   const capabilities = useMemo(() => ({ streaming, t, filePaths, pathImages, onOpenFile }), [streaming, t, filePaths, pathImages, onOpenFile])
   return <Rendering.Provider value={capabilities}><MarkdownBoundary text={text}>
     <Streamdown className={css.markdown} mode={streaming ? 'streaming' : 'static'} parseIncompleteMarkdown={streaming}
       components={components} plugins={plugins} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}
-      BlockComponent={revealLiveText ? StreamingMarkdownBlock : undefined}
-      linkSafety={{ enabled: false }} isAnimating={streaming} controls={false}>{normalizedText}</Streamdown>
+      linkSafety={{ enabled: false }} animated={false} isAnimating={false} controls={false}>{normalizedText}</Streamdown>
   </MarkdownBoundary></Rendering.Provider>
 })

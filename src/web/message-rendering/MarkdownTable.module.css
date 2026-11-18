@@ -1,26 +1,26 @@
-.root { position: relative; min-width: 0; margin: 16px 0; max-width: 100%; font-size: var(--message-font); color: var(--message-fg); line-height: 1.5; letter-spacing: normal; }
-.frame { display: flex; flex-direction: column; width: 100%; max-width: 100%; min-width: 0; }
-.actions { display: flex; align-items: center; justify-content: flex-end; gap: 3px; }
-.actions button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; border-radius: 6px; padding: 0; color: var(--message-subtle); background: transparent; cursor: pointer; }
+.root { position: relative; min-width: 0; margin: 20px 0; max-width: 100%; font-size: var(--message-font); color: var(--message-fg); line-height: 1.5; letter-spacing: normal; }
+.frame { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 100%; min-width: 0; }
+.actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.actions button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; padding: 0; color: var(--message-subtle); background: transparent; cursor: pointer; }
 .actions svg { flex: none; }
 .actions button:hover, .actions button[aria-pressed='true'] { background: var(--message-hover); color: var(--message-fg); }
-.actions button:focus-visible, .scrollbar input:focus-visible { outline: 2px solid var(--message-link); outline-offset: 1px; }
-.viewport { position: relative; max-width: 100%; min-width: 0; }
+.actions button:focus-visible, .scrollbar input:focus-visible { outline: 2px solid var(--message-link); outline-offset: 2px; }
+.border { position: relative; max-width: 100%; min-width: 0; border: 0; box-shadow: var(--message-card-elevation); border-radius: 16px; overflow: hidden; }
 .scroll { min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: visible; scrollbar-width: none; }
 .scroll:focus-visible { outline: 2px solid var(--message-link); outline-offset: -2px; }
 .scroll::-webkit-scrollbar { display: none; }
 .scroll table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font: inherit; color: inherit; }
-.scroll th, .scroll td { min-width: 64px; max-width: 448px; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--message-border); white-space: normal; overflow-wrap: break-word; text-align: left; }
-.scroll th { font-weight: 600; border-bottom-color: color-mix(in srgb, var(--message-fg) 20%, transparent); }
+.scroll th, .scroll td { min-width: 64px; max-width: 448px; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--message-border); white-space: normal; overflow-wrap: break-word; text-align: left; }
+.scroll th { font-weight: 400; color: var(--message-subtle); }
 .scroll td { vertical-align: top; }
-.preview tr:last-child td { border-bottom: 0; }
+.scroll tr:last-child td { border-bottom: 0; }
 .scroll tbody tr:hover { background: var(--message-hover); }
 .scroll th[align='center'], .scroll td[align='center'] { text-align: center; }
 .scroll th[align='right'], .scroll td[align='right'] { text-align: right; }
-/* Fade clipped cells into the conversation background. */
-.leftEdge, .rightEdge { position: absolute; inset-block: 0; width: 24px; pointer-events: none; }
-.leftEdge { left: 0; background: linear-gradient(to right, var(--message-background), transparent); }
-.rightEdge { right: 0; background: linear-gradient(to left, var(--message-background), transparent); }
+/* 卡片底色渐隐把被切走的字形淡出，静态可见；比阴影叠加更可感知 */
+.leftEdge, .rightEdge { position: absolute; inset-block: 0; width: 36px; pointer-events: none; }
+.leftEdge { left: 0; background: linear-gradient(90deg, var(--message-card) 16%, transparent); }
+.rightEdge { right: 0; background: linear-gradient(270deg, var(--message-card) 16%, transparent); }
 .scroll:focus-visible ~ :is(.leftEdge, .rightEdge) { inset-block: 2px; }
 .scroll:focus-visible ~ .leftEdge { left: 2px; }
 .scroll:focus-visible ~ .rightEdge { right: 2px; }

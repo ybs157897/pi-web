@@ -20,7 +20,7 @@ assistant 消息 id 是 `assistant:${byTaskId}:${timestamp}`（`assistantMessage
 
 ## 块级流式状态
 
-流式正文在现有 Markdown 块内按字或词淡入，文本从到达时就参与布局。长文本回填和静态历史直接显示，代码块与公式保持完整；系统启用减少动态效果时关闭淡入。[流式渲染](../../src/web/message-rendering/StreamingMarkdownBlock.tsx)
+流式正文随内容到达直接更新，支持尚未闭合的 Markdown 语法；回合结束后切换为静态渲染。[回答渲染](../../src/web/AnswerMarkdown.tsx)
 
 块身份用模型 content 数组里的位置 `slot`：投影层给每个块盖上写入时的下标并保留空块（`assistantBlocks`，[projection.ts:209](../../src/server/conversation/projection.ts#L209)）——删掉空块会移动后续块的 slot；空块的过滤下放到渲染层（`blockCarriesContent`，[render-model.ts:466](../../src/web/render-model.ts#L466)）。React key 用 slot 拼接（如 `${message.id}:process:${slot}`，[render-model.ts:366](../../src/web/render-model.ts#L366)），不随「空块变非空」漂移。
 
@@ -53,7 +53,7 @@ Composer 上方的浮动卡片（`QuestionComposer`，不属于 transcript）只
 
 转移函数 `processGroupAutoOpen`（[process-presentation.ts:30](../../src/web/process-presentation.ts#L30)）；`defaultProcessOpen` 由展示策略、是否最新回合、是否有插间用户输入共同决定（[process-presentation.ts:6](../../src/web/process-presentation.ts#L6)）。挂载时以 `defaultProcessOpen(当前 props)` 初始化（[transcript.tsx:358](../../src/web/transcript.tsx#L358)）；`manualOpen` 一经设置，自动因子不再改写开合，直到组件随 run key 变化重挂载。
 
-折叠头优先展示过程正文，无可读正文时显示工具活动计数。计数来自实际调用，连续工具分组内的调用各计一次。代码模式有子调用时计入子调用，直播记录与落盘记录按调用 ID 去重。展开的过程行和组内子行使用 4 px 间距。 [process-presentation.ts](../../src/web/process-presentation.ts) · [render-model.ts](../../src/web/render-model.ts)
+折叠头优先展示过程正文，无可读正文时显示工具活动计数。计数来自实际调用，连续工具分组内的调用各计一次。代码模式有子调用时计入子调用，直播记录与落盘记录按调用 ID 去重。展开的过程行间隔 16 px，工具组内的子行间隔 8 px。 [process-presentation.ts](../../src/web/process-presentation.ts) · [render-model.ts](../../src/web/render-model.ts)
 
 ## 状态机三：工具行 live→settled 身份（S3）
 

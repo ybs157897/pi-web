@@ -88,7 +88,7 @@ export function MarkdownTable({ children, t }: { children?: ReactNode; t: Transl
         {canExpand && <button type="button" aria-label={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} title={expanded ? t('收回表格宽度', 'Collapse table width') : t('扩展表格宽度', 'Expand table width')} aria-pressed={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? <ArrowRightFromLine size={14} aria-hidden="true" /> : <ArrowLeftFromLine size={14} aria-hidden="true" />}</button>}
       </div>
       {state === 'error' && <span className={css.error} role="status">{t('复制失败', 'Copy failed')}</span>}
-      <div className={css.viewport}>
+      <div className={css.border}>
         <div className={css.scroll} ref={viewport} tabIndex={0} role="region" aria-label={t('表格，可横向滚动', 'Table, horizontally scrollable')} onKeyDown={keyboardScroll}
           onScroll={event => { const left = event.currentTarget.scrollLeft; setGeometry(old => ({ ...old, left })) }}>
           <table ref={table}>{children}</table>
