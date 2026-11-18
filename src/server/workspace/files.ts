@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open, readdir, readFile, realpath, stat } from 'node:fs/promises'
@@ -93,6 +94,24 @@ function platformAbsolutePath(path: string): string | undefined {
     return resolve(path)
   }
   return isAbsolute(path) ? resolve(path) : undefined
+}
+
+/**
+ * 功能：识别工作区之外、但宿主平台能解析的绝对路径，用于只读预览。
+ * @returns 解析后的绝对路径；返回 undefined 时交回原有工作区校验
+ * 内部逻辑：反斜杠统一成 `/` 后先判长度、NUL 与 UNC；只有按平台解析成功且不落在
+ * 任一工作区根（realpath 后 / 添加时的原始路径）内的绝对路径才放行。相对路径、
+ * `..` 穿越、无法解析的盘符名都返回 undefined，规则完全不变。
+ */
+function externalAbsolutePath(root: string, requested: string, declared: string): string | undefined {
+  const normalized = requested.replace(/\\/g, '/')
+  if (normalized.length > 2048 || normalized.includes('\u0000') || normalized.startsWith('//')) return undefined
+  const absolute = platformAbsolutePath(normalized)
+  if (absolute === undefined) return undefined
+  for (const base of [root, declared]) {
+    if (isWithin(base, absolute)) return undefined
+  }
+  return absolute
 }
 
 /**
@@ -355,14 +374,21 @@ export class WorkspaceFiles {
   }
 
   /**
-   * 功能：读取一个工作区文件/目录用于预览。
+   * 功能：读取一个文件/目录用于预览。
    * @returns 图片、文本、二进制或目录列表。超过 2 MiB 的文本仅返回目标行附近的片段。
-   * 内部逻辑：路径先经 resolveEntry 兜底后缀匹配；预览上限 8 MiB；目录请求返回
-   * 其内容列表让检查器直接展示。
+   * 内部逻辑：工作区外的宿主绝对路径（模型常引用工具产物，如 C 盘 temp 文件）按只读
+   * 文件打开、不支持目录浏览；工作区内路径先经 resolveEntry 兜底后缀匹配；预览上限
+   * 8 MiB；目录请求返回其内容列表让检查器直接展示。
    */
   async read(id: string, path: string, line?: number): Promise<WorkspaceFile> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
+    const external = externalAbsolutePath(root, path, workspace.path)
+    if (external !== undefined) {
+      const info = await existing(() => stat(external), external)
+      if (info.isDirectory()) throw new RuntimeError('INVALID_INPUT', '工作区外的目录不支持浏览')
+      return this.readFileAt(external, external, info, line)
+    }
     const requested = resolveWorkspacePath(root, path, workspace.path)
     const resolved = await this.resolveEntry(root, requested)
     const info = await stat(resolved.canonical)
@@ -373,11 +399,16 @@ export class WorkspaceFiles {
         entries: await this.listDirectory(resolved.canonical, resolved.path),
       }
     }
+    return this.readFileAt(resolved.canonical, resolved.path, info, line)
+  }
+
+  /** 按 MIME 分派单文件预览；displayPath 是回给前端的展示路径（工作区相对或绝对）。 */
+  private async readFileAt(canonical: string, displayPath: string, info: Stats, line?: number): Promise<WorkspaceFile> {
     if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能预览普通文件')
     if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法在浏览器预览')
-    const buffer = await readFile(resolved.canonical)
-    const type = effectiveMimeType(resolved.canonical, buffer)
-    const common = { path: resolved.path, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
+    const buffer = await readFile(canonical)
+    const type = effectiveMimeType(canonical, buffer)
+    const common = { path: displayPath, mimeType: type, size: info.size, modifiedAt: info.mtimeMs }
     if (INLINE_IMAGE_TYPES.has(type)) return { ...common, kind: 'image', data: buffer.toString('base64') }
     if (isTextType(type) && !buffer.includes(0)) {
       const content = buffer.toString('utf8')
@@ -414,12 +445,21 @@ export class WorkspaceFiles {
   }
 
   /**
-   * 功能：把工作区文件作为资源读取（图像内联等）。
+   * 功能：把文件作为资源读取（图像内联等）。
    * @returns MIME 与原始字节；只读普通文件且 ≤ 8 MiB，路径同样经后缀兜底
+   * 内部逻辑：工作区外绝对路径按只读资源读取（与 read 同一口径），其余走工作区校验。
    */
   async asset(id: string, path: string): Promise<{ mimeType: string; data: Uint8Array }> {
     const workspace = this.workspace(id)
     const root = await realpath(workspace.path)
+    const external = externalAbsolutePath(root, path, workspace.path)
+    if (external !== undefined) {
+      const info = await existing(() => stat(external), external)
+      if (!info.isFile()) throw new RuntimeError('INVALID_INPUT', '只能读取普通文件')
+      if (info.size > MAX_FILE_PREVIEW_BYTES) throw new RuntimeError('INVALID_INPUT', '文件超过 8 MiB，无法内联读取')
+      const data = await readFile(external)
+      return { mimeType: effectiveMimeType(external, data), data }
+    }
     const requested = resolveWorkspacePath(root, path, workspace.path)
     const resolved = await this.resolveEntry(root, requested)
     const info = await stat(resolved.canonical)

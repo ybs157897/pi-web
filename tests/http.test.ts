@@ -1248,7 +1248,8 @@ describe('management API', () => {
   })
 
   // 工作区文件寻址：相对路径、绝对路径（含 realpath 规范化）、反斜杠分隔都能打开并归一化为相对路径；
-  // 目录可列出；资产可取回；越出工作区的绝对路径 400、../ 穿越 403、外来盘符/UNC 路径 400。
+  // 目录可列出；资产可取回；工作区外绝对路径按只读文件打开（只支持文件，不支持目录浏览），
+  // ../ 穿越 403、外来盘符/UNC 路径 400。
   it('opens workspace files addressed by absolute, backslash separated and relative paths', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-workspace-'))
     const outside = await mkdtemp(join(tmpdir(), 'pi-web-outside-'))
@@ -1285,16 +1286,32 @@ describe('management API', () => {
       expect(asset.status).toBe(200)
       expect(await asset.text()).toBe('hello\n')
 
-      // A path that leaves the workspace stays unreachable.
-      const escaped = await app.request(fileUrl(join(outside, 'secret.txt')))
-      expect(escaped.status).toBe(400)
-      expect(await escaped.json()).toMatchObject({ code: 'INVALID_INPUT', error: '工作区路径无效' })
+      // Model answers reference tool output outside the workspace (e.g. temp files);
+      // those open read-only by absolute path instead of failing validation.
+      const outsideFile = join(outside, 'secret.txt')
+      const escaped = await app.request(fileUrl(outsideFile))
+      expect(escaped.status).toBe(200)
+      expect(await escaped.json()).toMatchObject({ path: outsideFile, kind: 'text', content: 'secret\n' })
+
+      const outsideAsset = await app.request(`/api/workspaces/ws-1/asset?path=${encodeURIComponent(outsideFile)}`)
+      expect(outsideAsset.status).toBe(200)
+      expect(await outsideAsset.text()).toBe('secret\n')
+
+      // Directory browsing stays inside the workspace even for absolute paths.
+      const outsideDirectory = await app.request(fileUrl(outside))
+      expect(outsideDirectory.status).toBe(400)
+      expect(await outsideDirectory.json()).toMatchObject({ code: 'INVALID_INPUT', error: '工作区外的目录不支持浏览' })
+
+      const outsideMissing = await app.request(fileUrl(join(outside, 'missing.txt')))
+      expect(outsideMissing.status).toBe(404)
+      expect(await outsideMissing.json()).toMatchObject({ code: 'NOT_FOUND' })
 
       const traversal = await app.request(fileUrl('../secret.txt'))
       expect(traversal.status).toBe(403)
       expect(await traversal.json()).toMatchObject({ code: 'FORBIDDEN', error: '不能访问工作区以外的路径' })
 
-      // A drive letter names a location on Windows only, elsewhere it must not resolve to a file.
+      // A drive letter names a location on Windows only, elsewhere such a path stays an
+      // unresolvable name instead of being guessed into a file of the workspace.
       const foreign = process.platform === 'win32' ? '\\\\server\\share\\secret.txt' : 'D:\\2026\\dolynk\\dolynk-base-device\\docs\\a.md'
       const foreignPath = await app.request(fileUrl(foreign))
       expect(foreignPath.status).toBe(400)
