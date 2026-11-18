@@ -1,4 +1,6 @@
-import type { RenderRun, ToolActivity } from './render-model.ts'
+import type { RenderRun, ToolActivity, ToolItem } from './render-model.ts'
+import { toolActivity } from './render-model.ts'
+import { buildToolRenderModel } from './tool-render-model.ts'
 import type { ChatPresentationPolicy } from './presentation-policy.ts'
 import type { Translate } from './render-labels.ts'
 
@@ -105,23 +107,152 @@ export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120)
   return characters.length > limit ? `${characters.slice(0, limit).join('')}…` : line
 }
 
-/** 折叠组没有可读正文时，按真实工具调用次数显示工作摘要。 */
-export function foldedActivitySummary(run: Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'>, t: Translate): string | undefined {
+/** ZCode summary group 口径的工作统计：探索 / 执行 / 修改。 */
+export interface WorkSummaryCounts {
+  readonly explore: number
+  readonly run: number
+  readonly change: number
+  /** 修改类调用但抽不出路径的次数（ZCode 的 unresolved 桶）。 */
+  readonly unresolved: number
+}
+
+/**
+ * 功能：按 ZCode summary group 口径汇总一个 run 的工作量。
+ * @param run 渲染 run（活动计数 + 过程部件）
+ * @returns explore/run/change/unresolved 四类计数
+ * 内部逻辑：读取（含读图）、搜索、网页抓取归 explore；命令与代码执行归 run；写入与
+ * 编辑按去重文件路径归 change（抽不出路径的计入 unresolved）；其余活动类（子智能体、
+ * 计划、提问等）不进摘要，与 ZCode 的 explore/run/change 三桶一致。
+ */
+export function workSummaryCounts(run: Pick<RenderRun, 'activityCounts' | 'process'>): WorkSummaryCounts {
   const counts = new Map(run.activityCounts.map(({ kind, count }) => [kind, count]))
-  const times = (...kinds: ToolActivity[]): number => kinds.reduce((sum, kind) => sum + (counts.get(kind) ?? 0), 0)
+  const total = (...kinds: ToolActivity[]): number => kinds.reduce((sum, kind) => sum + (counts.get(kind) ?? 0), 0)
+  const changed = changedTargets(run.process)
+  return {
+    explore: total('read', 'readImage', 'search', 'webSearch', 'webFetch'),
+    run: total('commands', 'code'),
+    change: changed.files.size,
+    unresolved: changed.unresolved,
+  }
+}
+
+/**
+ * 功能：生成 ZCode 风格的折叠头统计文案：「已查阅 8 项，已执行 12 命令，已修改 3 文件」。
+ * @param counts 三类计数
+ * @param t 双语标签函数
+ * @param live 仍在运行时不加「已」前缀（对齐 ZCode 的进行中措辞）
+ * @returns 统计文案；三类都为 0 返回 undefined
+ */
+export function workSummaryText(counts: WorkSummaryCounts, t: Translate, live: boolean): string | undefined {
+  const parts: string[] = []
+  if (counts.explore > 0) {
+    parts.push(live
+      ? t(`查阅 ${counts.explore} 项`, `Explore ${counts.explore} ${counts.explore === 1 ? 'item' : 'items'}`)
+      : t(`已查阅 ${counts.explore} 项`, `Explored ${counts.explore} ${counts.explore === 1 ? 'item' : 'items'}`))
+  }
+  if (counts.run > 0) {
+    parts.push(live
+      ? t(`执行 ${counts.run} 命令`, `Run ${counts.run} ${counts.run === 1 ? 'command' : 'commands'}`)
+      : t(`已执行 ${counts.run} 命令`, `Ran ${counts.run} ${counts.run === 1 ? 'command' : 'commands'}`))
+  }
+  if (counts.change > 0) {
+    parts.push(live
+      ? t(`修改 ${counts.change} 文件`, `Change ${counts.change} ${counts.change === 1 ? 'file' : 'files'}`)
+      : t(`已修改 ${counts.change} 文件`, `Changed ${counts.change} ${counts.change === 1 ? 'file' : 'files'}`))
+  }
+  if (counts.unresolved > 0) {
+    parts.push(live
+      ? t(`修改 ${counts.unresolved} 次（路径未知）`, `Change ${counts.unresolved} ${counts.unresolved === 1 ? 'time' : 'times'} (path unknown)`)
+      : t(`已修改 ${counts.unresolved} 次（路径未知）`, `Changed ${counts.unresolved} ${counts.unresolved === 1 ? 'time' : 'times'} (path unknown)`))
+  }
+  return parts.length > 0 ? parts.join(t('，', ', ')) : undefined
+}
+
+/**
+ * 功能：取折叠头在运行中要显示的「当前动作」一行。
+ * @param run 渲染 run
+ * @param t 双语标签函数
+ * @param runRunning run 是否在运行
+ * @returns 运行中动作的文案；没有运行中的部件返回 undefined
+ * 内部逻辑：从过程末尾向前找第一个运行中的部件——流式思考取最后一行、流式正文取
+ * 首行可读文本、工具行复用工具渲染模型的标题与命令/摘要。ZCode 在折叠且仍在工作时
+ * 用当前动作代替统计文案。
+ */
+export function currentWorkLine(run: Pick<RenderRun, 'process'>, t: Translate, runRunning: boolean): string | undefined {
+  for (let index = run.process.length - 1; index >= 0; index -= 1) {
+    const part = run.process[index]
+    if (part === undefined) continue
+    if (part.kind === 'reasoning') {
+      if (!part.streaming) continue
+      const line = latestReasoningLine(part.text)
+      return line === '' ? undefined : line
+    }
+    if (part.kind === 'content') {
+      if (!part.streaming || part.block.type !== 'text') continue
+      const line = firstProseLine(part.block.text)
+      return line === '' ? undefined : line
+    }
+    if (part.kind !== 'tool' || !toolItemRunning(part.item, runRunning)) continue
+    const model = buildToolRenderModel(part.item, t, runRunning)
+    return `${model.title} ${model.command ?? model.summary}`.trim()
+  }
+  return undefined
+}
+
+/** 与 buildToolRenderModel 相同的运行中判定：结果流式/状态 running，或无结果且调用/父 run 在跑。 */
+function toolItemRunning(item: ToolItem, runRunning: boolean): boolean {
+  const status = item.result?.status ?? item.message.status
+  return item.result?.streaming === true || status === 'running'
+    || item.result === undefined && (item.message.streaming === true || runRunning)
+}
+
+/** 收集修改类调用落到的文件路径（含 codemode 嵌套子调用）；抽不出路径的次数单列。 */
+function changedTargets(process: RenderRun['process']): { files: Set<string>; unresolved: number } {
+  const files = new Set<string>()
+  let unresolved = 0
+  const visit = (item: ToolItem): void => {
+    const activity = toolActivity(item.call?.name ?? item.result?.toolName ?? '')
+    if (activity === 'write' || activity === 'edit') {
+      const path = changedPath(item)
+      if (path === undefined) unresolved += 1
+      else files.add(path)
+    }
+    for (const child of item.children) visit(child)
+  }
+  for (const part of process) {
+    if (part.kind === 'tool') visit(part.item)
+  }
+  return { files, unresolved }
+}
+
+/** 修改类调用的目标路径：先看参数里的 path 家族字段，再看写/编辑产物；都没有则不猜。 */
+function changedPath(item: ToolItem): string | undefined {
+  const args = item.call?.arguments
+  for (const key of ['path', 'file_path', 'filePath', 'file']) {
+    const value = args?.[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return item.result?.artifacts?.find(artifact => artifact.kind === 'edit' || artifact.kind === 'write' || artifact.kind === 'nativeEdit')?.path
+}
+
+/**
+ * 功能：三类工作（探索/执行/修改）之外的活动兜底摘要：子智能体、计划、提问、其他
+ * 工具与失败/停止计数。ZCode 的统计只覆盖三类，但 pi-web 的折叠组会吞掉这些行，
+ * 折叠头至少要让用户知道它们存在。
+ * @param run 渲染 run（活动计数 + 失败/停止数）
+ * @param t 双语标签函数
+ * @returns 如「提问 1 次」；没有其他活动返回 undefined
+ */
+export function otherActivitySummary(run: Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'>, t: Translate): string | undefined {
+  const counts = new Map(run.activityCounts.map(({ kind, count }) => [kind, count]))
   const parts: string[] = []
   const add = (count: number, zh: string, en: string): void => {
     if (count > 0) parts.push(t(`${zh} ${count} 次`, `${en} ${count}`))
   }
-  add(times('read', 'readImage'), '读取', 'Reads')
-  add(times('search', 'webSearch'), '搜索', 'Searches')
-  add(times('webFetch'), '查阅网页', 'Page fetches')
-  add(times('commands', 'code'), '执行', 'Executions')
-  add(times('write', 'edit'), '改动', 'Edits')
-  add(times('subagents'), '协调子智能体', 'Subagent calls')
-  add(times('plan'), '处理计划或目标', 'Plan and goal calls')
-  add(times('questions'), '提问', 'Questions')
-  add(times('tools'), '调用其他工具', 'Other tool calls')
+  add(counts.get('subagents') ?? 0, '协调子智能体', 'Subagent calls')
+  add(counts.get('plan') ?? 0, '处理计划或目标', 'Plan and goal calls')
+  add(counts.get('questions') ?? 0, '提问', 'Questions')
+  add(counts.get('tools') ?? 0, '调用其他工具', 'Other tool calls')
   add(run.failedTools, '失败', 'Failed')
   add(run.stoppedTools, '停止', 'Stopped')
   return parts.length > 0 ? parts.join(' · ') : undefined

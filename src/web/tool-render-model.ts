@@ -118,14 +118,17 @@ export function processTitleFromCounts(counts: readonly ActivityCount[], t: Tran
   return counts.length > 3 ? t(`${title}等`, `${title}, and more`) : title
 }
 
-/** 行标题，使用 DSH 的 `tool.title` 词表（与分组分类词表不同）。 */
-export function toolRowTitle(name: string, t: Translate): string {
+/**
+ * 行标题，采用 ZCode summary 行的完成态动词（「已读取」「已执行」，运行中为「正在…」）。
+ * MCP、技能、团队、计划等特殊工具保留各自的命名，不套完成态前缀。
+ */
+export function toolRowTitle(name: string, t: Translate, running = false): string {
   // MCP 名称渲染为 `MCP · server · tool`；分类图标保持通用。
   const mcp = mcpRowTitle(name)
   if (mcp !== undefined) return mcp
   const id = name.toLocaleLowerCase()
   if (id === CODEMODE_TOOL_NAME) return t('代码', 'Code')
-  // 列目录不是文本搜索；按工具实际执行的操作命名。
+  // 列目录不是文本搜索；按工具实际执行的操作命名（有意偏离 ZCode 的「已列出」）。
   if (id === 'list_files') return t('搜索列表', 'List files')
   // pi-web 把 ZCode 的单个 Skill 工具拆成四个；每行各自命名自己的操作。
   if (id === 'skill' || id === 'skill_load') return t('技能', 'Skill')
@@ -146,13 +149,11 @@ export function toolRowTitle(name: string, t: Translate): string {
   if (id === 'team_task_get') return t('查看团队任务', 'Team task detail')
   if (id === 'team_task_update') return t('更新团队任务', 'Update team task')
   switch (toolActivity(id)) {
-    case 'read': case 'readImage': return t('读取', 'Read')
-    case 'search': case 'webSearch': return t('搜索', 'Search')
-    case 'webFetch': return t('网页抓取', 'Fetch')
-    case 'write': return t('写入', 'Write')
-    case 'edit': return t('编辑', 'Edit')
-    case 'commands': return t('运行命令', 'Bash')
-    case 'code': return t('代码', 'Code')
+    case 'read': case 'readImage': return running ? t('正在读取', 'Reading') : t('已读取', 'Read')
+    case 'search': case 'webSearch': return running ? t('正在搜索', 'Searching') : t('已搜索', 'Searched')
+    case 'webFetch': return running ? t('正在抓取', 'Fetching') : t('已抓取', 'Fetched')
+    case 'write': case 'edit': return running ? t('正在修改', 'Editing') : t('已修改', 'Changed')
+    case 'commands': case 'code': return running ? t('正在执行', 'Running') : t('已执行', 'Ran')
     case 'plan': return t('待办', 'Todos')
     default: return t('工具调用', 'Tool call')
   }
@@ -256,7 +257,7 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     : undefined
   return {
     name,
-    title: toolRowTitle(name, t),
+    title: toolRowTitle(name, t, running),
     summary,
     output,
     ...(command === undefined ? {} : { command }),

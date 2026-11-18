@@ -1,5 +1,4 @@
 .root { min-width: 0; color: var(--message-muted); }
-.separator { flex: none; color: var(--message-muted); }
 .summary { min-width: 0; overflow: hidden; white-space: nowrap; flex: 1; color: var(--message-subtle); font-size: var(--message-font); }
 .summary[data-overflow] { mask-image: linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent); }
 .summaryText { display: inline-block; animation: reasoning-line-in 140ms ease-out both; }

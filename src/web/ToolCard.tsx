@@ -201,8 +201,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const title = ask !== null ? ask.title : subagent !== null ? subagent.title
     : codemode !== null ? codemode.title
       : skill !== null ? skill.title
-        : model.command !== undefined ? (model.running ? t('正在执行', 'Running') : t('终端', 'Terminal'))
-          : plan === undefined || model.failed || model.cancelled ? model.title : planHeading(plan) ?? model.title
+        : plan === undefined || model.failed || model.cancelled ? model.title : planHeading(plan) ?? model.title
   const outputCard = model.command !== undefined ? (
     <ProcessTerminal command={model.command} cwd={model.cwd} output={model.output}
       {...model.exitCode === undefined ? {} : { exitCode: model.exitCode }}

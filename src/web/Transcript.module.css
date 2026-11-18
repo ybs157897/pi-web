@@ -187,8 +187,12 @@
 }
 
 .processGroup { min-width: 0; color: var(--message-subtle); }
-.processHeader { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--message-subtle); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
+.processHeader { display: flex; width: 100%; min-width: 0; flex-direction: column; align-items: stretch; gap: 2px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--message-subtle); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
 .processHeader:disabled { cursor: default; }
+.processTitleRow { display: flex; min-width: 0; align-items: center; gap: 8px; }
+/* 第二行是 ZCode summary group 的统计条：图标 + 「已查阅 N 项，已执行 N 命令」。 */
+.processPreviewRow { display: flex; min-width: 0; align-items: center; gap: 6px; }
+.processPreviewIcon { flex: none; color: var(--message-muted); }
 .processFlatStatus { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); color: var(--message-subtle); font-size: var(--message-font); line-height: 1.5; }
 .processGroup[data-state='error'] .processFlatStatus { color: var(--message-danger); }
 .processGroup[data-state='error'] .processHeader { color: var(--message-danger); }
@@ -197,12 +201,17 @@
 .processTitle[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
 .processChevron { flex: none; color: var(--message-muted); transition: transform .2s ease-out; }
 .processChevron[data-open] { transform: rotate(90deg); }
-.processHeader[data-preview] .processTitle { max-width: 50%; }
 .processPreview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--message-muted); text-overflow: ellipsis; white-space: nowrap; }
+/* 模型在工具轮之间的说明：统计条之下的第三行，最淡；展开后移到过程体。 */
+.processProseRow { min-width: 0; overflow: hidden; color: var(--message-muted); opacity: .85; text-overflow: ellipsis; white-space: nowrap; }
 .processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }
 .processBody, .processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
+/* ZCode 的工作列表：左侧竖线 + 缩进、行距收窄；展开后行头图标隐藏，动作由行文案表达。 */
+.processBody[data-work-list] { position: relative; gap: 8px; margin-left: 8px; padding-left: 16px; }
+.processBody[data-work-list]::before { content: ''; position: absolute; top: 20px; bottom: 2px; left: 0; border-left: 1px solid color-mix(in srgb, var(--message-border) 60%, transparent); }
+.processBody[data-work-list] :global([data-process-leading-icon]) { display: none; }
 .processFlatBody { color: var(--message-muted); }
 .pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .processOutput { min-width: 0; color: var(--message-fg); }

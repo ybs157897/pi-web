@@ -45,6 +45,15 @@ function previewOf(header: HTMLElement): string | null {
 }
 
 /**
+ * 读取折叠分组头部里的 ZCode 统计条文本。
+ * @param header 分组头部按钮元素
+ * @returns data-process-statistics 节点文本，没有统计时为 null
+ */
+function statisticsOf(header: HTMLElement): string | null {
+  return header.querySelector('[data-process-statistics]')?.textContent ?? null
+}
+
+/**
  * 折叠工作分组预览测试。
  *
  * 关键契约：
@@ -85,6 +94,37 @@ describe('folded work group preview', () => {
     render(<Transcript messages={messages} policy={presentationPolicyFor('standard')} />)
 
     const header = screen.getByRole('button', { name: '已工作 9 分 8 秒', description: '提问 1 次' })
-    expect(previewOf(header)).toBe('提问 1 次')
+    expect(statisticsOf(header)).toBe('提问 1 次')
+    expect(previewOf(header)).toBeNull()
+  })
+
+  // ZCode summary group：折叠头给出「已查阅 N 项，已执行 N 命令」，展开后是一条带行文案的
+  // 扁平工作列表（已读取 / 已执行），不再是需要二次展开的「查阅/终端」子组。
+  it('summarizes tools in the header and opens a flat work list with settled row labels', () => {
+    const messages: ChatMessage[] = [
+      { id: 'user-rows', role: 'user', requestId: 'req-rows', timestamp: 1000, blocks: [{ type: 'text', text: '看下文件' }] },
+      { id: 'work-rows', role: 'assistant', runId: 'run-rows', timestamp: 1100, status: 'completed', blocks: [
+        { type: 'toolCall', id: 'read-1', name: 'read', arguments: { path: 'a.ts' } },
+        { type: 'toolCall', id: 'bash-1', name: 'bash', arguments: { command: 'npm test' } },
+      ] },
+      { id: 'read-result', role: 'tool', runId: 'run-rows', toolCallId: 'read-1', toolName: 'read', timestamp: 1200,
+        status: 'completed', details: { lines: [{ number: 1, text: 'const a = 1' }], totalLines: 1 }, blocks: [{ type: 'text', text: 'const a = 1' }] },
+      { id: 'bash-result', role: 'tool', runId: 'run-rows', toolCallId: 'bash-1', toolName: 'bash', timestamp: 1300,
+        status: 'completed', details: { command: 'npm test' }, blocks: [{ type: 'text', text: 'ok' }] },
+      { id: 'answer-rows', role: 'assistant', runId: 'run-rows', timestamp: 1900, status: 'completed',
+        durationMs: 548_000, blocks: [{ type: 'text', text: '完成。' }] },
+    ]
+    render(<Transcript messages={messages} policy={presentationPolicyFor('standard')} />)
+    const header = screen.getByRole('button', { name: '已工作 9 分 8 秒' })
+
+    expect(statisticsOf(header)).toBe('已查阅 1 项，已执行 1 命令')
+
+    fireEvent.click(header)
+    const body = document.querySelector('[data-work-list]')
+    expect(body).not.toBeNull()
+    expect(body?.textContent).toContain('已读取')
+    expect(body?.textContent).toContain('a.ts')
+    expect(body?.textContent).toContain('已执行')
+    expect(body?.textContent).toContain('npm test')
   })
 })

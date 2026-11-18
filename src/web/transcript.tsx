@@ -12,7 +12,6 @@ import { api } from './api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import ChangedFiles from './ChangedFiles.tsx'
 import ToolCard from './ToolCard.tsx'
-import { ProcessToolGroup } from './ProcessToolGroup.tsx'
 import { formatTokens, markdownLabels, type Translate } from './render-labels.ts'
 import { buildRenderModel, interactionBlocksTurnLoading, messageText, transcriptMessageDomId, turnChatLoadingVisible, type ProcessPart, type RenderRun, type ResponsePart } from './render-model.ts'
 import type { PlanDocument } from './plan-preview.ts'
@@ -23,9 +22,9 @@ import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
 import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
 import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-bridge.ts'
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, ListChecks } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, foldedActivitySummary, foldedProsePreview, processGroupAutoOpen, processGroupBoundary, workGroupTitle } from './process-presentation.ts'
+import { currentWorkLine, defaultProcessOpen, foldedProsePreview, otherActivitySummary, processGroupAutoOpen, processGroupBoundary, workGroupTitle, workSummaryCounts, workSummaryText } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -409,7 +408,14 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
-  const preview = open || live ? undefined : foldedProsePreview(run) ?? foldedActivitySummary(run, t)
+  // ZCode summary group：折叠头两层——「已工作 X」在上，统计文案（或运行中的当前动作）在下；
+  // 模型在工具轮之间写的说明另起一行，折叠时也保持可见（ZCode 把它们放在组外）。
+  const statistics = workSummaryText(workSummaryCounts(run), t, live) ?? otherActivitySummary(run, t)
+  const prose = open ? undefined : foldedProsePreview(run)
+  const liveLine = open || !live ? undefined : currentWorkLine(run, t, live)
+  const statisticsLine = open ? undefined
+    : liveLine ?? statistics ?? (live || prose !== undefined ? undefined : t('思考', 'Reasoning'))
+  const describedBy = statisticsLine === undefined && prose === undefined ? undefined : `${bodyId}-summary`
   // ZCode 把带内联插件页的成功工具行留在折叠历史区之外。否则分组收起时页面
   // 会消失，最终答案顶替它的位置。
   type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
@@ -446,23 +452,27 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   return <>
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
       <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
-        aria-labelledby={`${bodyId}-title`} aria-describedby={preview === undefined ? undefined : `${bodyId}-summary`}
-        data-preview={preview === undefined ? undefined : ''}
+        aria-labelledby={`${bodyId}-title`} aria-describedby={describedBy}
         disabled={hasInterleavedUser}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
-        <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
-        <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-        {preview !== undefined && <span id={`${bodyId}-summary`} className={css.processPreview} data-process-preview="" title={preview}>{preview}</span>}
+        <span className={css.processTitleRow}>
+          <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
+          <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
+        </span>
+        {statisticsLine !== undefined && <span id={`${bodyId}-summary`} className={css.processPreviewRow} data-process-statistics="">
+          <ListChecks className={css.processPreviewIcon} size={14} aria-hidden="true" />
+          <span className={css.processPreview} title={statisticsLine}>{statisticsLine}</span>
+        </span>}
+        {prose !== undefined && <span className={css.processProseRow} data-process-preview="" title={prose}>{prose}</span>}
       </button>
-      <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody}>{body}</div></div></div>
+      <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody} data-work-list>{body}</div></div></div>
     </div>}
     {pinnedBody.length > 0 && <div className={css.pinnedProcess} data-pinned-plugin-ui>{pinnedBody}</div>}
   </>
 }
 
 /**
- * 功能：单个过程部件的分派渲染：user → 消息行；tool → 工具卡；toolGroup → 分组卡；
- * content → 过程正文；reasoning → 思考块。
+ * 功能：单个过程部件的分派渲染：user → 消息行；tool → 工具行；content → 过程正文；reasoning → 思考块。
  * @param part 过程部件
  * @param runRunning run 是否在运行（影响工具行状态）
  * 其余为透传回调与载荷。
@@ -494,9 +504,6 @@ function ProcessPartView({ part, runRunning, policy, onOpenFile, onInspectDiff, 
     onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent}
     onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
     onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink} t={t} />
-  if (part.kind === 'toolGroup') return <ProcessToolGroup groupKey={part.key} group={part.group} items={part.items}
-    runRunning={runRunning} replies={replies} interactions={interactions} onOpenFile={onOpenFile}
-    onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan} t={t} />
   if (part.kind === 'content') return <div className={css.processOutput} data-message-id={part.message.id}>
     <ContentBlockView block={part.block} streaming={part.streaming} answer
       onOpenFile={onOpenFile} resolveFileImage={resolveFileImage} filePaths={filePaths} labels={labels} t={t} />

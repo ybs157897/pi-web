@@ -1,6 +1,5 @@
 import { isInteractionPayloadText } from './interaction-payload.ts'
 import type { ChatMessage, ContentBlock, FileArtifact, InteractionRequest, MessageUsage } from '../shared/types.ts'
-import { groupProcessParts, type ProcessToolGroupKind } from './process-grouping.ts'
 
 /** 一条工具调用渲染项：调用块、配对结果、父子嵌套与排序。 */
 export interface ToolItem {
@@ -13,19 +12,12 @@ export interface ToolItem {
   readonly order: number
 }
 
-/** 过程区的部件：交错用户行、思考、正文、工具行与工具分组（toolGroup 由 process-grouping 合成）。 */
+/** 过程区的部件：交错用户行、思考、正文与工具行（逐个工具平铺，聚合只发生在折叠头统计里）。 */
 export type ProcessPart =
   | { readonly kind: 'user'; readonly key: string; readonly message: ChatMessage; readonly order: number }
   | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly streaming: boolean; readonly order: number }
   | { readonly kind: 'content'; readonly key: string; readonly message: ChatMessage; readonly block: ContentBlock; readonly streaming: boolean; readonly order: number }
   | { readonly kind: 'tool'; readonly key: string; readonly item: ToolItem; readonly order: number }
-  | {
-      readonly kind: 'toolGroup'
-      readonly key: string
-      readonly group: ProcessToolGroupKind
-      readonly items: readonly ToolItem[]
-      readonly order: number
-    }
 
 /** 答案区的一段响应：一条助手消息的全部内容块。 */
 export interface ResponsePart {
@@ -418,7 +410,6 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     }
   }
   process.sort((left, right) => left.order - right.order)
-  const groupedProcess = groupProcessParts(process)
 
   const status = runStatus(run.messages)
   // 毫秒级工具与刚开跑的 partial 都会带 durationMs: 0；run 级时长要么为正、
@@ -433,7 +424,7 @@ function createRenderRun(run: MutableRun, systemRows: readonly RenderRunSystemRo
     ...(run.runId === undefined ? {} : { runId: run.runId }),
     users: run.users,
     messages: run.messages,
-    process: groupedProcess,
+    process,
     responses,
     systemRows,
     artifacts,

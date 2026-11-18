@@ -43,7 +43,7 @@ export function ProcessRow({ icon, showIcon = true, title, open, expandable, onT
     const timer = window.setTimeout(() => setMounted(false), 300)
     return () => window.clearTimeout(timer)
   }, [open])
-  const leading = <>{showIcon && <span className={css.icon} aria-hidden="true">{icon}</span>}<span className={css.title} data-running={running || undefined}>{title}</span></>
+  const leading = <>{showIcon && <span className={css.icon} data-process-leading-icon aria-hidden="true">{icon}</span>}<span className={css.title} data-running={running || undefined}>{title}</span></>
   const visibleSummary = keepSummaryWhenOpen || !open ? summary : null
   const arrow = expandable ? <ChevronRight className={css.chevron} size={16} aria-hidden="true" /> : null
   return <div className={css.root} data-open={open || undefined} data-running={running || undefined}>

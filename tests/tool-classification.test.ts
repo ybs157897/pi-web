@@ -75,8 +75,9 @@ describe('tool row titles', () => {
   })
 
   // 已定稿（settled）的行标题与英文措辞被显式 pin 住，防止无意改名。
+  // 完成态动词对齐 ZCode summary 行（「已执行」）；list_files 保留有意偏离的「搜索列表」。
   it('keeps the settled rows and the English wording unchanged', () => {
-    expect(build('bash', { command: 'pwd' }).title).toBe('运行命令')
+    expect(build('bash', { command: 'pwd' }).title).toBe('已执行')
     expect(toolRowTitle('list_files', en)).toBe('List files')
     expect(toolRowTitle('todo_write', en)).toBe('Todos')
     expect(toolRowTitle('skill', en)).toBe('Skill')

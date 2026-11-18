@@ -12,7 +12,8 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../src/shared/types.ts'
 import { buildRenderModel } from '../src/web/render-model.ts'
 import {
-  defaultProcessOpen, foldedProsePreview, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, workGroupTitle,
+  currentWorkLine, defaultProcessOpen, foldedProsePreview, latestReasoningLine, otherActivitySummary, processGroupAutoOpen,
+  processGroupBoundary, workGroupTitle, workSummaryCounts, workSummaryText,
 } from '../src/web/process-presentation.ts'
 import { presentationPolicyFor } from '../src/web/presentation-policy.ts'
 
@@ -234,5 +235,69 @@ describe('folded work group preview', () => {
   it('has nothing to preview for a run that only used tools or a blank block', () => {
     expect(foldedProsePreview(runOf([read]))).toBeUndefined()
     expect(foldedProsePreview(runOf([{ type: 'text', text: '   \n  ' }, read]))).toBeUndefined()
+  })
+})
+
+/**
+ * ZCode summary group 口径的折叠头统计（workSummaryCounts / workSummaryText /
+ * otherActivitySummary）与运行中的当前动作（currentWorkLine）。
+ */
+describe('zcode work summary', () => {
+  /**
+   * 构造一个已完成的 run。
+   * @param blocks 工作消息的内容块
+   * @returns 渲染模型中的 run
+   */
+  function runOf(blocks: ChatMessage['blocks']) {
+    const run = buildRenderModel([
+      { id: 'user', role: 'user', requestId: 'req', timestamp: 1, blocks: [{ type: 'text', text: '问题' }] },
+      { id: 'work', role: 'assistant', runId: 'run', timestamp: 2, status: 'completed', blocks },
+      { id: 'answer', role: 'assistant', runId: 'run', timestamp: 3, status: 'completed', blocks: [{ type: 'text', text: '完成。' }] },
+    ]).runs[0]
+    if (run === undefined) throw new Error('render model dropped the run')
+    return run
+  }
+
+  // 验证三桶统计：读取/搜索归 explore、命令归 run、写与编辑按去重文件数归 change，
+  // 抽不出路径的修改单列 unresolved（对齐 ZCode 的「已修改 N 次（路径未知）」）。
+  it('counts explore, run, and changed files the ZCode way', () => {
+    const run = runOf([
+      { type: 'toolCall', id: 'r1', name: 'read', arguments: { path: 'a.ts' } },
+      { type: 'toolCall', id: 's1', name: 'grep', arguments: { pattern: 'x' } },
+      { type: 'toolCall', id: 'b1', name: 'bash', arguments: { command: 'ls' } },
+      { type: 'toolCall', id: 'e1', name: 'edit', arguments: { path: 'a.ts' } },
+      { type: 'toolCall', id: 'e2', name: 'edit', arguments: { path: 'a.ts' } },
+      { type: 'toolCall', id: 'w1', name: 'write', arguments: {} },
+    ])
+    expect(workSummaryCounts(run)).toEqual({ explore: 2, run: 1, change: 1, unresolved: 1 })
+    expect(workSummaryText(workSummaryCounts(run), zh, false)).toBe('已查阅 2 项，已执行 1 命令，已修改 1 文件，已修改 1 次（路径未知）')
+    expect(workSummaryText(workSummaryCounts(run), zh, true)).toBe('查阅 2 项，执行 1 命令，修改 1 文件，修改 1 次（路径未知）')
+  })
+
+  // 验证空统计：没有三类工作时返回 undefined，交给调用方兜底。
+  it('has no summary text when nothing was explored, run, or changed', () => {
+    expect(workSummaryCounts(runOf([{ type: 'toolCall', id: 'q1', name: 'ask_user_question', arguments: {} }])))
+      .toEqual({ explore: 0, run: 0, change: 0, unresolved: 0 })
+    expect(workSummaryText({ explore: 0, run: 0, change: 0, unresolved: 0 }, zh, false)).toBeUndefined()
+    expect(otherActivitySummary(runOf([{ type: 'toolCall', id: 'q1', name: 'ask_user_question', arguments: {} }]), zh)).toBe('提问 1 次')
+  })
+
+  // 验证运行中的当前动作：流式思考取最后一行；无结果且父 run 在跑的命令行给出「正在执行 + 命令」。
+  it('names the running action for the collapsed live header', () => {
+    const thinking = buildRenderModel([
+      { id: 'user', role: 'user', requestId: 'req', timestamp: 1, blocks: [{ type: 'text', text: '问题' }] },
+      { id: 'work', role: 'assistant', runId: 'run', timestamp: 2, streaming: true,
+        blocks: [{ type: 'thinking', text: '先看现状\n再改服务端' }] },
+    ]).runs[0]
+    if (thinking === undefined) throw new Error('render model dropped the run')
+    expect(currentWorkLine(thinking, zh, true)).toBe('再改服务端')
+
+    const running = buildRenderModel([
+      { id: 'user', role: 'user', requestId: 'req', timestamp: 1, blocks: [{ type: 'text', text: '问题' }] },
+      { id: 'work', role: 'assistant', runId: 'run', timestamp: 2, streaming: true,
+        blocks: [{ type: 'toolCall', id: 'b1', name: 'bash', arguments: { command: 'npm test' } }] },
+    ]).runs[0]
+    if (running === undefined) throw new Error('render model dropped the run')
+    expect(currentWorkLine(running, zh, true)).toBe('正在执行 npm test')
   })
 })

@@ -317,8 +317,8 @@ describe('transcript render model', () => {
     expect(buildToolRenderModel(item, chinese => chinese, false)).toMatchObject({ output: 'custom result', knownPresentation: false })
   })
 
-  // 验证 DSH 卡片选取：bash → 运行命令（command/output/exitCode）、read → 读取（行列表/总行数）、
-  // edit → 编辑（diffs 来自 artifacts）、grep → 搜索匹配、web_search → 网络卡（answer/sources）。
+  // 验证 DSH 卡片选取：bash → 已执行（command/output/exitCode）、read → 已读取（行列表/总行数）、
+  // edit → 已修改（diffs 来自 artifacts）、grep → 搜索匹配、web_search → 网络卡（answer/sources）。
   it('selects DSH command, read, diff, search, and web cards from recorded fields', () => {
     const build = (name: string, args: Record<string, unknown>, result: Partial<ChatMessage>): ReturnType<typeof buildToolRenderModel> => {
       const message = assistant(`call-message:${name}`, [{ type: 'toolCall', id: `call:${name}`, name, arguments: args }])
@@ -334,11 +334,11 @@ describe('transcript render model', () => {
     }
 
     expect(build('bash', { command: 'pwd' }, { blocks: [{ type: 'text', text: '/workspace' }], details: { exitCode: 0 } }))
-      .toMatchObject({ title: '运行命令', command: 'pwd', output: '/workspace', exitCode: 0 })
+      .toMatchObject({ title: '已执行', command: 'pwd', output: '/workspace', exitCode: 0 })
     expect(build('read', { path: 'a.ts' }, { blocks: [{ type: 'text', text: 'const a = 1' }], details: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } }))
-      .toMatchObject({ title: '读取', read: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } })
+      .toMatchObject({ title: '已读取', read: { lines: [{ number: 4, text: 'const a = 1' }], totalLines: 8 } })
     expect(build('edit', { path: 'a.ts' }, { artifacts: [{ kind: 'edit', path: 'a.ts', before: 'old', after: 'new' }] }))
-      .toMatchObject({ title: '编辑', diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] })
+      .toMatchObject({ title: '已修改', diffs: [{ path: 'a.ts', oldText: 'old', newText: 'new' }] })
     expect(build('grep', { pattern: 'hello' }, { blocks: [{ type: 'text', text: 'a.ts:3:hello world' }] }))
       .toMatchObject({ search: { kind: 'matches', files: [{ path: 'a.ts', matches: [{ lineNumber: 3, line: 'hello world' }] }] } })
     expect(build('web_search', { query: 'pi durable' }, { details: { sources: [{ url: 'https://example.com', title: 'Example' }], answer: 'Found one result.' } }))
@@ -714,8 +714,9 @@ describe('MCP tool rows', () => {
     expect(buildToolRenderModel(item, zh, false))
       .toMatchObject({ title: 'MCP · github · search_repos', summary: 'found one' })
     expect(toolRowTitle('mcp__my_server__read_file', zh)).toBe('MCP · my_server · read_file')
-    // 其他工具保留 DSH 标题；非 MCP 形态的名字不改写。
-    expect(toolRowTitle('bash', zh)).toBe('运行命令')
+    // 其他工具保留 DSH 标题；非 MCP 形态的名字不改写。命令行的完成态动词对齐 ZCode。
+    expect(toolRowTitle('bash', zh)).toBe('已执行')
+    expect(toolRowTitle('bash', zh, true)).toBe('正在执行')
     expect(toolRowTitle('codemode', zh)).toBe('代码')
     expect(toolRowTitle('mcp_server', zh)).toBe('工具调用')
     // Pi 的 codemode 与 DSH 的 run_code 同属"code"活动类别。
@@ -1133,7 +1134,6 @@ function toolKeys(model: ReturnType<typeof buildRenderModel>): string[] {
   for (const run of model.runs) {
     for (const part of run.process) {
       if (part.kind === 'tool') visit(part.item)
-      if (part.kind === 'toolGroup') for (const item of part.items) visit(item)
     }
   }
   return keys

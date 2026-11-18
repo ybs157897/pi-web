@@ -53,7 +53,7 @@ Composer 上方的浮动卡片（`QuestionComposer`，不属于 transcript）只
 
 转移函数 `processGroupAutoOpen`（[process-presentation.ts:30](../../src/web/process-presentation.ts#L30)）；`defaultProcessOpen` 由展示策略、是否最新回合、是否有插间用户输入共同决定（[process-presentation.ts:6](../../src/web/process-presentation.ts#L6)）。挂载时以 `defaultProcessOpen(当前 props)` 初始化（[transcript.tsx:358](../../src/web/transcript.tsx#L358)）；`manualOpen` 一经设置，自动因子不再改写开合，直到组件随 run key 变化重挂载。
 
-折叠头优先展示过程正文，无可读正文时显示工具活动计数。计数来自实际调用，连续工具分组内的调用各计一次。代码模式有子调用时计入子调用，直播记录与落盘记录按调用 ID 去重。展开的过程行间隔 16 px，工具组内的子行间隔 8 px。 [process-presentation.ts](../../src/web/process-presentation.ts) · [render-model.ts](../../src/web/render-model.ts)
+折叠头两层：上行「已工作 X」，下行是 ZCode summary group 口径的统计（`workSummaryText`：已查阅 N 项、已执行 N 命令、已修改 N 文件，运行中去掉「已」改显示当前动作 `currentWorkLine`）；模型在工具轮之间写的说明另起第三行，展开体里可见。没有三类工作时回退到其他活动计数（`otherActivitySummary`）或正文预览。展开体是扁平工作列表：左侧竖线、行距 8 px、行头图标隐藏，行文案用完成态动词（已读取/已执行/已修改）。 [process-presentation.ts](../../src/web/process-presentation.ts) · [transcript.tsx](../../src/web/transcript.tsx)
 
 ## 状态机三：工具行 live→settled 身份（S3）
 
@@ -73,9 +73,9 @@ busy 期间指示器被两类事让位：pending 交互（任何 kind 都阻塞�
 
 ## 工作步骤组与压缩标记的位置编排
 
-process 排序后，「连续 2 个及以上」的同类工具行折成 UI 合成父行（`groupProcessParts`，[process-grouping.ts:48](../../src/web/process-grouping.ts#L48)）：只读探查（read / grep / glob / web_fetch 及只读 shell 白名单）折 `toolGroup(explore)`「查阅」，可执行 shell 折 `toolGroup(execute)`「终端」；写命令与重定向留在终端，单个不聚合，reasoning / user / content 打断分组。只读 shell 白名单与写操作判定见 `toolGroupKind`（[process-grouping.ts:22](../../src/web/process-grouping.ts#L22)）。
+工具行逐个平铺进折叠组，不再合成「查阅/终端」子组父行（对齐 ZCode 现行 summary group：聚合只体现在折叠头的统计里）。工具行身份、排序与结果配对仍由 `buildRenderModel` 决定；统计里的修改文件数是按去重路径计算的（`changedTargets`，[process-presentation.ts](../../src/web/process-presentation.ts)）。
 
-压缩标记：压缩运行期间，旧的已完成 compaction system 行整体隐藏（`visibleTranscriptMessages`，[render-model.ts:650](../../src/web/render-model.ts#L650)），「正在进行上下文压缩」行挂在正在压缩的 run 末尾（[transcript.tsx:277](../../src/web/transcript.tsx#L277)）；尚无 run 时落 transcript 顶层（[transcript.tsx:147](../../src/web/transcript.tsx#L147)）。连续的 subagent 调用在进入分组前先折成正文条带（`groupSubagentRuns` 接线于 [transcript.tsx:386](../../src/web/transcript.tsx#L386)，模型见 [subagent-run-model.ts](../../src/web/subagent-run-model.ts)）。
+压缩标记：压缩运行期间，旧的已完成 compaction system 行整体隐藏（`visibleTranscriptMessages`，[render-model.ts:650](../../src/web/render-model.ts#L650)），「正在进行上下文压缩」行挂在正在压缩的 run 末尾（[transcript.tsx:277](../../src/web/transcript.tsx#L277)）；尚无 run 时落 transcript 顶层（[transcript.tsx:147](../../src/web/transcript.tsx#L147)）。连续的 subagent 调用在渲染前先折成正文条带（`groupSubagentRuns` 接线于 [transcript.tsx:386](../../src/web/transcript.tsx#L386)，模型见 [subagent-run-model.ts](../../src/web/subagent-run-model.ts)）。
 
 ## 已知限制
 

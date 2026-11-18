@@ -70,7 +70,7 @@ function reasoningLineKey(text: string): number {
   return text.replace(/\r\n?/gu, '\n').split('\n').findLastIndex(line => line.trim() !== '')
 }
 function DurationSummary({ text }: { text: string }) {
-  return <><span className={css.separator} aria-hidden="true">·</span><span className={css.summary}>{text}</span></>
+  return <span className={css.summary}>{text}</span>
 }
 /**
  * 功能：收起流式态的单行摘要：横向滚出最新一行，内容超宽时标记 overflow（渲染渐隐边缘）。
@@ -87,7 +87,7 @@ function ThoughtSummary({ text, lineKey }: { text: string; lineKey: number }) {
     update(); const observer = new ResizeObserver(update); observer.observe(element)
     return () => observer.disconnect()
   }, [text])
-  return <><span className={css.separator} aria-hidden="true">·</span><span ref={viewport} className={css.summary} data-overflow={overflow || undefined}><span key={lineKey} className={css.summaryText}>{text}</span></span></>
+  return <span ref={viewport} className={css.summary} data-overflow={overflow || undefined}><span key={lineKey} className={css.summaryText}>{text}</span></span>
 }
 /**
  * 功能：展开态的思考全文滚动区；流式时自动跟随底部（用户上滚即停跟，重新滚到底恢复跟随）。
