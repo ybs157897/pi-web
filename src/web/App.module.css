@@ -124,9 +124,8 @@
   margin: 2px -4px 4px;
   border-radius: var(--dsw-radius-md);
   padding-left: 4px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
   line-height: 20px;
 }
 .workspaceHeader > span { flex: none; }
@@ -146,17 +145,17 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 .workspaceGroup { min-width: 0; }
-.workspaceGroup + .workspaceGroup { margin-top: 4px; }
 .workspaceRow {
+  position: relative;
   min-width: 0;
   height: 36px;
   border-radius: var(--dsw-radius-md);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
 }
 .workspaceRow:hover,
 .workspaceRow:focus-within,
+.workspaceRow[data-selected],
 .workspaceRow[data-menu-open] { background: var(--dsw-alias-interactive-bg-hover); }
-.workspaceRow[data-selected] { color: var(--dsw-alias-label-primary); }
 .workspaceToggle {
   flex: 1;
   min-width: 0;
@@ -164,23 +163,21 @@
   gap: 5px;
   border: 0;
   border-radius: inherit;
-  padding: 0 4px 0 6px;
+  padding: 0 30px 0 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
   font: inherit;
   font-size: 14px;
-  font-weight: 600;
   line-height: 22px;
 }
 .workspaceToggle > svg:first-child { flex: none; color: var(--dsw-alias-label-tertiary); transition: transform 150ms var(--ds-ease-in-out); }
-.workspaceToggle > svg:nth-child(2) { flex: none; }
-.workspaceRow[data-selected] .workspaceToggle > svg:nth-child(2) { color: var(--dsw-alias-state-business-primary); }
+.workspaceToggle > svg:nth-child(2) { flex: none; color: var(--dsw-alias-state-business-primary); }
 .chevronOpen { transform: rotate(90deg); }
 .workspaceName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspaceSessions { min-width: 0; margin: 2px 0 4px 24px; }
-.workspaceLabel { gap: 5px; height: 36px; padding: 0 6px 0 24px; color: var(--dsw-alias-label-secondary); font-size: 14px; font-weight: 600; }
+.workspaceSessions { min-width: 0; margin: 0 0 2px; }
+.workspaceLabel { gap: 7px; height: 36px; border-radius: var(--dsw-radius-md); padding: 0 8px; color: var(--dsw-alias-label-secondary); font-size: 14px; }
 .workspaceLabel > svg { color: var(--dsw-alias-label-tertiary); }
 
 .sessionRow {
@@ -188,7 +185,7 @@
   min-width: 0;
   height: 36px;
   margin: 1px 0;
-  padding: 0 6px;
+  padding: 0 8px;
   border-radius: var(--dsw-radius-md);
   color: var(--dsw-alias-label-primary);
 }
@@ -196,17 +193,6 @@
 .sessionRow:focus-within:not([data-selected]),
 .sessionRow[data-menu-open]:not([data-selected]) { background: var(--dsw-alias-interactive-bg-hover); }
 .sessionRow[data-selected] { background: var(--dsw-alias-bg-layer-1); box-shadow: var(--dsw-elevation-soft); --dsw-elevation-stroke-color: var(--dsw-alias-border-l1); }
-.sessionRow[data-selected]::before {
-  position: absolute;
-  inset-inline-start: 0;
-  top: 50%;
-  width: 2px;
-  height: 16px;
-  border-radius: 2px;
-  background: var(--dsw-alias-state-business-primary);
-  transform: translateY(-50%);
-  content: '';
-}
 .sessionSelect {
   display: flex;
   flex: 1;
@@ -224,49 +210,48 @@
   font: inherit;
 }
 .sessionTitle { flex: 1; min-width: 0; margin: 0 6px 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: normal; }
-.sessionRow[data-selected] .sessionTitle { font-weight: 600; }
 /* ZCode's leading 16px cell: a spinning loader while the turn runs, nothing when idle. */
 .sessionSlot { display: inline-flex; flex: none; width: 16px; height: 20px; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); }
-.sessionPin { display: inline-flex; flex: none; align-items: center; margin-right: 4px; color: var(--dsw-alias-label-tertiary); }
+.sessionPin { display: inline-flex; flex: none; align-items: center; color: var(--dsw-alias-label-tertiary); }
 .sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
 .sessionUnread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
-.sessionTail { display: grid; flex: none; align-items: center; justify-items: end; }
-.sessionTail > * { grid-area: 1 / 1; }
-.sessionMeta { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; line-height: 16px; white-space: nowrap; }
-/* 时间和操作共用尾部格，标题宽度在悬停和键盘操作时保持一致。 */
+.sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
+/* 收起操作按钮时保留 Tab 顺序，悬停或聚焦时再让操作栏参与布局。 */
 .rowActions {
+  position: absolute;
+  inset-inline-end: 0;
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 2px;
+  gap: 15px;
   opacity: 0;
   pointer-events: none;
 }
-.workspaceRow .rowActions { margin-right: 4px; }
 
+.sessionRow .rowActions { inset-inline-end: 8px; }
 .sessionRow:is(:hover, :focus-within, [data-menu-open]) .rowActions,
-.workspaceRow:is(:hover, :focus-within, [data-menu-open]) .rowActions { opacity: 1; pointer-events: auto; }
+.workspaceRow:is(:hover, :focus-within, [data-menu-open]) .rowActions { position: static; opacity: 1; pointer-events: auto; }
 
 @media (hover: hover) {
-  .sessionRow:is(:hover, :focus-within, [data-menu-open]) .sessionMeta { opacity: 0; }
+  .sessionRow:is(:hover, :focus-within, [data-menu-open]) .sessionMeta { display: none; }
 }
 
 .rowIconButton {
   flex: none;
   display: inline-flex;
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: var(--dsw-radius-xs);
   padding: 0;
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
 }
-.rowIconButton:is(:hover, :focus-visible, [aria-expanded='true']),
+.rowIconButton:is(:hover, :focus-visible, [aria-expanded='true']) { color: var(--dsw-alias-label-primary); }
 .workspaceTools :global(button[aria-expanded='true']) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .renameForm { display: flex; flex: 1; min-width: 0; align-items: center; gap: 4px; padding: 3px; }
 .renameForm input { flex: 1; min-width: 0; height: 26px; border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); padding: 0 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; }
@@ -302,6 +287,7 @@
 .mainBody[data-inspector-dragging] .inspectorResizer::after { width: 3px; background: var(--dsw-alias-state-business-primary, var(--dsw-alias-border-l3)); }
 .inspectorResizer:focus-visible { outline: none; }
 .primaryPanel { display: flex; min-width: 0; min-height: 0; flex-direction: column; margin-right: 2px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+.primaryPanel[data-page='inbox'] { margin-right: 0; overflow: clip; scrollbar-gutter: auto; }
 .withInspector > .primaryPanel { margin-right: 0; }
 .panelToggleIcon { transform: scaleX(-1); }
 .heroHeader { display: flex; flex: none; align-items: center; justify-content: space-between; height: 40px; padding: 0 10px 0 16px; }
@@ -460,9 +446,10 @@
 @media (hover: none) {
   .workspaceRow,
   .sessionRow { height: 40px; }
-  .rowActions { opacity: 1; pointer-events: auto; }
+  .workspaceToggle { padding-inline-end: 4px; }
+  .workspaceRow .rowActions { margin-inline-end: 4px; }
+  .rowActions { position: static; gap: 2px; opacity: 1; pointer-events: auto; }
   .rowIconButton { width: 32px; height: 36px; }
-  .sessionTail { display: flex; align-items: center; gap: 2px; }
 }
 
 @media (max-width: 760px) {

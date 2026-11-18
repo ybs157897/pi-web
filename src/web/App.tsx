@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowDown, Loader } from 'lucide-react'
+import { ArrowDown, Inbox, Loader } from 'lucide-react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChecklistOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
@@ -49,12 +49,13 @@ import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 /** antd 仅本页面需要，首次访问时按独立 chunk 懒加载。 */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
+const InboxPage = lazy(() => import('./InboxPage.tsx'))
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'defects' | 'automations'
+type MainPage = 'chat' | 'defects' | 'inbox' | 'automations'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
 /** 限额视角下的一个附件：是否图片 + 字节大小。 */
@@ -183,7 +184,7 @@ export default function App() {
 /**
  * 功能：应用外壳——左侧工作区/会话侧栏（搜索、排序、归档、置顶、重命名、分叉、
  * 下载日志），中间会话流 + Composer + Todo/目标/交互卡，右侧 Inspector 面板；
- * 并承载缺陷清单（WeTrackPage）与自动化任务（AutomationsPage）两个入口页、
+ * 并承载问题清单、收件箱和自动化任务页面、
  * 设置对话框、工作区增删改对话框与全局 Toast/快捷键。
  * @param props settings 已加载的 UI 设置；settingsError 设置读取错误；onSettingsChange 保存补丁回调。
  * 内部逻辑：会话列表/目录/工作区/能力各自独立拉取与轮询（SSE watch 驱动会话详情）；
@@ -1239,7 +1240,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     } catch (cause) { announce(errorText(cause, t('无法重命名工作区', 'Could not rename workspace'))) }
   }, [announce, t])
 
-  /** 切换主页面（chat/defects/automations）。 */
+  /** 切换主页面并收起移动端导航。 */
   const navigate = useCallback((next: MainPage): void => {
     setPage(next)
     setSidebarOpen(false)
@@ -1487,8 +1488,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
-  // 每条面板打开路径都保证先有标签页，因此仅凭 open 标志即可决定可见性。
-  const showInspector = inspectorOpen
+  // 收件箱占用整个主视图，返回会话时恢复原先的检查器。
+  const showInspector = inspectorOpen && page !== 'inbox'
   const inspectorSizes = mobile ? null : inspectorLayout(mainBodyWidth, preferredInspectorWidth)
   const dockedInspector = showInspector && !inspectorFullView ? inspectorSizes : null
   const inspectorOverlay = showInspector && dockedInspector === null
@@ -1608,6 +1609,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         if (mobile) setSidebarOpen(value => !value)
         else setSidebarCollapsed(value => !value)
       } else if (matchesShortcut(event, shortcuts.rename) || matchesShortcut(event, shortcuts.fork) || matchesShortcut(event, shortcuts.archive)) {
+        if (page === 'inbox') return
         // DSH 把这些操作绑定到读者所在的会话行；pi-web 应用到当前打开的会话。
         const current = conversationsRef.current.find(item => item.id === selectedIdRef.current)
         if (current === undefined) return
@@ -1619,7 +1621,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
     document.addEventListener('keydown', onShortcut, true)
     return () => { document.removeEventListener('keydown', onShortcut, true) }
-  }, [mobile, settings.shortcuts, startNewConversation, startRename, forkConversation, patchConversation])
+  }, [mobile, page, settings.shortcuts, startNewConversation, startRename, forkConversation, patchConversation])
 
   const conversationsRef = useRef(conversations)
   conversationsRef.current = conversations
@@ -2031,6 +2033,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             aria-label={t('问题清单', 'Issues')} aria-current={page === 'defects' ? 'page' : undefined} onClick={() => { navigate('defects') }}>
             <IconChecklistOutlineRegular size={16} /><span>{t('问题清单', 'Issues')}</span>
           </button>
+          <button type="button" className={css.navItem} data-active={page === 'inbox' || undefined}
+            aria-label={t('收件箱', 'Inbox')} aria-current={page === 'inbox' ? 'page' : undefined} onClick={() => { navigate('inbox') }}>
+            <Inbox size={16} aria-hidden="true" /><span>{t('收件箱', 'Inbox')}</span>
+          </button>
           <button type="button" className={css.navItem} data-active={page === 'automations' || undefined}
             aria-label={t('自动化任务', 'Automations')} aria-current={page === 'automations' ? 'page' : undefined} onClick={() => { navigate('automations') }}>
             <IconClockOutlineRegular size={16} /><span>{t('自动化任务', 'Automations')}</span>
@@ -2197,7 +2203,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             '--inspector-width': `${dockedInspector.width}px`,
             '--inspector-divider-width': `${INSPECTOR_DIVIDER_WIDTH}px`,
           } as CSSProperties)}>
-          <div ref={primaryPanelRef} className={css.primaryPanel}>
+          <div ref={primaryPanelRef} className={css.primaryPanel} data-page={page}>
             {page === 'chat' && <>
               {showConversationHeader && <>
                 <header className={css.topbar}>
@@ -2369,6 +2375,9 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             </>}
             {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
               <WetrackPage workspaces={workspaces} onOpenConversation={id => { void openConversation(id) }} />
+            </Suspense>}
+            {page === 'inbox' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载收件箱', 'Loading inbox')}</div>}>
+              <InboxPage />
             </Suspense>}
             {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId}
               workspaces={workspaces} onNewConversation={startNewConversation}
@@ -2588,17 +2597,15 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
                 ) : null}</span>
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
               </button>
+              <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
               {/* 置顶状态保留在行本身；其余动作都收在尾随菜单里。 */}
               {item.pinned && <span className={css.sessionPin} role="img" aria-label={t('已置顶', 'Pinned')} title={t('已置顶', 'Pinned')}><IconPinFillRegular size={14} /></span>}
-              <span className={css.sessionTail}>
-                <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
-                <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
-                  <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
-                    onSelect={id => { onAction(id) }}
-                    anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
-                      aria-haspopup="menu" aria-expanded={menuOpen}
-                      onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
-                </span>
+              <span className={css.rowActions} onClick={event => { event.stopPropagation() }}>
+                <Menu open={menuOpen} onClose={onMenuClose} items={actions} portal
+                  onSelect={id => { onAction(id) }}
+                  anchor={<button type="button" className={css.rowIconButton} aria-label={t(`会话“${item.title}”的操作`, `Actions for ${item.title}`)}
+                    aria-haspopup="menu" aria-expanded={menuOpen}
+                    onClick={onToggleMenu}><IconEllipsisOutlineRegular size={16} /></button>} />
               </span>
             </>}
         </div>
