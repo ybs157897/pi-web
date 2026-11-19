@@ -220,138 +220,75 @@
 .messageMeta { color: var(--workbench-muted); display: flex; align-items: center; gap: 3px; font-size: 11px; }
 .messageMeta .iconButton { width: 26px; height: 26px; }
 .receipt { color: var(--workbench-muted); font-size: 13px; }
-/* 工作项卡：对齐参考图 All Classes 卡片——
-   第一行：渐变方块图标 + 标题（图标右侧）；第二行：状态点 + 竖线 + 状态文案；
-   第三行：底部两列统计（证据进度条 / 尝试次数）。 */
+/* 工作项卡：方案 2 —— 类型胶囊与状态同行左右分列、细分隔线、加粗标题、底部 Bot 名。
+   只呈现类型 / 标题 / 状态三样（按此顺序），与收件箱卡片同一套视觉语言。 */
 .summonCard {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0;
-  padding: 12px 14px 12px;
+  gap: 10px;
+  padding: 15px;
   width: 100%;
   max-width: 100%;
   background: var(--dsw-alias-bg-base);
   color: var(--workbench-foreground);
   font-size: 14px;
   text-align: left;
-  border: 0;
-  border-radius: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
   cursor: pointer;
-  transition: background 140ms ease, box-shadow 140ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .summonCard:hover, .summonCard:focus-visible {
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, var(--dsw-alias-bg-base));
-  box-shadow: 0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
+  border-color: color-mix(in srgb, var(--workbench-muted) 50%, var(--dsw-alias-border-l2));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--workbench-foreground) 6%, transparent);
 }
 
-/* 顶部：图标与标题同一行，meta 在标题上方。 */
-.summonTop { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+/* 顶行：类型在左，状态在右。 */
+.summonHead { display: flex; align-items: center; gap: 8px; padding-inline-end: 22px; }
 
-.summonTop > :global(img) {
-  flex: none;
-  box-sizing: content-box;
-  padding: 5px;
-  width: 26px;
-  height: 26px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--workbench-accent) 22%, transparent), color-mix(in srgb, var(--workbench-accent) 8%, transparent));
+/* 类型胶囊。 */
+.summonKind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--workbench-muted);
+  background: color-mix(in srgb, var(--workbench-foreground) 7%, transparent);
 }
 
-.summonCard[data-status='pending_review'] .summonTop > :global(img) {
-  background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-success-primary) 24%, transparent), color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent));
-}
-.summonCard[data-status='needs_human'] .summonTop > :global(img),
-.summonCard[data-status='clarifying'] .summonTop > :global(img) {
-  background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-warn-primary) 26%, transparent), color-mix(in srgb, var(--dsw-alias-state-warn-primary) 9%, transparent));
-}
-.summonCard[data-failed] .summonTop > :global(img) {
-  background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, transparent), color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent));
-}
+/* 状态靠右：沿用 WorkbenchItemStatus 的圆点与配色，只调整排版。 */
+.summonHead .status { display: inline-flex; align-items: center; gap: 6px; margin-inline-start: auto; white-space: nowrap; font-size: 11.5px; font-weight: 600; }
 
-.summonMeta { display: grid; gap: 1px; min-width: 0; }
-.summonAgent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--workbench-muted); }
-.summonKind { font-size: 10px; color: var(--workbench-muted); opacity: 0.75; }
+/* 细分隔线。 */
+.summonRule { height: 1px; background: color-mix(in srgb, var(--dsw-alias-border-l2) 60%, transparent); }
 
-.summonArrow { flex: none; color: var(--workbench-muted); opacity: 0; transition: opacity 140ms ease, transform 140ms ease; }
-.summonCard:hover .summonArrow, .summonCard:focus-visible .summonArrow { opacity: 1; transform: translateX(2px); color: var(--workbench-accent); }
-
-/* 标题：图标右侧、加粗。 */
+/* 标题：卡片唯一的内容主角。 */
 .summonTitle {
   min-width: 0;
   color: var(--workbench-foreground);
   overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 650;
-  line-height: 1.35;
-  margin-block-start: 1px;
-}
-
-/* 状态行：圆点 + 细竖线 + 状态文案。 */
-.summonState { display: flex; align-items: center; gap: 7px; margin-block-start: 9px; }
-.summonState::before {
-  content: '';
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--dsw-alias-state-idle-primary);
-}
-.summonState::after {
-  content: '';
-  flex: none;
-  width: 1px;
-  height: 11px;
-  background: color-mix(in srgb, var(--workbench-muted) 35%, transparent);
-}
-.summonCard[data-status='running'] .summonState::before { background: var(--dsw-alias-state-business-primary); }
-.summonCard[data-status='pending_review'] .summonState::before { background: var(--dsw-alias-state-success-primary); }
-.summonCard[data-status='needs_human'] .summonState::before,
-.summonCard[data-status='clarifying'] .summonState::before { background: var(--dsw-alias-state-warn-primary); }
-.summonCard[data-failed] .summonState::before { background: var(--dsw-alias-state-error-primary); }
-
-.summonCard .status { font-size: 11.5px; font-weight: 600; color: var(--workbench-muted); }
-.summonCard[data-status='running'] .status { color: var(--dsw-alias-state-business-primary); }
-.summonCard[data-status='pending_review'] .status { color: var(--dsw-alias-state-success-primary); }
-.summonCard[data-status='needs_human'] .status,
-.summonCard[data-status='clarifying'] .status { color: var(--dsw-alias-state-warn-primary); }
-.summonCard[data-failed] .status { color: var(--dsw-alias-state-error-primary); }
-
-/* 底部双列统计：证据（彩条 + 计数）/ 尝试次数。 */
-.summonStats {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: 10px;
-  margin-block-start: 12px;
-  padding-block-start: 9px;
-  border-block-start: 1px solid color-mix(in srgb, var(--workbench-muted) 14%, transparent);
-}
-.summonStatColumn { display: grid; gap: 3px; min-width: 0; }
-.summonStatLabel { font-size: 10.5px; color: var(--workbench-muted); }
-.summonStatValue { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--workbench-foreground); }
-
-/* 进度彩条：底灰 + 前景按状态着色。 */
-.summonBar {
-  position: relative;
-  flex: none;
-  width: 52px;
-  height: 4px;
-  border-radius: 999px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  background: color-mix(in srgb, var(--workbench-muted) 20%, transparent);
 }
-.summonBar > span {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0;
-  border-radius: 999px;
-  background: var(--dsw-alias-state-idle-primary);
-}
-.summonBar[data-status='running'] > span { background: var(--dsw-alias-state-business-primary); }
-.summonBar[data-status='pending_review'] > span { background: var(--dsw-alias-state-success-primary); }
-.summonBar[data-status='needs_human'] > span,
-.summonBar[data-status='clarifying'] > span { background: var(--dsw-alias-state-warn-primary); }
+
+/* 底部元信息：圆形头像 + Bot 名 + 悬停箭头。 */
+.summonMeta { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.summonAgent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--workbench-muted); }
+
+.summonArrow { flex: none; margin-inline-start: auto; color: var(--workbench-muted); opacity: 0; transition: opacity 150ms ease, transform 150ms ease; }
+.summonCard:hover .summonArrow, .summonCard:focus-visible .summonArrow { opacity: 1; transform: translateX(2px); color: var(--workbench-accent); }
+
 .avatar {
   width: 29px;
   height: 29px;

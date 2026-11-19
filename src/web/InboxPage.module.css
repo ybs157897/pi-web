@@ -266,96 +266,67 @@
 .rowSelect { position: absolute; z-index: 2; inset-block-start: 10px; inset-inline-end: 10px; margin: 0; cursor: pointer; }
 .messageRow:has(.rowSelect) .card { padding-block-start: 14px; padding-inline-end: 34px; }
 
-/* 卡片：与工作台工作项卡同一套视觉语言（参考图 All Classes）——
-   第一行：渐变方块图标 + 会话/类型两段 meta + 加粗标题；
-   第二行：摘要；第三行：状态圆点 + 竖线；第四行：双列统计（状态 / 时间）。 */
+/* 卡片：方案 2 —— 类型胶囊与状态同行左右分列、细分隔线、加粗标题、底部元信息。
+   只呈现类型 / 标题 / 状态三样（按此顺序），状态用彩色圆点 + 同色文字而非胶囊。 */
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
+  gap: 10px;
   width: 100%;
   min-width: 0;
-  padding: 13px 15px 13px;
-  border: 0;
-  border-radius: 12px;
+  padding: 15px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
   background: var(--dsw-alias-bg-base);
   color: inherit;
   font: inherit;
   text-align: start;
   cursor: pointer;
-  transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.card:hover { box-shadow: 0 3px 12px color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent); }
+.card:hover { border-color: color-mix(in srgb, var(--dsw-alias-label-tertiary) 50%, var(--dsw-alias-border-l2)); box-shadow: 0 2px 10px color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent); }
 
-/* 卡片保持纯白，只有待处理且需要你出手的才极浅染色。 */
-.card[data-awaiting] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 5%, var(--dsw-alias-bg-base)); }
+.card:focus-visible { outline-offset: 2px; }
 
-.card:focus-visible, .group summary:focus-visible { outline-offset: 2px; }
+/* 顶行：类型在左，状态在右。 */
+.cardHead { display: flex; align-items: center; gap: 8px; padding-inline-end: 22px; }
 
-/* 顶部：叠层卡片图标 + 标题区 + 右上角类别标记。 */
-.cardTop { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-
-/* 叠层卡片图标：底层浅色偏移方块 + 主方块，右下角再压一枚小折角。 */
-.cardIcon {
-  position: relative;
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+/* 类型胶囊：浅底 + 深字。 */
+.cardKind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
   color: var(--dsw-alias-label-secondary);
-  background: linear-gradient(150deg, color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent), color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent));
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
 }
 
-/* 底层的浅色叠片，向左上错开 3px。 */
-.cardIcon::before {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  inset: -3px 3px 3px -3px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 6%, transparent);
-}
+.cardKind[data-kind='result'] { color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent); }
+.cardKind[data-kind='choice'], .cardKind[data-kind='review'] { color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 13%, transparent); }
+.cardKind[data-kind='confirmation'], .cardKind[data-kind='exception'] { color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 15%, transparent); }
 
-/* 右下角的折角高光，模拟参考图的叠层纸角。 */
-.cardIcon::after {
-  content: '';
-  position: absolute;
-  inset-block-end: -1px;
-  inset-inline-end: -1px;
-  width: 11px;
-  height: 11px;
-  border-end-end-radius: 9px;
-  border-start-start-radius: 7px;
-  background: color-mix(in srgb, var(--dsw-alias-bg-base) 82%, transparent);
-}
+/* 状态：圆点 + 同色文字，靠右。 */
+.cardState { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; }
+.cardDot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-idle-primary); }
+.cardDot[data-kind='result'] { background: var(--dsw-alias-state-success-primary); }
+.cardDot[data-kind='choice'], .cardDot[data-kind='review'] { background: var(--dsw-alias-state-business-primary); }
+.cardDot[data-kind='confirmation'], .cardDot[data-kind='exception'] { background: var(--dsw-alias-state-warn-primary); }
 
-.cardIcon[data-kind='result'] { color: var(--dsw-alias-state-success-primary); background: linear-gradient(150deg, color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent), color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent)); }
-.cardIcon[data-kind='choice'], .cardIcon[data-kind='review'] { color: var(--dsw-alias-state-business-primary); background: linear-gradient(150deg, color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent), color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent)); }
-.cardIcon[data-kind='confirmation'], .cardIcon[data-kind='exception'] { color: var(--dsw-alias-state-warn-primary); background: linear-gradient(150deg, color-mix(in srgb, var(--dsw-alias-state-warn-primary) 33%, transparent), color-mix(in srgb, var(--dsw-alias-state-warn-primary) 13%, transparent)); }
+.cardStatus { white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-tertiary); }
+.cardStatus[data-kind='result'] { color: var(--dsw-alias-state-success-primary); }
+.cardStatus[data-kind='choice'], .cardStatus[data-kind='review'] { color: var(--dsw-alias-state-business-primary); }
+.cardStatus[data-kind='confirmation'], .cardStatus[data-kind='exception'] { color: var(--dsw-alias-state-warn-primary); }
 
-/* 右上角的类别标记：贴卡片右缘的短竖条（参考图每张卡右侧都有）。 */
-.cardMark {
-  position: absolute;
-  inset-block-start: 14px;
-  inset-inline-end: 0;
-  width: 3px;
-  height: 20px;
-  border-radius: 2px 0 0 2px;
-  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 30%, transparent);
-}
-.cardMark[data-kind='result'] { background: var(--dsw-alias-state-success-primary); }
-.cardMark[data-kind='choice'], .cardMark[data-kind='review'] { background: var(--dsw-alias-state-business-primary); }
-.cardMark[data-kind='confirmation'], .cardMark[data-kind='exception'] { background: var(--dsw-alias-state-warn-primary); }
+/* 细分隔线：把「元信息」与「内容」拉开层次。 */
+.cardRule { height: 1px; background: color-mix(in srgb, var(--dsw-alias-border-l2) 60%, transparent); }
 
-/* 标题区：两段 meta 在上，加粗标题在下。 */
-.cardHeading { display: grid; gap: 1px; min-width: 0; flex: 1; }
-.cardMetaRow { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.cardConversation { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
-.cardKind { flex: none; font-size: 10px; color: var(--dsw-alias-label-tertiary); }
-
+/* 标题：卡片唯一的内容主角，两行截断。 */
 .cardTitle {
   min-width: 0;
   overflow: hidden;
@@ -364,109 +335,15 @@
   -webkit-box-orient: vertical;
   font-size: 14px;
   font-weight: 650;
-  line-height: 1.35;
+  line-height: 1.4;
   color: var(--dsw-alias-label-primary);
   overflow-wrap: anywhere;
 }
 
-.cardSnippet {
-  min-width: 0;
-  margin-block-start: 7px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* 状态行：彩色圆点 + 状态文案 + 竖排三点（参考图的「● 文字 ⋮」形态）。 */
-.cardState { display: flex; align-items: center; gap: 8px; margin-block-start: 10px; }
-
-.cardDot {
-  flex: none;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--dsw-alias-state-idle-primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-state-idle-primary) 12%, transparent);
-}
-.cardDot[data-kind='result'] { background: var(--dsw-alias-state-success-primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent); }
-.cardDot[data-kind='choice'], .cardDot[data-kind='review'] { background: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent); }
-.cardDot[data-kind='confirmation'], .cardDot[data-kind='exception'] { background: var(--dsw-alias-state-warn-primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 16%, transparent); }
-
-/* 竖排三点（参考图的 ⋮ 菜单位）。 */
-.cardMore {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  flex: none;
-  margin-inline-start: auto;
-  width: 2px;
-  height: 12px;
-  background-image: radial-gradient(circle 1px at center, var(--dsw-alias-label-tertiary) 100%, transparent 100%);
-  background-size: 2px 2px;
-  background-position: center top, center center, center bottom;
-  background-repeat: repeat-y;
-  opacity: 0.5;
-}
-
-.cardStatus { white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
-.cardStatus[data-tone='awaiting'] { color: var(--dsw-alias-state-business-primary); }
-
-/* 底部双列统计：进展 / 附件。 */
-.cardStats {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 12px;
-  margin-block-start: 12px;
-  padding-block-start: 9px;
-  border-block-start: 1px solid color-mix(in srgb, var(--dsw-alias-label-tertiary) 16%, transparent);
-}
-.cardStatColumn { display: grid; gap: 4px; min-width: 0; }
-.cardStatLabel { font-size: 10.5px; color: var(--dsw-alias-label-tertiary); }
-.cardStatValue { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
-
-/* 三段进度条：绿（已完成）→ 黄（进行中）→ 灰（未开始），与参考图一致。 */
-.cardBar {
-  display: flex;
-  flex: none;
-  width: 62px;
-  height: 5px;
-  gap: 2px;
-  border-radius: 999px;
-  overflow: hidden;
-}
-.cardBar > span { flex-basis: 0; min-width: 2px; border-radius: 999px; }
-.cardBar > span[data-tone='done'] { background: var(--dsw-alias-state-success-primary); }
-.cardBar > span[data-tone='active'] { background: var(--dsw-alias-state-warn-primary); }
-.cardBar > span[data-tone='rest'] { background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 26%, transparent); }
-
-/* 附件头像：两枚圆形占位 + 「+N」胶囊（参考图的 Trainers 位）。 */
-.cardAvatars { display: flex; align-items: center; flex: none; }
-.cardAvatar {
-  width: 16px;
-  height: 16px;
-  margin-inline-end: -5px;
-  border-radius: 50%;
-  border: 1.5px solid var(--dsw-alias-bg-base);
-  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 22%, transparent);
-}
-.cardAvatar[data-kind='result'] { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent); }
-.cardAvatar[data-kind='choice'], .cardAvatar[data-kind='review'] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent); }
-.cardAvatar[data-kind='confirmation'], .cardAvatar[data-kind='exception'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 32%, transparent); }
-
-.cardPlus {
-  margin-inline-start: 8px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 650;
-  color: var(--dsw-alias-state-business-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
-}
-
-.cardTime { margin-inline-start: auto; font-size: 10.5px; color: var(--dsw-alias-label-tertiary); }
+/* 底部元信息：会话名 + 时间。 */
+.cardMeta { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.cardConversation { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dsw-alias-label-tertiary); }
+.cardTime { flex: none; margin-inline-start: auto; font-size: 11px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 
 .rowOpen { color: var(--dsw-alias-state-warn-primary); font-weight: 600; }
 

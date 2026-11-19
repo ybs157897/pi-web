@@ -83,27 +83,16 @@ function MailType({ kind }: { kind: DecisionMailKind }) {
   return <span className={css.type} data-kind={kind}>{t(...kinds[kind])}</span>
 }
 
-/** 卡片左上角的类型图标：结果=成就类、选择/审阅=分支类、确认/异常=警示类。 */
-function mailKindIcon(kind: DecisionMailKind): ReactNode {
-  switch (kind) {
-    case 'result': return <Check size={17} />
-    case 'choice': return <ListFilter size={17} />
-    case 'review': return <Reply size={17} />
-    case 'confirmation': return <Clock3 size={17} />
-    default: return <Mail size={17} />
-  }
-}
-
 /**
- * 一封邮件一张卡：插画感渐变背景 + 装饰形状，标题直接叠在背景上。
+ * 一封邮件一张卡：类型胶囊 + 状态（同一行左右分列）、细分隔线、标题、底部元信息。
  * @param item 邮件摘要
  * @param canBatch 当前分类是否允许批量选择（决定是否渲染勾选框）
  * @param selected 是否已选中
  * @param disabled 批量操作进行中时禁用交互
  * @param t / locale 文案与时间格式
  * @param onToggle / onOpen 选择与打开回调
- * 内部逻辑：每张卡的背景由 kind 决定色相，装饰形状用纯 CSS 渐变画（不引入图片资源）；
- * 标题是视觉主角，状态与时间作为浅色浮层压在背景上。卡片自身是按钮，勾选框绝对定位。
+ * 内部逻辑：只呈现类型、标题、状态三样信息，按这个顺序排列；状态用彩色圆点 +
+ * 同色文字而不是胶囊，信息密度最高。勾选框绝对定位在右上角，不参与可访问名。
  */
 function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onOpen }: {
   item: DecisionMailSummary
@@ -116,68 +105,31 @@ function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onO
   onOpen: (id: string) => void
 }) {
   const awaiting = item.actionable && item.folder !== 'archived'
-  const segments = progressSegments(item)
   return <li className={css.messageRow}>
     {canBatch && <input className={css.rowSelect} type="checkbox" aria-label={t(`选择 ${item.subject}`, `Select ${item.subject}`)}
       checked={selected} disabled={disabled} onChange={event => onToggle(item.id, event.target.checked)} />}
     <button className={css.card} type="button" data-mail-id={item.id} data-kind={item.kind}
       data-awaiting={awaiting ? '' : undefined} disabled={disabled} onClick={() => onOpen(item.id)}>
-      <span className={css.cardTop}>
-        <span className={css.cardIcon} data-kind={item.kind} aria-hidden="true">{mailKindIcon(item.kind)}</span>
-        <span className={css.cardHeading}>
-          <span className={css.cardMetaRow}>
-            <span className={css.cardConversation}>{item.conversationTitle}</span>
-            <span className={css.cardKind}>{t(...kinds[item.kind])}</span>
+      <span className={css.cardHead}>
+        <span className={css.cardKind} data-kind={item.kind}>{t(...kinds[item.kind])}</span>
+        <span className={css.cardState}>
+          {item.folder === 'archived' && item.actionable && <span className={css.rowOpen}>{t('仍待处理', 'Still open')}</span>}
+          <span className={css.cardDot} data-kind={item.kind} aria-hidden="true" />
+          <span className={css.cardStatus} data-kind={item.kind}>
+            {item.resolution ? t(...resolutions[item.resolution])
+              : awaiting ? t(...reasons[item.reason]) : t('已归档', 'Archived')}
           </span>
-          <strong className={css.cardTitle}>{item.subject}</strong>
         </span>
-        <span className={css.cardMark} data-kind={item.kind} aria-hidden="true" />
       </span>
-      <span className={css.cardState}>
-        <span className={css.cardDot} data-kind={item.kind} aria-hidden="true" />
-        <span className={css.cardStatus} data-tone={awaiting ? 'awaiting' : 'settled'}>
-          {item.resolution ? t(...resolutions[item.resolution])
-            : awaiting ? t(...reasons[item.reason]) : t('已归档', 'Archived')}
-        </span>
-        {item.folder === 'archived' && item.actionable && <span className={css.rowOpen}>{t('仍待处理', 'Still open')}</span>}
-        <span className={css.cardMore} aria-hidden="true" />
-      </span>
-      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
-      <span className={css.cardStats}>
-        <span className={css.cardStatColumn}>
-          <span className={css.cardStatLabel}>{t('进展', 'Progress')}</span>
-          <span className={css.cardStatValue}>
-            <span className={css.cardBar} aria-hidden="true">
-              {segments.map((segment, index) => <span key={index} data-tone={segment.tone} style={{ flexGrow: segment.weight }} />)}
-            </span>
-            {`${Math.round((segments.find(segment => segment.tone === 'done')?.weight ?? 0) * 100)}%`}
-          </span>
-        </span>
-        <span className={css.cardStatColumn}>
-          <span className={css.cardStatLabel}>{t('时间', 'Time')}</span>
-          <span className={css.cardStatValue}>
-            <time className={css.cardTime} dateTime={new Date(item.createdAt).toISOString()}>
-              {mailTime(item.snoozedUntil ?? item.createdAt, locale)}
-            </time>
-          </span>
-        </span>
+      <span className={css.cardRule} aria-hidden="true" />
+      <strong className={css.cardTitle}>{item.subject}</strong>
+      <span className={css.cardMeta}>
+        <time className={css.cardTime} dateTime={new Date(item.createdAt).toISOString()}>
+          {mailTime(item.snoozedUntil ?? item.createdAt, locale)}
+        </time>
       </span>
     </button>
   </li>
-}
-
-/**
- * 功能：把一封邮件的处理进展拆成参考图那样的三段彩条。
- * @param item 邮件摘要
- * @returns 段列表（tone + 权重），权重之和为 1；空数组表示尚无进展
- * 内部逻辑：已归档算全绿；待你验收（Agent 已交付）给 80% 绿 + 20% 黄，呈现
- * 参考图「绿→黄→灰」的三段观感；其余待你决定只有灰色。参考图的三段是固定
- * 呈现，这里按语义映射到真实进展。
- */
-function progressSegments(item: DecisionMailSummary): { tone: 'done' | 'active' | 'rest'; weight: number }[] {
-  if (item.folder === 'archived') return [{ tone: 'done', weight: 1 }]
-  if (item.actionable && item.kind === 'result') return [{ tone: 'done', weight: 0.6 }, { tone: 'active', weight: 0.25 }, { tone: 'rest', weight: 0.15 }]
-  return [{ tone: 'rest', weight: 1 }]
 }
 
 function mailTime(timestamp: number, locale: string): string {
