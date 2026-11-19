@@ -205,6 +205,8 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
   const [fresh, setFresh] = useState(composeNonce !== 0)
   const [composeKey, setComposeKey] = useState(0)
   const [example, setExample] = useState<WorkbenchDraft>()
+  // 派发权限：undefined 表示跟随 Bot 配置，显式选择时才作为本轮上限发送。
+  const [dispatchAccess, setDispatchAccess] = useState<AccessMode | undefined>(undefined)
   const mailNavigation = useRef<number>()
   const titleRef = useRef<HTMLHeadingElement>(null)
   const returnFocus = useRef<string>()
@@ -268,7 +270,10 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
   }, [view?.messages.length, view?.items.length, page, hero, currentItem])
 
   const dispatch = async (input: WorkbenchSubmitInput) => {
-    await workbenchApi.submit(workspace.id, { ...input, model, thinkingLevel, whenBusy: 'followUp' })
+    await workbenchApi.submit(workspace.id, {
+      ...input, model, thinkingLevel, whenBusy: 'followUp',
+      ...(input.accessMode ?? dispatchAccess === undefined ? {} : { accessMode: dispatchAccess }),
+    })
     stayAtEnd.current = true
     setFresh(false)
     setExample(undefined)
@@ -331,6 +336,7 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
               <h2>{t('有什么要做的？', 'What needs to get done?')}</h2>
               <p>{t('发任务、查问题、聊需求，都在这里。拆解和排期由 Agent 处理。', 'Send work, investigate an issue, or discuss requirements. Agent handles planning and dispatch.')}</p>
               <AgentWorkbenchComposer key={composeKey} workspaceId={workspace.id} agents={view.agents} user={user} hero onOpenModels={onOpenModels} onSend={dispatch} example={example}
+                accessModes={accessModes} onAccessMode={setDispatchAccess}
                 placeholder={t('比如：帮我看下导入资料那边的校验问题', 'For example: Investigate validation during file imports')} />
               <EmptyExamples onExample={text => setExample({ text, key: Date.now() })} />
             </div>
@@ -383,6 +389,7 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
             <div className={css.mainFooter}>
               <WorkbenchQuestions detail={view.main} onAnswered={updateMain} />
               <AgentWorkbenchComposer workspaceId={workspace.id} agents={view.agents} user={user} onOpenModels={onOpenModels} onSend={dispatch} example={example}
+                accessModes={accessModes} onAccessMode={setDispatchAccess}
                 placeholder={t('输入任务，或用 @ 指定智能体…', 'Describe a task or @mention a worker…')} />
             </div>
           </>}

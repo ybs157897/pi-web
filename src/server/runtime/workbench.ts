@@ -237,13 +237,23 @@ export function createWorkbench(deps: WorkbenchDeps) {
     return probed
   }
 
-  function botAccess(profile: WorkbenchBotProfile, workspaceAccess: WorkspaceAccess, ceiling: AccessMode | null = null): AccessMode {
-    const configured = profile.accessMode ?? workspaceAccess
+  /**
+   * 功能：把 Bot 配置、派发权限与显式上限合成本轮生效的访问模式。
+   * @param profile 目标 Bot 配置
+   * @param sessionAccess 本会话的派发权限，Bot 未配置时作为默认
+   * @param workspaceAccess 平台探测结果，仅用于降级不可用的 workspaceWrite
+   * @param ceiling 用户显式指定的本轮上限；null 表示不额外收窄
+   * @returns 本轮生效的访问模式
+   * 内部逻辑：Bot 未配置权限时跟随会话派发权限，而不是平台能力；显式上限与
+   * 配置取较低档，workspaceWrite 在无沙盒平台上降级为只读。
+   */
+  function botAccess(profile: WorkbenchBotProfile, sessionAccess: AccessMode, workspaceAccess: WorkspaceAccess, ceiling: AccessMode | null = null): AccessMode {
+    const configured = profile.accessMode ?? sessionAccess
     const granted = ceiling === null ? configured : boundedBotAccess(ceiling, configured)
     return granted === 'workspaceWrite' ? workspaceAccess : granted
   }
 
-  function agentView(profile: WorkbenchBotProfile, items: readonly WorkItem[], skills: readonly SkillSummary[], defaultAccess: WorkspaceAccess): WorkbenchAgent {
+  function agentView(profile: WorkbenchBotProfile, items: readonly WorkItem[], skills: readonly SkillSummary[], workspaceAccess: WorkspaceAccess): WorkbenchAgent {
     const assigned = items.filter(item => item.assignee === profile.id)
     const latest = assigned.findLast(item => item.childId !== undefined)
     const { skillIds } = profile
@@ -254,9 +264,9 @@ export function createWorkbench(deps: WorkbenchDeps) {
       skills: skills.filter(skill => skillIds === null || skillIds.includes(skill.id)).map(skill => skill.name),
       ...(latest?.childId ? { conversationId: latest.childId } : {}),
       ...(model === undefined ? {} : { model }),
-      accessMode: botAccess(profile, defaultAccess),
+      accessMode: botAccess(profile, deps.defaultAccessMode(), workspaceAccess),
       config: {
-        instructions: profile.instructions, accessMode: profile.accessMode ?? defaultAccess, skillIds,
+        instructions: profile.instructions, accessMode: profile.accessMode ?? deps.defaultAccessMode(), skillIds,
         icon: profile.icon, origin: profile.origin,
         ...(profile.model === undefined ? {} : { model: profile.model }),
       },
@@ -355,7 +365,7 @@ export function createWorkbench(deps: WorkbenchDeps) {
     const requested = input.accessMode ?? deps.defaultAccessMode()
     const accessMode = input.mention === undefined
       ? requested === 'workspaceWrite' ? workspaceAccess : requested
-      : botAccess(findBot(await readBots(mainId), input.mention), workspaceAccess, input.accessMode)
+      : botAccess(findBot(await readBots(mainId), input.mention), requested, workspaceAccess, input.accessMode ?? null)
     const change = await deps.buildAgentChange(workspace.id, accessMode, input).catch(error => {
       if (error instanceof RuntimeError && error.code === 'MODEL_UNAVAILABLE') throw new ConversationFailureError(runFailure(error))
       throw error
@@ -387,9 +397,9 @@ export function createWorkbench(deps: WorkbenchDeps) {
       const id = ids[index]!
       const requestId = `workbench-start:${id}`
       const dependencies = [...new Set([...task.dependsOn.map(dependency => ids[dependency]!), ...task.previous])]
-      const accessCeiling = botCreation ? 'readOnly'
-        : source.mention !== undefined ? source.accessMode ?? null
-          : task.type === 'build' ? dispatch.accessMode : 'readOnly'
+      // 权限只由用户显式指定的本轮上限决定；任务类型不参与收窄，Bot 配置在
+      // workerAccess 中与它取较低档。这样配置完权限下一次派发即可生效。
+      const accessCeiling = botCreation ? 'readOnly' : source.accessMode ?? null
       const body = [
         `工作项：${task.title}`,
         `目标：${task.objective}`,
@@ -407,7 +417,7 @@ export function createWorkbench(deps: WorkbenchDeps) {
           evidence: [], verification: 'pending', attempt: 1, createdAt: Date.now(), updatedAt: Date.now(),
         },
         run: {
-          requestId, accessMode: accessCeiling ?? dispatch.accessMode, accessCeiling, model: dispatch.model, failures: 0,
+          requestId, accessMode: dispatch.accessMode, accessCeiling, model: dispatch.model, failures: 0,
           ...(dispatch.thinkingLevel ? { thinkingLevel: dispatch.thinkingLevel } : {}),
           input: {
             requestId, text: body,
@@ -443,7 +453,7 @@ export function createWorkbench(deps: WorkbenchDeps) {
         }
         const input = dispatch.input!
         const accessMode = input.mention === undefined ? dispatch.accessMode
-          : botAccess(findBot(bots, input.mention), await workspacePermission(workspaceId), input.accessMode)
+          : botAccess(findBot(bots, input.mention), dispatch.accessMode, await workspacePermission(workspaceId), input.accessMode ?? null)
         const plan = await planWork(deps.modelRuntime, mainId, dispatch.model, input, accessMode, context, controller.signal)
         await harnessOf().commit(async tx => {
           const state = await tx.doc(Workbench, mainId)
@@ -491,8 +501,17 @@ export function createWorkbench(deps: WorkbenchDeps) {
     planningRuns.add(run)
   }
 
-  function workerAccess(run: Pick<WorkItemRun, 'accessCeiling' | 'accessMode'>, profile: WorkbenchBotProfile, workspaceAccess: WorkspaceAccess): AccessMode {
-    return botAccess(profile, workspaceAccess, run.accessCeiling === undefined ? run.accessMode : run.accessCeiling)
+  /**
+   * 功能：计算一个工作项本轮生效的访问模式。
+   * @param run 工作项运行记录，只读取用户显式指定的上限
+   * @param profile 分配的 Bot 配置
+   * @param workspaceAccess 平台探测结果，仅用于降级不可用的 workspaceWrite
+   * @returns 生效的访问模式
+   * 内部逻辑：Bot 配置优先，未配置时跟随全局默认（实时读设置），显式上限与它
+   * 取较低档。不读上一轮的生效记录，因此改完配置下一次派发立即生效。
+   */
+  function workerAccess(run: Pick<WorkItemRun, 'accessCeiling'>, profile: WorkbenchBotProfile, workspaceAccess: WorkspaceAccess): AccessMode {
+    return botAccess(profile, deps.defaultAccessMode(), workspaceAccess, run.accessCeiling === undefined ? null : run.accessCeiling)
   }
 
   async function workerAgent(item: StoredWorkItem, profile: WorkbenchBotProfile, accessMode: AccessMode): Promise<AgentChange> {
@@ -556,7 +575,9 @@ export function createWorkbench(deps: WorkbenchDeps) {
         }).join('\n')
         stored.run.input.text = `已验收的上游交付是参考背景，只沿用当前请求授权：\n${delivered}\n\n${stored.run.input.text}`
       }
-      if (stored.run.accessCeiling === undefined) stored.run.accessCeiling = item.run.accessMode
+      // 权限上限是用户显式给的本轮约束；旧记录里它曾被写成本轮生效权限，
+      // 那些值不再参与计算，下一轮按 Bot 当前配置重新决定。
+      if (stored.run.accessCeiling === undefined) stored.run.accessCeiling = item.run.accessCeiling ?? null
       stored.run.accessMode = accessMode
       stored.run.startedAt = Date.now()
       stored.run.elapsedMs = 0

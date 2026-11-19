@@ -360,62 +360,6 @@ it('opens a fresh composer on a new-input request received before the workbench 
   expect(await screen.findByRole('button', { name: '打开会话：日志排查' })).toBeTruthy()
 })
 
-it.each([
-  ['/managed/item-1', '/managed/item-1/output/evidence.txt'],
-  [String.raw`D:\managed\item-1`, String.raw`D:\managed\item-1\output\evidence.txt`],
-])('opens child artifacts relative to the actual worker cwd %s', async (cwd, expected) => {
-  const view = workbench()
-  view.items[0]!.evidence = [
-    { kind: 'artifact', label: '任务证据', path: 'output/evidence.txt', status: 'recorded' },
-    { kind: 'artifact', label: '原项目源文件', path: '/project/src/reference.ts', status: 'recorded' },
-  ]
-  const child = detail('child')
-  child.conversation.cwd = cwd
-  vi.spyOn(workbenchApi, 'get').mockResolvedValue(view)
-  vi.spyOn(api, 'getConversation').mockResolvedValue(child)
-  vi.spyOn(api, 'watch').mockReturnValue({ close: vi.fn() } as unknown as EventSource)
-  const openFile = vi.fn()
-  render(<AgentWorkbench workspace={workspace} page="agent" onInbox={vi.fn()} onFileOpen={openFile} />)
-  fireEvent.click(await screen.findByRole('button', { name: '打开会话：日志排查' }))
-  fireEvent.click(await screen.findByRole('button', { name: '任务证据' }))
-  fireEvent.click(screen.getByRole('button', { name: '原项目源文件' }))
-  expect(openFile).toHaveBeenCalledWith(expected, undefined)
-  expect(openFile).toHaveBeenCalledWith('/project/src/reference.ts', undefined)
-})
-
-it('lists each delivered file once and distinguishes the original project from the worker directory', async () => {
-  const view = workbench()
-  const item = view.items[0]!
-  const child = detail('child')
-  child.conversation.cwd = '/managed/task'
-  const projectFile = '/workspace/docs/result.md'
-  const scratchFile = '/managed/task/docs/result.md'
-  item.evidence = [projectFile, projectFile, './docs/result.md', scratchFile, '/workspace/docs/proof.md'].map(path => ({
-    kind: 'artifact', label: path, path, status: 'recorded',
-  }))
-  item.evidence.push(
-    { kind: 'artifact', label: '补充证据', path: '/workspace/docs/proof.md', status: 'recorded' },
-    { kind: 'validation', label: 'npm run check', status: 'passed' },
-  )
-  vi.spyOn(api, 'getConversation').mockResolvedValue(child)
-  vi.spyOn(api, 'watch').mockReturnValue({ close: vi.fn() } as unknown as EventSource)
-  const openFile = vi.fn()
-  render(<WorkbenchChildConversation workspaceId={workspace.id} workspacePath={workspace.path} item={item}
-    agent={view.agents[1]} onFileOpen={openFile} onChange={vi.fn()} />)
-
-  const section = within(await screen.findByRole('region', { name: '交付结果' }))
-  expect(section.getAllByRole('listitem')).toHaveLength(4)
-  const [project, scratch] = section.getAllByRole('button', { name: 'docs/result.md' })
-  expect(project!.title).toBe(projectFile)
-  expect(scratch!.title).toBe(scratchFile)
-  expect(section.getByRole('button', { name: 'docs/result.md', description: '工作项目录' })).toBe(scratch)
-  expect(section.getByRole('button', { name: '补充证据' }).title).toBe('/workspace/docs/proof.md')
-  expect(section.getByText('npm run check')).toBeTruthy()
-  fireEvent.click(project!)
-  fireEvent.click(scratch!)
-  expect(openFile.mock.calls).toEqual([[projectFile, undefined], [scratchFile, undefined]])
-})
-
 it('switches Bot roles and routes the lead back to the only dispatch entry', async () => {
   vi.spyOn(workbenchApi, 'get').mockResolvedValue(workbench())
   vi.spyOn(api, 'getConversation').mockResolvedValue(detail('child'))
@@ -606,37 +550,19 @@ it.each([
   ])
 })
 
-it('accepts a delivery from its own conversation using the displayed attempt', async () => {
+it('leaves delivery acceptance to the inbox instead of the worker conversation', async () => {
   const view = workbench()
   const item = { ...view.items[0]!, status: 'pending_review' as const, attempt: 2, acceptance: ['核对生成的文件'] }
   const child = detail('child')
   vi.spyOn(api, 'getConversation').mockResolvedValue(child)
   vi.spyOn(api, 'watch').mockReturnValue({ close: vi.fn() } as unknown as EventSource)
   const verdict = vi.spyOn(workbenchApi, 'verdict').mockResolvedValue({ ok: true })
-  const refresh = vi.fn()
-  render(<WorkbenchChildConversation workspaceId={workspace.id} item={item} agent={view.agents[1]} onChange={refresh} />)
-  fireEvent.click(await screen.findByRole('button', { name: '验收通过' }))
-  await waitFor(() => expect(verdict).toHaveBeenCalledWith('space', 'item-1', { action: 'accept', attempt: 2 }))
-  await waitFor(() => expect(refresh).toHaveBeenCalledOnce())
-  expect(screen.queryByRole('button', { name: '去收件箱处理' })).toBeNull()
-})
-
-it('retains revision feedback on a failed in-conversation submission', async () => {
-  const view = workbench()
-  const item = { ...view.items[0]!, status: 'pending_review' as const, attempt: 3 }
-  vi.spyOn(api, 'getConversation').mockResolvedValue(detail('child'))
-  vi.spyOn(api, 'watch').mockReturnValue({ close: vi.fn() } as unknown as EventSource)
-  const verdict = vi.spyOn(workbenchApi, 'verdict').mockRejectedValueOnce(new Error('服务连接中断')).mockResolvedValue({ ok: true })
   render(<WorkbenchChildConversation workspaceId={workspace.id} item={item} agent={view.agents[1]} onChange={vi.fn()} />)
-  fireEvent.click(await screen.findByRole('button', { name: '退回修改' }))
-  const feedback = screen.getByLabelText('修改意见（选填）') as HTMLTextAreaElement
-  fireEvent.change(feedback, { target: { value: '补上核对依据' } })
-  fireEvent.click(screen.getByRole('button', { name: '提交返修' }))
-  expect((await screen.findByRole('alert')).textContent).toContain('服务连接中断')
-  expect(feedback.value).toBe('补上核对依据')
-  fireEvent.click(screen.getByRole('button', { name: '提交返修' }))
-  await screen.findByText('已退回修改')
-  expect(verdict).toHaveBeenLastCalledWith('space', 'item-1', { action: 'revise', attempt: 3, feedback: '补上核对依据' })
+  await screen.findByRole('region', { name: '子智能体会话' })
+  expect(screen.queryByRole('region', { name: '交付结果' })).toBeNull()
+  expect(screen.queryByRole('button', { name: '验收通过' })).toBeNull()
+  expect(screen.queryByRole('button', { name: '退回修改' })).toBeNull()
+  expect(verdict).not.toHaveBeenCalled()
 })
 
 it('recovers the terminal child snapshot when the work item has completed before the stream settles', async () => {
@@ -649,8 +575,8 @@ it('recovers the terminal child snapshot when the work item has completed before
   })
   const get = vi.spyOn(api, 'getConversation').mockResolvedValue(settled)
   render(<WorkbenchChildConversation workspaceId={workspace.id} item={item} agent={workbench().agents[1]} onChange={vi.fn()} />)
-  expect(await screen.findByRole('button', { name: '验收通过' })).toBeTruthy()
-  expect(get.mock.calls.length).toBeGreaterThan(1)
+  await screen.findByRole('region', { name: '子智能体会话' })
+  await waitFor(() => expect(get.mock.calls.length).toBeGreaterThan(1))
   expect(screen.queryByRole('button', { name: '停止当前回答' })).toBeNull()
 })
 

@@ -102,22 +102,3 @@
   cursor: pointer;
 }
 .jump:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: 2px; }
-
-.review { display: grid; gap: 8px; margin-top: 8px; }
-.reviewCriteria { color: var(--dsw-alias-label-secondary); font-size: 13px; }
-.reviewCriteria summary { width: fit-content; cursor: pointer; }
-.reviewCriteria ul { margin: 5px 0; padding-inline-start: 22px; }
-.reviewButtons { display: flex; gap: 7px; }
-.reviewButtons button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 5px 10px;
-  border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary); cursor: pointer; }
-.reviewButtons button:first-child { background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-base); }
-.reviewButtons button:disabled { cursor: wait; opacity: .65; }
-.review :is(button, summary):focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: 2px; }
-.revision { display: grid; gap: 8px; }
-.revision label { display: grid; gap: 5px; font-size: 13px; }
-.revision textarea { width: 100%; resize: vertical; min-height: 58px; padding: 8px 10px; font: inherit;
-  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; }
-.revision textarea:focus { outline: none; border-color: var(--dsw-alias-label-secondary); }
-html[data-input-modality='keyboard'] .revision textarea:focus-visible { outline: 2px solid var(--dsw-alias-label-secondary); outline-offset: 2px; }
-.reviewNote { color: var(--dsw-alias-label-secondary); }

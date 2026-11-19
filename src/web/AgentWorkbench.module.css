@@ -321,7 +321,8 @@
 .composer textarea::placeholder { color: var(--dsw-alias-label-tertiary); }
 .composer textarea:focus-visible { outline: none; }
 .composerActions { display: flex; align-items: center; gap: 6px; width: 100%; }
-.utilityButton {
+.utilityButton,
+.composerSelect {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -330,6 +331,7 @@
   padding: 1px 7px;
   font-size: 12px;
 }
+.composerSelect { background: transparent; color: inherit; font-family: inherit; }
 .send, .primaryButton {
   border: 1px solid transparent;
   background: var(--dsw-alias-button-primary-fill);
@@ -421,21 +423,6 @@
 }
 .popoverText strong { font-weight: 600; }
 .popoverText small { color: var(--workbench-muted); }
-
-.resultHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 8px; }
-.resultHeading h2 { font-size: 14px; }
-.resultHeading small { color: var(--workbench-muted); }
-.evidenceList { padding: 0; margin: 0; list-style: none; }
-.evidenceList li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
-.evidenceList li + li { border-top: 1px solid var(--workbench-divider); }
-.evidenceIdentity { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; min-width: 0; overflow-wrap: anywhere; }
-.evidenceIdentity .linkButton { min-width: 0; max-width: 100%; }
-.evidenceIdentity svg { flex: none; }
-.evidenceLocation { color: var(--workbench-muted); font-size: 11px; }
-.evidenceList small { color: var(--workbench-muted); white-space: nowrap; }
-.evidenceList [data-evidence='passed'] { color: var(--dsw-alias-state-success-primary); }
-.evidenceList [data-evidence='failed'] { color: var(--dsw-alias-state-error-primary); }
-.evidenceList [data-evidence='insufficient'] { color: var(--dsw-alias-state-warn-label); }
 
 .botsPage {
   display: grid;

@@ -1,11 +1,13 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { ArrowUp, AtSign, Bot, Diamond, Monitor, User, X } from 'lucide-react'
+import type { AccessMode } from '../shared/types.ts'
 import type { SkillSummary } from '../shared/skills.ts'
 import type { WorkbenchAgent, WorkbenchSubmitInput } from '../shared/workbench.ts'
 import { api, ApiFailure } from './api.ts'
 import type { ConversationFailure } from '../shared/conversation-failure.ts'
 import ConversationFailureNotice from './ConversationFailureNotice.tsx'
 import { matchesShortcut, resolveShortcuts } from './keyboard.ts'
+import { accessModeLabel } from './render-labels.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import { TaskAvatar } from './WorkbenchBotAvatar.tsx'
 import css from './AgentWorkbench.module.css'
@@ -29,6 +31,9 @@ type ComposerProps = {
   hero?: boolean
   example?: WorkbenchDraft
   replyBlocked?: string
+  accessMode?: AccessMode
+  accessModes?: readonly AccessMode[]
+  onAccessMode?: (mode: AccessMode) => void
   onOpenModels?: () => void
   onSend: (input: WorkbenchSubmitInput) => Promise<void>
 }
@@ -75,7 +80,7 @@ export function WorkbenchReferenceIcon({ kind }: { kind?: WorkbenchContextRefere
 
 /** A native textarea keeps native composition and plain-text paste intact. The chosen Agent
  * appears as an atomic sibling chip inside the same composer and is sent separately from text. */
-export function AgentWorkbenchComposer({ workspaceId, placeholder, agents, user, hero = false, example, replyBlocked, onOpenModels, onSend }: ComposerProps) {
+export function AgentWorkbenchComposer({ workspaceId, placeholder, agents, user, hero = false, example, replyBlocked, accessMode, accessModes = [], onAccessMode, onOpenModels, onSend }: ComposerProps) {
   const { settings, t } = useUiPreferences()
   const form = useRef<HTMLFormElement>(null)
   const field = useRef<HTMLTextAreaElement>(null)
@@ -84,7 +89,7 @@ export function AgentWorkbenchComposer({ workspaceId, placeholder, agents, user,
   const composing = useRef(false)
   const dismissedMention = useRef<{ text: string; caret: number }>()
   const submitting = useRef(false)
-  const request = useRef<{ text: string; mention?: string; requestId: string }>()
+  const request = useRef<{ text: string; mention?: string; requestId: string; accessMode?: AccessMode }>()
   const listId = useId()
   const skillsId = useId()
   const replyBlockedId = useId()
@@ -219,9 +224,9 @@ export function AgentWorkbenchComposer({ workspaceId, placeholder, agents, user,
     const body = withReferences(content, references)
     const target = mentionId
     const previous = request.current
-    const input = previous?.text === body && previous.mention === target
+    const input = previous?.text === body && previous.mention === target && previous.accessMode === accessMode
       ? previous
-      : { text: body, requestId: crypto.randomUUID(), ...(target === undefined ? {} : { mention: target }) }
+      : { text: body, requestId: crypto.randomUUID(), ...(target === undefined ? {} : { mention: target }), ...(accessMode === undefined ? {} : { accessMode }) }
     request.current = input
     submitting.current = true
     setFailure(undefined)
@@ -353,6 +358,16 @@ export function AgentWorkbenchComposer({ workspaceId, placeholder, agents, user,
     {error && <div className={css.error} role="alert">{error}</div>}
     {replyBlocked !== undefined && <div id={replyBlockedId} className={css.composerNotice} role="status">{replyBlocked}</div>}
     <div className={css.composerActions}>
+      {onAccessMode !== undefined && accessModes.length > 0 && <select className={css.composerSelect}
+        aria-label={t('派发权限', 'Dispatch permission')} title={t('派发权限', 'Dispatch permission')}
+        value={accessMode ?? ''} disabled={saving}
+        onChange={event => {
+          const mode = accessModes.find(candidate => candidate === event.currentTarget.value)
+          if (mode !== undefined) onAccessMode(mode)
+        }}>
+        {accessMode === undefined && <option value="">{t('跟随 Bot 配置', 'Follow Bot config')}</option>}
+        {accessModes.map(mode => <option key={mode} value={mode}>{accessModeLabel(mode, t)}</option>)}
+      </select>}
       <button ref={skillsButton} type="button" className={css.utilityButton} disabled={saving} aria-expanded={skillMenu} aria-controls={skillMenu ? skillsId : undefined}
         onClick={toggleSkills}><Diamond size={13} aria-hidden="true" /> {t('技能', 'Skills')}</button>
       {skillMenu && <div id={skillsId} role="group" aria-label={t('工作区技能', 'Workspace skills')} className={css.popover}>

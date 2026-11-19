@@ -20,7 +20,7 @@ const chartTaskPrefix = '每周图表可读性检查'
 const explicitCreationRequest = '请创建一个名叫目录核对员的 Bot，仅建档'
 type BeforePlan = (request: string, accessMode: AccessMode) => void | Promise<void>
 
-function fixtureModel(worker: FauxResponseFactory, type: 'investigate' | 'build', beforePlan?: BeforePlan) {
+function fixtureModel(worker: FauxResponseFactory, type: 'investigate' | 'build' | 'decide', beforePlan?: BeforePlan) {
   const models = createModels()
   const faux = fauxProvider({
     provider: model.provider, models: [
@@ -67,7 +67,7 @@ function fixtureModel(worker: FauxResponseFactory, type: 'investigate' | 'build'
 async function fixture(run: (context: {
   runtime: Awaited<ReturnType<typeof createRuntime>>; workspace: string; workspaceId: string;
   reopen(): Promise<Awaited<ReturnType<typeof createRuntime>>>;
-}) => Promise<void>, response: FauxResponseFactory, type: 'investigate' | 'build' = 'investigate', beforePlan?: BeforePlan) {
+}) => Promise<void>, response: FauxResponseFactory, type: 'investigate' | 'build' | 'decide' = 'investigate', beforePlan?: BeforePlan) {
   const root = await mkdtemp(join(tmpdir(), 'pi-web-workbench-'))
   const workspace = join(root, 'project')
   const dataDir = join(root, 'data')
@@ -554,7 +554,7 @@ describe('Agent 工作台的运行时契约', () => {
     })
   }, 15_000)
 
-  it('自动派发首轮服从工作区默认，显式只读派发重试保留上限，直接续聊重新采用 Bot 配置', async () => {
+  it('派发按 Bot 当前配置取权，显式只读派发重试保留上限，直接续聊重新采用 Bot 配置', async () => {
     const planned = new Map<string, AccessMode>()
     await fixture(async ({ runtime, workspaceId }) => {
       await runtime.updateSettings({ defaultAccessMode: 'readOnly', codemodeMode: 'off' })
@@ -562,9 +562,11 @@ describe('Agent 工作台的运行时契约', () => {
       await runtime.submitWorkbench(workspaceId, { requestId: 'auto-permission', text: '自动派发', model })
       const automatic = await observe(runtime, workspaceId, view => view.items[0]?.status === 'pending_review')
       const previous = automatic.items[0]!
-      expect(previous).toMatchObject({ type: 'build', accessMode: 'readOnly' })
+      // 任务类型不再收窄权限：自动派发同样采用 Bot 已配置的权限。规划阶段还不知道
+      // 最终执行者，因此给规划模型的提示仍是派发权限；生效权限在启动工作项时决定。
+      expect(previous).toMatchObject({ type: 'build', accessMode: 'fullAccess' })
       expect(planned.get('自动派发')).toBe('readOnly')
-      expect((await runtime.detail(previous.childId!)).conversation.accessMode).toBe('readOnly')
+      expect((await runtime.detail(previous.childId!)).conversation.accessMode).toBe('fullAccess')
 
       await runtime.submitWorkbench(workspaceId, {
         requestId: 'explicit-cap', text: '只读排查失败', mention: 'time', model, accessMode: 'readOnly',
@@ -591,6 +593,26 @@ describe('Agent 工作台的运行时契约', () => {
       }
       return fauxAssistantMessage('已检查')
     }, 'build', (request, accessMode) => { planned.set(request, accessMode) })
+  }, 20_000)
+
+  it('改完 Bot 权限后新派发立即生效，且不受任务类型影响', async () => {
+    const planned = new Map<string, AccessMode>()
+    await fixture(async ({ runtime, workspaceId }) => {
+      await runtime.updateSettings({ defaultAccessMode: 'readOnly', codemodeMode: 'off' })
+      await runtime.updateWorkbenchBot(workspaceId, 'time', { accessMode: 'readOnly' })
+      await runtime.submitWorkbench(workspaceId, { requestId: 'before-permission', text: '改权限前', model })
+      const before = await observe(runtime, workspaceId, view => view.items[0]?.status === 'pending_review')
+      expect(before.items[0]).toMatchObject({ type: 'decide', accessMode: 'readOnly' })
+
+      // 配置完成即可直接使用：无需先跑完一轮或续聊刷新。
+      await runtime.updateWorkbenchBot(workspaceId, 'time', { accessMode: 'fullAccess' })
+      await runtime.submitWorkbench(workspaceId, { requestId: 'after-permission', text: '改权限后', model })
+      const after = await observe(runtime, workspaceId, view => view.items[1]?.status === 'pending_review')
+      expect(after.items[1]).toMatchObject({ type: 'decide', accessMode: 'fullAccess' })
+      // 规划阶段还不知道执行者，提示值是派发权限；生效权限才是 Bot 配置。
+      expect(planned.get('改权限后')).toBe('readOnly')
+      expect((await runtime.detail(after.items[1]!.childId!)).conversation.accessMode).toBe('fullAccess')
+    }, () => fauxAssistantMessage('已检查'), 'decide', (request, accessMode) => { planned.set(request, accessMode) })
   }, 20_000)
 
   it.runIf(process.platform === 'darwin')('同一 Bot 子会话续聊刷新写沙盒、完全访问和只读工具', async () => {

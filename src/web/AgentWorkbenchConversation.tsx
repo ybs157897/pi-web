@@ -1,6 +1,6 @@
 import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ClipboardList, FolderOpen } from 'lucide-react'
+import { ArrowDown, ClipboardList } from 'lucide-react'
 import type { ChatMessage, ConversationDetail, ModelCatalog, ModelOption, ThinkingLevel } from '../shared/types.ts'
 import type { WorkbenchAgent, WorkbenchReplyInput, WorkItem, WorkItemEvidence } from '../shared/workbench.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
@@ -13,22 +13,14 @@ import { ApiFailure, api } from './api.ts'
 import { clampThinkingLevel, isImageType, submissionFingerprint } from './conversation-input.ts'
 import { MessageDialog } from './message-rendering/Dialog.tsx'
 import { accessModeLabel } from './render-labels.ts'
-import { asRecord, conversationStats, messageText, transcriptMessageDomId, visibleTranscriptMessages } from './render-model.ts'
+import { asRecord, conversationStats, messageText, visibleTranscriptMessages } from './render-model.ts'
 import Transcript, { type InspectorDiff, type PendingMessage } from './transcript.tsx'
 import { useUiPreferences } from './ui-preferences.tsx'
 import { useWorkbenchDraft } from './use-workbench-draft.ts'
 import { useDecisionInboxPresence } from './use-decision-inbox-presence.ts'
-import { WorkbenchResultReview } from './WorkbenchResultReview.tsx'
 import { workbenchApi } from './workbench-api.ts'
 import css from './AgentWorkbench.module.css'
 import nativeCss from './AgentWorkbenchConversation.module.css'
-
-const evidenceStatus = {
-  passed: ['验证通过', 'Validation passed'],
-  failed: ['验证失败', 'Validation failed'],
-  recorded: ['已记录', 'Recorded'],
-  insufficient: ['证据不足', 'Evidence missing'],
-} as const
 
 const windowsAbsolutePath = /^(?:[A-Za-z]:[\\/]|\\\\)/u
 const absolutePath = (path: string) => path.startsWith('/') || windowsAbsolutePath.test(path)
@@ -51,42 +43,6 @@ function normalizeFilePath(path: string): string {
 function filePathKey(path: string): string {
   const normalized = normalizeFilePath(path)
   return windowsAbsolutePath.test(path) ? normalized.toLowerCase() : normalized
-}
-
-function relativeFilePath(path: string, root: string | undefined): string | undefined {
-  if (root === undefined || !absolutePath(root)) return undefined
-  const prefix = normalizeFilePath(root).replace(/\/+$/u, '') + '/'
-  const prefixKey = windowsAbsolutePath.test(root) ? prefix.toLowerCase() : prefix
-  return filePathKey(path).startsWith(prefixKey) ? normalizeFilePath(path).slice(prefix.length) : undefined
-}
-
-type EvidenceRow = { entry: WorkItemEvidence; target?: string; label: string; worker?: boolean; pathLabel?: boolean }
-
-function deliveryEvidenceRows(evidence: readonly WorkItemEvidence[], cwd: string | undefined, workspacePath: string | undefined) {
-  const rows: EvidenceRow[] = []
-  const indexByTarget = new Map<string, number>()
-  for (const entry of evidence) {
-    const target = entry.path ? workerFilePath(entry.path, cwd) : undefined
-    if (target === undefined || entry.kind !== 'artifact') {
-      rows.push({ entry, target, label: entry.label })
-      continue
-    }
-    const key = filePathKey(target)
-    const project = relativeFilePath(target, workspacePath)
-    const scratch = relativeFilePath(target, cwd)
-    const worker = scratch !== undefined && (project === undefined || scratch.length < project.length)
-    const pathLabel = entry.label === entry.path || filePathKey(entry.label) === key
-    const label = pathLabel ? (worker ? scratch : project) || entry.label : entry.label
-    const row = { entry, target, label, worker, pathLabel }
-    const existing = indexByTarget.get(key)
-    if (existing === undefined) {
-      indexByTarget.set(key, rows.length)
-      rows.push(row)
-    } else if (rows[existing]?.pathLabel && !pathLabel) {
-      rows[existing] = row
-    }
-  }
-  return rows
 }
 
 function taskFileResolver(cwd: string | undefined, workspacePath: string | undefined,
@@ -288,7 +244,6 @@ function ChildChat({ childId, workspaceId, workspacePath, item, agent, catalog =
   const composerAccess = (attemptActive ? attemptAccess ?? replyAccess : replyAccess ?? attemptAccess) ?? 'readOnly'
   const selectedModel = catalog?.models.find(option => option.provider === currentModel?.provider && option.modelId === currentModel.modelId)
   const thinkingLevel = clampThinkingLevel(thinkingOverride ?? detail?.conversation.thinkingLevel ?? 'off', selectedModel?.thinkingLevels)
-  const reviewable = item.status === 'pending_review' && !busy && !waitingForDecision
   const suppressPreviousFailure = busy || item.status === 'ready' || recoveringAttempt === item.attempt
   const failure = suppressPreviousFailure ? undefined : item.failure ?? detail?.failure
   const cwd = detail?.conversation.cwd
@@ -302,15 +257,12 @@ function ChildChat({ childId, workspaceId, workspacePath, item, agent, catalog =
   const resultMessageId = messages.findLast(message => message.role === 'assistant' && (
     message.entryId !== undefined && item.evidence.some(entry => entry.kind === 'response' && entry.entryId === message.entryId) ||
     summary && messageText(message).trim() === summary))?.id
-  const resultId = resultMessageId === undefined ? undefined : transcriptMessageDomId(resultMessageId)
   const createRunFileResolver = useCallback((runMessages: readonly ChatMessage[]) => {
     const entryIds = new Set(runMessages.map(message => message.entryId))
     const evidence = runMessages.some(message => message.id === resultMessageId) ? item.evidence
       : item.evidence.filter(entry => entry.entryId !== undefined && entryIds.has(entry.entryId))
     return taskFileResolver(cwd, workspacePath, runMessages, evidence)
   }, [cwd, workspacePath, item.evidence, resultMessageId])
-  const resolveDeliveryFile = useMemo(() => taskFileResolver(cwd, workspacePath, [], item.evidence), [cwd, workspacePath, item.evidence])
-  const evidenceRows = useMemo(() => deliveryEvidenceRows(item.evidence, cwd, workspacePath), [item.evidence, cwd, workspacePath])
 
   const openTaskFile = useMemo(() => onFileOpen === undefined ? undefined : (path: string, line?: number) => {
     const target = workerFilePath(path, cwd)
@@ -442,44 +394,6 @@ function ChildChat({ childId, workspaceId, workspacePath, item, agent, catalog =
             ? <p className={`${nativeCss.artifacts} ${nativeCss.error}`} role="alert">{item.error || detail?.error}</p>
             : null}
         {detail?.retry && <div className={nativeCss.artifacts}><ConversationRetryNotice retry={detail.retry} /></div>}
-        {detail && !busy && !waitingForDecision && (item.evidence.length > 0 || item.outcome !== undefined || reviewable) &&
-          <section className={nativeCss.artifacts} aria-label={t('交付结果', 'Deliverables')}>
-            <div className={css.resultHeading}>
-              <h2>{t('交付结果', 'Deliverables')}</h2>
-              {item.outcome?.decision === 'accepted' && <small>{t('验收通过', 'Accepted')}</small>}
-              {item.status === 'pending_review' && <small>{t('结果待验收', 'Awaiting acceptance')}</small>}
-            </div>
-            {resultId === undefined && item.outcome?.summary &&
-              <AnswerMarkdown text={item.outcome.summary} t={t} onOpenFile={openTaskFile && ((path, line) => {
-                const target = resolveDeliveryFile(path)
-                if (target !== undefined) openTaskFile(target, line)
-              })} />}
-            {evidenceRows.length > 0 && <ul className={css.evidenceList}>
-              {evidenceRows.map(({ entry, target, label, worker }, index) => {
-                const [statusZh, statusEn] = evidenceStatus[entry.status]
-                const locationId = worker ? `workbench-file-location-${item.id}-${index}` : undefined
-                return <li key={`${entry.kind}:${index}`}>
-                  <div className={css.evidenceIdentity}>
-                    {entry.kind === 'response' && resultId !== undefined
-                      ? <a className={css.linkButton} href={`#${resultId}`} onClick={event => {
-                        const answer = document.getElementById(resultId)
-                        if (answer === null) return
-                        event.preventDefault()
-                        answer.scrollIntoView({ block: 'start' })
-                      }}>{label}</a>
-                      : !target || openTaskFile === undefined
-                        ? <span title={target}>{label}</span>
-                        : <button type="button" className={css.linkButton} title={target} aria-describedby={locationId} onClick={() => openTaskFile(target)}>
-                          <FolderOpen size={14} aria-hidden="true" /><span>{label}</span>
-                        </button>}
-                    {locationId && <span id={locationId} className={css.evidenceLocation}>{t('工作项目录', 'Work item folder')}</span>}
-                  </div>
-                  <small data-evidence={entry.status}>{t(statusZh, statusEn)}</small>
-                </li>
-              })}
-            </ul>}
-            {reviewable && <WorkbenchResultReview key={item.attempt} item={item} onChange={onChange} />}
-          </section>}
       </div>
       {jumpVisible && <button type="button" className={nativeCss.jump} aria-label={t('滚动到底部', 'Scroll to bottom')} onClick={jumpToEnd}>
         <ArrowDown size={16} aria-hidden="true" />
