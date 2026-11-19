@@ -156,7 +156,6 @@ const TICK_MS = 1_000
 const LEASE_MS = 15_000
 const RUN_LIMIT_MS = 15 * 60_000
 const PLANNER_LEASE_MS = 120_000
-const MAX_ACTIVE_WORKERS = 3
 const SEAT_DETAIL = { subagents: false, team: false }
 
 export async function workbenchDirectory(dataDir: string, workspaceId: string, itemId: string): Promise<string> {
@@ -798,26 +797,18 @@ export function createWorkbench(deps: WorkbenchDeps) {
       }
       const latest = await harnessOf().snapshot(Workbench, mainId, CTX)
       if (!latest || !latest.items.some(item => item.view.status === 'ready')) continue
-      const running = latest.items.filter(item => item.view.status === 'running'
-        || (item.view.status === 'needs_human' && !item.view.error && item.run.startedAt !== undefined))
       const accepted = new Set(latest.items.filter(item => item.view.outcome?.decision === 'accepted').map(item => item.view.id))
-      let capacity = MAX_ACTIVE_WORKERS - running.length
-      // A worker waiting on a real decision can resume directly from either surface.
-      let writing = latest.items.some(item => item.run.accessMode !== 'readOnly'
-        && (item.view.status === 'running' || (item.view.status === 'needs_human' && !item.view.error)))
       const profiles = new Map((await readBots(mainId)).map(profile => [profile.id, profile]))
       const workspaceAccess = await workspacePermission(workspaceId)
+      // 派发即执行：不设并发上限，也不按权限档位做写入互斥。用户只发布任务，
+      // 等待与串行由各子会话自己承担，工作台不做排队。
       for (const item of latest.items) {
-        if (capacity <= 0) break
         if (item.view.status !== 'ready' || !item.view.dependencies.every(id => accepted.has(id))) continue
         try {
           const profile = profiles.get(item.view.assignee)
           if (!profile) throw new RuntimeError('NOT_FOUND', '未找到任务分配的 Bot')
           const accessMode = workerAccess(item.run, profile, workspaceAccess)
-          if (accessMode !== 'readOnly' && writing) continue
-          if (!await runChild(mainId, item, profile, accessMode)) continue
-          capacity -= 1
-          writing ||= accessMode !== 'readOnly'
+          await runChild(mainId, item, profile, accessMode)
         } catch (error) {
           await markWorkerError(mainId, item, runFailure(error))
         }

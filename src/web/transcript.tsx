@@ -27,7 +27,7 @@ import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-br
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
 import { Brain, ChevronRight, ListChecks, Pencil, Sparkles, Terminal } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, groupWorkSteps, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, runningPart, workGroupTitle, workSummaryText, type WorkStepGroup } from './process-presentation.ts'
+import { defaultProcessOpen, groupWorkSteps, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, runningPart, workGroupDuration, workGroupTitleParts, workSummaryCounts, workSummaryText, type WorkStepGroup } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -155,7 +155,7 @@ export default function Transcript({
           : <SystemMessageRow key={entry.row.key} message={entry.row.message} />)}
         {compactionRunning && lastRunKey === undefined && <CompactionRunningRow t={t} />}
         {pending.map(message => <PendingRow key={message.id} message={message} onOpenFile={onOpenFile} t={t} />)}
-        {tailLoading && <TurnRunningIndicator t={t} />}
+        {tailLoading && <TurnRunningIndicator t={t} durationMs={lastRun?.durationMs} />}
       </MarkdownDelegateProvider>
       </ProcessExpansionProvider>
       </PluginUiConversationContext.Provider>
@@ -189,12 +189,23 @@ function useLiveSubagents(conversationId: string | undefined, projected: readonl
  * lives on the HTML wrapper rather than on the SVG, so the animation stays on the
  * compositor instead of re-triggering main-thread style updates every frame.
  */
-function TurnRunningIndicator({ t }: { t: Translate }) {
+/**
+ * 功能：回合尾部的运行指示条，对齐 ZCode 的 `hun`（`chat.loading.working`）：
+ * spinner + 渐变的「工作中」+ 等宽数字的实时时长。
+ * @param t 双语标签函数
+ * @param durationMs 已记录的回合时长（会话级事实，工具轮之间不回落）
+ * 内部逻辑：ZCode 把「工作中 X 分 Y 秒」放在回合最底部而不是折叠头，折叠头只承载
+ * 统计文案或当前动作。时长来自 run.durationMs，拿不到时只显示「工作中」。
+ */
+function TurnRunningIndicator({ t, durationMs }: { t: Translate; durationMs?: number }) {
+  const time = workGroupDuration(durationMs, t)
   return (
     <div className={css.runningIndicator} role="status" aria-live="polite" aria-label={t('加载中', 'Loading')}>
       <span className={css.runningIndicatorIcon} aria-hidden="true">
         <IconLoadingOutlineRegular size={16} />
       </span>
+      <span className={css.runningIndicatorLabel}>{t('工作中', 'Working')}</span>
+      {time !== undefined && <span className={css.runningIndicatorTime} aria-hidden="true">{time}</span>}
     </div>
   )
 }
@@ -437,15 +448,32 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   }, [autoOpen, live, latest, policy, manualOpen])
   const open = manualOpen ?? autoOpen
   const bodyId = useId()
-  const title = workGroupTitle(run, t, live)
-  const liveRow = open || !live ? undefined : currentWorkRow(run, t, live)
-  const liveRowNode = liveRow === undefined ? undefined : <span id={`${bodyId}-summary`} className={css.currentWorkRow} data-current-work="">
-    <span className={css.currentWorkIcon} aria-hidden="true">{liveRow.icon}</span>
-    <span className={css.currentWorkLabel}>{liveRow.label}</span>
-    {liveRow.path !== undefined
-      ? <span className={css.currentWorkChip}><MessageFileIcon path={liveRow.path} /><span>{liveRow.path.split(/[/\\]/u).at(-1)}</span></span>
-      : liveRow.detail !== undefined ? <code className={css.currentWorkDetail}>{liveRow.detail}</code> : null}
-  </span>
+  // ZCode 的折叠头只承载统计文案或当前动作；「工作中 X」属于回合尾部的 hun 指示条。
+  // 收起且仍在运行时整行换成当前动作，展开或结束后回到统计文案。
+  const liveRow = live && !open ? currentWorkRow(run, t, live) : undefined
+  // ZCode 的两层口径：外层历史段触发器显示「已工作 X 分 Y 秒」（完成态折叠整段），
+  // 运行中不显示时间头——时间属于回合尾部的 hun 指示条。运行中这一行改显示统计文案，
+  // 收起且仍是尾组时整行换成当前动作（带渐变流光）。
+  const statistics = workSummaryCounts(run)
+  const statisticsText = workSummaryText(statistics, t, false) ?? t('工具调用', 'Tool calls')
+  const titleParts = workGroupTitleParts(run, t, live)
+  const headerBody = live
+    ? liveRow !== undefined
+      ? <>
+        <span className={css.currentWorkIcon} aria-hidden="true">{liveRow.icon}</span>
+        <span className={css.currentWorkLabel}>{liveRow.label}</span>
+        {liveRow.path !== undefined
+          ? <span className={css.currentWorkChip}><MessageFileIcon path={liveRow.path} /><span>{liveRow.path.split(/[/\\]/u).at(-1)}</span></span>
+          : liveRow.detail !== undefined ? <code className={css.currentWorkDetail}>{liveRow.detail}</code> : null}
+      </>
+      : <>
+        <span className={css.processHeaderIcon} aria-hidden="true"><ListChecks size={16} /></span>
+        <span className={css.processHeaderStats}>{statisticsText}</span>
+      </>
+    : <>
+      <span className={css.processHeaderStats} data-settled="">{titleParts.status}</span>
+      {titleParts.duration !== undefined && <> <span className={css.processHeaderTime}>{titleParts.duration}</span></>}
+    </>
   // ZCode 把带内联插件页的成功工具行留在折叠历史区之外。否则分组收起时页面
   // 会消失，最终答案顶替它的位置。
   type ToolPart = Extract<ProcessPart, { kind: 'tool' }>
@@ -480,9 +508,6 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   if (!grouped) {
     return (
       <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-flat data-run-id={run.runId}>
-        <div className={css.processFlatStatus} data-state={run.status}>
-          <span className={css.processTitle} data-running={live || undefined}>{title}</span>
-        </div>
         <div className={css.processFlatBody}>{steps.map(renderStep)}</div>
       </div>
     )
@@ -491,29 +516,25 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   const sectionIds = flow.flatMap(segment => segment.kind === 'work' ? [`${bodyId}-${segment.key}`] : [])
   return <>
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
-      {sectionIds.length > 0 && <button ref={headerRef} type="button" className={css.processHeader} aria-expanded={open} aria-controls={sectionIds.join(' ')}
-        aria-labelledby={`${bodyId}-title`} aria-describedby={liveRow === undefined ? undefined : `${bodyId}-summary`}
+      {sectionIds.length > 0 && <button ref={headerRef} type="button" className={css.processHeader} data-live={`${live && liveRow !== undefined}`}
+        aria-expanded={open} aria-controls={sectionIds.join(' ')}
+        aria-labelledby={`${bodyId}-title`}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
-        {liveRowNode !== undefined ? <>
-          {liveRowNode}
-          <span className={css.processPreviewRow} data-process-status="">
-            <IconLoadingOutlineRegular className={css.processPreviewIcon} size={14} aria-hidden="true" />
-            <span id={`${bodyId}-title`} className={css.processPreview} data-running>{title}</span>
-            <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-          </span>
-        </> : <span className={css.processTitleRow}>
-          <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
-          <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-        </span>}
+        <span id={`${bodyId}-title`} className={css.processHeaderRow} data-running={live && liveRow !== undefined || undefined}>
+          {headerBody}
+        </span>
+        <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
       </button>}
       <div ref={flowRef} data-process-flow>{flow.map(segment => segment.kind === 'user'
         ? <div key={segment.part.key} className={css.processUserInput}>{renderPart(segment.part)}</div>
-        : <div key={segment.key} id={`${bodyId}-${segment.key}`} className={css.processCollapse} data-process-section=""
-          data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}>
-          <div className={css.processClip}>
-            <div className={css.processBody} data-work-list>{segment.parts.map(renderStep)}</div>
-          </div>
-        </div>)}</div>
+        : segment.kind === 'text'
+          ? <div key={segment.part.key} className={css.processInlineText} data-process-inline-text="">{renderPart(segment.part)}</div>
+          : <div key={segment.key} id={`${bodyId}-${segment.key}`} className={css.processCollapse} data-process-section=""
+            data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}>
+            <div className={css.processClip}>
+              <div className={css.processBody} data-work-list>{segment.parts.map(renderStep)}</div>
+            </div>
+          </div>)}</div>
     </div>}
     {pinnedBody.length > 0 && <div className={css.pinnedProcess} data-pinned-plugin-ui>{pinnedBody}</div>}
   </>
@@ -521,9 +542,14 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
 
 type ProcessFlowSegment =
   | { kind: 'user'; part: Extract<TranscriptPart, { kind: 'user' }> }
+  | { kind: 'text'; part: Extract<TranscriptPart, { kind: 'content' }> }
   | { kind: 'work'; key: string; parts: (TranscriptPart | WorkStepGroup)[] }
 
-/** 用户消息的 DOM 节点保持原位，只有前后的过程片段参与收起。 */
+/**
+ * 切分过程流：用户消息与中间正文原位渲染，只有工作步骤参与收起。
+ * 内部逻辑：ZCode 把 `assistantText` 放在折叠区外、与用户输入同层全宽渲染，
+ * 折叠只吃掉工具与思考行；这里沿用同一口径，正文不再被缩进到折叠体里。
+ */
 function splitProcessFlow(parts: readonly (TranscriptPart | WorkStepGroup)[]): ProcessFlowSegment[] {
   const flow: ProcessFlowSegment[] = []
   let sectionKey = 'start'
@@ -531,6 +557,10 @@ function splitProcessFlow(parts: readonly (TranscriptPart | WorkStepGroup)[]): P
   for (const part of parts) {
     if (part.kind === 'user') {
       flow.push({ kind: 'user', part })
+      section = undefined
+      sectionKey = `after-${encodeURIComponent(part.key)}`
+    } else if (part.kind === 'content') {
+      flow.push({ kind: 'text', part })
       section = undefined
       sectionKey = `after-${encodeURIComponent(part.key)}`
     } else {
@@ -576,16 +606,17 @@ interface CurrentWorkRowModel {
 }
 
 /**
- * 功能：把运行中的过程部件折成折叠头第一行（ZCode 的动作行在上、耗时在下）。
+ * 功能：把过程里最近一个部件折成折叠头第一行（ZCode 的动作行在上、耗时在下）。
  * @param run 渲染 run
  * @param t 双语标签函数
  * @param running run 是否在运行
- * @returns 当前动作行模型；没有运行中的部件返回 undefined
- * 内部逻辑：工具行复用工具渲染模型（同一套状态与文案，路径走文件 chip），思考取最新
- * 一行，流式正文取首行文本。
+ * @returns 当前动作行模型；过程为空返回 undefined
+ * 内部逻辑：优先取正在运行的部件；没有运行中的部件时回落到最近一个已完成的工具行或
+ * 思考行——ZCode 在两次调用之间也保持显示上一个动作，不会让动作行空掉。工具行复用
+ * 工具渲染模型（同一套状态与文案，路径走文件 chip），思考取最新一行，流式正文取首行。
  */
 function currentWorkRow(run: RenderRun, t: Translate, running: boolean): CurrentWorkRowModel | undefined {
-  const part = runningPart(run, running)
+  const part = runningPart(run, running) ?? latestActionPart(run)
   if (part === undefined) return undefined
   if (part.kind === 'reasoning') {
     const line = latestReasoningLine(part.text)
@@ -601,6 +632,21 @@ function currentWorkRow(run: RenderRun, t: Translate, running: boolean): Current
     label: model.title,
     ...(model.path !== undefined ? { path: model.path } : { detail: model.command ?? model.summary }),
   }
+}
+
+/**
+ * 功能：取过程里最近一个已完成的动作，供折叠头在两次调用之间保持动作行可见。
+ * @param run 渲染 run
+ * @returns 最后一个工具行或思考行；过程里只有正文与用户消息时返回 undefined
+ * 内部逻辑：从末尾向前找工具行与思考行，跳过用户消息与正文（正文由答案区承载）。
+ */
+function latestActionPart(run: RenderRun): Extract<ProcessPart, { kind: 'tool' | 'reasoning' }> | undefined {
+  for (let index = run.process.length - 1; index >= 0; index -= 1) {
+    const part = run.process[index]
+    if (part === undefined) continue
+    if (part.kind === 'tool' || part.kind === 'reasoning') return part
+  }
+  return undefined
 }
 
 /**

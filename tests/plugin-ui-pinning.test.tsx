@@ -62,8 +62,8 @@ describe('plugin UI pinning', () => {
   it('keeps an inline page visible when the completed work group is folded', () => {
     render(<Transcript messages={conversation()} conversationId="conv-plugin" policy={presentationPolicyFor('standard')} />)
 
-    // 工作组在完成时折叠，但插件页面位于折叠体之外。
-    expect(screen.getByText('已工作 9 秒').closest('button')?.getAttribute('aria-expanded')).toBe('false')
+    // 工作组在完成时折叠，但插件页面位于折叠体之外。标题拆成「已工作」+「9 秒」两段。
+    expect(screen.getByText(/^已工作/).closest('button')?.getAttribute('aria-expanded')).toBe('false')
     expect(document.querySelector('[data-pinned-plugin-ui]')).not.toBeNull()
     expect(document.querySelector('[data-plugin-ui-card]')).not.toBeNull()
     expect(screen.getByText('Excalidraw')).toBeTruthy()

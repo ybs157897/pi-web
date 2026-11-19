@@ -35,16 +35,21 @@ describe('live transcript state', () => {
 
     // 会话仍在进行（running）时：单条消息状态可能已是 completed（工具轮次之间），
     // 但终态动作（复制）、用量、耗时与变更文件都必须隐藏；rerender 去掉 running 后全部出现。
-    expect(screen.getByText(/^工作中/)).toBeTruthy()
-    expect(screen.getByText(/^工作中/).closest('button')?.getAttribute('aria-expanded')).toBe('true')
+    // 运行中「工作中 X」在回合尾的指示条（ZCode hun），不在折叠头。
+    const indicator = screen.getByRole('status', { name: '加载中' })
+    expect(indicator.textContent).toContain('工作中')
+    expect(screen.queryByText(/^已工作/)).toBeNull()
     expect(screen.queryByRole('button', { name: '复制回答' })).toBeNull()
     expect(screen.queryByRole('button', { name: /用量/ })).toBeNull()
     expect(document.querySelector('[data-message-changes]')).toBeNull()
 
     rerender(<Transcript messages={values} conversationId="conv-live" policy={policy} />)
 
-    expect(screen.getByText('已工作 11 秒')).toBeTruthy()
-    expect(screen.getByText('已工作 11 秒').closest('button')?.getAttribute('aria-expanded')).toBe('false')
+    // 结束态：折叠头显示「已工作 X」，尾部指示条消失。
+    expect(screen.queryByRole('status', { name: '加载中' })).toBeNull()
+    expect(screen.getByText('已工作')).toBeTruthy()
+    expect(screen.getByText('11 秒')).toBeTruthy()
+    expect(screen.getByText('已工作').closest('button')?.getAttribute('aria-expanded')).toBe('false')
     expect(screen.getByRole('button', { name: '复制回答' })).toBeTruthy()
     expect(screen.getByRole('button', { name: /用量/ })).toBeTruthy()
     expect(document.querySelector('[data-message-changes]')).toBeTruthy()

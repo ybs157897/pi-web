@@ -195,41 +195,56 @@
   --message-muted: color-mix(in srgb, var(--message-fg) 68%, var(--message-background));
   --message-subtle: var(--work-step-label);
 }
-.processHeader { display: flex; width: 100%; min-width: 0; flex-direction: column; align-items: stretch; gap: 2px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--work-step-label); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
-.processTitleRow { display: flex; min-width: 0; align-items: center; gap: 8px; }
-/* 运行中收起时的计时行；完成态只保留时长与开关。 */
-.processPreviewRow { display: flex; min-width: 0; align-items: center; gap: 6px; }
-.processPreviewIcon { flex: none; color: var(--message-muted); }
-/* 运行中折叠头的当前动作行：图标 + 动词 + 文件 chip / 命令，位置在「工作中 X」之上。 */
-.currentWorkRow { display: flex; min-width: 0; align-items: center; gap: 8px; color: var(--message-muted); }
-.currentWorkIcon { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--message-muted); }
-.currentWorkIcon > svg { width: 16px; height: 16px; }
-.currentWorkLabel { flex: none; white-space: nowrap; color: var(--message-muted); }
-.currentWorkChip { display: inline-flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; color: var(--message-subtle); }
-.currentWorkChip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.currentWorkDetail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--message-mono); font-size: calc(var(--message-font) - 2px); color: var(--message-muted); }
-.processFlatStatus { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); color: var(--message-subtle); font-size: var(--message-font); line-height: 1.5; }
-.processGroup[data-state='error'] .processFlatStatus { color: var(--message-danger); }
+/* ZCode O1e 口径：折叠头是单行按钮——图标 + 统计文案（或运行中的当前动作）+ 悬停才显现的箭头。 */
+.processHeader {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--message-subtle);
+  font: inherit;
+  font-size: var(--message-font);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.processHeaderRow { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.processHeaderIcon { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--message-subtle); }
+.processHeaderIcon > svg { width: 16px; height: 16px; }
+.processHeaderStats { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--message-subtle); font-weight: 600; }
+.processHeaderTime { font-weight: 400; color: var(--message-muted); }
+/* 运行中且收起的尾组：统计文案换成当前动作，走 ZCode 的渐变流光。 */
+.processHeader[data-live='true'] .processHeaderRow { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
 .processGroup[data-state='error'] .processHeader { color: var(--message-danger); }
 .processGroup[data-state='cancelled'] .processHeader { color: var(--message-subtle); }
-.processTitle { flex: none; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.processTitle[data-running], .processPreview[data-running] { background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; color: transparent; animation: work-sweep 4s linear infinite; }
-.processChevron { flex: none; color: var(--message-muted); transition: transform .2s ease-out; }
+/* 当前动作行的三段：图标 / 动词 / 内容。 */
+.currentWorkIcon { display: inline-flex; flex: none; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--message-muted); }
+.currentWorkIcon > svg { width: 16px; height: 16px; }
+.currentWorkLabel { flex: none; white-space: nowrap; font-weight: 600; color: var(--message-fg); }
+.currentWorkChip { display: inline-flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; color: var(--message-subtle); }
+.currentWorkChip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.currentWorkDetail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--message-muted); }
+.processChevron { flex: none; color: var(--message-subtle); opacity: 0; transition: transform .2s ease-out, opacity .15s ease-out; }
+.processHeader:hover .processChevron, .processHeader:focus-visible .processChevron { opacity: 1; }
 .processChevron[data-open] { transform: rotate(90deg); }
-.processPreview { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--message-muted); text-overflow: ellipsis; white-space: nowrap; }
 .processCollapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; }
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }
 .processBody, .processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
 .processUserInput { padding-block-start: 16px; }
+/* ZCode 把中间正文放在折叠区外、与用户输入同层全宽渲染，不再缩进到工作列表里。 */
+.processInlineText { min-width: 0; padding-block: 12px; color: var(--message-fg); }
 .workStepsRow { min-width: 0; }
 .workStepsList { display: flex; min-width: 0; flex-direction: column; gap: 8px; margin-inline-start: 8px; padding-inline-start: 15px; border-inline-start: 1px solid var(--message-border); }
 .workStepsList :global([data-process-leading-icon]) { display: none; }
 .processFlatBody { color: var(--message-muted); }
 .pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .processOutput { min-width: 0; color: var(--message-fg); }
-@keyframes work-sweep { from { background-position: 100% 0; } to { background-position: -100% 0; } }
-@media (prefers-reduced-motion: reduce) { .processCollapse, .processChevron { transition: none; } .processTitle[data-running] { animation: none; background: none; color: var(--message-subtle); } }
+@media (prefers-reduced-motion: reduce) { .processCollapse, .processChevron { transition: none; } }
 
 .images {
   display: flex;
@@ -369,30 +384,58 @@
   .compactionSpinner { animation: none; }
 }
 
-/* The transcript-tail spinner; it sits where the next assistant output will land. */
+/* ZCode hun 口径的回合尾指示条：spinner + 渐变「工作中」+ 等宽时长。 */
 .runningIndicator {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 8px;
   min-height: 16px;
+  font-size: var(--message-font);
+  line-height: 1.5;
 }
 
 .runningIndicatorIcon {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: none;
   width: 16px;
   height: 16px;
   color: var(--dsw-alias-label-tertiary);
   animation: runningIndicatorSpin 1s linear infinite;
 }
 
+/* 文案随流光扫过，与 ZCode 的 animated-gradient-text 一致。 */
+.runningIndicatorLabel {
+  background: linear-gradient(90deg, var(--message-fg) 0%, var(--message-fg) 34%, var(--message-muted) 50%, var(--message-fg) 66%, var(--message-fg) 100%);
+  background-size: 300% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: work-sweep 4s linear infinite;
+}
+
+/* 时长用等宽数字右对齐，秒数跳动时宽度不抖。 */
+.runningIndicatorTime {
+  font-family: var(--message-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--message-muted);
+}
+
 @keyframes runningIndicatorSpin {
   to { transform: rotate(360deg); }
 }
 
+@keyframes work-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .runningIndicatorIcon { animation: none; }
+  .runningIndicatorLabel { animation: none; background: none; color: var(--message-muted); }
+  .processHeader[data-live='true'] .processHeaderRow { animation: none; background: none; color: var(--message-subtle); }
 }
 
 

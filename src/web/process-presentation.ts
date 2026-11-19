@@ -59,30 +59,58 @@ export function latestReasoningLine(text: string): string {
 }
 
 /**
+ * 功能：把已记录的时长渲染成「X 分 Y 秒」或「X 秒」。
+ * @param durationMs 已记录的时长
+ * @param t 双语标签函数
+ * @returns 时长文案；拿不到有效时长返回 undefined
+ * 内部逻辑：只用已记录的 durationMs，不从墙钟猜。0 与未知同义（毫秒级 run 不值得
+ * 展示「0 秒」），其余四舍五入到秒。
+ */
+export function workGroupDuration(durationMs: number | undefined, t: Translate): string | undefined {
+  const duration = durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 1000
+    ? undefined
+    : Math.max(1, Math.round(durationMs / 1000))
+  if (duration === undefined) return undefined
+  return duration >= 60
+    ? t(`${Math.floor(duration / 60)} 分 ${duration % 60} 秒`, `${Math.floor(duration / 60)} min ${duration % 60} sec`)
+    : t(`${duration} 秒`, `${duration} sec`)
+}
+
+/**
+ * 功能：生成工作组标题的两个片段（状态词与耗时），供分层次渲染。
+ * @param run 运行状态与时长
+ * @param t 双语标签函数
+ * @param live 是否仍在工作
+ * @returns 状态词与可选时长；对齐 ZCode「工作中 2 分 0 秒」的加粗动词加灰时长
+ */
+export interface WorkGroupTitleParts {
+  readonly status: string
+  readonly duration?: string
+}
+
+export function workGroupTitleParts(run: Pick<RenderRun, 'status' | 'durationMs'>, t: Translate, live = run.status === 'running'): WorkGroupTitleParts {
+  const duration = workGroupDuration(run.durationMs, t)
+  const withDuration = (status: string): WorkGroupTitleParts => duration === undefined ? { status } : { status, duration }
+  if (live) return withDuration(t('工作中', 'Working'))
+  if (run.status === 'error') return { status: t('处理失败', 'Turn failed') }
+  if (run.status === 'cancelled') return { status: t('已停止', 'Stopped') }
+  if (run.status === 'running') return withDuration(t('工作中', 'Working'))
+  return withDuration(t('已工作', 'Worked'))
+}
+
+/**
  * 功能：生成工作组的标题文案（工作中/已工作 + 耗时，或 处理失败/已停止）。
  * @param run 运行状态与时长
  * @param t 双语标签函数
  * @param live 是否仍在工作（默认取 run.status === 'running'）
  * @returns 双语标题字符串
- * 内部逻辑：只用已记录的 durationMs，拿不到时长不从墙钟猜；不足 1 秒的亚秒 run
- * 与未知同义（否则显示「已工作 0 秒」）；≥60s 显示「X 分 Y 秒」。
+ * 内部逻辑：状态词与耗时之间空一格，时长口径见 workGroupDuration。两次工具轮之间
+ * run.status 会短暂回落为 completed；会话级 live 标志让标题保持「工作中」，直到
+ * 回合真正落定。
  */
 export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t: Translate, live = run.status === 'running'): string {
-  // 0 与未知同义（毫秒级 run 不值得展示「0 秒」），不足 1 秒同理，回落到不带耗时的「工作中/已工作」；
-  // 其余四舍五入到秒（2.8 秒的回合显示「3 秒」更贴近实际工作时长）。
-  const duration = run.durationMs === undefined || !Number.isFinite(run.durationMs) || run.durationMs < 1000
-    ? undefined
-    : Math.max(1, Math.round(run.durationMs / 1000))
-  const time = duration === undefined ? undefined : duration >= 60
-    ? t(`${Math.floor(duration / 60)} 分 ${duration % 60} 秒`, `${Math.floor(duration / 60)} min ${duration % 60} sec`)
-    : t(`${duration} 秒`, `${duration} sec`)
-  // 两次工具轮之间 run.status 会短暂回落为 completed；会话级 live 标志让标题保持「工作中」，
-  // 直到回合真正落定（ZCode 的运行中折叠头同样带实时时长）。
-  if (live) return time === undefined ? t('工作中', 'Working') : t(`工作中 ${time}`, `Working ${time}`)
-  if (run.status === 'error') return t('处理失败', 'Turn failed')
-  if (run.status === 'cancelled') return t('已停止', 'Stopped')
-  if (run.status === 'running') return time === undefined ? t('工作中', 'Working') : t(`工作中 ${time}`, `Working ${time}`)
-  return time === undefined ? t('已工作', 'Worked') : t(`已工作 ${time}`, `Worked ${time}`)
+  const parts = workGroupTitleParts(run, t, live)
+  return parts.duration === undefined ? parts.status : `${parts.status} ${parts.duration}`
 }
 
 type WorkStep = Extract<ProcessPart, { kind: 'tool' | 'reasoning' }>

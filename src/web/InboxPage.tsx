@@ -12,6 +12,7 @@ import { api } from './api.ts'
 import { DECISION_INBOX_CHANGED, decisionInboxApi } from './decision-inbox-api.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
 import css from './InboxPage.module.css'
+import heroIllustration from './assets/inbox/upgrade.webp'
 
 type InboxPageProps = {
   workspaceId?: string
@@ -80,6 +81,61 @@ function groupMails(mails: DecisionMailSummary[]) {
 function MailType({ kind }: { kind: DecisionMailKind }) {
   const { t } = useUiPreferences()
   return <span className={css.type} data-kind={kind}>{t(...kinds[kind])}</span>
+}
+
+/** 卡片左上角的类型图标：结果=成就类、选择/审阅=分支类、确认/异常=警示类。 */
+function mailKindIcon(kind: DecisionMailKind): ReactNode {
+  switch (kind) {
+    case 'result': return <Check size={17} />
+    case 'choice': return <ListFilter size={17} />
+    case 'review': return <Reply size={17} />
+    case 'confirmation': return <Clock3 size={17} />
+    default: return <Mail size={17} />
+  }
+}
+
+/**
+ * 一封邮件一张卡：插画感渐变背景 + 装饰形状，标题直接叠在背景上。
+ * @param item 邮件摘要
+ * @param canBatch 当前分类是否允许批量选择（决定是否渲染勾选框）
+ * @param selected 是否已选中
+ * @param disabled 批量操作进行中时禁用交互
+ * @param t / locale 文案与时间格式
+ * @param onToggle / onOpen 选择与打开回调
+ * 内部逻辑：每张卡的背景由 kind 决定色相，装饰形状用纯 CSS 渐变画（不引入图片资源）；
+ * 标题是视觉主角，状态与时间作为浅色浮层压在背景上。卡片自身是按钮，勾选框绝对定位。
+ */
+function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onOpen }: {
+  item: DecisionMailSummary
+  canBatch: boolean
+  selected: boolean
+  disabled: boolean
+  t: ReturnType<typeof useUiPreferences>['t']
+  locale: string
+  onToggle: (id: string, selected: boolean) => void
+  onOpen: (id: string) => void
+}) {
+  const awaiting = item.actionable && item.folder !== 'archived'
+  return <li className={css.messageRow}>
+    {canBatch && <input className={css.rowSelect} type="checkbox" aria-label={t(`选择 ${item.subject}`, `Select ${item.subject}`)}
+      checked={selected} disabled={disabled} onChange={event => onToggle(item.id, event.target.checked)} />}
+    <button className={css.card} type="button" data-mail-id={item.id} data-kind={item.kind}
+      data-awaiting={awaiting ? '' : undefined} disabled={disabled} onClick={() => onOpen(item.id)}>
+      <span className={css.cardTop}>
+        <span className={css.cardIcon} data-kind={item.kind} aria-hidden="true">{mailKindIcon(item.kind)}</span>
+        <span className={css.cardStatus} data-tone={awaiting ? 'awaiting' : 'settled'}>
+          {item.resolution ? t(...resolutions[item.resolution])
+            : awaiting ? t(...reasons[item.reason]) : t('已归档', 'Archived')}
+        </span>
+      </span>
+      <strong className={css.cardTitle}>{item.subject}</strong>
+      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
+      <span className={css.cardFoot}>
+        {item.folder === 'archived' && item.actionable && <span className={css.rowOpen}>{t('仍待处理', 'Still open')}</span>}
+        <time dateTime={new Date(item.createdAt).toISOString()}>{mailTime(item.snoozedUntil ?? item.createdAt, locale)}</time>
+      </span>
+    </button>
+  </li>
 }
 
 function mailTime(timestamp: number, locale: string): string {
@@ -278,17 +334,21 @@ function InboxMailView({
           <h1 ref={headingRef} tabIndex={-1}>{mail.subject}</h1><MailType kind={mail.kind} />
           {mail.resolution && <span className={css.resolution} role="status"><Check size={14} />{t(...resolutions[mail.resolution])}</span>}
         </div>
-        <section className={css.why}>
-          <h2>{mail.actionable ? t('为什么找你', 'Why you are needed') : t('发信原因', 'Why this was sent')}</h2>
-          <div><strong>{mail.reason === 'accept_result' && !mail.actionable
-            ? t('交付验收', 'Result acceptance') : needsRecovery ? t('执行异常', 'Execution error') : t(...reasons[mail.reason])}</strong>
+        {mail.actionable && mail.reason !== 'accept_result' && <section className={css.why}>
+          <h2>{t('为什么找你', 'Why you are needed')}</h2>
+          <div><strong>{needsRecovery ? t('执行异常', 'Execution error') : t(...reasons[mail.reason])}</strong>
             <p>{needsRecovery ? t('到原对话查看恢复选项，处理后可继续工作项。', 'Open the original conversation for recovery options and resume the work item.') : mail.why}</p>
           </div>
-        </section>
+        </section>}
         {mail.failure && <ConversationFailureNotice failure={mail.failure} />}
-        {mail.body && mail.body !== mail.failure?.message && <div className={css.body}><AnswerMarkdown text={mail.body} t={t}
-          filePaths={mail.evidence.flatMap(item => item.path ? [item.path] : [])} onOpenFile={openFile} /></div>}
-        {mail.questions?.map(question => {
+        {mail.body && mail.body !== mail.failure?.message && <section className={css.block} data-tone="delivery">
+          <h2>{t('交付内容', 'Delivery')}</h2>
+          <div className={css.body}><AnswerMarkdown text={mail.body} t={t}
+            filePaths={mail.evidence.flatMap(item => item.path ? [item.path] : [])} onOpenFile={openFile} /></div>
+        </section>}
+        {mail.questions && mail.questions.length > 0 && <section className={css.block} data-tone="decision">
+          <h2>{t('需要你的决定', 'Your decision')}</h2>
+          {mail.questions.map(question => {
           const current = selected[question.id] ?? []
           const answered = mail.answers?.find(answer => answer.id === question.id)
           const isSkipped = skipped.has(question.id)
@@ -327,22 +387,27 @@ function InboxMailView({
             {answered?.custom && <p className={css.savedReply}>{answered.custom}</p>}
             {answered && !answered.selected.length && !answered.custom && <p className={css.savedReply}>{t('已跳过', 'Skipped')}</p>}
           </fieldset>
-        })}
-        {mail.acceptance && mail.acceptance.length > 0 && <section className={css.acceptance}>
-          <h2>{t('验收条件', 'Acceptance criteria')}</h2>
-          <ul>{mail.acceptance.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul>
+          })}
         </section>}
-        {mail.evidence.length > 0 && <section className={css.evidence}>
-          <h2>{t('验收证据', 'Evidence')}</h2>
-          <ul>{mail.evidence.map((item, index) => <li key={`${item.label}-${index}`} data-state={item.status}>
-            <span>{item.path && openFile
-              ? <button className={css.evidenceLink} type="button" onClick={() => openFile(item.path!)}>{item.label}<ArrowUpRight size={14} /></button>
-              : item.label}
-              {item.path && item.path !== item.label && <small>{item.path}</small>}</span>
-            <span className={css.evidenceState}>{t(...evidenceStates[item.status])}</span>
-          </li>)}</ul>
+        {((mail.acceptance?.length ?? 0) > 0 || mail.evidence.length > 0) && <section className={css.block} data-tone="verify">
+          <h2>{t('验收', 'Acceptance')}</h2>
+          <div className={css.verifyColumns}>
+            {mail.acceptance && mail.acceptance.length > 0 && <div className={css.acceptance}>
+              <h3>{t('验收条件', 'Criteria')}</h3>
+              <ul>{mail.acceptance.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul>
+            </div>}
+            {mail.evidence.length > 0 && <div className={css.evidence}>
+              <h3>{t('验收证据', 'Evidence')}</h3>
+              <ul>{mail.evidence.map((item, index) => <li key={`${item.label}-${index}`} data-state={item.status}>
+                <span>{item.path && openFile
+                  ? <button className={css.evidenceLink} type="button" title={item.label} onClick={() => openFile(item.path!)}>{item.label}<ArrowUpRight size={14} /></button>
+                  : <span title={item.label}>{item.label}</span>}</span>
+                <span className={css.evidenceState}>{t(...evidenceStates[item.status])}</span>
+              </li>)}</ul>
+            </div>}
+          </div>
         </section>}
-        {mail.answers && !mail.questions && <section className={css.savedReply}>
+        {mail.answers && !mail.questions && <section className={css.block} data-tone="reply">
           <h2>{t('已提交的答复', 'Submitted reply')}</h2>
           {mail.answers.map(answer => <p key={answer.id}>{[...answer.selected, answer.custom].filter(Boolean).join(' · ')}</p>)}
         </section>}
@@ -398,6 +463,10 @@ function WorkspaceInbox({
   const [refresh, setRefresh] = useState(0)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filter, setFilter] = useState<DecisionReason>()
+  /** 展示形态：分组（按会话折叠）或卡片（一封一张卡平铺）。 */
+  const [view, setView] = useState<'grouped' | 'cards'>('cards')
+  /** 卡片模式下的会话筛选；undefined 表示全部会话。 */
+  const [groupFilter, setGroupFilter] = useState<string>()
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkError, setBulkError] = useState('')
@@ -490,7 +559,10 @@ function WorkspaceInbox({
 
   const all = list?.mails ?? []
   const inFolder = all.filter(item => folderOf(item) === folder)
-  const visible = filter === undefined ? inFolder : inFolder.filter(item => item.reason === filter)
+  const inReason = filter === undefined ? inFolder : inFolder.filter(item => item.reason === filter)
+  /** 卡片模式下可选的会话清单（当前分类里出现过的分组）。 */
+  const conversationOptions = Array.from(new Map(inReason.map(item => [item.groupId, item.groupTitle])).entries())
+  const visible = groupFilter === undefined ? inReason : inReason.filter(item => item.groupId === groupFilter)
   const groups = groupMails(visible)
   const canBatch = folder !== 'archived' && visible.length > 0
   const ids = canBatch ? visible.filter(item => selectedRows.has(item.id)).map(item => item.id) : []
@@ -532,6 +604,13 @@ function WorkspaceInbox({
           <h1 id="decision-inbox-heading">{t('收件箱', 'Inbox')}</h1>
           {list && <span>{t(`${list.pendingCount} 封等你处理`, `${list.pendingCount} awaiting you`)}</span>}
         </header>
+        <div className={css.hero}>
+          <img src={heroIllustration} alt="" aria-hidden="true" />
+          <span className={css.heroText}>
+            <strong>Upgrade with AI</strong>
+            <small>{t('让收件箱更强', 'For more powerful Inbox')}</small>
+          </span>
+        </div>
         <nav className={css.folders} aria-label={t('收件箱分类', 'Inbox folders')}>
           {(Object.keys(folders) as Folder[]).map(name => <button key={name} type="button" data-inbox-folder={name}
             aria-current={folder === name ? 'page' : undefined} disabled={bulkBusy} onClick={() => {
@@ -560,8 +639,20 @@ function WorkspaceInbox({
         {list ? <div className={css.card}>
           <div className={css.cardHeading}>
             <h2>{t(...folders[folder])}</h2>
-            <span>{t('按会话分组', 'Grouped by conversation')}</span>
+            <span>{view === 'grouped' ? t('按会话分组', 'Grouped by conversation') : t(`${visible.length} 封邮件`, `${visible.length} messages`)}</span>
             <div className={css.listActions}>
+              <div className={css.viewToggle} role="group" aria-label={t('展示形态', 'Layout')}>
+                <button type="button" aria-pressed={view === 'cards'} disabled={bulkBusy}
+                  onClick={() => setView('cards')}>{t('卡片', 'Cards')}</button>
+                <button type="button" aria-pressed={view === 'grouped'} disabled={bulkBusy}
+                  onClick={() => setView('grouped')}>{t('分组', 'Grouped')}</button>
+              </div>
+              {view === 'cards' && conversationOptions.length > 1 && <select className={css.conversationSelect}
+                aria-label={t('按会话筛选', 'Filter by conversation')} value={groupFilter ?? ''} disabled={bulkBusy}
+                onChange={event => { setGroupFilter(event.currentTarget.value === '' ? undefined : event.currentTarget.value); setSelectedRows(new Set()) }}>
+                <option value="">{t('全部会话', 'All conversations')}</option>
+                {conversationOptions.map(([id, title]) => <option key={id} value={id}>{title}</option>)}
+              </select>}
               {canBatch && <label className={css.selectAll}>
                 <input type="checkbox" checked={ids.length === visible.length} disabled={bulkBusy}
                   ref={input => { if (input) input.indeterminate = ids.length > 0 && ids.length < visible.length }}
@@ -593,28 +684,24 @@ function WorkspaceInbox({
           {bulkError && <p className={css.bulkError} role="alert">{bulkError}</p>}
           {groups.size === 0 ? <div className={css.empty}>
             <Inbox size={26} />
-            <p>{filter !== undefined
+            <p>{filter !== undefined || groupFilter !== undefined
               ? t('没有符合筛选条件的邮件', 'No messages match this filter')
               : folder === 'pending' ? t('暂无待你决定的事项', 'Nothing needs your decision') : t('这个分类还没有邮件', 'No messages in this folder')}</p>
-          </div> : Array.from(groups, ([id, group]) => <details className={css.group} key={id} open>
-            <summary><ChevronDown size={15} /><strong>{group.title}</strong><span>{t(`${group.mails.length} 封`, `${group.mails.length} messages`)}</span></summary>
-            <ul>{group.mails.map(item => <li className={css.messageRow} key={item.id}>
-              {canBatch && <input className={css.rowSelect} type="checkbox" aria-label={t(`选择 ${item.subject}`, `Select ${item.subject}`)}
-                checked={selectedRows.has(item.id)} disabled={bulkBusy} onChange={event => toggleRow(item.id, event.target.checked)} />}
-              <button className={css.row} type="button" data-mail-id={item.id} disabled={bulkBusy} onClick={() => {
+          </div> : view === 'cards' ? <ul className={css.cardGrid}>
+            {visible.map(item => <MailCard key={item.id} item={item} canBatch={canBatch} selected={selectedRows.has(item.id)}
+              disabled={bulkBusy} t={t} locale={settings.locale} onToggle={toggleRow} onOpen={id => {
                 setMail(undefined)
-                setSelectedId(item.id)
-              }}>
-                <span className={css.messageDot} data-actionable={item.actionable || undefined} aria-hidden="true" />
-                <span className={css.rowText}><span className={css.rowSubject}><strong>{item.subject}</strong><MailType kind={item.kind} /></span>
-                  {item.snippet && <span className={css.snippet}>{item.snippet}</span>}</span>
-                <span className={css.rowSide}>
-                  <time dateTime={new Date(item.createdAt).toISOString()}>{mailTime(item.snoozedUntil ?? item.createdAt, settings.locale)}</time>
-                  {item.resolution && <span>{t(...resolutions[item.resolution])}</span>}
-                  {item.folder === 'archived' && item.actionable && <span>{t('仍待处理', 'Still open')}</span>}
-                </span>
-              </button>
-            </li>)}</ul>
+                setSelectedId(id)
+              }} />)}
+          </ul> : Array.from(groups, ([id, group]) => <details className={css.group} key={id} open>
+            <summary><ChevronDown size={15} /><strong>{group.title}</strong><span>{t(`${group.mails.length} 封`, `${group.mails.length} messages`)}</span></summary>
+            <ul className={css.cardGrid}>
+              {group.mails.map(item => <MailCard key={item.id} item={item} canBatch={canBatch} selected={selectedRows.has(item.id)}
+                disabled={bulkBusy} t={t} locale={settings.locale} onToggle={toggleRow} onOpen={id => {
+                  setMail(undefined)
+                  setSelectedId(id)
+                }} />)}
+            </ul>
           </details>)}
         </div> : !listError && <p role="status" className={css.loading}>{t('正在读取收件箱…', 'Loading inbox…')}</p>}
       </div>

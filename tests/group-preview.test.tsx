@@ -38,21 +38,24 @@ function turn(tag: string, durationMs?: number): ChatMessage[] {
 describe('work group disclosure', () => {
   it('shows only the work title while folded and keeps the final answer outside of the work group', () => {
     render(<Transcript messages={turn('one', 548_000)} policy={presentationPolicyFor('standard')} />)
-    const header = screen.getByRole('button', { name: '已工作 9 分 8 秒' })
+    const header = screen.getByRole('button', { name: /^已工作/ })
     const body = document.getElementById(header.getAttribute('aria-controls') ?? '')
 
     expect(header.getAttribute('aria-expanded')).toBe('false')
     expect(header.textContent).toBe('已工作 9 分 8 秒')
     expect(header.getAttribute('aria-describedby')).toBeNull()
     expect(body?.getAttribute('aria-hidden')).toBe('true')
+    // 中间正文（prose）现在渲染在折叠区外，与用户输入同层左对齐。
+    expect(screen.getAllByText(prose)).toHaveLength(1)
+    expect(body?.textContent).not.toContain(prose)
     expect(screen.getAllByText(answer)).toHaveLength(1)
     expect(body?.textContent).not.toContain(answer)
 
     fireEvent.click(header)
 
     expect(header.getAttribute('aria-expanded')).toBe('true')
-    expect(body?.textContent).toContain(prose)
     expect(body?.getAttribute('aria-hidden')).toBe('false')
+    expect(screen.getAllByText(prose)).toHaveLength(1)
     expect(screen.getAllByText(answer)).toHaveLength(1)
   })
 
@@ -81,7 +84,9 @@ describe('work group disclosure', () => {
         status: 'completed', durationMs: 3000, blocks: [{ type: 'text', text: '两个文件均已检查。' }] },
     ]
     const { rerender } = render(<Transcript messages={messages} conversationId="steered" running />)
-    const header = screen.getByRole('button', { name: /^工作中/ })
+    // 运行中折叠头的可访问名是统计文案或当前动作；「工作中 X」在回合尾。
+    const header = screen.getByRole('button', { name: /查阅|执行|正在/ })
+    expect(screen.getByRole('status', { name: '加载中' }).textContent).toContain('工作中')
     const [firstId, secondId] = header.getAttribute('aria-controls')!.split(' ')
     const before = document.getElementById(firstId!)!
     const after = document.getElementById(secondId!)!
@@ -132,10 +137,17 @@ describe('work group disclosure', () => {
     ]
     render(<Transcript messages={messages} policy={presentationPolicyFor('standard')} />)
     fireEvent.click(screen.getByRole('button', { name: '已工作 1 秒' }))
-    const body = document.querySelector<HTMLElement>('[data-work-list]')!
-    const [firstGroup, narration, secondGroup] = Array.from(body.children) as HTMLElement[]
-    expect(body.children).toHaveLength(3)
-    expect(narration.textContent).toBe('环境已确认，现在检查配置。')
+    // 中间正文把过程切成两段，各自一个折叠区（ZCode 的 flowItems 口径）。
+    const sections = [...document.querySelectorAll<HTMLElement>('[data-process-section]')]
+    expect(sections).toHaveLength(2)
+    const lists = sections.map(section => section.querySelector<HTMLElement>('[data-work-list]')!)
+    const [firstGroup] = [...lists[0]!.children] as HTMLElement[]
+    const [secondGroup] = [...lists[1]!.children] as HTMLElement[]
+    // 中间正文（narration）渲染在折叠区外，与用户输入同层全宽。
+    const narration = screen.getAllByText('环境已确认，现在检查配置。')
+    expect(narration).toHaveLength(1)
+    expect(narration[0]!.closest('[aria-hidden="true"]')).toBeNull()
+    expect(narration[0]!.closest('[data-process-inline-text]')).not.toBeNull()
     for (const [group, title] of [[firstGroup, '已执行 1 命令'], [secondGroup, '已查阅 1 项']] as const) {
       expect(group.hasAttribute('data-work-step-group')).toBe(true)
       const toggle = within(group).getByRole('button', { name: title })
@@ -146,7 +158,7 @@ describe('work group disclosure', () => {
       expect(steps.textContent).toMatch(/^思考/u)
       expect(within(steps).getByRole('button', { name: '思考' })).toBeTruthy()
     }
-    expect(body.textContent).not.toContain('配置检查完毕。')
+    // 最终答案在回复区，不在任何折叠区内。
     expect(screen.getAllByText('配置检查完毕。')).toHaveLength(1)
   })
 
@@ -172,25 +184,28 @@ describe('work group disclosure', () => {
     expect(screen.queryByRole('button', { name: '已查阅 1 项，已执行 1 命令' })).toBeNull()
 
     fireEvent.click(header)
-    const body = document.querySelector<HTMLElement>('[data-work-list]')!
-    const [reasoningRow, narration, stepGroup] = [...body.children]
+    // 正文「我先读文件并运行测试。」把过程切成两段，折叠区外全宽渲染。
+    const narration = screen.getAllByText('我先读文件并运行测试。')
+    expect(narration).toHaveLength(1)
+    expect(narration[0]!.closest('[data-process-inline-text]')).not.toBeNull()
+    const reasoningRow = document.querySelector<HTMLElement>('[data-process-leading-icon]')?.parentElement
     expect(reasoningRow?.querySelector('[data-process-leading-icon]')).not.toBeNull()
     expect(reasoningRow?.textContent).toContain('思考')
-    expect(narration?.textContent).toBe('我先读文件并运行测试。')
-    expect(stepGroup?.hasAttribute('data-work-step-group')).toBe(true)
-    const stepsToggle = within(stepGroup as HTMLElement).getByRole('button', { name: '已查阅 1 项，已执行 1 命令' })
+    const stepGroup = document.querySelector<HTMLElement>('[data-work-step-group]')
+    expect(stepGroup).not.toBeNull()
+    const stepsToggle = within(stepGroup!).getByRole('button', { name: '已查阅 1 项，已执行 1 命令' })
     expect(stepsToggle.getAttribute('aria-expanded')).toBe('false')
 
     fireEvent.click(stepsToggle)
     const details = document.getElementById(stepsToggle.getAttribute('aria-controls') ?? '')
     expect(details?.textContent).toMatch(/已读取.*a\.ts.*思考.*已执行.*npm test/u)
     expect(screen.getAllByText('已完成验证。')).toHaveLength(1)
-    expect(body.textContent).not.toContain('已完成验证。')
+    expect(details?.textContent).not.toContain('已完成验证。')
   })
 
-  // 运行中收起时，折叠头两行换成「当前动作行」+「工作中 X」，动作行随执行中的工具切换；
-  // 展开或完成后不出现这一行。
-  it('shows the running action row above the working title while collapsed', () => {
+  // 运行中折叠头承载统计文案（或收起时的当前动作），「工作中 X」在回合尾的指示条；
+  // 动作行随执行中的工具切换，完成后不再出现。
+  it('shows the current action in the header and the working timer at the turn tail', () => {
     const messages: ChatMessage[] = [
       { id: 'user-live', role: 'user', requestId: 'req-live', timestamp: 1000, blocks: [{ type: 'text', text: '跑测试' }] },
       { id: 'work-live', role: 'assistant', runId: 'run-live', timestamp: 1030, streaming: true, blocks: [
@@ -208,18 +223,21 @@ describe('work group disclosure', () => {
     expect(workList.children).toHaveLength(1)
     expect(workList.firstElementChild?.hasAttribute('data-work-step-group')).toBe(true)
     expect(workList.firstElementChild?.textContent).toMatch(/思考.*npm test/u)
-    const header = screen.getByRole('button', { name: /^工作中/ })
 
-    // live 组默认展开；手动收起后才显示动作行。
+    // live 组默认展开：折叠头显示统计文案，展开时不显示当前动作行。
+    const header = screen.getByRole('button', { name: /已执行|已查阅|工具调用/ })
     expect(header.getAttribute('aria-expanded')).toBe('true')
-    expect(header.querySelector('[data-current-work]')).toBeNull()
+    expect(header.querySelector('[class*="currentWorkLabel"]')).toBeNull()
 
+    // 收起后整行换成当前动作（ZCode 的 tail 组行为）。
     fireEvent.click(header)
     expect(header.getAttribute('aria-expanded')).toBe('false')
-    const currentWork = header.querySelector('[data-current-work]')
-    expect(currentWork?.textContent).toContain('正在执行')
-    expect(currentWork?.textContent).toContain('npm test')
-    expect(header.textContent).toContain('工作中')
+    expect(header.textContent).toContain('正在执行')
+    expect(header.textContent).toContain('npm test')
+    // 「工作中 X」在回合尾的指示条，不在折叠头。
+    const indicator = screen.getByRole('status', { name: '加载中' })
+    expect(indicator.textContent).toContain('工作中')
+    expect(header.textContent).not.toContain('工作中')
 
     fireEvent.click(header)
     const reasoning = screen.getByRole('button', { name: '思考' })
@@ -237,7 +255,8 @@ describe('work group disclosure', () => {
     expect(screen.getByRole('button', { name: /^已工作/ })).toBe(header)
     expect(header.getAttribute('aria-expanded')).toBe('false')
     expect(document.activeElement).toBe(header)
-    expect(header.querySelector('[data-current-work]')).toBeNull()
+    expect(header.querySelector('[class*="currentWorkLabel"]')).toBeNull()
+    expect(screen.queryByRole('status', { name: '加载中' })).toBeNull()
     expect(screen.getAllByText('测试完成。')).toHaveLength(1)
 
     fireEvent.click(header)
