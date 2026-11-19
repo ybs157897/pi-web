@@ -585,12 +585,15 @@ export function createConversations(deps: ConversationsDeps) {
     const files = attachmentReferences(data?.files)
     const metadata = await ensureMetadata(source.id)
     const workspace = selectedWorkspace(metadata.workspaceId ?? undefined)
+    await assertConversationModelAllowed(source)
+    const agent = await source.agent(CTX)
     let child: Awaited<ReturnType<typeof source.fork>>
     const previousEntry = history.items[userIndex + 1]
     if (previousEntry) {
       child = await source.fork(previousEntry.id, { ownership: { kind: 'ownerless' } }, CTX)
+      // Retry uses the model currently chosen for the source conversation, including a repair after a provider failure.
+      await child.configure({ model: agent.model, thinkingLevel: agent.thinkingLevel }, CTX)
     } else {
-      const agent = await source.agent(CTX)
       const change: AgentChange = {
         cwd: workspace.path,
         extensions: agent.extensions,

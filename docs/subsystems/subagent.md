@@ -11,7 +11,7 @@
 - `general-purpose`（默认）：继承父会话的工作工具面，适合实现、修复和复杂多步调研。
 - `Explore`：只读检索。工具面收窄为 `EXPLORE_TOOLS`（`read / glob / grep / list_files / search_files`，[subagent-policy.ts:29](../../src/server/conversation/subagent-policy.ts)）与父工具取交集；父会话没有 `read` 路由时报错拒绝；当 `read` 只能经 codemode 路由时保留 `codemode` 本身（[subagent.ts:135](../../src/server/tools/subagent.ts)）。
 
-所有委派子会话（无论 profile）在暴露与执行两层都被剥夺计划、问答、目标、委派与团队工具（`CHILD_FORBIDDEN_TOOLS` 加 `team_task_*` 前缀，[subagent-policy.ts:31](../../src/server/conversation/subagent-policy.ts)）——委派只有一层，子会话不能再委派。
+普通委派子会话在暴露与执行两层禁用计划、问答、目标、委派与团队工具（`CHILD_FORBIDDEN_TOOLS` 加 `team_task_*` 前缀，[subagent-policy.ts](../../src/server/conversation/subagent-policy.ts)）。[工作台](workbench.md)以专用身份允许必要裁决。委派子会话不能再委派。
 
 ## 委派契约与提示词裁剪
 

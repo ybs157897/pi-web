@@ -81,7 +81,7 @@
 .panelFoot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: .5px solid var(--dsw-alias-border-l1); }
 
 /* Editor fields */
-.editor { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; border: 0; }
+.editor { display: flex; min-inline-size: 0; flex-direction: column; gap: 14px; margin: 0; padding: 0; border: 0; }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .instruction { box-sizing: border-box; width: 100%; min-height: 96px; border: .5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); padding: 8px 10px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; resize: vertical; }
 .instruction:focus { outline: 1px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -123,6 +123,7 @@
   .listPane { width: auto; border-right: 0; border-bottom: .5px solid var(--dsw-alias-border-l1); padding: 8px 16px; }
   .detail { padding-bottom: 8px; }
   .empty { position: static; padding: 32px 16px; }
-  .panel { width: auto; border-left: 0; }
+  .panel { width: 100%; min-width: 0; border-left: 0; }
+  .page[data-panel] > :is(.pageHead, .body) { visibility: hidden; }
 }
 @media (prefers-reduced-motion: reduce) { .skeleton i { animation: none; } }

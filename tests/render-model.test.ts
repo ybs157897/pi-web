@@ -627,8 +627,8 @@ describe('codemode row model', () => {
       output: '2 files',
     }, zh)
     expect(model).toEqual({
-      title: '代码',
-      summary: "const files = await tools.glob({ pattern: '*.ts' })",
+      title: '已运行脚本',
+      summary: '调用了 4 项工具，其中 1 项失败',
       script,
       output: '2 files',
       calls: [
@@ -641,14 +641,14 @@ describe('codemode row model', () => {
     })
   })
 
-  it('falls back to the ordinary tool card without a call list and ignores other tools', () => {
-    // 纯调用行尚无结果 details：通用卡保持原始 JSON 可见。
-    expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: undefined, output: '' }, zh)).toBeNull()
-    expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: { calls: 'nope' }, output: '' }, zh)).toBeNull()
+  it('keeps the script in details when the call list is unavailable and ignores other tools', () => {
+    expect(codemodeRowModel({ name: 'codemode', args: { code: script }, details: undefined, output: '' }, zh))
+      .toMatchObject({ script, summary: '', calls: [] })
+    expect(codemodeRowModel({ name: 'codemode', args: {}, details: { calls: 'nope' }, output: '' }, zh)).toBeNull()
     expect(codemodeRowModel({ name: 'bash', args: {}, details: { calls: [] }, output: '' }, zh)).toBeNull()
   })
 
-  // 验证结果侧读取：args 缺 code 时摘要用输出文本；details 为 JSON 字符串时同样解析出调用列表。
+  // 验证结果侧读取：args 缺 code 时也按调用列表展示摘要。
   it('reads result-only records and a JSON-string details payload', () => {
     const model = codemodeRowModel({
       name: 'codemode',
@@ -656,7 +656,7 @@ describe('codemode row model', () => {
       output: 'Script failed after 1.2s',
       details: JSON.stringify({ calls: [{ id: 7, name: 'read', args: { path: 'x' }, status: 'ok' }] }),
     }, zh)
-    expect(model).toMatchObject({ title: '代码', summary: 'Script failed after 1.2s', script: '', output: 'Script failed after 1.2s' })
+    expect(model).toMatchObject({ title: '已运行脚本', summary: '调用了 1 项工具', script: '', output: 'Script failed after 1.2s' })
     expect(model?.calls).toEqual([{ id: '7', name: 'read', args: '{"path":"x"}', status: 'ok' }])
     expect(model?.fullOutputPath).toBeUndefined()
   })
@@ -672,7 +672,7 @@ describe('codemode row model', () => {
     expect(model?.calls).toEqual([{ id: '1', name: 'ok', args: '', status: 'ok' }])
   })
 
-  it('carries the code-mode title, script live detail, and failure text into the generic row model', () => {
+  it('presents a script failure without exposing its JavaScript or stack in the row summary', () => {
     const callItem = (result?: Partial<ChatMessage>): ToolItem => {
       const message = assistant('call-message:codemode', [{ type: 'toolCall', id: 'call:codemode', name: 'codemode', arguments: { code: script } }])
       return {
@@ -686,11 +686,12 @@ describe('codemode row model', () => {
         order: 0,
       }
     }
-    // 纯调用行还没有 details：通用卡仍以"代码"为标题、脚本首行为摘要。
-    expect(buildToolRenderModel(callItem(), zh, false))
-      .toMatchObject({ title: '代码', summary: "const files = await tools.glob({ pattern: '*.ts' })" })
-    expect(buildToolRenderModel(callItem({ blocks: [{ type: 'text', text: 'Script failed' }], isError: true }), zh, false))
-      .toMatchObject({ title: '代码', failed: true, errorText: 'Script failed' })
+    expect(buildToolRenderModel(callItem(), zh, true))
+      .toMatchObject({ title: '正在运行脚本', summary: '' })
+    expect(buildToolRenderModel(callItem({
+      blocks: [{ type: 'text', text: 'Script failed\nWall time 0.2 seconds\nOutput:\nScript error:\nTypeError: Unsupported argument\n    at run (eval.js:1)' }],
+      isError: true,
+    }), zh, false)).toMatchObject({ title: '脚本执行失败', failed: true, summary: '', failureReason: '脚本遇到了不兼容的值或参数' })
   })
 })
 
@@ -717,7 +718,7 @@ describe('MCP tool rows', () => {
     // 其他工具保留 DSH 标题；非 MCP 形态的名字不改写。命令行的完成态动词对齐 ZCode。
     expect(toolRowTitle('bash', zh)).toBe('已执行')
     expect(toolRowTitle('bash', zh, true)).toBe('正在执行')
-    expect(toolRowTitle('codemode', zh)).toBe('代码')
+    expect(toolRowTitle('codemode', zh)).toBe('已运行脚本')
     expect(toolRowTitle('mcp_server', zh)).toBe('工具调用')
     // Pi 的 codemode 与 DSH 的 run_code 同属"code"活动类别。
     expect(toolActivity('codemode')).toBe('code')

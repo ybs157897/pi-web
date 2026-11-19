@@ -3,6 +3,8 @@ import type { HooksEntryInput, HooksSaveInput, HooksTrustInput } from './runtime
 import type { MutableModels } from '@earendil-works/pi-ai'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
+import type { CreateWorkbenchBotInput, UpdateWorkbenchBotInput, WorkbenchAgent, WorkbenchReplyInput, WorkbenchRetryInput, WorkbenchSubmitInput, WorkbenchView } from '../shared/workbench.ts'
+import type { DecisionInbox } from './runtime/decision-inbox.ts'
 import type {
   AddWorkspaceInput,
   AccessMode,
@@ -67,6 +69,13 @@ export interface Runtime {
   detail(id: string): Promise<ConversationDetail>
   update(id: string, input: UpdateConversationInput): Promise<ConversationDetail>
   submit(id: string, input: SubmitInput): Promise<{ submissionId: string }>
+  workbench(workspaceId: string): Promise<WorkbenchView>
+  createWorkbenchBot(workspaceId: string, input: CreateWorkbenchBotInput): Promise<WorkbenchAgent>
+  updateWorkbenchBot(workspaceId: string, botId: string, input: UpdateWorkbenchBotInput): Promise<WorkbenchAgent>
+  submitWorkbench(workspaceId: string, input: WorkbenchSubmitInput): Promise<{ requestId: string }>
+  replyWorkbench(workspaceId: string, itemId: string, input: WorkbenchReplyInput): Promise<{ submissionId: string }>
+  retryWorkbench(workspaceId: string, input: WorkbenchRetryInput): Promise<{ ok: true }>
+  decisionInbox: DecisionInbox
   /** 回答一条待回答的提问调用；结算会话文档并把答复作为引导消息注入。 */
   answerInteraction(id: string, callId: string, answers: AskUserQuestionAnswerItem[]): Promise<ConversationDetail>
   /** 不作答直接关闭一条待回答的提问调用；注入关闭引导并把调用结算为 cancelled。 */
@@ -117,6 +126,7 @@ export interface Runtime {
   openConfigFile(): Promise<void>
   workspaces(): WorkspaceSummary[]
   addWorkspace(input: AddWorkspaceInput): Promise<WorkspaceSummary>
+  createNamedWorkspace(name: string, requestId: string): Promise<WorkspaceSummary>
   renameWorkspace(id: string, input: RenameWorkspaceInput): Promise<WorkspaceSummary>
   deleteWorkspace(id: string): Promise<void>
   /** 调起操作系统选择目录；null 表示操作者取消。 */

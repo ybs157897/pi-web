@@ -27,20 +27,13 @@
 }
 
 .accessories { display: inline-flex; flex: none; align-items: center; gap: 8px; }
-.statusFailed,
 .statusStopped {
   flex: none;
   color: var(--message-muted);
   font-size: calc(var(--message-font) - 1px);
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-  cursor: help;
   white-space: nowrap;
 }
-/* 失败要比普通次要文案醒目一级；停止是中性态，维持 muted。 */
-.statusFailed { color: var(--message-danger); }
-.statusStopped { cursor: default; text-decoration: none; }
 .subagentStatus { flex: none; color: var(--message-muted); font-size: calc(var(--message-font) - 1px); line-height: calc(24px + var(--dsh-content-font-delta, 0px)); white-space: nowrap; }
 
 .sep {
@@ -52,12 +45,33 @@
   background: var(--dsw-alias-label-caption);
 }
 
-.failedSummary {
+.failureSummary {
+  display: inline-flex;
   min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+}
+
+.failureTarget {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  color: var(--dsw-alias-state-error-primary);
+  color: var(--message-subtle);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.failureReason {
+  min-width: 0;
+  color: var(--message-danger);
+  overflow-wrap: anywhere;
+}
+
+.failureTarget + .failureReason::before {
+  margin-inline-end: 5px;
+  color: var(--message-muted);
+  content: '·';
 }
 
 .stoppedSummary {
@@ -119,13 +133,8 @@
   font-size: 12px;
 }
 
-.errorLabel,
 .stoppedLabel {
   font-size: 12px;
-}
-
-.errorLabel {
-  color: var(--dsw-alias-state-error-primary);
 }
 
 .stoppedLabel {

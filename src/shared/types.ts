@@ -1,3 +1,5 @@
+import type { ConversationFailure, ConversationRetry } from './conversation-failure.ts'
+
 /** Browser-facing values. Provider credentials never enter this protocol. */
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type AccessMode = 'readOnly' | 'workspaceWrite' | 'fullAccess'
@@ -695,6 +697,8 @@ export interface ConversationDetail {
   team?: TeamView
   compaction?: CompactionView
   error?: string
+  failure?: ConversationFailure
+  retry?: ConversationRetry
   usage?: { input: number; output: number; totalCost: number }
 }
 /** One direct child conversation: DSH's `subagentCatalog` row plus the child's latest answer. */
@@ -841,4 +845,4 @@ export type QueueActionInput = EditQueueInput
 export interface RetryInput { entryId: string; requestId: string }
 export interface RetryResult { conversationId: string; submissionId: string }
 export interface FeedbackInput { entryId: string; rating: 'up' | 'down' | null }
-export interface ApiError { error: string; code?: string }
+export interface ApiError { error: string; code?: string; failure?: ConversationFailure }

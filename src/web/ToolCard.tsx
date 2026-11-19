@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ImageLightbox, JsonBlock, StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { SquareTerminal, Search, Pencil, FilePlus2, Globe, Braces, Bot, ListTodo, CircleHelp, Sparkles, Ellipsis, WandSparkles } from 'lucide-react'
+import { SquareTerminal, Search, Pencil, FilePlus2, FolderTree, Globe, Braces, Bot, ListTodo, CircleHelp, Sparkles, Ellipsis, WandSparkles } from 'lucide-react'
 import type { ContentBlock, InteractionRequest } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage } from '../shared/plugin-ui.ts'
 import type { InspectorDiff } from './Inspector.tsx'
@@ -10,7 +10,7 @@ import type { PlanDocument } from './plan-preview.ts'
 import type { ToolItem } from './render-model.ts'
 import { type Translate } from './render-labels.ts'
 import {
-  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, skillRowModel, subagentRowModel,
+  askQuestionRowModel, buildToolRenderModel, codemodeRowModel, compactToolPath, skillRowModel, subagentRowModel,
   type AskQuestionRecord, type CodemodeCallStatus, type CodemodeRowModel, type LateAnswer, type SkillRowModel,
 } from './tool-render-model.ts'
 import { useUiPreferences } from './ui-preferences.tsx'
@@ -25,6 +25,7 @@ import { MessageCodeBlock } from './message-rendering/CodeBlock.tsx'
 import { CodeViewer } from './message-rendering/CodeViewer.tsx'
 import { MessageFileIcon } from './message-rendering/FileIcon.tsx'
 import { ToolDiff, toolDiffLines } from './message-rendering/ToolDiff.tsx'
+import { readableToolOutput } from './tool-failure-presentation.ts'
 import css from './ToolCard.module.css'
 
 interface ToolCardProps {
@@ -137,16 +138,17 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const subagentPrimary = subagent === null ? undefined
     : [subagent.label, subagent.task === undefined || subagent.task === '' ? undefined : t('任务：', 'Task: ') + subagent.task]
       .filter((part): part is string => part !== undefined && part !== '').join(' · ') || subagent.summary
-  const subagentStatus = subagent === null ? undefined
-    : model.failed ? t('失败', 'Failed') : model.cancelled ? t('已停止', 'Stopped') : model.running ? t('运行中', 'Running') : t('已完成', 'Finished')
+  const subagentStatus = subagent === null || model.failed ? undefined
+    : model.cancelled ? t('已停止', 'Stopped') : model.running ? t('运行中', 'Running') : t('已完成', 'Finished')
+  const output = model.failed ? readableToolOutput(model.output) : model.output
   // A code-mode result carries its script's nested calls, so the row shows the script,
   // the calls it made, and the result text instead of a generic arguments JSON dump.
   const codemode = useMemo(() => codemodeRowModel({
     name: model.name,
     args: model.args,
     details: model.details,
-    output: model.output,
-  }, t), [model, t])
+    output,
+  }, t), [model, output, t])
   // ZCode's Skill card replaces the raw arguments and details dump with the skill id,
   // its optional resource, and the loaded text.
   const skill = useMemo(() => skillRowModel({
@@ -178,38 +180,41 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   const hasChildren = visibleChildren.length > 0
   const fileRead = model.read !== undefined && model.path !== undefined && onOpenFile !== undefined && !model.failed && !model.cancelled && !hasChildren && !(item.result?.blocks.some(block => block.type === 'image' || block.type === 'file'))
   // ZCode's read/search rows are summary-only; a listing keeps its result behind the disclosure.
-  const readOnlySummary = /^(find_files|find|glob|grep|ripgrep|search)$/u.test(model.name.toLocaleLowerCase())
+  const readOnlySummary = /^(find_files|find|glob|grep|ripgrep|search|search_files)$/u.test(model.name.toLocaleLowerCase())
   const listingRow = model.name.toLocaleLowerCase() === 'list_files'
-  const summaryOnly = fileRead || subagent !== null || (model.search !== undefined || model.web !== undefined || readOnlySummary) && !model.failed && !model.cancelled && !hasChildren
-  const expandable = ask !== null ? ask.record !== null : !summaryOnly && (hasResult || hasArgs || hasDetails || hasChildren || model.artifacts.length > 0)
+  const summaryOnly = fileRead || subagent !== null || !listingRow && (model.search !== undefined || model.web !== undefined || readOnlySummary)
+    && !model.failed && !model.cancelled && !hasChildren
+  const hasToolDetails = hasResult || hasArgs || hasDetails || hasChildren || model.artifacts.length > 0
+  const expandable = model.failed ? hasToolDetails : ask !== null ? ask.record !== null : !summaryOnly && hasToolDetails
   const icon = ask !== null ? <CircleHelp size={16} />
     : codemode !== null ? <Braces size={16} /> : skill !== null ? <WandSparkles size={16} /> : toolIcon(model.name)
-  const summary = ask !== null ? ask.summary : subagent !== null ? (subagentPrimary ?? subagent.summary)
-    : codemode !== null ? codemode.summary : skill !== null ? (skill.skill ?? model.summary)
-      : model.command !== undefined ? model.command.replace(/\s+/gu, ' ').trim() : model.summary
-  const diagnostics = ask !== null && model.failed ? <span className={css.failedSummary}>{ask.summary}</span>
-    : subagent !== null && model.failed ? <span className={css.failedSummary}>{t('子智能体未返回答案', 'The subagent returned no answer')}</span>
-      : skill !== null && skill.skill !== undefined
-        ? <code className={css.skillRowName}>{skill.resource === undefined ? skill.skill : `${skill.skill} · ${skill.resource}`}</code>
-        : <span>{plan === undefined ? summary : t('计划 · Markdown', 'Plan · Markdown')}</span>
-  // ZCode keeps the failure/stop word at the end of the row; the detail lives in its tooltip.
-  const statusAccessory = ask === null && subagent === null && model.failed
-    ? <span className={css.statusFailed} title={model.errorText}>{t('执行失败', 'Failed')}</span>
-    : ask === null && subagent === null && model.cancelled
-      ? <span className={css.statusStopped}>{t('已停止', 'Stopped')}</span>
-      : undefined
-  const title = ask !== null ? ask.title : subagent !== null ? subagent.title
-    : codemode !== null ? codemode.title
-      : skill !== null ? skill.title
-        : plan === undefined || model.failed || model.cancelled ? model.title : planHeading(plan) ?? model.title
+  const normalSummary = ask?.summary ?? subagentPrimary ?? subagent?.summary ?? skill?.skill ?? model.summary
+  const target = model.failed ? model.summary || subagent?.label : undefined
+  const failureReason = model.failureReason ?? (
+    subagent !== null ? t('子智能体未返回答案', 'The subagent returned no answer')
+      : output.trim() !== '' || hasDetails
+        ? t('原因见工具详情', 'See tool details for the cause')
+        : t('工具未提供具体原因', 'The tool gave no specific reason')
+  )
+  const diagnostics = model.failed ? <span className={css.failureSummary}>
+    {target && <span className={css.failureTarget} title={model.path}>{target}</span>}
+    <span className={css.failureReason}>{failureReason}</span>
+  </span> : skill?.skill !== undefined
+    ? <code className={css.skillRowName}>{skill.resource === undefined ? skill.skill : `${skill.skill} · ${skill.resource}`}</code>
+    : normalSummary !== '' ? <span>{plan === undefined ? normalSummary : t('计划 · Markdown', 'Plan · Markdown')}</span> : null
+  const statusAccessory = ask === null && subagent === null && model.cancelled
+    ? <span className={css.statusStopped}>{t('已停止', 'Stopped')}</span>
+    : undefined
+  const planTitle = plan !== undefined && !model.cancelled ? planHeading(plan) : undefined
+  const title = model.failed ? model.title : ask?.title ?? subagent?.title ?? skill?.title ?? planTitle ?? model.title
   const outputCard = model.command !== undefined ? (
-    <ProcessTerminal command={model.command} cwd={model.cwd} output={model.output}
+    <ProcessTerminal command={model.command} cwd={model.cwd} output={output}
       {...model.exitCode === undefined ? {} : { exitCode: model.exitCode }}
       {...model.signal === undefined ? {} : { signal: model.signal }}
-      running={model.running} t={t} />
+      running={model.running && !model.failed} t={t} />
   ) : model.read !== undefined ? (
     fileRead ? null : <div className={css.fileContent}><CodeViewer code={model.read.lines.map(line => line.text).join('\n')} language={model.language} lineNumbers /></div>
-  ) : model.diffs !== undefined ? (
+  ) : model.diffs !== undefined && !model.failed ? (
     <ToolDiff diffs={model.diffs} t={t} />
   ) : null
   const hasOutputCard = outputCard !== null
@@ -217,7 +222,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A recorded question pair replaces the row's own I/O card the way DSH's
   // transcript card does; the raw arguments and details stay available below.
   const record = ask?.record ?? null
-  const resultText = !hasOutputCard && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && model.output !== '' ? model.output : ''
+  const resultText = !hasOutputCard && (model.failed || ask === null && subagent === null) && codemode === null && skill === null && !pluginUiPresented ? output : ''
   const sourceMessage = item.call === undefined ? item.result ?? item.message : item.message
   const toolImages = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'image' }> => block.type === 'image') ?? []
   const toolFiles = item.result?.blocks.filter((block): block is Extract<ContentBlock, { type: 'file' }> => block.type === 'file') ?? []
@@ -227,7 +232,8 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
   // A code-mode call's argument is the script, shown by its own card instead of raw JSON.
   // The question row's record replaces its raw I/O the way ZCode's ask row does; the
   // arguments and details stay available through the inspect button.
-  const argsPayload = hasArgs && unknownPayload && plan === undefined && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented
+  const showArguments = model.failed || listingRow || (unknownPayload && plan === undefined && ask === null && subagent === null)
+  const argsPayload = hasArgs && showArguments && codemode === null && skill === null && !pluginUiPresented
     ? model.args : undefined
   // DSH's plan card is one button: icon, plan title, "计划 · Markdown", and "打开"
   // (`ui-plan/src/client/PlanCard.tsx:48-57`, copy `locales.ts:7-11`).
@@ -246,10 +252,11 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
     else if (model.read?.line !== undefined) onOpenFile(model.path, model.read.line)
     else onOpenFile(model.path)
   }
+  const directory = model.path === undefined ? undefined : directoryOf(model.path)
   const fileSummary = (fileRead || model.diffs !== undefined) && model.path && !model.failed && !model.cancelled ? <span className={css.fileSummary}>
     {onOpenFile ? <button type="button" className={css.fileChip} title={model.path} onClick={openToolFile}><MessageFileIcon path={model.path} /><span>{model.path.split(/[/\\]/u).at(-1)}</span></button>
       : <span className={css.fileChip}><MessageFileIcon path={model.path} /><span>{model.path.split(/[/\\]/u).at(-1)}</span></span>}
-    {directoryOf(model.path) !== undefined && <span className={css.directory}>{directoryOf(model.path)}</span>}
+    {directory !== undefined && <span className={css.directory}>{compactToolPath(directory)}/</span>}
     {model.diffs && <span className={css.diffCounts}>{(() => { const lines = model.diffs.flatMap(diff => toolDiffLines(diff.oldText, diff.newText)); return <><span>+{lines.filter(line => line.kind === 'add').length}</span><span>−{lines.filter(line => line.kind === 'remove').length}</span></> })()}</span>}
   </span> : undefined
   const inspectButton = inspect === undefined ? undefined
@@ -268,15 +275,17 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
         title={title}
         open={open}
         expandable={expandable}
-        running={model.running}
+        running={model.running && !model.failed}
         accessory={accessory}
         onActivate={subagentOpen}
         interactiveSummary={fileSummary !== undefined}
-        keepSummaryWhenOpen={fileSummary !== undefined || listingRow || skill !== null}
+        keepSummaryWhenOpen={fileSummary !== undefined || listingRow || skill !== null || model.failed}
+        alwaysShowChevron={model.failed}
+        wrapTitle={model.failed}
         toggleLabel={subagent !== null ? t('打开子智能体会话', 'Open subagent session')
-          : open ? t('收起工具详情', 'Collapse tool details') : t('展开工具详情', 'Expand tool details')}
+          : model.failed ? undefined : open ? t('收起工具详情', 'Collapse tool details') : t('展开工具详情', 'Expand tool details')}
         onToggle={() => { setOpen(value => !value) }}
-        summary={fileSummary ?? <span className={css.summary}>{diagnostics}</span>}
+        summary={fileSummary ?? (model.failed ? diagnostics : diagnostics !== null ? <span className={css.summary}>{diagnostics}</span> : null)}
       >
         <div className={css.body}>
           {planDocument !== undefined && planOpen !== undefined && (
@@ -293,7 +302,7 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
           )}
           {record !== null && <QuestionRecord record={record} t={t} />}
           {codemode !== null && <CodemodeBody row={codemode} onOpenFile={onOpenFile} t={t} />}
-          {skill !== null && <SkillBody skill={skill} output={model.output} running={model.running} failed={model.failed} cancelled={model.cancelled} t={t} />}
+          {skill !== null && <SkillBody skill={skill} output={output} running={model.running} failed={model.failed} cancelled={model.cancelled} t={t} />}
           {outputCard}
           {resultText !== '' && <pre className={css.output}>{resultText}</pre>}
           {toolImages.map((block, index) => <ToolImage key={`${item.key}:image:${index}`} block={block} />)}
@@ -307,9 +316,8 @@ export default function ToolCard({ item, runRunning, t, showIcon = true, replies
             && <div className={css.empty}>{t('工具没有返回可显示的内容', 'The tool returned no displayable content')}</div>}
           {argsPayload !== undefined && <JsonBlock label={t('调用参数', 'Call arguments')} payload={argsPayload}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
-          {hasDetails && !hasOutputCard && ask === null && subagent === null && codemode === null && skill === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
+          {hasDetails && (model.failed || !hasOutputCard && ask === null && subagent === null) && codemode === null && skill === null && !pluginUiPresented && <JsonBlock label={t('工具详情', 'Tool details')} payload={model.details}
             truncatedLabel={count => t(`内容过长，原始长度 ${count} 字符`, `Content too long (${count} characters)`)} />}
-          {model.failed && <div className={css.errorLabel} role="alert">{t('工具执行失败', 'Tool failed')}</div>}
           {model.cancelled && <div className={css.stoppedLabel} role="status">{t('工具已停止', 'Tool stopped')}</div>}
           {hasChildren && <div className={css.nestedTools}>
             {visibleChildren.map(child => <ToolCard key={child.key} item={child} runRunning={runRunning} replies={replies}
@@ -444,6 +452,7 @@ function openExternalLink(url: string): void {
 
 export function toolIcon(name: string) {  const normalized = name.toLowerCase()
   if (/^(bash|pwsh|shell|exec|exec_command|write_stdin|terminal|run_command)$/u.test(normalized)) return <SquareTerminal size={16} />
+  if (normalized === 'list_files') return <FolderTree size={16} />
   if (/^(read|read_file|readfile|cat|read_image)$/u.test(normalized) || /search|grep|glob|find/u.test(normalized)) return <Search size={16} />
   if (/write|create_file/u.test(normalized)) return <FilePlus2 size={16} />
   if (/edit|patch/u.test(normalized)) return <Pencil size={16} />
@@ -454,10 +463,10 @@ export function toolIcon(name: string) {  const normalized = name.toLowerCase()
   return <Sparkles size={16} />
 }
 
-/** The parent directory as ZCode shows it: normalized separators and a trailing slash. */
+/** Parent directory kept as secondary information next to the file name. */
 function directoryOf(path: string): string | undefined {
   const directory = path.split(/[/\\]/u).slice(0, -1).join('/')
-  return directory === '' ? undefined : `${directory}/`
+  return directory === '' ? undefined : directory
 }
 
 function ToolImage({ block }: { block: Extract<ContentBlock, { type: 'image' }> }) {

@@ -91,6 +91,15 @@ export function createExecutionPolicyExtension(installed: readonly Extension[]):
             if (plan?.active === true && !PLAN_TOOLS.has(tool.name)) {
               throw new Error(`Plan mode blocks ${tool.name}. Finish planning and wait for the user to leave Plan mode before implementation.`)
             }
+            if (identity?.workbench === true && tool.name === 'ask_user_question' && (args as { escalation?: unknown }).escalation == null) {
+              const message = '工作台子会话要在收件箱请求人工裁决，必须填写 escalation.reason 和 escalation.why。确需人来判断时带完整参数重试；有合理默认、可自行验证或仅需告知的事项，在当前会话继续处理。'
+              return {
+                isError: true,
+                output: [{ type: 'text' as const, text: message }],
+                details: { status: 'missing_escalation' },
+                diagnostics: [{ severity: 'error' as const, code: 'workbench_escalation_required', message }],
+              }
+            }
             if (plan?.active !== true && !identity) return tool.execute(args, api, context)
             // codemode 通过 api.agent() 发现嵌套工具，而非 provider 工具列表。
             return tool.execute(args, {

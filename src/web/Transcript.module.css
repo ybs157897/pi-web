@@ -186,11 +186,18 @@
   font-size: 12px;
 }
 
-.processGroup { min-width: 0; color: var(--message-subtle); }
-.processHeader { display: flex; width: 100%; min-width: 0; flex-direction: column; align-items: stretch; gap: 2px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--message-subtle); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
-.processHeader:disabled { cursor: default; }
+.processGroup {
+  min-width: 0;
+  --work-step-label: color-mix(in srgb, var(--message-fg) 84%, var(--message-background));
+  color: var(--work-step-label);
+}
+.processBody {
+  --message-muted: color-mix(in srgb, var(--message-fg) 68%, var(--message-background));
+  --message-subtle: var(--work-step-label);
+}
+.processHeader { display: flex; width: 100%; min-width: 0; flex-direction: column; align-items: stretch; gap: 2px; padding: 0 0 8px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--message-border) 50%, transparent); background: transparent; color: var(--work-step-label); font: inherit; font-size: var(--message-font); line-height: 1.5; text-align: left; cursor: pointer; }
 .processTitleRow { display: flex; min-width: 0; align-items: center; gap: 8px; }
-/* 第二行是 ZCode summary group 的统计条：图标 + 「已查阅 N 项，已执行 N 命令」。 */
+/* 运行中收起时的计时行；完成态只保留时长与开关。 */
 .processPreviewRow { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .processPreviewIcon { flex: none; color: var(--message-muted); }
 /* 运行中折叠头的当前动作行：图标 + 动词 + 文件 chip / 命令，位置在「工作中 X」之上。 */
@@ -214,10 +221,10 @@
 .processCollapse[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .processClip { overflow: hidden; min-height: 0; }
 .processBody, .processFlatBody { display: flex; min-width: 0; flex-direction: column; gap: 16px; padding-top: 20px; }
-/* ZCode 的工作列表：左侧竖线 + 缩进、行距收窄；展开后行头图标隐藏，动作由行文案表达。 */
-.processBody[data-work-list] { position: relative; gap: 8px; margin-left: 8px; padding-left: 16px; }
-.processBody[data-work-list]::before { content: ''; position: absolute; top: 20px; bottom: 2px; left: 0; border-left: 1px solid color-mix(in srgb, var(--message-border) 60%, transparent); }
-.processBody[data-work-list] :global([data-process-leading-icon]) { display: none; }
+.processUserInput { padding-block-start: 16px; }
+.workStepsRow { min-width: 0; }
+.workStepsList { display: flex; min-width: 0; flex-direction: column; gap: 8px; margin-inline-start: 8px; padding-inline-start: 15px; border-inline-start: 1px solid var(--message-border); }
+.workStepsList :global([data-process-leading-icon]) { display: none; }
 .processFlatBody { color: var(--message-muted); }
 .pinnedProcess { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 .processOutput { min-width: 0; color: var(--message-fg); }
@@ -334,7 +341,7 @@
   }
 
   .userBubble { max-width: min(calc(100% - 32px), 92%); }
-  .processBody { padding-left: 14px; }
+  .workStepsList { padding-inline-start: 10px; }
 }
 
 .compactionRunning {

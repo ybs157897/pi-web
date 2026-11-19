@@ -1,6 +1,7 @@
 import { Type } from '@earendil-works/pi-ai'
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools'
+import { workbenchFileEnv } from '../../conversation/execution-env.ts'
 import { executePosixBash } from './posix.ts'
 import { DEFAULT_COMMAND_TIMEOUT_SECONDS } from './common.ts'
 import { MAX_YIELD_TIME_MS, MIN_YIELD_TIME_MS, SHELL_OUTPUT_SCHEMA, YIELD_TIME_MS } from './runner.ts'
@@ -43,6 +44,36 @@ const bashTool = defineTool({
 const pwshTool = createWindowsPowerShellTool()
 const shellSessionTool = createShellSessionTool()
 
+/** 记录 Pi 实际读写的绝对路径，包括 read 找到的 Unicode 文件名变体。 */
+function withWorkbenchFileRoot(tool: ToolRegistration): ToolRegistration {
+  return {
+    ...tool,
+    async execute(args, api, context) {
+      const env = workbenchFileEnv(api.env)
+      if (env === undefined) return tool.execute(args, api, context)
+
+      let resolvedPath: string | undefined
+      const openBinaryReader = env.openBinaryReader.bind(env)
+      env.openBinaryReader = (path, options, ctx) => {
+        resolvedPath = path
+        return openBinaryReader(path, options, ctx)
+      }
+      const writeFile = env.writeFile.bind(env)
+      env.writeFile = (path, content, ctx) => {
+        resolvedPath = path
+        return writeFile(path, content, ctx)
+      }
+      const result = await tool.execute(args, { ...api, env }, context)
+      if (resolvedPath === undefined || result.isError) return result
+      const details = result.details
+      return {
+        ...result,
+        details: { ...(details && typeof details === 'object' && !Array.isArray(details) ? details : {}), resolvedPath },
+      }
+    },
+  }
+}
+
 /**
  * 功能：装配 coding-tools 工具扩展，工具面与 Pi 内置 `coding-tools` 一致，并按 DSH 的平台
  * 划分：Windows 只装原生 `pwsh`，其他平台只装 `bash`。
@@ -52,7 +83,7 @@ const shellSessionTool = createShellSessionTool()
  * @returns 名为 `coding-tools` 的扩展，包含 read、write、edit、shell、shell_session 五个工具。
  */
 export function createCodingTools(platform: NodeJS.Platform = process.platform): Extension {
-  const tools: ToolRegistration[] = [createReadTool(), createWriteTool(), createEditTool()]
+  const tools = [createReadTool(), createWriteTool(), createEditTool()].map(withWorkbenchFileRoot)
   tools.push(platform === 'win32' ? pwshTool : bashTool)
   tools.push(shellSessionTool)
   return defineExtension({ name: 'coding-tools', tools })

@@ -42,18 +42,11 @@ Composer 上方的浮动卡片（`QuestionComposer`，不属于 transcript）只
 
 ## 状态机二：工作分组开合（S2）
 
-`ProcessGroup` 的开合是 `manualOpen ?? autoOpen`，run 内插有用户输入时强制展开并禁用开关（[transcript.tsx:368](../../src/web/transcript.tsx#L368)）。自动值只在边界上转移，其余帧（defaultOpen 重算、latest 变化、重投影）一律保持原值，SSE 帧间抖动不会折起/展开分组（[transcript.tsx:360](../../src/web/transcript.tsx#L360)）：
+工作分组自动跟随回合边界。进入运行阶段默认展开，完成时按「工作步骤收起时机」收起。手动开合只作用于当前阶段，运行中手动展开过的组完成后仍按设置收起。历史回合允许手动重开。SSE 普通帧、完成帧后的重投影都保留当前阶段的选择。交错用户消息留在两个可折叠过程片段之间，展开和收起时均保留原本顺序。[展开策略](../../src/web/process-presentation.ts) · [转录](../../src/web/transcript.tsx)
 
-| 边界（`processGroupBoundary`） | 含义 | autoOpen 转移 |
-|---|---|---|
-| live-start | 本 run 变为 live | true（live 组恒开） |
-| live-end | live 消失 | `defaultProcessOpen(policy, latest, live=false, hasInterleavedUser)` |
-| demote | 非 live 的 run 失去 latest | 同 live-end |
-| none | 其余任意帧 | 保持原值 |
+折叠的已完成回合只在正文上方显示「已工作 X」与展开箭头。运行中折叠可显示当前工具动作、思考或进展片段。时长优先用服务端投影的 `runDurationMs`，表示整轮经过时间。结束后有最终回答时，回答在过程分组之外渲染一次。
 
-转移函数 `processGroupAutoOpen`（[process-presentation.ts:30](../../src/web/process-presentation.ts#L30)）；`defaultProcessOpen` 由展示策略、是否最新回合、是否有插间用户输入共同决定（[process-presentation.ts:6](../../src/web/process-presentation.ts#L6)）。挂载时以 `defaultProcessOpen(当前 props)` 初始化（[transcript.tsx:358](../../src/web/transcript.tsx#L358)）；`manualOpen` 一经设置，自动因子不再改写开合，直到组件随 run key 变化重挂载。
-
-折叠头固定两行：完成后上行「已工作 X」，下行是 ZCode summary group 口径的统计（`workSummaryText`：已查阅 N 项、已执行 N 命令、已修改 N 文件）；统计为空时回退到其他活动计数（`otherActivitySummary`）或过程正文预览，都没有才显示「思考」。运行中收起时两行换成「当前动作行」（`runningPart` + 工具渲染模型：图标、正在读取/执行、文件 chip 或命令）+「工作中 X」，动作随执行中的工具/思考自动切换；展开时不显示动作行（与 ZCode 一致）。时长优先用服务端投影的 `runDurationMs`（整轮墙钟跨度：最后一条消息或下一次 run 起点），`durationMs` 在文本回合会因 entry 时间戳塌缩而只剩请求耗时。展开体是扁平工作列表：左侧竖线、行距 8 px、行头图标隐藏，行文案用完成态动词（已读取/已执行/已修改）。 [process-presentation.ts](../../src/web/process-presentation.ts) · [transcript.tsx](../../src/web/transcript.tsx)
+详细度设置决定展开后的层级。详细模式打开各工作小组，标准与简洁模式默认收起小组明细，完全展开模式平铺过程。折叠时键盘焦点若在隐去的内容中，会移回该回合的展开按钮。
 
 ## 状态机三：工具行 live→settled 身份（S3）
 
@@ -73,7 +66,7 @@ busy 期间指示器被两类事让位：pending 交互（任何 kind 都阻塞�
 
 ## 工作步骤组与压缩标记的位置编排
 
-工具行逐个平铺进折叠组，不再合成「查阅/终端」子组父行（对齐 ZCode 现行 summary group：聚合只体现在折叠头的统计里）。工具行身份、排序与结果配对仍由 `buildRenderModel` 决定；统计里的修改文件数是按去重路径计算的（`changedTargets`，[process-presentation.ts](../../src/web/process-presentation.ts)）。
+正文划分工作片段。思考后直接输出正文时，纯思考片段按原顺序单独显示。思考后执行命令、查阅或修改文件时，思考与工具进入同一个折叠组，即使只有一次工具调用。单独一次工具调用保留自身详情入口。用户消息和独立交互也会断开分组。组头汇总工具调用及失败状态，展开可查看原始顺序；修改文件数按路径去重。[工作小组](../../src/web/process-presentation.ts)
 
 压缩标记：压缩运行期间，旧的已完成 compaction system 行整体隐藏（`visibleTranscriptMessages`，[render-model.ts:650](../../src/web/render-model.ts#L650)），「正在进行上下文压缩」行挂在正在压缩的 run 末尾（[transcript.tsx:277](../../src/web/transcript.tsx#L277)）；尚无 run 时落 transcript 顶层（[transcript.tsx:147](../../src/web/transcript.tsx#L147)）。连续的 subagent 调用在渲染前先折成正文条带（`groupSubagentRuns` 接线于 [transcript.tsx:386](../../src/web/transcript.tsx#L386)，模型见 [subagent-run-model.ts](../../src/web/subagent-run-model.ts)）。
 
@@ -81,5 +74,4 @@ busy 期间指示器被两类事让位：pending 交互（任何 kind 都阻塞�
 
 - 陈旧 live slot：上一 run 遗留的 running tool slot 可能挂到新 run 的分组里，依赖 harness 投影原子性兜底，低概率未修（[rendering-state-machines.md](../history/rendering-state-machines.md) S3 尾注）。
 - 思考摘要行是 140ms 的单次进入动画，不是 ZCode 的排队 enter/exit（[ReasoningBlock.module.css:5](../../src/web/message-rendering/ReasoningBlock.module.css#L5)）。
-- 失败状态词带 title tooltip，但没有 ZCode 的 tooltip 内复制按钮（[ToolCard.tsx:197](../../src/web/ToolCard.tsx#L197)）；`list_files` 摘要按用户要求明示（「搜索列表」），有意偏离 ZCode。两者均见 [zcode-process-rendering-gaps.md](../history/zcode-process-rendering-gaps.md) 的「仍保留的部分对齐」。
 - 工作区的目标 / 终端 / 工作流分区未实现，目标分区只渲染当前目标与轮次预算（[spec.md](../spec.md) 2026-10-31 段未决）。

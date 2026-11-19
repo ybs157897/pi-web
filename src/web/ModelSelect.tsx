@@ -29,7 +29,7 @@ export interface ModelSelectProps {
   onSelectModel: (model: ModelOption) => void
   onSelectLevel: (level: ThinkingLevel) => void
   onSearch: () => void
-  onManageProviders: () => void
+  onManageProviders?: () => void
 }
 
 /** 按提供商分组的模型组。 */
@@ -285,7 +285,7 @@ export default function ModelSelect({
               })}
             </div>
             <button ref={itemRef()} type="button" role="menuitem" className={css.command} onClick={() => { close(); onSearch() }}>{t('搜索模型…', 'Search models…')}</button>
-            <button ref={itemRef()} type="button" role="menuitem" className={css.command} onClick={() => { close(); onManageProviders() }}>{t('管理模型提供商', 'Manage model providers')}</button>
+            {onManageProviders && <button ref={itemRef()} type="button" role="menuitem" className={css.command} onClick={() => { close(); onManageProviders() }}>{t('管理模型提供商', 'Manage model providers')}</button>}
           </>}
           {pane === 'effort' && levels.map(item => {
             const selected = item === level

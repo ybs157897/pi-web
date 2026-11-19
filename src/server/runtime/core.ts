@@ -35,6 +35,8 @@ import { Goals } from '../tools/goal.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { Plans } from '../tools/plan.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { WORKBENCH_CREATE_BOT_TOOL } from './workbench-bots.ts'
+import { submissionFailure } from '../conversation/failure.ts'
 import type { Draft } from '@earendil-works/chord'
 
 /** 核心 feature 的依赖注入契约：状态、模型运行时与团队/子智能体投影的迟绑定回调。 */
@@ -162,6 +164,18 @@ export function createCore(deps: CoreDeps) {
       ...(options.subagents === true ? { subagents: await subagentSummaries(id) } : {}),
       ...(team === undefined ? {} : { team }),
     })
+    // Request preparation can fail without appending an assistant entry, for example if the model was removed.
+    const latestInput = detail.messages.findLast(message => message.role === 'user')
+    if (!detail.conversation.busy && !detail.failure && latestInput?.requestId) {
+      const requestId = latestInput.requestId
+      const receipt = await harness.commit(tx => tx.submissionByRequest(id, requestId), CTX)
+      if (receipt?.status === 'unanswered' && receipt.reason !== 'aborted' && receipt.reason !== 'withdrawn') {
+        const failure = submissionFailure(receipt.reason, receipt.detail)
+        detail.failure = failure
+        detail.error = failure.message
+        detail.conversation.status = 'error'
+      }
+    }
     // 存档的等级可能早于模型现行等级表（例如手改的 Provider 文件收窄了它）。请求
     // 反正会被 pi-ai 收敛，因此投影出同样的收敛结果，而不是暴露选择器里不存在的等级。
     const activeModel = detail.conversation.model
@@ -176,11 +190,11 @@ export function createCore(deps: CoreDeps) {
   }
 
   /** 读取当前详情（附子智能体与团队投影）；内部调用方使用，不落定未读标记。 */
-  const currentDetail = async (id: ConversationId): Promise<ConversationDetail> => {
+  const currentDetail = async (id: ConversationId, projection = { subagents: true, team: true }): Promise<ConversationDetail> => {
     const conversation = await requireConversation(String(id))
     const viewWatch = await conversation.watch(CTX)
     try {
-      return await detailFromView(id, viewWatch.value, undefined, { subagents: true, team: true })
+      return await detailFromView(id, viewWatch.value, undefined, projection)
     } finally {
       await viewWatch.stop()
     }
@@ -256,6 +270,7 @@ export function createCore(deps: CoreDeps) {
   const buildAgentChange = async (workspaceId: string, accessMode: AccessMode, overrides: {
     model?: UiModelRef
     thinkingLevel?: ThinkingLevel
+    workbenchBotCreation?: boolean
   } = {}): Promise<AgentChange> => {
     const workspace = workspaceFiles.workspace(workspaceId)
     const installed = deps.installedExtensions()
@@ -273,6 +288,8 @@ export function createCore(deps: CoreDeps) {
     })
     const registeredTools = extensions.flatMap(extension => (extension.tools ?? []).map(tool => ({ extension, tool })))
     const tools: ToolRegistration[] = registeredTools.flatMap(({ tool }) => {
+      if (overrides.workbenchBotCreation) return tool.name === WORKBENCH_CREATE_BOT_TOOL || tool.name === CODEMODE_TOOL_NAME ? [tool] : []
+      if (tool.name === WORKBENCH_CREATE_BOT_TOOL) return []
       // 工具始终开启；只读模式仅过滤掉白名单外的写类工具。
       if (accessMode === 'readOnly' && !READ_ONLY_TOOLS.has(tool.name) && !tool.name.startsWith('wetrack_analysis_')) return []
       return [tool]

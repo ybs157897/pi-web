@@ -102,6 +102,28 @@ class FakeRuntime implements Runtime {
     return { submissionId: 'submission-1' }
   }
 
+  readonly workbench: Runtime['workbench'] = async () => ({ main: makeDetail(), items: [], agents: [], messages: [] })
+  readonly createWorkbenchBot: Runtime['createWorkbenchBot'] = async (_workspaceId, input) => ({
+    id: 'bot-1', name: input.name, role: input.role ?? '', description: input.description ?? '', status: 'idle', skills: [],
+  })
+  readonly updateWorkbenchBot: Runtime['updateWorkbenchBot'] = async (_workspaceId, id, input) => ({
+    id, name: input.name ?? 'Bot', role: input.role ?? '', description: input.description ?? '', status: 'idle', skills: [],
+  })
+  readonly submitWorkbench: Runtime['submitWorkbench'] = async (_workspaceId, input) => ({ requestId: input.requestId })
+  readonly replyWorkbench: Runtime['replyWorkbench'] = async () => ({ submissionId: 'workbench-submission' })
+  readonly retryWorkbench: Runtime['retryWorkbench'] = async () => ({ ok: true })
+  readonly decisionInbox: Runtime['decisionInbox'] = {
+    list: async () => ({ mails: [], pendingCount: 0 }),
+    detail: async () => { throw new Error('No decision mail') },
+    opened: async () => undefined,
+    update: async () => { throw new Error('No decision mail') },
+    updateMany: async () => undefined,
+    verdict: async () => { throw new Error('No decision mail') },
+    verdictWorkItem: async () => undefined,
+    presence: async () => undefined,
+    recordInteractionSettlement: async () => undefined,
+  }
+
   readonly questionSets = new Map<string, AskUserQuestionItem[]>([['call-1', QUESTION_SET]])
   readonly answeredCalls = new Set<string>()
   /** 计划评审调用集：两者都带与运行时一致的批准标签（「同意执行」），回答语义由假运行时实现。 */
@@ -318,6 +340,7 @@ class FakeRuntime implements Runtime {
   }
   workspaces(): Protocol.WorkspaceSummary[] { return [{ id: 'ws-1', name: 'Workspace', path: '/tmp/pi-web-test', createdAt: NOW, updatedAt: NOW }] }
   async addWorkspace(input: Protocol.AddWorkspaceInput): Promise<Protocol.WorkspaceSummary> { return { ...this.workspaces()[0]!, name: input.name ?? 'Added', path: input.path } }
+  async createNamedWorkspace(name: string): Promise<Protocol.WorkspaceSummary> { return { ...this.workspaces()[0]!, name } }
   async deleteWorkspace(id: string) { this.calls.push(`delete-workspace:${id}`) }
   async pickDirectory(): Promise<string | null> { return '/tmp/picked-workspace' }
   async listDirectories(path?: string): Promise<Protocol.DirectoryListing> { return { path: path ?? '/tmp', home: '/tmp', crumbs: [], entries: [], truncated: false } }
@@ -635,16 +658,21 @@ describe('HTTP API', () => {
   })
 
   // 生产静态模式（staticRoot）：根路径的 favicon.svg 以 image/svg+xml 正确返回。
-  it('serves root favicon assets in production static mode', async () => {
+  it('serves favicon and Bot portrait SVGs in production static mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-web-static-'))
     try {
       await writeFile(join(root, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+      await mkdir(join(root, 'bot-avatars'))
+      await writeFile(join(root, 'bot-avatars', '07-ada.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><title>Ada</title></svg>')
       const app = createApp(new FakeRuntime(), { demo: true, staticRoot: root })
       liveApps.push(app)
       const response = await app.request('/favicon.svg')
       expect(response.status).toBe(200)
       expect(response.headers.get('content-type')).toContain('image/svg+xml')
       expect(await response.text()).toContain('<svg')
+      const portrait = await app.request('/bot-avatars/07-ada.svg')
+      expect(portrait.headers.get('content-type')).toContain('image/svg+xml')
+      expect(await portrait.text()).toContain('<title>Ada</title>')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -957,6 +985,44 @@ describe('management API', () => {
    * @returns 可直接传给 app.request 的初始化对象
    */
   const json = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+  it('creates and edits workbench bots with a bounded configuration schema', async () => {
+    const { app, runtime } = createTestApp()
+    const add = vi.spyOn(runtime, 'createWorkbenchBot')
+    const edit = vi.spyOn(runtime, 'updateWorkbenchBot')
+    const endpoint = '/api/workbench/ws-1/bots'
+    const created = await app.request(endpoint, json('POST', {
+      name: '材料审阅', role: '资料核对', instructions: '保留条目来源', skillIds: [], accessMode: 'readOnly', icon: 'book',
+    }))
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ id: 'bot-1', name: '材料审阅', role: '资料核对' })
+    expect(add).toHaveBeenCalledWith('ws-1', expect.objectContaining({ skillIds: [], accessMode: 'readOnly', icon: 'book' }))
+    const updated = await app.request(`${endpoint}/bot-1`, json('PATCH', { description: '核对文档来源', model: null, skillIds: null }))
+    expect(updated.status).toBe(200)
+    expect(edit).toHaveBeenCalledWith('ws-1', 'bot-1', { description: '核对文档来源', model: null, skillIds: null })
+    expect((await app.request(endpoint, json('POST', { name: ' ', origin: 'agent' }))).status).toBe(400)
+    expect(add).toHaveBeenCalledTimes(1)
+  })
+
+  it('validates the foreground receipt and allows a verdict without a mail id', async () => {
+    const { app, runtime } = createTestApp()
+    const register = vi.spyOn(runtime.decisionInbox, 'presence')
+    const settle = vi.spyOn(runtime.decisionInbox, 'verdictWorkItem')
+    const root = '/api/workbench/ws-1'
+    const view = {
+      viewId: 'b2cc7a9c-cb16-477b-882f-afafdca6f9ee', sequence: 1, active: true,
+      observed: [{ kind: 'interaction', id: 'call-1' }],
+    }
+    expect((await app.request(root + '/inbox/presence/1', json('POST', view))).status).toBe(200)
+    expect(register).toHaveBeenCalledWith('ws-1', '1', view)
+    expect((await app.request(root + '/inbox/presence/1', json('POST', { ...view, sequence: -1 }))).status).toBe(400)
+    expect(register).toHaveBeenCalledTimes(1)
+    const result = { action: 'revise', attempt: 2, feedback: '补上证据' }
+    expect(await (await app.request(root + '/items/item-1/verdict', json('POST', result))).json()).toEqual({ ok: true })
+    expect(settle).toHaveBeenCalledWith('ws-1', 'item-1', result)
+    expect((await app.request(root + '/items/item-1/verdict', json('POST', { ...result, attempt: 0 }))).status).toBe(400)
+    expect(settle).toHaveBeenCalledTimes(1)
+  })
 
   // 错误分级：RuntimeError(CONFLICT)→409 且带原文案；未知异常→500 的「Internal server error」（不泄露细节）；
   // RuntimeError(UNSUPPORTED)→422。

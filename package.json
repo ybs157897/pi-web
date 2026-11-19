@@ -24,6 +24,9 @@
     "test:live:hooks": "tsx scripts/live-hooks-check.ts",
     "test:live:hooks:matrix": "tsx scripts/live-hooks-matrix-check.ts",
     "test:live:policy": "tsx scripts/live-prompt-policy-check.ts",
+    "test:live:workbench": "tsx scripts/live-workbench-check.ts",
+    "test:live:workbench:bots": "tsx scripts/live-workbench-bots.ts",
+    "test:live:workbench:dependencies": "tsx scripts/live-workbench-dependencies.ts",
     "test:live:workflow": "tsx scripts/live-workflow-check.ts",
     "test:live:prompt": "tsx scripts/live-prompt-check.ts"
   },

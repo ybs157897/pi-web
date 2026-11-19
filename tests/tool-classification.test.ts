@@ -51,7 +51,7 @@ const build = (
 describe('tool row titles', () => {
   // 反回归：这些高频工具行必须有具名标题，不允许退化为通用「工具」占位。
   it('names the listing, todo, skill, and stop-task rows instead of leaving them generic', () => {
-    expect(build('list_files', { path: '.' }).title).toBe('搜索列表')
+    expect(build('list_files', { path: '.' }).title).toBe('已列出目录')
     expect(build('todo_write', { todos: [] }).title).toBe('待办')
     expect(build('skill', { name: 'demo' }).title).toBe('技能')
     expect(build('task_stop', { task_id: 't-1' }).title).toBe('停止任务')
@@ -75,10 +75,9 @@ describe('tool row titles', () => {
   })
 
   // 已定稿（settled）的行标题与英文措辞被显式 pin 住，防止无意改名。
-  // 完成态动词对齐 ZCode summary 行（「已执行」）；list_files 保留有意偏离的「搜索列表」。
   it('keeps the settled rows and the English wording unchanged', () => {
     expect(build('bash', { command: 'pwd' }).title).toBe('已执行')
-    expect(toolRowTitle('list_files', en)).toBe('List files')
+    expect(toolRowTitle('list_files', en)).toBe('Listed directory')
     expect(toolRowTitle('todo_write', en)).toBe('Todos')
     expect(toolRowTitle('skill', en)).toBe('Skill')
     expect(toolRowTitle('task_stop', en)).toBe('Stop task')
@@ -86,11 +85,34 @@ describe('tool row titles', () => {
 })
 
 describe('tool row summaries', () => {
-  // list_files 特例：摘要原样展示调用请求 JSON，不做「浏览目录」之类的意译。
-  it('shows the raw list_files request instead of a paraphrased directory', () => {
-    expect(build('list_files', { path: '.' }).summary).toBe('{ "name": "list_files", "arguments": { "path": "." } }')
-    expect(build('list_files', { path: '.', maxEntries: 60 }).summary).toBe('{ "name": "list_files", "arguments": { "path": ".", "maxEntries": 60 } }')
-    expect(build('list_files', {}).summary).toBe('{ "name": "list_files", "arguments": {} }')
+  it('keeps nested file targets available without turning a script into a single-file row', () => {
+    const artifacts = [{ kind: 'read', path: '/project/input.txt' }, { kind: 'write', path: '/project/output.txt' }] as const
+    const model = build('codemode', { code: 'await tools.read({path: "input.txt"})' }, {
+      artifacts: [...artifacts], blocks: [{ type: 'text', text: 'read then wrote' }],
+    })
+    expect(model.artifacts).toEqual(artifacts)
+    expect(model.title).toBe('已运行脚本')
+    expect(model.path).toBeUndefined()
+    expect(model.read).toBeUndefined()
+    expect(model.diffs).toBeUndefined()
+  })
+
+  it('opens a direct edit and its diff at the path resolved by the file tool', () => {
+    const model = build('edit', { path: 'notes.txt', oldText: 'one', newText: 'two' }, {
+      details: { resolvedPath: '/project/notes.txt' },
+    })
+    expect(model.path).toBe('/project/notes.txt')
+    expect(model.diffs?.[0]?.path).toBe('/project/notes.txt')
+  })
+
+  it('summarizes what directory was listed without exposing raw arguments', () => {
+    expect(build('list_files', { path: '.', maxEntries: 60 }).summary).toBe('工作区根目录')
+    expect(build('list_files', { path: '.', recursive: true }).summary).toBe('工作区根目录，包含子目录')
+    expect(build('list_files', { path: 'docs/notes' }).summary).toBe('docs/notes')
+    expect(build('list_files', {}).summary).toBe('工作区根目录')
+    expect(build('codemode', { code: 'await tools.list_files({path: "."})' }, { details: {
+      calls: [{ id: 1, name: 'list_files', args: '{"path":"."}', status: 'ok' }],
+    } }).summary).toBe('列出 工作区根目录')
   })
 
   // 搜索行摘要以查询词为先（「查找 hello」），路径退居次要；
@@ -110,5 +132,24 @@ describe('tool row summaries', () => {
   // read 行维持「路径优先」摘要，与搜索行（查询优先）形成对照。
   it('keeps path-first summaries for file reads', () => {
     expect(build('read', { path: 'a.ts' }).summary).toBe('a.ts')
+    expect(build('read', { path: '/some/long/private/path/docs/a.ts' }).summary).toBe('…/docs/a.ts')
+  })
+
+  it('uses diagnostics from persisted and live results to explain failures', () => {
+    expect(build('read', { path: 'sample.txt' }, {
+      isError: true,
+      blocks: [{ type: 'text', text: "<harness>\n[error] ENOENT: no such file or directory, open '/work/sample.txt'\n</harness>" }],
+    })).toMatchObject({ title: '读取文件失败', summary: 'sample.txt', failureReason: '找不到文件' })
+    expect(build('grep', { pattern: '村', path: '/work/source' }, {
+      status: 'error', details: { diagnostics: [{ severity: 'error', message: 'Workspace paths must be relative and no longer than 1024 characters.' }] },
+    })).toMatchObject({ title: '搜索失败', summary: '查找 村', failureReason: '工作区路径需为相对路径，且至多 1024 个字符' })
+    expect(build('bash', { command: 'npm test' }, {
+      isError: true, details: { exitCode: 2 },
+    })).toMatchObject({ title: '命令未成功完成', summary: 'npm', failureReason: '命令返回退出码 2' })
+    const unknown = build('read', { path: 'sample.txt' }, {
+      isError: true, blocks: [{ type: 'text', text: '<harness>\n[error] Unclassified internal error\n</harness>' }],
+    })
+    expect(unknown.failureReason).toBeUndefined()
+    expect(unknown.read).toBeUndefined()
   })
 })

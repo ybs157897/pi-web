@@ -10,7 +10,11 @@ import type { Runtime } from './contracts.ts'
 import { isDefectNumber } from './automation/wetrack.ts'
 import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugins/ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
+import { ConversationFailureError, conversationFailure, conversationFailureStatus } from './conversation/failure.ts'
+import type { ConversationFailure } from '../shared/conversation-failure.ts'
 import { hooksEntrySchema, hooksSaveSchema, hooksTrustSchema } from './runtime/hooks.ts'
+import { mountDecisionInboxRoutes } from './decision-inbox-routes.ts'
+import { createWorkbenchBotSchema, updateWorkbenchBotSchema } from './runtime/workbench-bots.ts'
 
 /** 应用版本号，/api/health 返回。 */
 const packageVersion: string = packageJson.version
@@ -99,6 +103,13 @@ const childMessageSchema = z.object({
 }).strict()
 
 const submitSchema = submitObject.refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
+const workbenchSubmitSchema = submitObject.extend({
+  mention: identifier.optional(), model: modelRef.optional(),
+  thinkingLevel: z.enum(thinkingLevels).optional(), accessMode: z.enum(accessModes).optional(),
+}).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
+const workbenchReplySchema = submitObject.extend({
+  model: modelRef.optional(), thinkingLevel: z.enum(thinkingLevels).optional(),
+}).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
 const editQueueSchema = submitObject.extend({ whenBusy: z.enum(['steer', 'followUp']) }).refine(withinAttachmentBudget).refine(input => input.text.trim().length > 0 || !!input.images?.length || !!input.files?.length)
 const jsonObject = z.record(z.string(), z.unknown())
 const headersSchema = z.record(z.string().min(1).max(160).regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/), z.string().max(8192).refine(value => !/[\r\n]/.test(value)))
@@ -206,7 +217,7 @@ class ApiFault extends Error {
 /** 未知来源错误的宽松形态（code/message 均可能是任意类型）。 */
 type RuntimeFailure = { code?: unknown; message?: unknown }
 /** 可直接返回给客户端的失败形态：状态码 + 稳定错误码 + 已脱敏消息。 */
-type PublicFailure = { status: 400 | 403 | 404 | 409 | 413 | 415 | 422 | 500 | 502; code: string; message: string }
+type PublicFailure = { status: 400 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 502 | 504; code: string; message: string; failure?: ConversationFailure }
 
 /**
  * 校验请求的 Host 是否为本机权威（localhost / 127.0.0.1 / ::1）。
@@ -238,6 +249,11 @@ function publicFailure(error: unknown): PublicFailure {
     return { status: error.status, code: error.code, message: error.message }
   }
 
+  if (error instanceof ConversationFailureError) {
+    const { failure } = error
+    return { status: conversationFailureStatus(failure), code: failure.code, message: failure.message, failure }
+  }
+
   if (error instanceof RuntimeError) {
     const statuses = {
       NOT_FOUND: 404, CONFLICT: 409, MODEL_UNAVAILABLE: 422, INVALID_INPUT: 400, FORBIDDEN: 403, UNSUPPORTED: 422, PROVIDER_ERROR: 502,
@@ -246,7 +262,10 @@ function publicFailure(error: unknown): PublicFailure {
       ACCESS_DENIED: 403, PLAN_BLOCKED: 409,
     } as const
     const message = error.message.replace(/[\r\n\t]+/g, ' ').replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]').replace(/\b(?:sk|key|token|secret)[-_][A-Za-z0-9._~+/-]{8,}/gi, '[redacted]').trim().slice(0, 240)
-    return { status: statuses[error.code], code: error.code, message: message || 'The operation could not be completed' }
+    return {
+      status: statuses[error.code], code: error.code, message: message || 'The operation could not be completed',
+      ...(error.code === 'MODEL_UNAVAILABLE' ? { failure: conversationFailure('MODEL_UNAVAILABLE') } : {}),
+    }
   }
 
   const code = typeof error === 'object' && error !== null ? (error as RuntimeFailure).code : undefined
@@ -391,6 +410,31 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   })
 
   app.get('/api/health', c => c.json({ ok: true, demo: options.demo === true, version: packageVersion, user: userInfo().username }))
+  mountDecisionInboxRoutes(app, runtime.decisionInbox, readJson)
+  app.get('/api/workbench/:workspaceId', async c => c.json(await runtime.workbench(pathId(c.req.param('workspaceId')))))
+  app.post('/api/workbench/:workspaceId/retry', async c => {
+    const change = { attempt: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), model: modelRef.optional(), thinkingLevel: z.enum(thinkingLevels).optional() }
+    const input = await readJson(c.req.raw, z.union([
+      z.object({ ...change, requestId: z.string().trim().min(1).max(160) }).strict(),
+      z.object({ ...change, itemId: identifier }).strict(),
+    ]))
+    return c.json(await runtime.retryWorkbench(pathId(c.req.param('workspaceId')), input), 202)
+  })
+  app.post('/api/workbench/:workspaceId/bots', async c => c.json(await runtime.createWorkbenchBot(
+    pathId(c.req.param('workspaceId')), await readJson(c.req.raw, createWorkbenchBotSchema),
+  ), 201))
+  app.patch('/api/workbench/:workspaceId/bots/:botId', async c => c.json(await runtime.updateWorkbenchBot(
+    pathId(c.req.param('workspaceId')), pathId(c.req.param('botId')), await readJson(c.req.raw, updateWorkbenchBotSchema),
+  )))
+  app.post('/api/workbench/:workspaceId/messages', async c => {
+    const input = await readJson(c.req.raw, workbenchSubmitSchema)
+    return c.json(await runtime.submitWorkbench(pathId(c.req.param('workspaceId')), input), 202)
+  })
+  app.post('/api/workbench/:workspaceId/items/:itemId/messages', async c => {
+    const input = await readJson(c.req.raw, workbenchReplySchema)
+    await runtime.replyWorkbench(pathId(c.req.param('workspaceId')), pathId(c.req.param('itemId')), input)
+    return c.json({ requestId: input.requestId }, 202)
+  })
   app.get('/api/conversations', async c => c.json({ conversations: await runtime.list() }))
   app.post('/api/conversations', async c => {
     const input = await readJson(c.req.raw, createSchema) as CreateConversationInput
@@ -450,7 +494,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
           if (!isCancelled()) {
             const failure = publicFailure(streamError)
             try {
-              controller.enqueue(new TextEncoder().encode(`event: error\ndata: ${JSON.stringify({ error: failure.message, code: failure.code })}\n\n`))
+              controller.enqueue(new TextEncoder().encode(`event: error\ndata: ${JSON.stringify({ error: failure.message, code: failure.code, failure: failure.failure })}\n\n`))
             } catch {
               // 客户端已关闭流。
             }
@@ -699,6 +743,10 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
   })
   app.get('/api/workspaces', c => c.json({ workspaces: runtime.workspaces() }))
   app.post('/api/workspaces', async c => c.json({ workspace: await runtime.addWorkspace(await readJson(c.req.raw, workspaceSchema)) }, 201))
+  app.post('/api/workspaces/named', async c => {
+    const { name, requestId } = await readJson(c.req.raw, z.object({ name: z.string().trim().min(1).max(120), requestId: z.string().uuid() }).strict())
+    return c.json({ workspace: await runtime.createNamedWorkspace(name, requestId) }, 201)
+  })
   app.patch('/api/workspaces/:id', async c => c.json({ workspace: await runtime.renameWorkspace(pathId(c.req.param('id')), await readJson(c.req.raw, z.object({ name: z.string().trim().min(1).max(120) }).strict())) }))
   app.delete('/api/workspaces/:id', async c => { await runtime.deleteWorkspace(pathId(c.req.param('id'))); return c.json({ ok: true }) })
   app.post('/api/workspaces/pick', async c => c.json({ path: await runtime.pickDirectory(c.req.raw.signal) }))
@@ -951,7 +999,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
 
   app.onError((error, c) => {
     const failure = publicFailure(error)
-    return c.json({ error: failure.message, code: failure.code }, failure.status)
+    return c.json({ error: failure.message, code: failure.code, failure: failure.failure }, failure.status)
   })
 
   if (options.staticRoot) {
@@ -961,6 +1009,7 @@ export function createApp(runtime: Runtime, options: { demo?: boolean; staticRoo
       app.get(`/${file}`, serveStatic({ root: staticRoot, path: file }))
     }
     app.get('/assets/*', serveStatic({ root: staticRoot }))
+    app.get('/bot-avatars/*', serveStatic({ root: staticRoot }))
     app.get('*', async (c, next) => {
       if (c.req.path === '/api' || c.req.path.startsWith('/api/')) return c.json({ error: 'Not found', code: 'not_found' }, 404)
       return serveStatic({ root: staticRoot, path: 'index.html' })(c, next)

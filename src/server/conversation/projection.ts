@@ -11,6 +11,8 @@ import type {
   UsageState,
 } from '@earendil-works/pi-durable'
 import type { AssistantMessage, ImageContent, Message, ToolResultMessage } from '@earendil-works/pi-ai'
+import type { ConversationFailure } from '../../shared/conversation-failure.ts'
+import { assistantFailure, providerFailure, withRetryHistory } from './failure.ts'
 import type {
   AskUserQuestionAnswerItem,
   AskUserQuestionItem,
@@ -277,7 +279,7 @@ function messageFromPi(message: Message, entryId: string, index: number, request
   }
   if (message.role === 'assistant') {
     const blocks = assistantBlocks(message)
-    const errorMessage = message.errorMessage ? safeError(message.errorMessage) : undefined
+    const errorMessage = message.stopReason === 'error' ? assistantFailure(message).message : undefined
     if (errorMessage && !blocks.some(block => block.type === 'text' && block.text === errorMessage)) {
       blocks.push({ type: 'text', text: errorMessage })
     }
@@ -394,14 +396,22 @@ function fileBlocks(files: readonly { name: string; path: string; mimeType: stri
  * @returns 产物列表；read 记行起点，write 记写入后内容，edit 记 before/after/diff。
  */
 function artifactFromTool(name: string, args: Record<string, unknown> | undefined, details: unknown): FileArtifact[] {
-  if (!args || !isString(args.path)) return []
   const result = jsonRecord(details)
+  if (name === 'codemode' && Array.isArray(result?.workbenchFiles)) {
+    return result.workbenchFiles.flatMap((value): FileArtifact[] => {
+      const file = jsonRecord(value)
+      if (!file || !isString(file.path) || (file.kind !== 'read' && file.kind !== 'write' && file.kind !== 'edit')) return []
+      return [{ kind: file.kind, path: file.path }]
+    })
+  }
+  if (!args || !isString(args.path)) return []
+  const path = isString(result?.resolvedPath) ? result.resolvedPath : args.path
   if (name === 'read') {
     const offset = args.offset
-    return [{ kind: 'read', path: args.path, ...(typeof offset === 'number' && Number.isSafeInteger(offset) && offset > 0 ? { lineStart: offset } : {}) }]
+    return [{ kind: 'read', path, ...(typeof offset === 'number' && Number.isSafeInteger(offset) && offset > 0 ? { lineStart: offset } : {}) }]
   }
   if (name === 'write') {
-    return isString(args.content) ? [{ kind: 'write', path: args.path, after: args.content }] : [{ kind: 'write', path: args.path }]
+    return isString(args.content) ? [{ kind: 'write', path, after: args.content }] : [{ kind: 'write', path }]
   }
   if (name === 'edit' || name === 'nativeEdit' || name === 'native_edit') {
     const edits = Array.isArray(args.edits) ? args.edits.map(jsonRecord).filter((edit): edit is Record<string, unknown> => edit !== undefined) : []
@@ -410,7 +420,7 @@ function artifactFromTool(name: string, args: Record<string, unknown> | undefine
     const kind = name === 'edit' ? 'edit' : 'nativeEdit'
     return [{
       kind,
-      path: args.path,
+      path,
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),
       ...(isString(result?.diff) ? { diff: result.diff } : {}),
@@ -916,7 +926,7 @@ export function projectConversation(
   let previousAssistantCallsTools = false
   let latestEntryTimestamp = metadata.createdAt
   let lastTimestamp = metadata.createdAt
-  let latestAssistantError: string | undefined
+  let latestAssistantFailure: ConversationFailure | undefined
 
   for (const entry of view.entries) {
     entryIds.add(entry.id)
@@ -972,9 +982,18 @@ export function projectConversation(
       }
       if (message.role === 'assistant') {
         settledAssistantMessages.push(message)
+        if (message.stopReason === 'error') {
+          const failure = assistantFailure(message)
+          const retried = entry.byTaskId !== undefined && previousAssistantTask === entry.byTaskId
+            && latestAssistantFailure?.code === failure.code ? (latestAssistantFailure.retryAttempts ?? 0) + 1 : 0
+          latestAssistantFailure = withRetryHistory(failure, retried)
+        } else {
+          latestAssistantFailure = undefined
+        }
         previousAssistantTask = entry.byTaskId
         previousAssistantCallsTools = message.stopReason === 'toolUse'
-        latestAssistantError = message.errorMessage ? safeError(message.errorMessage) : undefined
+      } else if (message.role === 'user') {
+        latestAssistantFailure = undefined
       }
       if (message.role === 'toolResult') {
         settledToolCallIds.add(message.toolCallId)
@@ -1067,7 +1086,7 @@ export function projectConversation(
     latestEntryTimestamp = Math.max(latestEntryTimestamp, partial.timestamp)
     if (!settledAssistantMessages.some(message => sameAssistant(message, partial))) {
       const blocks = assistantBlocks(partial)
-      const errorMessage = partial.errorMessage ? safeError(partial.errorMessage) : undefined
+      const errorMessage = partial.stopReason === 'error' ? assistantFailure(partial).message : undefined
       if (errorMessage && !blocks.some(block => block.type === 'text' && block.text === errorMessage)) {
         blocks.push({ type: 'text', text: errorMessage })
       }
@@ -1123,13 +1142,15 @@ export function projectConversation(
     message.status ??= message.isError ? 'error' : 'completed'
   }
 
-  const latestError = live.generation?.retry?.error
-    ? safeError(live.generation.retry.error)
-    : live.compactionFailure?.error
-      ? safeError(live.compactionFailure.error)
-      : partial?.errorMessage
-        ? safeError(partial.errorMessage)
-        : latestAssistantError
+  const retry = live.run && live.generation?.retry
+    ? {
+        attempt: live.generation.attempt,
+        nextAt: live.generation.retry.at,
+        failure: providerFailure(live.generation.retry.error),
+      }
+    : undefined
+  const failure = live.run ? undefined : partial?.stopReason === 'error' ? assistantFailure(partial) : latestAssistantFailure
+  const latestError = failure?.message ?? (live.compactionFailure ? safeError(live.compactionFailure.error) : undefined)
 
   const agentModel = agent?.model
   const model = modelCopy(agentModel ?? options.defaultModel)
@@ -1189,6 +1210,8 @@ export function projectConversation(
     ...(team ? { team } : {}),
     ...(compaction ? { compaction } : {}),
     ...(latestError ? { error: latestError } : {}),
+    ...(failure ? { failure } : {}),
+    ...(retry ? { retry } : {}),
     ...(usage ? { usage } : {}),
   }
 }

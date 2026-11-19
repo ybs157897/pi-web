@@ -1,9 +1,18 @@
 import type {
   DiffBlockLabels, MarkdownLabels, ReadBlockLabels, SearchBlockLabels, TerminalBlockLabels, WebBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { AccessMode } from '../shared/types.ts'
 
 /** 双语标签函数：传中英文两份文案，按 UI 语言取一份。 */
 export type Translate = (chinese: string, english: string) => string
+
+export function accessModeLabel(mode: AccessMode, t: Translate): string {
+  switch (mode) {
+    case 'readOnly': return t('仅可查看', 'Read only')
+    case 'workspaceWrite': return t('工作区内修改', 'Workspace write')
+    case 'fullAccess': return t('完全权限', 'Full access')
+  }
+}
 
 /**
  * 功能：紧凑的 token 计数文案（对齐 DSH 风格：950、22K、1.2M）。

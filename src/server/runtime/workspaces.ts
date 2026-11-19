@@ -5,6 +5,8 @@
  * 会话列表与元数据写入回调，而不是直接触碰会话引擎。
  */
 import { randomUUID } from 'node:crypto'
+import { mkdir, realpath } from 'node:fs/promises'
+import { join } from 'node:path'
 import type {
   AddWorkspaceInput, Automation, ConversationSummary, CreateGitBranchInput, GitBranchMutation, GitBranchSnapshot,
   GitChangeSourceId, GitCommitInput, GitCommitMessageInput, GitCommitMessageResult, GitCommitResult, GitPushResult,
@@ -23,6 +25,7 @@ import { RuntimeError } from '../runtime-errors.ts'
 
 /** 工作区 feature 的依赖注入契约：应用状态、模型运行时、文件服务与会话侧回调。 */
 export interface WorkspacesDeps {
+  dataDir: string
   appState: AppStateStore
   modelRuntime: RuntimeModels
   workspaceFiles: WorkspaceFiles
@@ -55,6 +58,28 @@ export function createWorkspaces(deps: WorkspacesDeps) {
     const candidate = await workspaceFiles.addWorkspace(input.path, input.name)
     return appState.update(state => {
       if (state.workspaces.some(item => item.path === candidate.path)) throw new RuntimeError('CONFLICT', '这个目录已经添加为工作区')
+      state.workspaces.push(candidate)
+      return structuredClone(candidate)
+    })
+  }
+
+  /** 用户输入仅作显示名称；重试同一请求沿用同一托管目录。 */
+  const createNamedWorkspace = async (name: string, requestId: string): Promise<WorkspaceSummary> => {
+    const label = name.trim()
+    if (!label || label.length > 120 || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu.test(requestId)) {
+      throw new RuntimeError('INVALID_INPUT', '工作空间名称或请求标识无效')
+    }
+    const root = join(deps.dataDir, 'workspaces')
+    await mkdir(root, { recursive: true, mode: 0o700 })
+    const path = join(await realpath(root), requestId.toLowerCase())
+    await mkdir(path, { recursive: true, mode: 0o700 })
+    if (await realpath(path) !== path) throw new RuntimeError('INVALID_INPUT', '托管工作空间目录无效')
+    return appState.update(state => {
+      const existing = state.workspaces.find(space => space.path === path)
+      if (existing && existing.name !== label) throw new RuntimeError('CONFLICT', '这个请求已用于另一工作空间名称')
+      if (existing) return structuredClone(existing)
+      const now = Date.now()
+      const candidate = { id: randomUUID(), name: label, path, createdAt: now, updatedAt: now }
       state.workspaces.push(candidate)
       return structuredClone(candidate)
     })
@@ -174,6 +199,7 @@ export function createWorkspaces(deps: WorkspacesDeps) {
   return {
     list: workspaces,
     add: addWorkspace,
+    createNamed: createNamedWorkspace,
     rename: renameWorkspace,
     remove: deleteWorkspace,
     pickDirectory,

@@ -6,13 +6,12 @@
  * - workGroupTitle：按状态与时长生成组标题（"已工作 X"、"工作中"、"处理失败"、"已停止"）；
  * - defaultProcessOpen / processGroupBoundary / processGroupAutoOpen：工作组展开状态机——
  *   边界事件（live-start/live-end/demote）才移动状态，噪声帧不动；矩阵全枚举验证 + 帧序列仿真；
- * - foldedProsePreview：折叠组的正文预览——取最长文本块、剥离代码块/Markdown/链接、字符预算截断。
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '../src/shared/types.ts'
 import { buildRenderModel } from '../src/web/render-model.ts'
 import {
-  currentWorkLine, defaultProcessOpen, foldedProsePreview, latestReasoningLine, otherActivitySummary, processGroupAutoOpen,
+  currentWorkLine, defaultProcessOpen, latestReasoningLine, processGroupAutoOpen,
   processGroupBoundary, workGroupTitle, workSummaryCounts, workSummaryText,
 } from '../src/web/process-presentation.ts'
 import { presentationPolicyFor } from '../src/web/presentation-policy.ts'
@@ -44,16 +43,15 @@ describe('work and thought presentation', () => {
     expect(workGroupTitle({ status: 'completed', durationMs: 0 }, zh)).toBe('已工作')
     expect(workGroupTitle({ status: 'completed', durationMs: -5 }, zh)).toBe('已工作')
   })
-  // 验证展开默认值（defaultProcessOpen）：compact 下活组默认开、非最新回合收起（有排队输入则保持开）、
-  // detailed 下最新回合开/历史回合收；standard+next-input 下保持开。
-  it('preserves live work, interleaved user input, and detailed or deferred collapse', () => {
+  // 运行中和完全展开模式保留过程，完成后按所选时机收起。
+  it('preserves live work and honors the selected collapse timing or expanded mode', () => {
     const compact = presentationPolicyFor('compact')
-    expect(defaultProcessOpen(compact, true, true, false)).toBe(true)
-    expect(defaultProcessOpen(compact, true, false, false)).toBe(false)
-    expect(defaultProcessOpen(compact, true, false, true)).toBe(true)
-    expect(defaultProcessOpen(presentationPolicyFor('detailed'), true, false, false)).toBe(true)
-    expect(defaultProcessOpen(presentationPolicyFor('detailed'), false, false, false)).toBe(false)
-    expect(defaultProcessOpen(presentationPolicyFor('standard', 'next-input'), true, false, false)).toBe(true)
+    expect(defaultProcessOpen(compact, true, true)).toBe(true)
+    expect(defaultProcessOpen(compact, true, false)).toBe(false)
+    expect(defaultProcessOpen(presentationPolicyFor('verbose'), true, false)).toBe(true)
+    expect(defaultProcessOpen(presentationPolicyFor('detailed'), true, false)).toBe(false)
+    expect(defaultProcessOpen(presentationPolicyFor('detailed'), false, false)).toBe(false)
+    expect(defaultProcessOpen(presentationPolicyFor('standard', 'next-input'), true, false)).toBe(true)
   })
 })
 
@@ -126,22 +124,22 @@ describe('work group open state machine', () => {
     { live: false, latest: false }, { live: false, latest: false },
   ]
 
-  // detailed 模式仿真：live → settle（live-end）阶段最新回合保持开（历史策略），
+  // 显式延后收起时，live → settle 阶段最新回合保持开，
   // 新 run 出现时 demote 恰好收起一次；边界之后的噪声帧不改变状态（trace 全程记录）。
-  it('keeps a detailed-mode group open through settle and folds it exactly once on demote', () => {
-    const policy = presentationPolicyFor('detailed')
-    let open = defaultProcessOpen(policy, true, true, false)
+  it('honors the next-input timing and folds exactly once on demote', () => {
+    const policy = presentationPolicyFor('detailed', 'next-input')
+    let open = defaultProcessOpen(policy, true, true)
     const trace = [open]
     let was = { live: true, latest: true }
     for (const frame of frames) {
       const boundary = processGroupBoundary(was, frame)
       was = frame
-      open = processGroupAutoOpen(open, boundary, defaultProcessOpen(policy, frame.latest, false, false))
+      open = processGroupAutoOpen(open, boundary, defaultProcessOpen(policy, frame.latest, false))
       trace.push(open)
     }
-    // live → settle keeps the latest turn open (history policy), the newer run folds it once,
+    // live → settle keeps the latest turn open (next-input timing), the newer run folds it once,
     // and the noise frames after each boundary change nothing.
-    // live → settle 时最新回合按历史策略保持开；新回合 demote 时恰好收起一次；
+    // live → settle 时最新回合按延后策略保持开；新回合 demote 时恰好收起一次；
     // 每个边界之后的噪声帧不改变状态。
     expect(trace).toEqual([true, true, true, true, true, true, true, true, false, false, false])
   })
@@ -149,12 +147,12 @@ describe('work group open state machine', () => {
   // compact 模式仿真：settle（live-end）即收起一次，最终状态为收起。
   it('folds a compact-mode group exactly once at settle', () => {
     const policy = presentationPolicyFor('compact')
-    let open = defaultProcessOpen(policy, true, true, false)
+    let open = defaultProcessOpen(policy, true, true)
     let was = { live: true, latest: true }
     for (const frame of frames) {
       const boundary = processGroupBoundary(was, frame)
       was = frame
-      open = processGroupAutoOpen(open, boundary, defaultProcessOpen(policy, frame.latest, false, false))
+      open = processGroupAutoOpen(open, boundary, defaultProcessOpen(policy, frame.latest, false))
     }
     expect(open).toBe(false)
   })
@@ -170,79 +168,7 @@ describe('work group open state machine', () => {
   })
 })
 
-/** 折叠工作组正文预览（foldedProsePreview）的选取与净化测试。 */
-describe('folded work group preview', () => {
-  /**
-   * 构造一个已完成的 run：问题 → 带给定 blocks 的工作消息 → "完成。"回复。
-   * @param blocks 工作消息的内容块
-   * @returns 渲染模型中的 run
-   */
-  function runOf(blocks: ChatMessage['blocks']) {
-    const run = buildRenderModel([
-      { id: 'user', role: 'user', requestId: 'req', timestamp: 1, blocks: [{ type: 'text', text: '问题' }] },
-      { id: 'work', role: 'assistant', runId: 'run', timestamp: 2, status: 'completed', blocks },
-      { id: 'answer', role: 'assistant', runId: 'run', timestamp: 3, status: 'completed', blocks: [{ type: 'text', text: '完成。' }] },
-    ]).runs[0]
-    if (run === undefined) throw new Error('render model dropped the run')
-    return run
-  }
-  /** 公用的 read 工具调用块（让 run 里存在非文本块）。 */
-  const read = { type: 'toolCall' as const, id: 'read', name: 'read', arguments: { path: 'a.ts' } }
-
-  // 验证选取策略：取最长文本块而非最短的过场叙述（"我先看一眼代码"被跳过）。
-  it('names the longest folded block instead of the shortest narration', () => {
-    const run = runOf([
-      { type: 'text', text: '我先看一眼代码。' },
-      read,
-      { type: 'text', text: '我倾向方案 A：改动面最小，且语义最准。' },
-    ])
-    expect(foldedProsePreview(run)).toBe('我倾向方案 A：改动面最小，且语义最准。')
-  })
-
-  // 验证净化：代码围栏整段跳过，Markdown 标题与粗体剥成纯文本（"结论：方案 A"）。
-  it('keeps the preview a plain line, skipping fences and reading headings as prose', () => {
-    const run = runOf([
-      { type: 'text', text: '```ts\nconst hidden = 1\n```\n## 结论：**方案 A**' },
-      read,
-    ])
-    expect(foldedProsePreview(run)).toBe('结论：方案 A')
-  })
-
-  it('finds shorter prose when the longest block only contains fenced code', () => {
-    const run = runOf([
-      { type: 'text', text: '检查索引。' },
-      { type: 'text', text: '~~~ts\nconst muchLongerCode = true\n~~~' },
-      read,
-    ])
-    expect(foldedProsePreview(run)).toBe('检查索引。')
-  })
-
-  // 验证链接解包：[label](url) 只保留 label 文本，URL 不进入预览。
-  it('unwraps a markdown link target into its label', () => {
-    const run = runOf([
-      { type: 'text', text: '详见 [设计文档](https://example.test/design.md)，其余不变。' },
-      read,
-    ])
-    expect(foldedProsePreview(run)).toBe('详见 设计文档，其余不变。')
-  })
-
-  // 验证字符预算：超预算截断并补省略号（30 字按 10 字预算 → 10 字 + …）。
-  it('truncates to the character budget with an ellipsis', () => {
-    const run = runOf([{ type: 'text', text: '一二三四五六七八九十'.repeat(3) }, read])
-    expect(foldedProsePreview(run, 10)).toBe('一二三四五六七八九十…')
-  })
-
-  // 验证空预览：纯工具调用 run 或只有空白文本块的 run 没有可预览正文（返回 undefined）。
-  it('has nothing to preview for a run that only used tools or a blank block', () => {
-    expect(foldedProsePreview(runOf([read]))).toBeUndefined()
-    expect(foldedProsePreview(runOf([{ type: 'text', text: '   \n  ' }, read]))).toBeUndefined()
-  })
-})
-
-/**
- * ZCode summary group 口径的折叠头统计（workSummaryCounts / workSummaryText /
- * otherActivitySummary）与运行中的当前动作（currentWorkLine）。
- */
+/** 小组统计与运行中的当前动作。 */
 describe('zcode work summary', () => {
   /**
    * 构造一个已完成的 run。
@@ -280,7 +206,6 @@ describe('zcode work summary', () => {
     expect(workSummaryCounts(runOf([{ type: 'toolCall', id: 'q1', name: 'ask_user_question', arguments: {} }])))
       .toEqual({ explore: 0, run: 0, change: 0, unresolved: 0 })
     expect(workSummaryText({ explore: 0, run: 0, change: 0, unresolved: 0 }, zh, false)).toBeUndefined()
-    expect(otherActivitySummary(runOf([{ type: 'toolCall', id: 'q1', name: 'ask_user_question', arguments: {} }]), zh)).toBe('提问 1 次')
   })
 
   // 验证运行中的当前动作：流式思考取最后一行；无结果且父 run 在跑的命令行给出「正在执行 + 命令」。

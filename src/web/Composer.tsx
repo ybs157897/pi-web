@@ -16,6 +16,7 @@ import ModelSelect from './ModelSelect.tsx'
 import GitBranchSwitcher from './GitBranchSwitcher.tsx'
 import ComposerUsage from './ComposerUsage.tsx'
 import type { ConversationStats } from './render-model.ts'
+import { accessModeLabel } from './render-labels.ts'
 import { matchesShortcut, resolveShortcuts } from './keyboard.ts'
 import { CHAT_EMPTY_GREETINGS, chatEmptyGreeting, greetingFontSizePx, nextGreetingDelayMs } from './greeting.ts'
 import css from './Composer.module.css'
@@ -34,7 +35,10 @@ export interface ComposerProps {
   onChange: (value: string) => void; onAddImages: (files: FileList | File[]) => void; onRemoveImage: (id: string) => void
   onRetryImage?: (id: string) => void
   onSend: (mode?: BusySendMode) => void; onStop: () => void; onRemoveQueue: (id: string) => void
-  onSelectModel: (model: ModelOption) => void; onThinkingLevel: (level: ThinkingLevel) => void; onSendMode: (mode: BusySendMode) => void
+  onSelectModel: (model: ModelOption) => void; onThinkingLevel: (level: ThinkingLevel) => void; onSendMode?: (mode: BusySendMode) => void
+  /** Take input while the host is waiting for a decision or work slot. */
+  sendBlocked?: string
+  placeholder?: string
   hero?: boolean; workspace?: WorkspaceSummary; workspaces?: WorkspaceSummary[]; onSelectWorkspace?: (id: string) => void; onAddWorkspace?: () => void
   accessMode?: AccessMode; accessModes?: AccessMode[]; onAccessMode?: (mode: AccessMode) => void
   onUpdateQueue?: (id: string, action: QueueActionInput) => Promise<void>
@@ -46,6 +50,7 @@ export interface ComposerProps {
   /** Plan mode as the server projects it; the chip closes it through `onPlan`. */
   plan?: boolean; onPlan?: (active: boolean) => void
   files?: WorkspaceFileEntry[]; onSearchFiles?: (query: string) => Promise<WorkspaceFileEntry[]>; onPreviewFile?: (path: string) => void
+  resolveReferencePath?: (path: string) => string
   /** `$` skill picker; returns the workspace catalog (plugin skills included). */
   onSearchSkills?: (query: string) => Promise<readonly SkillSummary[]>
   stats?: ConversationStats
@@ -91,7 +96,7 @@ export default function Composer(props: ComposerProps) {
     onChange, onAddImages, onRemoveImage, onSend, onStop, onRemoveQueue, onSelectModel, onThinkingLevel,
     hero = false, workspace, workspaces = [], accessMode = 'fullAccess',
     accessModes = ['readOnly', 'fullAccess'], onUpdateQueue, onSearchFiles, onSearchSkills, plan = false, onPlan,
-    pluginContexts = [], onRemovePluginContext, queuePaused = false, onResumeQueue } = props
+    pluginContexts = [], onRemovePluginContext, queuePaused = false, onResumeQueue, sendBlocked } = props
   const { t, settings } = useUiPreferences()
   const textarea = useRef<HTMLTextAreaElement>(null)
   const card = useRef<HTMLDivElement>(null)
@@ -126,8 +131,9 @@ export default function Composer(props: ComposerProps) {
   const matchingModels = useMemo(() => availableModels.filter(item => `${item.name} ${item.modelId} ${item.provider}`.toLowerCase().includes(modelQuery.toLowerCase())).slice(0, 60), [availableModels, modelQuery])
   const providerName = (id: string): string => catalog?.providers.find(item => item.id === id)?.name ?? id
   const attachmentsPending = images.some(image => image.status !== 'ready')
-  const canSend = (value.trim() !== '' || images.length > 0) && !disabled && !sending && !attachmentsPending
-  const accessLabel = (mode: AccessMode) => mode === 'readOnly' ? t('仅可查看', 'Read only') : mode === 'workspaceWrite' ? t('工作区内修改', 'Workspace write') : t('完全权限', 'Full access')
+  const canSend = (value.trim() !== '' || images.length > 0) && !disabled && !sending && !attachmentsPending && sendBlocked === undefined
+  const sendStops = busy && !canSend
+  const accessLabel = (mode: AccessMode) => accessModeLabel(mode, t)
   const accessIcon = (mode: AccessMode): ReactNode => mode === 'readOnly' ? <PermissionIconReadOnlyRegular size={14} /> : mode === 'workspaceWrite' ? <PermissionIconWorkspaceWriteRegular size={14} /> : <PermissionIconFullAccessRegular size={14} />
 
   useEffect(() => { guard.current = observeComposition(document); return () => { guard.current?.dispose(); guard.current = null } }, [])
@@ -241,10 +247,10 @@ export default function Composer(props: ComposerProps) {
     { id: 'file', group: 'add', label: t('文件', 'File'), description: t('选择图片或文件作为附件', 'Attach images or files'), icon: <IconPlusOutlineRegular size={16} />, run: () => fileInput.current?.click() },
     ...(props.onCompact ? [{ id: 'compact', group: 'command' as const, label: t('压缩', 'Compact'), description: t('压缩以上对话内容', 'Compact the conversation above'), icon: <IconDatabaseOutlineRegular size={16} />, run: props.onCompact }] : []),
     ...(onPlan ? [{ id: 'plan', group: 'command' as const, label: t('计划', 'Plan'), description: plan ? t('退出计划模式，直接执行', 'Leave plan mode and work directly') : t('进入计划模式：先出计划，批准后再执行', 'Enter plan mode: plan first, execute after approval'), icon: <IconPlanOutlineRegular size={16} />, run: () => onPlan(!plan) }] : []),
-    { id: 'permission', group: 'command', label: t('权限', 'Permission'), description: t('切换权限预设（沙箱模式与审批策略）', 'Switch the permission preset (sandbox and approvals)'), icon: accessIcon(accessMode), run: () => setMenu('access') },
+    ...(props.onAccessMode ? [{ id: 'permission', group: 'command' as const, label: t('权限', 'Permission'), description: t('切换权限预设（沙箱模式与审批策略）', 'Switch the permission preset (sandbox and approvals)'), icon: accessIcon(accessMode), run: () => setMenu('access') }] : []),
     { id: 'model', group: 'command', label: t('模型', 'Model'), description: t('选择本会话使用的模型', 'Choose the model for this conversation'), icon: <IconDatabaseOutlineRegular size={16} />, run: () => setMenu('search') },
-    { id: 'settings', group: 'command', label: t('设置', 'Settings'), description: t('打开设置对话框', 'Open settings'), icon: <IconGaugeOutlineRegular size={16} />, run: () => props.onOpenSettings?.() },
-    { id: 'new', group: 'command', label: t('新建会话', 'New conversation'), description: t('开始一个新会话', 'Start a new conversation'), icon: <IconPlusOutlineRegular size={16} />, run: () => props.onNewConversation?.() },
+    ...(props.onOpenSettings ? [{ id: 'settings', group: 'command' as const, label: t('设置', 'Settings'), description: t('打开设置对话框', 'Open settings'), icon: <IconGaugeOutlineRegular size={16} />, run: props.onOpenSettings }] : []),
+    ...(props.onNewConversation ? [{ id: 'new', group: 'command' as const, label: t('新建会话', 'New conversation'), description: t('开始一个新会话', 'Start a new conversation'), icon: <IconPlusOutlineRegular size={16} />, run: props.onNewConversation }] : []),
     ...(busy ? [{ id: 'stop', group: 'command' as const, label: t('停止', 'Stop'), description: t('停止当前回答', 'Stop the current response'), icon: <IconStopFillRegular size={16} />, run: onStop }] : []),
   ]
   const commandMatches = trigger?.type === 'command' ? commands.filter(item => item.id.startsWith(trigger.query.toLowerCase())) : []
@@ -278,7 +284,7 @@ export default function Composer(props: ComposerProps) {
     if (entry.type === 'directory') {
       const directory = entry.path.endsWith('/') ? entry.path : `${entry.path}/`
       if (directory.includes(' ')) {
-        const insertion = `@"${directory}" `
+        const insertion = `@"${props.resolveReferencePath?.(directory) ?? directory}" `
         onChange(value.slice(0, trigger.from) + insertion + value.slice(trigger.to))
         setTrigger(null)
         requestAnimationFrame(() => {
@@ -298,7 +304,8 @@ export default function Composer(props: ComposerProps) {
       })
       return
     }
-    const insertion = entry.path.includes(' ') ? `@"${entry.path}" ` : `@${entry.path} `
+    const path = props.resolveReferencePath?.(entry.path) ?? entry.path
+    const insertion = path.includes(' ') ? `@"${path}" ` : `@${path} `
     onChange(value.slice(0, trigger.from) + insertion + value.slice(trigger.to))
     setTrigger(null)
     requestAnimationFrame(() => {
@@ -442,7 +449,7 @@ export default function Composer(props: ComposerProps) {
           </span>
         })}
       </div>}
-      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : busy ? t('继续输入以排队后续修改', 'Keep typing to queue follow-up changes') : undefined}
+      <textarea ref={textarea} className={css.textarea} data-composer-input aria-label={t('发送消息', 'Message')} placeholder={props.placeholder ?? (hero ? t('描述你想要构建的内容，/ 调用指令、@ 文件、$ 技能', 'Describe what you want to build, / for commands, @ for files, $ for skills') : busy ? t('继续输入以排队后续修改', 'Keep typing to queue follow-up changes') : undefined)}
         value={value} disabled={disabled || sending} rows={hero ? 2 : 1} onChange={event => updateValue(event.currentTarget.value, event.currentTarget.selectionStart)} onKeyDown={onKeyDown}
         onPaste={event => { const files = event.clipboardData.files; if (files.length) { event.preventDefault(); onAddImages(files) } }} />
       {trigger !== null && <div className={css.suggestionPanel} role="listbox" aria-label={trigger.type === 'command' ? t('指令', 'Commands') : trigger.type === 'skill' ? t('技能', 'Skills') : t('文件与文件夹', 'Files and folders')}>
@@ -485,7 +492,7 @@ export default function Composer(props: ComposerProps) {
           <input ref={fileInput} type="file" multiple className={css.fileInput} onChange={event => { if (event.currentTarget.files) onAddImages(event.currentTarget.files); event.currentTarget.value = '' }} />
           <Menu open={menu === 'add'} onClose={() => setMenu(null)} side="top" portal items={[
             { id: 'upload', label: t('添加文件', 'Add files'), icon: <IconPlusOutlineRegular size={14} /> },
-            { id: 'reference', label: t('引用工作区文件', 'Reference workspace file'), disabled: !workspace },
+            { id: 'reference', label: t('引用工作区文件', 'Reference workspace file'), disabled: !workspace && !onSearchFiles },
             { id: 'commands', label: t('调用指令', 'Commands') },
           ]} onSelect={id => { setMenu(null); if (id === 'upload') fileInput.current?.click(); else { const symbol = id === 'reference' ? '@' : '/'; const next = `${value}${value ? ' ' : ''}${symbol}`; updateValue(next, next.length); requestAnimationFrame(() => textarea.current?.focus()) } }}
             anchor={<button type="button" className={css.add} aria-label={t('添加文件或调用指令', 'Add files or commands')} disabled={disabled} onClick={() => setMenu(menu === 'add' ? null : 'add')}><IconPlusOutlineRegular size={16} /></button>} />
@@ -496,7 +503,7 @@ export default function Composer(props: ComposerProps) {
               <IconPlanOutlineRegular size={14} /><span>{t('计划', 'Plan')}</span>
             </button>
           </Tooltip>}
-          <Menu open={menu === 'access'} onClose={() => setMenu(null)} side="top" portal items={accessModes.map(mode => ({ id: mode, label: accessLabel(mode), icon: accessIcon(mode) }))} selectedId={accessMode}
+          {props.onAccessMode ? <Menu open={menu === 'access'} onClose={() => setMenu(null)} side="top" portal items={accessModes.map(mode => ({ id: mode, label: accessLabel(mode), icon: accessIcon(mode) }))} selectedId={accessMode}
             onSelect={id => {
               setMenu(null)
               const mode = id as AccessMode
@@ -504,30 +511,32 @@ export default function Composer(props: ComposerProps) {
               if (mode === 'fullAccess') { setAccessAck(false); setAccessConfirm(true); return }
               props.onAccessMode?.(mode)
             }} anchor={<button type="button" className={css.select} aria-label={`${t('访问模式，当前：', 'Access mode: ')}${accessLabel(accessMode)}`} onClick={() => setMenu(menu === 'access' ? null : 'access')} disabled={disabled}>{accessIcon(accessMode)}<span className={css.accessText}>{accessLabel(accessMode)}</span><IconChevronDownOutlineRegular size={11} /></button>} />
+            : <span className={css.accessIndicator} title={accessLabel(accessMode)}>{accessIcon(accessMode)}<span className={css.accessText}>{accessLabel(accessMode)}</span></span>}
         </div>
         <div className={css.trailing}>
           <ModelSelect models={availableModels} providerName={providerName} current={model} level={thinkingLevel} levels={thinkingChoices}
             levelName={value => LEVEL_NAMES[value]} disabled={disabled} busy={busy} t={t}
             onSelectModel={value => { onSelectModel(value) }} onSelectLevel={value => { onThinkingLevel(value) }}
-            onSearch={() => setMenu('search')} onManageProviders={() => { props.onOpenSettings?.() }} />
+            onSearch={() => setMenu('search')} onManageProviders={props.onOpenSettings} />
           <Menu open={menu === 'search'} onClose={() => setMenu(null)} side="top" align="end" portal anchor={<span className={css.menuAnchor} aria-hidden />} getAnchorRect={() => card.current?.getBoundingClientRect() ?? null} listClassName={css.modelSearchMenu}>
             <div className={css.modelSearch}><Input ref={modelSearch} value={modelQuery} placeholder={t('搜索模型', 'Search models')} onChange={event => setModelQuery(event.currentTarget.value)} /></div>
             {matchingModels.map(item => <MenuItemButton key={`${item.provider}/${item.modelId}`} onSelect={() => { onSelectModel(item); setMenu(null) }}><span className={css.modelMenuRow}><span>{item.name}<small>{item.provider}</small></span>{item.provider === model?.provider && item.modelId === model.modelId && <IconCheckOutlineRegular size={14} />}</span></MenuItemButton>)}
             {matchingModels.length === 0 && <div className={css.emptyMenu}>{t('没有可用模型', 'No available models')}</div>}
-            <MenuItemButton separatorBefore onSelect={() => { setMenu(null); props.onOpenSettings?.() }}>{t('管理模型提供商', 'Manage model providers')}</MenuItemButton>
+            {props.onOpenSettings && <MenuItemButton separatorBefore onSelect={() => { setMenu(null); props.onOpenSettings?.() }}>{t('管理模型提供商', 'Manage model providers')}</MenuItemButton>}
           </Menu>
           {busy && canSend && <Tooltip label={t('停止当前回答', 'Stop current response')} portal><button className={css.stopSecondary} type="button" aria-label={t('停止当前回答', 'Stop current response')} onClick={onStop}><IconStopFillRegular size={14} /></button></Tooltip>}
-          <Tooltip label={busy && !canSend ? t('停止当前回答', 'Stop current response') : busy ? sendMode === 'steer' ? t('立即插入', 'Steer now') : t('排队发送', 'Queue message') : !disabled && !sending && attachmentsPending ? t('附件读取中，暂不可发送', 'Attachments are still loading') : t('发送消息', 'Send message')} portal>
-            <button type="button" className={css.send} disabled={disabled || sending || !busy && !canSend} aria-label={busy && !canSend ? t('停止当前回答', 'Stop current response') : !disabled && !sending && attachmentsPending ? t('附件读取中，暂不可发送', 'Attachments are still loading') : t('发送消息', 'Send message')}
-              onClick={() => { setTrigger(null); if (busy && !canSend) onStop(); else onSend(sendMode) }}>{busy && !canSend ? <IconStopFillRegular size={16} /> : <IconSendOutlineRegular size={20} />}</button>
+          <Tooltip label={sendStops ? t('停止当前回答', 'Stop current response') : sendBlocked ?? (busy ? sendMode === 'steer' ? t('立即插入', 'Steer now') : t('排队发送', 'Queue message') : !disabled && !sending && attachmentsPending ? t('附件读取中，暂不可发送', 'Attachments are still loading') : t('发送消息', 'Send message'))} portal>
+            <button type="button" className={css.send} disabled={disabled || sending || !busy && !canSend} aria-label={sendStops ? t('停止当前回答', 'Stop current response') : !disabled && !sending && attachmentsPending ? t('附件读取中，暂不可发送', 'Attachments are still loading') : t('发送消息', 'Send message')}
+              onClick={() => { setTrigger(null); if (sendStops) onStop(); else if (canSend) onSend(sendMode) }}>{sendStops ? <IconStopFillRegular size={16} /> : <IconSendOutlineRegular size={20} />}</button>
           </Tooltip>
         </div>
       </div>
     </div>
     {!hero && <div className={css.statusStrip}>
       {props.stats !== undefined && <ComposerUsage stats={props.stats} contextWindow={selectedModel?.contextWindow} />}
-      {busy && <Menu open={menu === 'mode'} onClose={() => setMenu(null)} side="top" portal selectedId={sendMode} items={[{ id: 'followUp', label: t('排队发送', 'Queue message') }, { id: 'steer', label: t('立即插入', 'Steer now') }]}
-        onSelect={id => { props.onSendMode(id as BusySendMode); setMenu(null) }} anchor={<button className={css.modeButton} type="button" onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>{sendMode === 'steer' ? t('插入', 'Steer') : t('排队', 'Queue')}<IconChevronDownOutlineRegular size={10} /></button>} />}
+      {sendBlocked && <span className={css.sendBlocked} role="status">{sendBlocked}</span>}
+      {busy && props.onSendMode && <Menu open={menu === 'mode'} onClose={() => setMenu(null)} side="top" portal selectedId={sendMode} items={[{ id: 'followUp', label: t('排队发送', 'Queue message') }, { id: 'steer', label: t('立即插入', 'Steer now') }]}
+        onSelect={id => { props.onSendMode?.(id as BusySendMode); setMenu(null) }} anchor={<button className={css.modeButton} type="button" onClick={() => setMenu(menu === 'mode' ? null : 'mode')}>{sendMode === 'steer' ? t('插入', 'Steer') : t('排队', 'Queue')}<IconChevronDownOutlineRegular size={10} /></button>} />}
     </div>}
     <Modal open={accessConfirm} onClose={() => { setAccessConfirm(false); setAccessAck(false) }} title={t('确认启用完全权限?', 'Enable full access?')} closeLabel={t('关闭', 'Close')}
       footer={<div className={css.riskActions}>

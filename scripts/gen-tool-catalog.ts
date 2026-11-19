@@ -35,8 +35,8 @@ const repoRoot = join(fileURLToPath(new URL('../', import.meta.url)))
 const docPath = join(repoRoot, 'docs', 'tool-catalog.md')
 const scanRoot = join(repoRoot, 'src', 'server', 'tools')
 
-// 目录覆盖的五个 agent 变体，即总表的列序；每个变体单独发起一次真实探测请求。
-const VARIANTS = ['default', 'plan', 'readonly', 'subagent-general', 'subagent-explore'] as const
+// 目录覆盖的 agent 变体，即总表的列序。每个变体单独发起一次实际探测请求。
+const VARIANTS = ['default', 'plan', 'readonly', 'subagent-general', 'subagent-explore', 'workbench-bot-creation'] as const
 type Variant = (typeof VARIANTS)[number]
 
 /** 每个目录内工具的定义来源；vendor 工具以 `(vendor)` 标注而非仓库路径。 */
@@ -83,6 +83,7 @@ const TOOL_SOURCES: Record<string, string> = {
   team_task_get: 'src/server/tools/team.ts',
   team_task_update: 'src/server/tools/team.ts',
   codemode: 'src/server/codemode-policy.ts',
+  create_workbench_bot: 'src/server/runtime/workbench.ts',
   // vendor 工具随 @earendil-works/pi-durable 发布；`tool_search` 仅在 MCP 服务暴露延迟工具时
   // 注册，裸 demo runtime 不会出现它。
   tool_search: VENDOR_SOURCE,
@@ -282,6 +283,22 @@ async function captureVariants(): Promise<Record<Variant, CapturedTool[]>> {
       readonly: await probeMarker(await create('Catalog readonly', 'readOnly'), 'catalog-readonly'),
       'subagent-general': await probeSubagent('general'),
       'subagent-explore': await probeSubagent('explore'),
+      'workbench-bot-creation': await (async () => {
+        const first = captured.length
+        const workspaceId = runtime!.workspaces()[0]!.id
+        const requestId = randomUUID()
+        await runtime!.submitWorkbench(workspaceId, {
+          text: '[prompt-probe] [workbench-create-bot-probe] 创建一个资料审阅 Bot',
+          requestId, mention: 'general', accessMode: 'readOnly',
+        })
+        const deadline = Date.now() + 15_000
+        while (Date.now() < deadline) {
+          const request = captured.slice(first).find(item => item.tools.some(tool => tool.name === 'create_workbench_bot'))
+          if (request) return request
+          await delay(40)
+        }
+        throw new Error('没有捕获到通用智能体建档请求')
+      })(),
     }
     return Object.fromEntries(VARIANTS.map(variant => [variant, requests[variant].tools])) as Record<Variant, CapturedTool[]>
   } finally {
@@ -399,7 +416,7 @@ function render(variantTools: Record<Variant, CapturedTool[]>): string {
     '',
     '本目录穷举 pi-web 的内置工具面。每个变体的工具集合都不是手抄源码，而是来自真实 runtime 的模型请求：生成脚本以 demo 模式启动 runtime（与 `tests/prompt-snapshot.test.ts` 同一条生产线），向每个变体发送一条探测消息，捕获到达 provider 的请求并读取其中的工具清单。MCP 动态工具与插件提供的工具不在本目录内。',
     '',
-    '变体含义：`default` 为默认会话（code mode on，全量工具）；`plan` 为计划模式会话；`readonly` 为只读会话；`subagent-general` / `subagent-explore` 为 `subagent` 委派出的子智能体（general / explore profile）。总表按 default 变体的注册序排列，✓ 表示该变体的请求里出现了这个工具，— 表示被该变体的工具过滤排除。',
+    '变体含义：`default` 为默认会话（code mode on）；`plan` 为计划模式会话；`readonly` 为只读会话；`subagent-general` / `subagent-explore` 为 `subagent` 委派出的子智能体；`workbench-bot-creation` 为通用智能体的 Bot 建档工作项。总表按 default 变体的注册序排列，✓ 表示该变体的请求里出现了这个工具，— 表示该变体不提供这个工具。',
     '',
     '## 总表',
     '',

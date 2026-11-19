@@ -23,6 +23,7 @@ import {
 import type { AssistantMessage, AssistantMessageEventStream, Message } from '@earendil-works/pi-ai'
 import type { Context } from '@earendil-works/chord/context'
 import type { HookRunRecord } from '../hooks/schema.ts'
+import { assistantFailure, providerFailure } from './failure.ts'
 
 /** 轨迹扩展注册名，供装配与测试引用。 */
 export const TRAJECTORY_EXTENSION_NAME = 'pi-web-trajectory'
@@ -117,6 +118,47 @@ function clip(text: string): string {
 function previewOf(value: unknown): string | undefined {
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   return typeof text === 'string' ? clip(text) : undefined
+}
+
+/** Provider error bodies belong to the runtime's control flow. Trajectories carry the public code and message. */
+function traceMessage(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const message = value as Record<string, unknown>
+  if (message.role !== 'assistant' || message.failure !== undefined
+    || (message.stopReason !== 'error' && typeof message.errorMessage !== 'string')) return value
+  const failure = assistantFailure({
+    stopReason: message.stopReason === 'aborted' ? 'aborted' : 'error',
+    errorMessage: typeof message.errorMessage === 'string' ? message.errorMessage : undefined,
+    diagnostics: Array.isArray(message.diagnostics) ? message.diagnostics : undefined,
+  })
+  const { diagnostics, rawStopReason, errorMessage, ...rest } = message
+  return { ...rest, errorMessage: failure.message, failure }
+}
+
+function traceEntry(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const entry = value as Record<string, unknown>
+  return Array.isArray(entry.model) ? { ...entry, model: entry.model.map(traceMessage) } : value
+}
+
+function traceTask(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+  const task = value as { state?: { outcome?: { error?: { message?: unknown; detail?: { reason?: unknown } } } } }
+  const outcome = task.state?.outcome
+  const error = outcome?.error
+  if (error?.detail?.reason !== 'model_error') return value
+  const failure = providerFailure(error.message)
+  return { ...task, state: { ...task.state, outcome: { ...outcome, error: { message: failure.message, failure } } } }
+}
+
+function traceCapture(line: Record<string, unknown>): Record<string, unknown> {
+  if (line.type === 'request' && Array.isArray(line.messages)) return { ...line, messages: line.messages.map(traceMessage) }
+  if (line.type === 'response') return { ...line, message: traceMessage(line.message) }
+  if (line.type !== 'sidecall') return line
+  if (line.answer !== undefined) return { ...line, answer: traceMessage(line.answer) }
+  if (typeof line.error !== 'string' || line.failure !== undefined) return line
+  const failure = providerFailure(line.error)
+  return { ...line, error: failure.message, failure }
 }
 
 /**
@@ -244,7 +286,7 @@ export function createTrajectoryExtension(options: TrajectoryExtensionOptions): 
       ...(facts.thinkingLevel === undefined ? {} : { thinkingLevel: facts.thinkingLevel }),
       messageCount: request.messages.length,
       ...(options.fullRequest
-        ? { messages: request.messages }
+        ? { messages: request.messages.map(traceMessage) }
         : { messages: outlineRequestMessages(request.messages) }),
     })
     // 工具目录很少变化；用哈希门控，只有真实变化才落一行。
@@ -290,7 +332,7 @@ export function createTrajectoryExtension(options: TrajectoryExtensionOptions): 
       conversationId: key,
       task: sequence?.task ?? String(api.taskId),
       request: sequence?.request ?? 0,
-      message,
+      message: traceMessage(message),
     })
   }
 
@@ -413,10 +455,11 @@ export async function captureSideCall<T extends AssistantMessage>(
   }
   try {
     const answer = await run()
-    record({ answer })
+    record({ answer: traceMessage(answer) })
     return answer
   } catch (error) {
-    record({ error: error instanceof Error ? error.message : String(error) })
+    const failure = providerFailure(error)
+    record({ error: failure.message, failure })
     throw error
   }
 }
@@ -521,7 +564,7 @@ export async function assembleTrajectory(options: TrajectoryExportOptions): Prom
           seq: row.commit_seq,
           head: row.head !== null,
           ts: recordTimestamp(record) ?? null,
-          record,
+          record: traceEntry(record),
         },
       })
     }
@@ -541,7 +584,7 @@ export async function assembleTrajectory(options: TrajectoryExportOptions): Prom
           ts: startedAt ?? endedAt ?? null,
           ...(startedAt === undefined ? {} : { startedAt }),
           ...(endedAt === undefined ? {} : { endedAt }),
-          record,
+          record: traceTask(record),
         },
       })
     }
@@ -557,7 +600,7 @@ export async function assembleTrajectory(options: TrajectoryExportOptions): Prom
         if (line.trim() === '') continue
         try {
           const parsed = JSON.parse(line) as { ts?: unknown }
-          items.push({ ts: typeof parsed.ts === 'number' ? parsed.ts : 0, line: parsed as Record<string, unknown> })
+          items.push({ ts: typeof parsed.ts === 'number' ? parsed.ts : 0, line: traceCapture(parsed as Record<string, unknown>) })
         } catch {
           // 追加中途崩溃导致的撕裂末行不能污染整个导出。
         }

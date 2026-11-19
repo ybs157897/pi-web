@@ -635,6 +635,22 @@ describe('Pi Durable runtime', () => {
     expect(created.conversation.workspaceId).toBe(workspace.id)
   })
 
+  it('creates a directory from a workspace display name once across concurrent retries', async () => {
+    const { runtime } = await fixture()
+    const requestId = randomUUID()
+    const name = '研发 / 第一组'
+    const [first, retry] = await Promise.all([
+      runtime.createNamedWorkspace(name, requestId), runtime.createNamedWorkspace(name, requestId),
+    ])
+    expect(first).toEqual(retry)
+    expect(first.name).toBe(name)
+    expect(first.path.endsWith(requestId)).toBe(true)
+    expect((await stat(first.path)).isDirectory()).toBe(true)
+    expect(runtime.workspaces().filter(workspace => workspace.id === first.id)).toHaveLength(1)
+    await expect(runtime.createNamedWorkspace('其他', requestId)).rejects.toMatchObject({ code: 'CONFLICT' })
+    await expect(runtime.createNamedWorkspace(name, '../bad')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
   // 自动化引用守门：被（即使已暂停的）自动化引用的 workspace 删除报 CONFLICT
   // （错误信息点名自动化）；改派到默认 workspace 后即可删除，会话重绑。
   it('blocks deleting a workspace referenced by a disabled automation, then allows removal after reassignment', async () => {

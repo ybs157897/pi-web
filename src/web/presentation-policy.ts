@@ -8,8 +8,8 @@ export interface ChatPresentationPolicy {
   readonly collapseTiming: CollapseTiming
   /** 已完成的回合是否把过程行折叠进整回合的控制条。 */
   readonly foldCompletedTurns: boolean
-  /** 回合分组策略：collapsed 全部折叠；history 保留最新回合展开；none 平铺不分组。 */
-  readonly stepGrouping: 'collapsed' | 'history' | 'none'
+  /** 展开回合后，小组详细行默认收起、展开，或全部平铺。 */
+  readonly stepGrouping: 'collapsed' | 'expanded' | 'none'
   /** 折叠的流式思考旁是否显示最新一行摘要。 */
   readonly liveReasoningPreview: boolean
 }
@@ -19,7 +19,7 @@ type ModeCaps = Omit<ChatPresentationPolicy, 'collapseTiming'>
 const POLICIES: Readonly<Record<TranscriptViewMode, ModeCaps>> = {
   compact: { mode: 'compact', foldCompletedTurns: true, stepGrouping: 'collapsed', liveReasoningPreview: false },
   standard: { mode: 'standard', foldCompletedTurns: true, stepGrouping: 'collapsed', liveReasoningPreview: true },
-  detailed: { mode: 'detailed', foldCompletedTurns: true, stepGrouping: 'history', liveReasoningPreview: true },
+  detailed: { mode: 'detailed', foldCompletedTurns: true, stepGrouping: 'expanded', liveReasoningPreview: true },
   verbose: { mode: 'verbose', foldCompletedTurns: false, stepGrouping: 'none', liveReasoningPreview: true },
 }
 

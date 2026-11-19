@@ -7,6 +7,7 @@ import { defineExtension, defineTool, type Extension, type ToolExecutionApi } fr
 import { searchWithRipgrep } from './search/native.ts'
 import { boundedSearch, MAX_TOOL_OUTPUT_BYTES, makeExcerpt, type SearchMatch } from './search/format.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { workbenchProject } from '../conversation/execution-env.ts'
 
 /** 四个检索工具名：list_files / search_files / glob / grep。 */
 export const RESEARCH_TOOL_NAMES = ['list_files', 'search_files', 'glob', 'grep'] as const
@@ -189,7 +190,7 @@ function grepPattern(value: string, caseSensitive: boolean): RegExp {
  * @returns workspace 目录路径。
  */
 function requireWorkspace(api: ToolExecutionApi): string {
-  const cwd = api.env?.cwd
+  const cwd = workbenchProject(api.env) ?? api.env?.cwd
   if (typeof cwd !== 'string' || cwd.trim() === '' || !isAbsolute(cwd)) {
     throw new RuntimeError('UNSUPPORTED', 'The current conversation has no bound workspace directory.')
   }

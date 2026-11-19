@@ -6,7 +6,7 @@ import type { Context } from '@earendil-works/chord/context'
 import type { ToolExecutionApi, ToolExecutionResult } from '@earendil-works/pi-durable'
 import { createBashTool } from '@earendil-works/pi-durable/tools'
 import iconv from 'iconv-lite'
-import { localShellSpawn } from '../../conversation/execution-env.ts'
+import { localShellSpawn, workbenchProject } from '../../conversation/execution-env.ts'
 import { RuntimeError } from '../../runtime-errors.ts'
 import { commandTimeout, resolveWorkdir, shellQuote, withNoMatchSuccess } from './common.ts'
 import { runShellCommand } from './runner.ts'
@@ -189,7 +189,7 @@ export async function executePosixBash(
   }
 
   const root = await realpath(cwd).catch(() => resolve(cwd))
-  const workdir = await resolveWorkdir(root, args.workdir)
+  const workdir = await resolveWorkdir(root, args.workdir, workbenchProject(api.env))
 
   if (api.env === undefined || api.env.id !== 'node:local') {
     const command = workdir === root ? args.command : `cd -- ${shellQuote(workdir)} && ${args.command}`

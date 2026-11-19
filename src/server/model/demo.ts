@@ -9,7 +9,7 @@ import {
   type FauxResponseFactory,
 } from '@earendil-works/pi-ai'
 import type { ModelRef } from '@earendil-works/pi-durable'
-import { getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
+import { getCurrentSystemMessage, getCurrentTools, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { ModelCatalog, ProviderConfigSummary, ProviderInput, ProviderTestResult, ThinkingLevel } from '../../shared/types.ts'
 import type { RuntimeModels } from './catalog.ts'
 import { RuntimeError } from '../runtime-errors.ts'
@@ -374,7 +374,24 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
   }
   const currentResults = context.messages.slice(lastUserIndex + 1).filter((message) => message.role === 'toolResult')
   const userText = latestUserText(context).trim()
-  const toolNames = new Set(getCurrentTools(normalizeContext(context).messages).map(tool => tool.name))
+  const transcript = normalizeContext(context).messages
+  const system = getCurrentSystemMessage(transcript)
+  const systemPrompt = typeof system?.content === 'string' ? system.content : ''
+  if (systemPrompt.includes('pi-web Agent 工作台的主 Agent')) {
+    const input = JSON.parse(userText) as { request: string; mention?: string }
+    const title = input.request.trim().split('\n')[0]?.trim().slice(0, 100) || '检查附件'
+    const createBot = input.mention === 'general' && input.request.includes('[workbench-create-bot-probe]') ? {
+      id: 'catalog-specialist', name: '目录演示 Bot', role: '检查资料',
+      description: '演示工作台的 Bot 建档工具。', instructions: '逐项核对资料来源。',
+    } : undefined
+    return fauxAssistantMessage(fauxText(JSON.stringify({ tasks: [{
+      title, type: 'investigate', assignee: input.mention || 'general', objective: title,
+      constraints: ['本次为演示'], acceptance: ['展示一条可提交验收的演示结果'], dependsOn: [], previous: [],
+    }], createBot })))
+  }
+  const workbenchWorker = Object.values(system?.sections ?? {}).some(section =>
+    typeof section === 'string' && section.includes('你在自己的子会话执行主 Agent 分配的工作项'))
+  const toolNames = new Set(getCurrentTools(transcript).map(tool => tool.name))
   const routedCall = (name: string, args: NonNullable<Parameters<typeof fauxToolCall>[1]>, id: string) =>
     !toolNames.has(name) && toolNames.has('codemode')
       ? fauxToolCall('codemode', { code: `return await tools.${name}(${JSON.stringify(args)})` }, { id })
@@ -460,6 +477,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
           fauxThinking('先把演示范围问清楚，再决定后续步骤。'),
           fauxText('先确认这次演示覆盖哪一层：选前端交互会重点看卡片与选项，选全链路会一直跑到收尾回复。\n\n补充要求可以留空，我会按默认顺序演示。'),
           fauxToolCall('ask_user_question', {
+            ...(workbenchWorker ? { escalation: { reason: 'requirement_ambiguity', why: '不同的演示范围需要不同的验证步骤，必须先确定目标。' } } : {}),
             questions: [
               {
                 id: 'scope',
@@ -485,6 +503,7 @@ export const scriptedResponse: FauxResponseFactory = async (context, options) =>
         ])
     }
   }
+  if (workbenchWorker) return fauxAssistantMessage(fauxText('演示任务已完成，请核对本次交付。'))
   if (userText.includes('[statechart]')) {
     switch (currentResults.length) {
       case 0:

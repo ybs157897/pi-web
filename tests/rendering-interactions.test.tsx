@@ -181,6 +181,10 @@ describe('real message rendering interactions', () => {
   it('connects read and edit file chips to the host and preserves tool disclosure through work-group toggles', () => {
     const onOpenFile = vi.fn(), onInspectDiff = vi.fn()
     render(<Transcript messages={processMessages()} onOpenFile={onOpenFile} onInspectDiff={onInspectDiff} onOpenTool={() => {}} />)
+    const group = screen.getByRole('button', { name: '已工作 11 秒' })
+    expect(group.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: 'example.ts' })).toBeNull()
+    fireEvent.click(group)
     const read = document.querySelector('[data-tool-name=read]') as HTMLElement
     fireEvent.click(within(read).getByRole('button', { name: 'example.ts' }))
     expect(onOpenFile).toHaveBeenCalledWith('src/example.ts')
@@ -191,8 +195,9 @@ describe('real message rendering interactions', () => {
     const terminal = document.querySelector('[data-tool-name=bash]') as HTMLElement
     fireEvent.click(within(terminal).getByRole('button', { name: '展开工具详情' }))
     expect(within(terminal).getByRole('region', { name: '命令输出' })).toBeTruthy()
-    const group = screen.getByRole('button', { name: '已工作 11 秒' })
-    fireEvent.click(group); fireEvent.click(group)
+    fireEvent.click(group)
+    expect(screen.queryByRole('region', { name: '命令输出' })).toBeNull()
+    fireEvent.click(group)
     expect(within(terminal).getByRole('button', { name: '收起工具详情' }).getAttribute('aria-expanded')).toBe('true')
     const changes = screen.getByRole('button', { name: '展开已更改文件' })
     expect(changes.getAttribute('aria-expanded')).toBe('false')

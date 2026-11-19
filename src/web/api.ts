@@ -9,6 +9,7 @@ import type {
   WorkspaceFile, WorkspaceFileEntry, WorkspaceSummary,
 } from '../shared/types.ts'
 import type { SkillCatalog, SkillContent, SkillValidation } from '../shared/skills.ts'
+import type { ConversationFailure } from '../shared/conversation-failure.ts'
 import type { InstallPluginInput, PluginDescription, PluginOverview } from '../shared/plugins.ts'
 import type {
   PluginUiCallInput, PluginUiDescriptor, PluginUiReadResourceInput, PluginUiSurfaceView,
@@ -21,7 +22,7 @@ import type {
 export class ApiFailure extends Error {
   readonly code: string | undefined
 
-  constructor(message: string, code?: string) {
+  constructor(message: string, code?: string, readonly failure?: ConversationFailure) {
     super(message)
     this.name = 'ApiFailure'
     this.code = code
@@ -33,7 +34,7 @@ export class ApiFailure extends Error {
  * 文案，缺失时按状态码兜底；响应体不是 JSON 或 body 不是对象时，成功响应用「无法
  * 读取的数据」、失败响应用状态码文案兜底；带 body 的请求自动补 `Content-Type: application/json`。
  */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -48,11 +49,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiFailure(response.ok ? '服务器返回了无法读取的数据' : `请求失败（${response.status}）`)
   }
   if (!response.ok) {
-    const body = isRecord(payload) ? payload : {}
-    throw new ApiFailure(
-      typeof body.error === 'string' ? body.error : `请求失败（${response.status}）`,
-      typeof body.code === 'string' ? body.code : undefined,
-    )
+    throw apiFailure(payload, `请求失败（${response.status}）`)
   }
   return payload as T
 }
@@ -77,6 +74,17 @@ async function requestText(path: string): Promise<string> {
 /** 窄化守卫：值是普通对象（非 null、非数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function apiFailure(payload: unknown, fallback: string): ApiFailure {
+  const body = isRecord(payload) ? payload : {}
+  const failure = body.failure
+  const typedFailure = isRecord(failure) && typeof failure.code === 'string'
+    && typeof failure.message === 'string' && typeof failure.retryable === 'boolean'
+    && (failure.action === 'retry' || failure.action === 'check_model' || failure.action === 'compact')
+    ? failure as ConversationFailure : undefined
+  return new ApiFailure(typeof body.error === 'string' ? body.error : fallback,
+    typeof body.code === 'string' ? body.code : undefined, typedFailure)
 }
 
 /**
@@ -303,6 +311,9 @@ export const api = {
   createWorkspace(input: AddWorkspaceInput): Promise<{ workspace: WorkspaceSummary }> {
     return request('/api/workspaces', { method: 'POST', body: JSON.stringify(input) })
   },
+  createNamedWorkspace(name: string, requestId: string): Promise<{ workspace: WorkspaceSummary }> {
+    return request('/api/workspaces/named', { method: 'POST', body: JSON.stringify({ name, requestId }) })
+  },
   renameWorkspace(id: string, input: RenameWorkspaceInput): Promise<{ workspace: WorkspaceSummary }> {
     return request(`/api/workspaces/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) })
   },
@@ -439,11 +450,21 @@ export const api = {
    * @returns EventSource，由调用方负责 close()
    * 内部逻辑：快照 JSON 解析失败时回报 error；连接断开浏览器自动重连，onState 跟随。
    */
-  watch(id: string, listener: (detail: ConversationDetail) => void, onState: (state: 'connecting' | 'open' | 'error') => void): EventSource {
+  watch(id: string, listener: (detail: ConversationDetail) => void, onState: (state: 'connecting' | 'open' | 'error', failure?: ApiFailure) => void): EventSource {
     const source = new EventSource(`/api/conversations/${encodeURIComponent(id)}/events`)
     onState('connecting')
     source.onopen = () => { onState('open') }
-    source.onerror = () => { onState('error') }
+    source.onerror = event => {
+      if ('data' in event && typeof event.data === 'string') {
+        let payload: unknown
+        try { payload = JSON.parse(event.data) } catch { /* Treat malformed data as a dropped stream. */ }
+        if (isRecord(payload) && typeof payload.error === 'string') {
+          onState('error', apiFailure(payload, '会话同步失败'))
+          return
+        }
+      }
+      onState('error')
+    }
     source.addEventListener('snapshot', (event) => {
       try {
         listener(JSON.parse((event as MessageEvent<string>).data) as ConversationDetail)

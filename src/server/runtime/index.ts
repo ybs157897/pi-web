@@ -78,6 +78,8 @@ import { createConversations } from './conversations.ts'
 import { createCore } from './core.ts'
 import { createInteractionReplies } from './interactions.ts'
 import { createSubagentSettlement } from './subagent-settle.ts'
+import { createWorkbench, createWorkbenchRuntimeExtension, WorkbenchSeats, workbenchDirectory } from './workbench.ts'
+import { createDecisionInbox } from './decision-inbox.ts'
 
 import { CODEMODE_EXTENSION_NAME, CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, accumulateUsage, ensureRuntimePolicy, parseConversationId } from './helpers.ts'
 
@@ -258,9 +260,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
   }))
   registry.install(InteractionTools)
+  registry.install(createWorkbenchRuntimeExtension(() => harness))
   registry.install(createPlanExtension({ readAccessMode: async (tx, conversationId) => (await tx.doc(META, conversationId)).accessMode }))
   registry.install(createSkillTools({
     store: skillStore,
+    skillSelection: async (conversationId, context) => (await harness.snapshot(WorkbenchSeats, conversationId, context))?.seat?.skillIds,
     canWrite: async (conversationId, context) => {
       const metadata = await harness.snapshot(META, conversationId, context)
       const plan = await harness.snapshot(Plans, conversationId, context)
@@ -412,6 +416,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         : undefined
       if (memoryRoot !== undefined && selectedMode !== 'readOnly') void ensureMemoryDirectory(memoryRoot)
       const extraWriteRoots = memoryRoot !== undefined && selectedMode === 'workspaceWrite' ? [memoryRoot] : []
+      const seat = (await harness.snapshot(WorkbenchSeats, target.conversationId, CTX))?.seat
+      if (seat?.itemId) {
+        const project = appState.snapshot().workspaces.find(item => item.id === seat.workspaceId)
+        if (project === undefined) throw new RuntimeError('NOT_FOUND', '工作项的原工作区已不存在')
+        return createExecutionEnv(await workbenchDirectory(dataDir, seat.workspaceId, seat.itemId), selectedMode, extraWriteRoots, project.path)
+      }
       return createExecutionEnv(selectedWorkspace.path, selectedMode, extraWriteRoots)
     },
     /** 新会话创建钩子：注入运行时政策扩展与元数据初值；fork 继承父会话的字段。 */
@@ -481,9 +491,23 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     harness: () => harness, requireConversation, ensureMetadata, withMetadata,
     submitWithReferences: conversationsService.submitWithReferences, workspaceFiles, defaultWorkspace,
   })
+  const workbenchService = createWorkbench({
+    dataDir, harness: () => harness, assertOpen, modelRuntime, selectedWorkspace,
+    workspaceWriteAvailable, defaultModel: () => appState.snapshot().settings.defaultModel ?? modelRuntime.defaultModel,
+    defaultAccessMode: () => appState.snapshot().settings.defaultAccessMode, buildAgentChange, currentDetail,
+    submit: conversationsService.submit,
+    serializeInteractionSettlement: (id, action) => interactionsService.serializeSettlement(id, action),
+    listSkills: async id => (await skillStore.list(workspaceFiles.workspace(id).path)).skills,
+  })
+  const decisionInbox = createDecisionInbox({
+    harness: () => harness,
+    listWorkItems: workbenchService.listWorkItems,
+    decideWorkItem: workbenchService.decideWorkItem,
+  })
   /** 交互回复 feature：回答与放弃 ask_user_question / 计划审阅。 */
   const interactionsService = createInteractionReplies({
     harness: () => harness, requireConversation, currentDetail, assertConversationModelAllowed,
+    recordInteractionSettlement: decisionInbox.recordInteractionSettlement,
   })
 
   /** 设置 feature：应用设置读写与模型/Provider 的白名单过滤面。 */
@@ -494,7 +518,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   /** 工作区 feature：注册、目录选择、文件面与 Git 能力面。 */
   const workspacesService = createWorkspaces({
-    appState, modelRuntime, workspaceFiles, list: conversationsService.list, withMetadata, parseConversationId,
+    dataDir, appState, modelRuntime, workspaceFiles, list: conversationsService.list, withMetadata, parseConversationId,
     assertNoAutomationReferences: (...args) => automationsFeature().assertNoAutomationReferences(...args),
     conversationModel: async (value: string) => (await requireConversation(value)).agent(CTX).then(agent => agent.model),
   })
@@ -634,6 +658,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // 会开启父会话的 follow-up 运行。
   await subagentSettlement.reconcileBackgroundDelegations()
   harness.resume()
+  workbenchService.start()
   // 升级会把 code mode 加入既有注册表，而 agent 选择是按会话存储的：
   // 先把空闲会话对齐到当前呈现再开始服务。
   await syncIdleAgents()
@@ -653,16 +678,38 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   /** 面向 HTTP 层的 Runtime 契约：全部按 feature 分组透传。 */
   return {
     /** 列出全部无主会话摘要。 */
-    list: () => conversationsService.list(),
+    list: async () => {
+      const list = await conversationsService.list()
+      const seats = await Promise.all(list.map(conversation => workbenchService.seat(conversation.id)))
+      return list.filter((_conversation, index) => seats[index] === null)
+    },
     /** 创建新会话。 */
     create: (input) => conversationsService.create(input),
     // 读取详情就是客户端的「查看会话」；侧栏未读点在下一次列表刷新时清除。
     // 内部调用方直接用 `currentDetail`。
     detail: (value) => conversationsService.detail(value),
     /** 更新会话标题/归档/置顶/工作区/模式/模型/思考等级。 */
-    update: (value, input) => conversationsService.update(value, input),
+    update: async (value, input) => {
+      if ((input.workspaceId !== undefined || input.accessMode !== undefined || input.model !== undefined || input.thinkingLevel !== undefined)
+        && await workbenchService.seat(value) !== null) {
+        throw new RuntimeError('INVALID_INPUT', '请在 Bot 配置中修改工作台设置，或在工作台对话中选择本轮模型')
+      }
+      return conversationsService.update(value, input)
+    },
     /** 向会话提交一条用户消息。 */
-    submit: (value, input) => conversationsService.submit(value, input),
+    submit: async (value, input) => {
+      const seat = await workbenchService.seat(value)
+      if (seat === null) return conversationsService.submit(value, input)
+      if (!seat.itemId) throw new RuntimeError('INVALID_INPUT', '请从 Agent 对话发送工作项')
+      return workbenchService.reply(seat.workspaceId, seat.itemId, input)
+    },
+    workbench: workbenchService.view,
+    createWorkbenchBot: workbenchService.createBot,
+    updateWorkbenchBot: workbenchService.updateBot,
+    submitWorkbench: workbenchService.submit,
+    replyWorkbench: workbenchService.reply,
+    retryWorkbench: workbenchService.retry,
+    decisionInbox,
     /** 回答一条 pending 交互（问答或计划审阅）。 */
     answerInteraction: (value, callId, answers) => interactionsService.answerInteraction(value, callId, answers),
     /** 放弃一条 pending 交互。 */
@@ -752,6 +799,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     workspaces: () => workspacesService.list(),
     /** 添加工作区。 */
     addWorkspace: (input) => workspacesService.add(input),
+    createNamedWorkspace: (name, requestId) => workspacesService.createNamed(name, requestId),
     /** 重命名工作区。 */
     renameWorkspace: (id, input) => workspacesService.rename(id, input),
     /** 注销工作区并改绑其会话。 */
@@ -871,6 +919,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         modelRuntime.close()
         closePromise = (async () => {
           try {
+            await workbenchService.close()
             await conversationsService.closeWatches()
           } finally {
             try {

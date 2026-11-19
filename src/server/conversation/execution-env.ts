@@ -9,6 +9,21 @@ import { RuntimeError } from '../runtime-errors.ts'
 
 /** macOS 内置沙盒执行器的固定路径。 */
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec'
+const workbenchProjects = new WeakMap<ExecutionEnv, { project: string; writeRoots?: readonly string[] }>()
+
+/** 工作台在独立目录运行，项目读取和交付仍以原工作区为根。 */
+export function workbenchProject(env: ExecutionEnv | undefined): string | undefined {
+  return env === undefined ? undefined : workbenchProjects.get(env)?.project
+}
+
+/** Pi 文件工具以原项目为 cwd，沿用会话的写入根和检查顺序。 */
+export function workbenchFileEnv(env: ExecutionEnv | undefined): NodeExecutionEnv | undefined {
+  const workspace = env === undefined ? undefined : workbenchProjects.get(env)
+  if (workspace === undefined) return undefined
+  return workspace.writeRoots === undefined
+    ? new NodeExecutionEnv({ cwd: workspace.project })
+    : new WorkspaceWriteExecutionEnv(workspace.project, workspace.writeRoots)
+}
 
 /**
  * 功能：判断 target 是否位于 root 之内（含相等），做词法相对路径判断。
@@ -94,13 +109,12 @@ class WorkspaceWriteExecutionEnv extends NodeExecutionEnv {
 
   /**
    * 功能：构建沙盒执行环境。
-   * @param cwd 工作区根（作为默认 cwd 与首个写入根）。
-   * @param extraWriteRoots 额外写入根（如记忆目录）；重复根会被去重。
+   * @param cwd 默认工作目录。
+   * @param writeRoots 允许写入的有序目录列表；重复根会被去重。
    */
-  constructor(cwd: string, extraWriteRoots: readonly string[] = []) {
+  constructor(cwd: string, writeRoots: readonly string[]) {
     super({ cwd })
-    const workspaceRoot = resolve(cwd)
-    this.#roots = [workspaceRoot, ...extraWriteRoots.map(root => resolve(root)).filter(root => root !== workspaceRoot)]
+    this.#roots = [...new Set(writeRoots.map(root => resolve(root)))]
     this.#profile = profile(this.#roots)
   }
 
@@ -210,17 +224,26 @@ export function localShellSpawn(env: ExecutionEnv, command: string, fallbackShel
  * @param cwd 会话工作目录；realpath 失败时抛 NOT_FOUND。
  * @param mode 访问模式（readOnly/workspaceWrite/fullAccess）。
  * @param extraWriteRoots workspaceWrite 模式下的额外写入根。
+ * @param project 工作台子会话的原项目目录。
  * @returns 对应模式的 ExecutionEnv。
  * 内部逻辑：先规范化 cwd（不可用即抛错）；workspaceWrite 模式下沙盒不受支持则抛 UNSUPPORTED，
  * 否则返回 WorkspaceWriteExecutionEnv；其余模式返回无沙盒的 NodeExecutionEnv。
  */
-export async function createExecutionEnv(cwd: string, mode: AccessMode, extraWriteRoots: readonly string[] = []): Promise<ExecutionEnv> {
+export async function createExecutionEnv(cwd: string, mode: AccessMode, extraWriteRoots: readonly string[] = [], project?: string): Promise<ExecutionEnv> {
   const canonical = await realpath(cwd).catch(() => {
     throw new RuntimeError('NOT_FOUND', '会话工作目录不可用')
   })
-  if (mode === 'workspaceWrite') {
+  const deliveryRoot = project === undefined ? undefined : await realpath(project)
+  const writeRoots = mode === 'workspaceWrite'
+    ? [canonical, ...(deliveryRoot === undefined ? [] : [deliveryRoot]), ...extraWriteRoots]
+    : undefined
+  let env: ExecutionEnv
+  if (writeRoots !== undefined) {
     if (!await workspaceWriteSupported(canonical)) throw new RuntimeError('UNSUPPORTED', '当前系统无法启用工作区写入沙盒')
-    return new WorkspaceWriteExecutionEnv(canonical, extraWriteRoots)
+    env = new WorkspaceWriteExecutionEnv(canonical, writeRoots)
+  } else {
+    env = new NodeExecutionEnv({ cwd: canonical })
   }
-  return new NodeExecutionEnv({ cwd: canonical })
+  if (deliveryRoot !== undefined) workbenchProjects.set(env, { project: deliveryRoot, writeRoots })
+  return env
 }

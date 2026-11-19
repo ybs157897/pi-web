@@ -33,7 +33,7 @@ export function powershellQuote(value: string): string {
  * @param value 调用参数中的 workdir，可为绝对或相对路径；相对路径以 cwd 为基准。
  * @returns realpath 解析后的、保证在 workspace 内的目录绝对路径。
  */
-export async function resolveWorkdir(cwd: string, value: unknown): Promise<string> {
+export async function resolveWorkdir(cwd: string, value: unknown, project?: string): Promise<string> {
   if (value === undefined) return cwd
   if (typeof value !== 'string' || value.trim() === '' || value.includes('\u0000')) {
     throw new RuntimeError('INVALID_INPUT', 'workdir must be a non-empty path inside the workspace.')
@@ -46,8 +46,12 @@ export async function resolveWorkdir(cwd: string, value: unknown): Promise<strin
   } catch {
     throw new RuntimeError('NOT_FOUND', 'workdir does not exist or is unavailable.')
   }
-  const rel = relative(root, target)
-  if (rel !== '' && (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))) {
+  const allowedRoots = project === undefined ? [root] : [root, project]
+  const inside = allowedRoots.some(directory => {
+    const rel = relative(directory, target)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  })
+  if (!inside) {
     throw new RuntimeError('FORBIDDEN', 'workdir must stay inside the workspace.')
   }
   const info = await lstat(target)

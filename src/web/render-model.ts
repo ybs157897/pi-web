@@ -12,7 +12,7 @@ export interface ToolItem {
   readonly order: number
 }
 
-/** 过程区的部件：交错用户行、思考、正文与工具行（逐个工具平铺，聚合只发生在折叠头统计里）。 */
+/** 过程区的原始部件，按时间保留交错用户行、思考、正文与工具行。 */
 export type ProcessPart =
   | { readonly kind: 'user'; readonly key: string; readonly message: ChatMessage; readonly order: number }
   | { readonly kind: 'reasoning'; readonly key: string; readonly message: ChatMessage; readonly text: string; readonly redacted: boolean; readonly streaming: boolean; readonly order: number }
@@ -503,9 +503,9 @@ function liveTailIndex(blocks: readonly ContentBlock[]): number {
 }
 
 /** 从调用树计数，显示分组不增加调用数。已有子调用的 codemode 只贡献内部活动。 */
-function summarizeToolActivities(roots: readonly MutableToolItem[]): Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'> {
+export function summarizeToolActivities(roots: readonly ToolItem[]): Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'> {
   const counts = new Map<ToolActivity, number>()
-  const visited = new Set<MutableToolItem>()
+  const visited = new Set<ToolItem>()
   const counted = new Set<string>()
   let failedTools = 0
   let stoppedTools = 0
@@ -519,8 +519,8 @@ function summarizeToolActivities(roots: readonly MutableToolItem[]): Pick<Render
     if (status === 'error') failedTools += 1
     else if (status === 'cancelled') stoppedTools += 1
   }
-  const toolStatus = (item: MutableToolItem) => item.result?.isError ? 'error' : item.result?.status ?? item.message.status
-  const visit = (item: MutableToolItem): void => {
+  const toolStatus = (item: ToolItem) => item.result?.isError ? 'error' : item.result?.status ?? item.message.status
+  const visit = (item: ToolItem): void => {
     if (visited.has(item)) return
     visited.add(item)
     const id = item.call?.id ?? item.result?.toolCallId ?? item.key

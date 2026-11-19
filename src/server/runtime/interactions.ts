@@ -5,13 +5,13 @@
  * 重启后的重试复用由 call 派生的 request id。
  */
 import { createHash } from 'node:crypto'
-import type { Conversation, ConversationId, Harness, InputSubmissionDraft } from '@earendil-works/pi-durable'
+import type { Conversation, ConversationId, Harness, InputSubmissionDraft, Tx } from '@earendil-works/pi-durable'
 import type { AskUserQuestionAnswerItem, ConversationDetail } from '../../shared/types.ts'
 import { validateAnswers } from '../conversation/interactions.ts'
 import { Plans, decidePlanReview, interactionTable, planReviewOf, type StoredPlanReview } from '../tools/plan.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
-import { CTX, META } from './helpers.ts'
+import { CTX, META, parseConversationId } from './helpers.ts'
 
 /** 交互回复 feature 的依赖注入契约：会话句柄获取、会话校验、详情读取与模型策略。 */
 export interface InteractionsDeps {
@@ -19,6 +19,7 @@ export interface InteractionsDeps {
   requireConversation(value: string): Promise<Conversation>
   currentDetail(id: ConversationId): Promise<ConversationDetail>
   assertConversationModelAllowed(conversation: Conversation): Promise<void>
+  recordInteractionSettlement?(tx: Tx, id: ConversationId, callId: string, askedAt: number): Promise<void>
 }
 
 /**
@@ -30,6 +31,22 @@ export interface InteractionsDeps {
 export function createInteractionReplies(deps: InteractionsDeps) {
   const { requireConversation, currentDetail, assertConversationModelAllowed } = deps
   const harness = (): Harness => deps.harness()
+  const settlements = new Map<ConversationId, Promise<unknown>>()
+
+  // Replies and workbench deadline cancellation share the conversation inbox.
+  const serializeSettlement = async <T>(
+    conversationId: ConversationId,
+    action: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = settlements.get(conversationId)
+    const result = previous ? previous.catch(() => undefined).then(action) : action()
+    settlements.set(conversationId, result)
+    try {
+      return await result
+    } finally {
+      if (settlements.get(conversationId) === result) settlements.delete(conversationId)
+    }
+  }
 
   /**
    * 功能：提交一条回复消息，并记下与手打消息相同的请求回执。
@@ -45,12 +62,26 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   const submitReply = async (
     conversation: Conversation,
     requestId: string,
+    alternateId: string,
     content: string,
     entry: InputSubmissionDraft['entry'],
   ): Promise<void> => {
-    const existing = await harness().snapshot(META, conversation.id, CTX)
-    const receipt = existing?.requestReceipts[requestId]
-    if (receipt?.submissionId !== null && receipt?.submissionId !== undefined) return
+    const fingerprint = createHash('sha256').update(content).digest('hex')
+    const settled = await harness().commit(async (tx) => {
+      const metadata = await tx.doc(META, conversation.id)
+      const receipt = metadata.requestReceipts[requestId]
+      if (await tx.submissionByRequest(conversation.id, alternateId)) {
+        throw new RuntimeError('CONFLICT', '该交互已有另一项处理提交')
+      }
+      const admitted = await tx.submissionByRequest(conversation.id, requestId)
+      if (admitted && receipt?.fingerprint !== fingerprint) {
+        throw new RuntimeError('CONFLICT', '该交互已有不同的处理提交')
+      }
+      if (receipt?.submissionId != null) return true
+      metadata.requestReceipts[requestId] = { fingerprint, status: 'pending', submissionId: null }
+      return false
+    }, CTX)
+    if (settled) return
     const request = await conversation.submit({
       type: 'input',
       content,
@@ -62,7 +93,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     await harness().commit(async (tx) => {
       const metadata = await tx.doc(META, conversation.id)
       metadata.requestReceipts[requestId] = {
-        fingerprint: createHash('sha256').update(content).digest('hex'),
+        fingerprint,
         status: 'accepted',
         submissionId: Number(request.id),
       }
@@ -116,7 +147,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
         : '用户要求修改，计划模式仍开启：修订计划，再用 exit_plan_mode 提交。',
     }
     const requestId = `plan-review-reply:${callId}`
-    await submitReply(conversation, requestId, JSON.stringify(reply), {
+    await submitReply(conversation, requestId, `plan-review-dismiss:${callId}`, JSON.stringify(reply), {
       kind: 'pi-web.plan-review-reply',
       data: {
         requestId,
@@ -130,6 +161,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       const table = interactionTable(await tx.doc(Interactions, id))
       const stored = planReviewOf(table[callId])
       if (!stored || stored.status !== 'pending') return
+      await deps.recordInteractionSettlement?.(tx, id, callId, stored.askedAt)
       stored.status = 'answered'
       stored.approved = decision.approved
       stored.answers = settledAnswers
@@ -161,7 +193,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     if (review.status !== 'pending') return currentDetail(conversation.id)
     await assertConversationModelAllowed(conversation)
     const requestId = `plan-review-dismiss:${callId}`
-    await submitReply(conversation, requestId, JSON.stringify({
+    await submitReply(conversation, requestId, `plan-review-reply:${callId}`, JSON.stringify({
       kind: 'dismissed_plan_review',
       callId,
       approveLabel: review.approveLabel,
@@ -174,6 +206,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       const table = interactionTable(await tx.doc(Interactions, conversation.id))
       const stored = planReviewOf(table[callId])
       if (!stored || stored.status !== 'pending') return
+      await deps.recordInteractionSettlement?.(tx, conversation.id, callId, stored.askedAt)
       stored.status = 'cancelled'
       stored.cancelledAt = Date.now()
     }, CTX)
@@ -203,7 +236,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
     const review = planReviewOf(request)
     if (review) return answerPlanReview(conversation, callId, review, answers)
     if (request.status === 'answered') return currentDetail(id)
-    if (request.status === 'cancelled') throw new RuntimeError('CONFLICT', '该问题已放弃整组，无法再回答')
+    if (request.status === 'cancelled') throw new RuntimeError('CONFLICT', '该问题已结束，无法再回答')
     const invalid = validateAnswers(request.questions, answers)
     if (invalid) throw new RuntimeError('INVALID_INPUT', invalid)
     await assertConversationModelAllowed(conversation)
@@ -222,7 +255,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       answers: settledAnswers,
     }
     const requestId = `question-reply:${callId}`
-    await submitReply(conversation, requestId, JSON.stringify(reply), {
+    await submitReply(conversation, requestId, `question-dismiss:${callId}`, JSON.stringify(reply), {
       kind: 'pi-web.user-question-reply',
       data: { requestId, callId, answers: settledAnswers },
     })
@@ -231,6 +264,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       const stored = doc[callId]
       // 只有 pending 的请求在这里落定：输给放弃操作的回答不得复活该问题。
       if (!stored || stored.status !== 'pending') return
+      if (stored.escalation) await deps.recordInteractionSettlement?.(tx, id, callId, stored.askedAt)
       stored.status = 'answered'
       stored.answers = settledAnswers
       stored.answeredAt = Date.now()
@@ -272,7 +306,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       instruction: '用户关闭了这些问题，未作答复。不要重复提问；继续不依赖答复的工作，或结束本轮。',
     }
     const requestId = `question-dismiss:${callId}`
-    await submitReply(conversation, requestId, JSON.stringify(dismissal), {
+    await submitReply(conversation, requestId, `question-reply:${callId}`, JSON.stringify(dismissal), {
       kind: 'pi-web.user-question-dismissed',
       data: { requestId, callId },
     })
@@ -280,6 +314,7 @@ export function createInteractionReplies(deps: InteractionsDeps) {
       const doc = await tx.doc(Interactions, id)
       const stored = doc[callId]
       if (!stored || stored.status !== 'pending') return
+      if (stored.escalation) await deps.recordInteractionSettlement?.(tx, id, callId, stored.askedAt)
       stored.status = 'cancelled'
       stored.cancelledAt = Date.now()
     }, CTX)
@@ -287,5 +322,11 @@ export function createInteractionReplies(deps: InteractionsDeps) {
   }
 
 
-  return { answerInteraction, cancelInteraction }
+  return {
+    serializeSettlement,
+    answerInteraction: async (id: string, callId: string, answers: AskUserQuestionAnswerItem[]) =>
+      serializeSettlement(parseConversationId(id), () => answerInteraction(id, callId, answers)),
+    cancelInteraction: async (id: string, callId: string) =>
+      serializeSettlement(parseConversationId(id), () => cancelInteraction(id, callId)),
+  }
 }

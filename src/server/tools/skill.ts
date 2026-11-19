@@ -21,6 +21,8 @@ import type {
   SkillValidation,
 } from '../../shared/skills.ts'
 import { SkillStore } from '../skills/store.ts'
+import { workbenchProject } from '../conversation/execution-env.ts'
+import { RuntimeError } from '../runtime-errors.ts'
 
 /** 只读技能工具名单（对子代理/只读会话可见的三个）。 */
 export const SKILL_READ_TOOLS = ['skill_list', 'skill_load', 'skill_validate'] as const
@@ -165,11 +167,28 @@ function output(text: string) {
  * @returns 工作区目录路径。
  */
 function requireWorkspace(api: ToolExecutionApi): string {
-  const workspace = api.env?.cwd
+  const workspace = workbenchProject(api.env) ?? api.env?.cwd
   if (typeof workspace !== 'string' || workspace.trim() === '') {
     throw new Error('The current conversation has no workspace directory; Skill tools cannot select a workspace safely.')
   }
   return workspace
+}
+
+type SkillSelection = (conversationId: ConversationId, context: Context) => Promise<readonly string[] | null | undefined>
+
+function allowedCatalog(catalog: SkillCatalog, selection: readonly string[] | null | undefined): SkillCatalog {
+  if (selection == null) return catalog
+  return { skills: catalog.skills.filter(skill => selection.includes(skill.id)), diagnostics: [] }
+}
+
+/** A selected id also resolves name-based access to the same source-qualified skill. */
+async function allowedSkill(store: SkillStore, workspace: string, skill: string, selection: readonly string[] | null | undefined): Promise<string> {
+  if (selection == null || selection.includes(skill)) return skill
+  if (!skill.includes(':')) {
+    const found = (await store.list(workspace)).skills.find(candidate => candidate.name === skill && selection.includes(candidate.id))
+    if (found) return found.id
+  }
+  throw new RuntimeError('FORBIDDEN', '此 Bot 的配置未启用请求的技能')
 }
 
 /** 已请求中止时立即抛 AbortError。 */
@@ -381,17 +400,18 @@ function renderReferences(references: readonly LoadedSkillReference[], canLoad: 
  * @param store 技能存储。
  * @returns section 定义。
  */
-function renderSkillSection(store: SkillStore) {
+function renderSkillSection(store: SkillStore, skillSelection?: SkillSelection) {
   return section('skills-policy', async (input, context) => {
     const route = callableToolNames(input)
     const toolInstructions = callableInstruction(route)
     if (toolInstructions === undefined) return undefined
     abortIfRequested(context)
 
+    const selection = await skillSelection?.(input.conversationId, context)
     let catalog: SkillCatalog | undefined
     try {
-      const workspace = input.env?.cwd
-      if (typeof workspace === 'string' && workspace.trim() !== '') catalog = await store.list(workspace)
+      const workspace = workbenchProject(input.env) ?? input.env?.cwd
+      if (typeof workspace === 'string' && workspace.trim() !== '') catalog = allowedCatalog(await store.list(workspace), selection)
     } catch {
       // 技能工具本身仍可用；目录读不出来不能阻断整个请求。
     }
@@ -402,14 +422,14 @@ function renderSkillSection(store: SkillStore) {
     const available = new Set([...route.direct, ...route.viaCodemode])
     let workspace: string | undefined
     try {
-      const cwd = input.env?.cwd
+      const cwd = workbenchProject(input.env) ?? input.env?.cwd
       if (typeof cwd === 'string' && cwd.trim() !== '') workspace = await realpath(cwd)
     } catch {
       // 拿不到规范化的当前工作区时，旧的工作区引用在这里不可信。
     }
     const currentReferences = workspace === undefined
       ? []
-      : (saved?.references ?? []).filter(reference => reference.workspace === workspace)
+      : (saved?.references ?? []).filter(reference => reference.workspace === workspace && (selection == null || selection.includes(reference.id)))
     const active = renderReferences(currentReferences, available.has('skill_load'))
     const skillInstructions = [
       // 身份锚点：没有它，一个本身就是其他 agent 源码树的工作区（自带 AGENTS.md 与技能
@@ -447,6 +467,7 @@ function renderSkillSection(store: SkillStore) {
 export function createSkillTools(options: {
   store: SkillStore
   canWrite: (conversationId: ConversationId, context: Context) => Promise<boolean>
+  skillSelection?: SkillSelection
 }): Extension {
   const listTool = defineTool({
     name: 'skill_list',
@@ -461,7 +482,8 @@ export function createSkillTools(options: {
      */
     execute: async (_args, api, context) => {
       abortIfRequested(context)
-      const catalog = await options.store.list(requireWorkspace(api))
+      const selection = await options.skillSelection?.(api.conversationId, context)
+      const catalog = allowedCatalog(await options.store.list(requireWorkspace(api)), selection)
       abortIfRequested(context)
       const result = {
         skills: catalog.skills.map(safeSummary),
@@ -496,7 +518,8 @@ export function createSkillTools(options: {
     execute: async (args, api, context) => {
       abortIfRequested(context)
       const workspace = await realpath(requireWorkspace(api))
-      const loaded = await options.store.load(workspace, args.skill, args.resource)
+      const selection = await options.skillSelection?.(api.conversationId, context)
+      const loaded = await options.store.load(workspace, await allowedSkill(options.store, workspace, args.skill, selection), args.resource)
       abortIfRequested(context)
       await rememberLoaded(api, context, loaded, workspace)
       const result = {
@@ -542,7 +565,9 @@ export function createSkillTools(options: {
      */
     execute: async (args, api, context) => {
       abortIfRequested(context)
-      const validation = await options.store.validate(requireWorkspace(api), args.skill)
+      const workspace = requireWorkspace(api)
+      const selection = await options.skillSelection?.(api.conversationId, context)
+      const validation = await options.store.validate(workspace, await allowedSkill(options.store, workspace, args.skill, selection))
       abortIfRequested(context)
       return {
         output: output(validationText(validation)),
@@ -578,6 +603,10 @@ export function createSkillTools(options: {
         throw new Error('Workspace write permission could not be confirmed, so skill_save did not run.')
       }
       if (!writable) throw new Error('skill_save is unavailable in this conversation because workspace writing is disabled or cannot be confirmed.')
+      const selection = await options.skillSelection?.(api.conversationId, context)
+      if (selection != null && !selection.includes(`agents:${args.name}`)) {
+        throw new RuntimeError('FORBIDDEN', '此 Bot 的配置未启用请求的技能')
+      }
       abortIfRequested(context)
 
       let saved: SkillSaveResult
@@ -614,7 +643,7 @@ export function createSkillTools(options: {
   return defineExtension({
     name: 'skills',
     tools: [listTool, loadTool, saveTool, validateTool],
-    sections: [renderSkillSection(options.store)],
+    sections: [renderSkillSection(options.store, options.skillSelection)],
   })
 }
 

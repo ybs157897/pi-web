@@ -1,21 +1,21 @@
 import type { ProcessPart, RenderRun, ToolActivity, ToolItem } from './render-model.ts'
-import { toolActivity } from './render-model.ts'
+import { summarizeToolActivities, toolActivity } from './render-model.ts'
 import { buildToolRenderModel } from './tool-render-model.ts'
 import type { ChatPresentationPolicy } from './presentation-policy.ts'
 import type { Translate } from './render-labels.ts'
+import type { TranscriptPart } from './subagent-run-model.ts'
 
 /**
- * 功能：推导一个工作组的默认展开态，保证交错出现的用户输入可见并遵循所选详情档位。
+ * 功能：按用户选择的详情档位和收起时机推导工作组的默认状态。
  * @param policy 当前呈现策略
  * @param latest 是否为最新回合
  * @param live 是否正在运行
- * @param hasInterleavedUser 回合内是否夹带用户输入
  * @returns true 表示默认展开
- * 内部逻辑：折叠条件 = 策略允许折叠 且（完成时机 / 非最新回合）；夹带用户输入、正在直播、不满足折叠条件、或 history 档的最新回合一律展开。
+ * 正在运行和不满足折叠时机的回合一律展开。
  */
-export function defaultProcessOpen(policy: ChatPresentationPolicy, latest: boolean, live: boolean, hasInterleavedUser: boolean): boolean {
+export function defaultProcessOpen(policy: ChatPresentationPolicy, latest: boolean, live: boolean): boolean {
   const folds = policy.foldCompletedTurns && (policy.collapseTiming === 'completion' || !latest)
-  return hasInterleavedUser || live || !folds || policy.stepGrouping === 'history' && latest
+  return live || !folds
 }
 
 /** 工作组自动展开状态允许变化的边界：仅这四种，普通帧不会改变它。 */
@@ -85,28 +85,48 @@ export function workGroupTitle(run: Pick<RenderRun, 'status' | 'durationMs'>, t:
   return time === undefined ? t('已工作', 'Worked') : t(`已工作 ${time}`, `Worked ${time}`)
 }
 
-/**
- * 功能：取折叠的工作组会「吞掉」的正文摘要——run 过程里模型伴随工具调用写的文字块
- * （提问的引子、验证前的解释），取含正文的最长一段的首行。
- * @param run 渲染 run（只需 process）
- * @param limit 最大字符数（码点计），超出截断加省略号，默认 120
- * @returns 预览文本；无可读正文时 undefined
- */
-export function foldedProsePreview(run: Pick<RenderRun, 'process'>, limit = 120): string | undefined {
-  let line = ''
-  let longest = 0
-  for (const part of run.process) {
-    if (part.kind !== 'content' || part.block.type !== 'text') continue
-    const text = part.block.text.trim()
-    if (text.length <= longest) continue
-    const prose = firstProseLine(text)
-    if (!prose) continue
-    line = prose
-    longest = text.length
+type WorkStep = Extract<ProcessPart, { kind: 'tool' | 'reasoning' }>
+
+export interface WorkStepGroup {
+  readonly kind: 'workSteps'
+  readonly key: string
+  readonly parts: readonly WorkStep[]
+  readonly counts: WorkSummaryCounts
+  readonly failedTools: number
+  readonly stoppedTools: number
+}
+
+const workActivities = new Set<ToolActivity>(['read', 'readImage', 'search', 'webSearch', 'webFetch', 'commands', 'code', 'write', 'edit'])
+
+/** 正文和交互结束当前工作片段；片段内的思考和工具按原顺序一起折叠。 */
+export function groupWorkSteps(parts: readonly TranscriptPart[]): readonly (TranscriptPart | WorkStepGroup)[] {
+  const rows: (TranscriptPart | WorkStepGroup)[] = []
+  let steps: WorkStep[] = []
+  let tools: ToolItem[] = []
+  const flush = () => {
+    if (tools.length === 0 || steps.length === 1) {
+      rows.push(...steps)
+    } else {
+      const { activityCounts, failedTools, stoppedTools } = summarizeToolActivities(tools)
+      const counts = workSummaryCounts({ activityCounts, process: steps })
+      rows.push({ kind: 'workSteps', key: `work-steps:${tools[0]!.key}`, parts: steps, counts, failedTools, stoppedTools })
+    }
+    steps = []
+    tools = []
   }
-  if (!line) return undefined
-  const characters = [...line]
-  return characters.length > limit ? `${characters.slice(0, limit).join('')}…` : line
+  for (const part of parts) {
+    if (part.kind === 'tool' && workActivities.has(toolActivity(part.item.call?.name ?? part.item.result?.toolName ?? ''))) {
+      steps.push(part)
+      tools.push(part.item)
+    } else if (part.kind === 'reasoning') {
+      steps.push(part)
+    } else {
+      flush()
+      rows.push(part)
+    }
+  }
+  flush()
+  return rows
 }
 
 /** ZCode summary group 口径的工作统计：探索 / 执行 / 修改。 */
@@ -139,7 +159,7 @@ export function workSummaryCounts(run: Pick<RenderRun, 'activityCounts' | 'proce
 }
 
 /**
- * 功能：生成 ZCode 风格的折叠头统计文案：「已查阅 8 项，已执行 12 命令，已修改 3 文件」。
+ * 功能：生成展开区小组的统计文案。
  * @param counts 三类计数
  * @param t 双语标签函数
  * @param live 仍在运行时不加「已」前缀（对齐 ZCode 的进行中措辞）
@@ -257,29 +277,6 @@ function changedPath(item: ToolItem): string | undefined {
     if (typeof value === 'string' && value.trim() !== '') return value.trim()
   }
   return item.result?.artifacts?.find(artifact => artifact.kind === 'edit' || artifact.kind === 'write' || artifact.kind === 'nativeEdit')?.path
-}
-
-/**
- * 功能：三类工作（探索/执行/修改）之外的活动兜底摘要：子智能体、计划、提问、其他
- * 工具与失败/停止计数。ZCode 的统计只覆盖三类，但 pi-web 的折叠组会吞掉这些行，
- * 折叠头至少要让用户知道它们存在。
- * @param run 渲染 run（活动计数 + 失败/停止数）
- * @param t 双语标签函数
- * @returns 如「提问 1 次」；没有其他活动返回 undefined
- */
-export function otherActivitySummary(run: Pick<RenderRun, 'activityCounts' | 'failedTools' | 'stoppedTools'>, t: Translate): string | undefined {
-  const counts = new Map(run.activityCounts.map(({ kind, count }) => [kind, count]))
-  const parts: string[] = []
-  const add = (count: number, zh: string, en: string): void => {
-    if (count > 0) parts.push(t(`${zh} ${count} 次`, `${en} ${count}`))
-  }
-  add(counts.get('subagents') ?? 0, '协调子智能体', 'Subagent calls')
-  add(counts.get('plan') ?? 0, '处理计划或目标', 'Plan and goal calls')
-  add(counts.get('questions') ?? 0, '提问', 'Questions')
-  add(counts.get('tools') ?? 0, '调用其他工具', 'Other tool calls')
-  add(run.failedTools, '失败', 'Failed')
-  add(run.stoppedTools, '停止', 'Stopped')
-  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 /**

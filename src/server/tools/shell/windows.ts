@@ -7,6 +7,7 @@ import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { createPowerShellTool } from '@earendil-works/pi-durable/tools'
 import { RuntimeError } from '../../runtime-errors.ts'
+import { workbenchProject } from '../../conversation/execution-env.ts'
 import {
   commandTimeout,
   DEFAULT_COMMAND_TIMEOUT_SECONDS,
@@ -229,7 +230,7 @@ export function createWindowsPowerShellTool(): ToolRegistration {
       }
 
       const root = await realpath(cwd).catch(() => resolve(cwd))
-      const workdir = await resolveWorkdir(root, args.workdir)
+      const workdir = await resolveWorkdir(root, args.workdir, workbenchProject(api.env))
 
       // 远程或其他非本地环境沿用平台工具自身的执行模型。
       if (api.env === undefined || api.env.id !== 'node:local') {

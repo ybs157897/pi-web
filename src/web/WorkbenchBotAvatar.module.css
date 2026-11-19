@@ -1,0 +1,7 @@
+.portrait { width: 32px; height: 32px; flex: none; object-fit: contain; vertical-align: middle; }
+.portrait[data-large] { width: 46px; height: 46px; }
+.portrait[data-small] { width: 19px; height: 19px; }
+@media (prefers-reduced-motion: no-preference) {
+  .portrait[data-active] { animation: working 2.8s ease-in-out infinite; transform-origin: bottom center; }
+  @keyframes working { 50% { transform: translateY(-1px) rotate(-3deg); } }
+}

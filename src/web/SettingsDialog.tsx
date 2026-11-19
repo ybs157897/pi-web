@@ -9,6 +9,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AccessMode, AppSettings, CodemodeMode, CollapseTiming, McpServerView, McpView, ModelCatalog, ProviderInput, PerformanceUsageMode, TranscriptViewMode, UpdateAppSettingsInput } from '../shared/types.ts'
 import { api } from './api.ts'
+import { accessModeLabel } from './render-labels.ts'
 import { normalizeFontFamily } from '../shared/fonts.ts'
 import { DEFAULT_UI_SETTINGS, useUiPreferences } from './ui-preferences.tsx'
 import { DEFAULT_SHORTCUTS, displayShortcut, shortcutFromEvent, resolveShortcuts, type ShortcutCommand } from './keyboard.ts'
@@ -136,7 +137,6 @@ export default function SettingsDialog(props: SettingsDialogProps) {
   }
   // 进入页签是唯一触发点：对话框在被展示前不会读取该文件。
   useEffect(() => { if (open && tab === 'mcp') void loadMcp() }, [open, tab])
-  const accessName = (value: AccessMode) => value === 'readOnly' ? t('仅可查看', 'Read only') : value === 'workspaceWrite' ? t('工作区内修改', 'Workspace write') : t('完全权限', 'Full access')
   const themes = [
     { value: 'light' as const, label: t('浅色', 'Light'), icon: <IconLightOutlineRegular size={16} /> },
     { value: 'dark' as const, label: t('深色', 'Dark'), icon: <IconDarkOutlineRegular size={16} /> },
@@ -179,7 +179,7 @@ export default function SettingsDialog(props: SettingsDialogProps) {
           {error && <p className={css.error} role="alert">{error}</p>}
           {tab === 'general' && <div className={css.general}>
             <SettingRow title={t('权限', 'Permissions')} description={t('选择新会话的默认权限模式', 'Choose the default access mode for new conversations')}>
-              <Choice label={t('默认权限', 'Default access')} value={settings.defaultAccessMode} disabled={pending} options={(props.accessModes ?? ['readOnly', 'workspaceWrite', 'fullAccess'] as AccessMode[]).map(value => ({ value, label: accessName(value) }))} onChange={value => void update({ defaultAccessMode: value as AccessMode })} />
+              <Choice label={t('默认权限', 'Default access')} value={settings.defaultAccessMode} disabled={pending} options={(props.accessModes ?? ['readOnly', 'workspaceWrite', 'fullAccess'] as AccessMode[]).map(value => ({ value, label: accessModeLabel(value, t) }))} onChange={value => void update({ defaultAccessMode: value as AccessMode })} />
             </SettingRow>
             <SettingRow title={t('代码模式', 'Code mode')} description={t('关闭时不提供代码工具；开启时与原生工具并存；仅脚本时模型只能通过脚本调用工具', 'Off offers no code tool; On offers it beside the native tools; Script only reaches every other tool from a script')}>
               <Choice label={t('代码模式', 'Code mode')} value={settings.codemodeMode} disabled={pending} options={[

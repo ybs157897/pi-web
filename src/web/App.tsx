@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowDown, Inbox, Loader } from 'lucide-react'
+import { ArrowDown, ArrowLeft, Inbox, Loader } from 'lucide-react'
 import {
   Button, ConnectionIndicator, HoverCard, HoverCardGroup, IconArchiveOutlineRegular, IconBranchOutlineRegular,
   IconCheckOutlineRegular, IconChecklistOutlineRegular, IconChevronRightOutlineRegular, IconClockOutlineRegular, IconCopyOutlineRegular,
@@ -18,8 +18,11 @@ import type {
 } from '../shared/types.ts'
 import type { PluginContextEntry, PluginUiPage, PluginUiSurfaceView } from '../shared/plugin-ui.ts'
 import { pluginContextBlock } from '../shared/plugin-ui.ts'
+import { useDecisionInboxPresence } from './use-decision-inbox-presence.ts'
 import { ApiFailure, api } from './api.ts'
+import ConversationFailureNotice, { ConversationRetryNotice } from './ConversationFailureNotice.tsx'
 import Composer, { type BusySendMode, type DraftImage } from './Composer.tsx'
+import { attachmentLimitError, attachmentLimitText, clampThinkingLevel, fileData, imageFileType, isImageType, submissionFingerprint } from './conversation-input.ts'
 import TodoPanel from './TodoPanel.tsx'
 import SubagentPanel from './SubagentPanel.tsx'
 import TeamPanel from './TeamPanel.tsx'
@@ -33,7 +36,8 @@ import { latestPlan, sessionPlans, type PlanDocument } from './plan-preview.ts'
 import DirectoryBrowser from './DirectoryBrowser.tsx'
 import Inspector from './Inspector.tsx'
 import { PluginPageHostContext } from './plugin-page-pool.tsx'
-import type { InspectorDiff, InspectorFile } from './Inspector.tsx'
+import type { InspectorDiff } from './Inspector.tsx'
+import { workspacePreview } from './workspace-preview.ts'
 import { activateTab, closeAllTabs, closeOtherTabs, closeTabs, nextSelectionChatOrdinal, normalizePaneState,
   openFromLauncher, readPaneMemory, stripConversationScoped, upsertTab, writePaneMemory,
   type InspectorTab, type PaneState } from './inspector-tabs.ts'
@@ -49,18 +53,17 @@ import WorkspaceRenameDialog from './WorkspaceRenameDialog.tsx'
 import AutomationsPage from './AutomationsPage.tsx'
 /** antd 仅本页面需要，首次访问时按独立 chunk 懒加载。 */
 const WetrackPage = lazy(() => import('./WetrackPage.tsx'))
-const InboxPage = lazy(() => import('./InboxPage.tsx'))
+const WorkbenchShell = lazy(() => import('./WorkbenchShell.tsx'))
 import { matchesShortcut, resolveShortcuts, shortcutKeyLabels, type ShortcutCommand } from './keyboard.ts'
 import { DEFAULT_UI_SETTINGS, UiPreferencesProvider, useUiPreferences } from './ui-preferences.tsx'
 import css from './App.module.css'
 
+export { attachmentLimitError, clampThinkingLevel } from './conversation-input.ts'
+
 type ConnectionState = 'connecting' | 'disconnected' | 'recovered' | undefined
-type MainPage = 'chat' | 'defects' | 'inbox' | 'automations'
+type MainPage = 'agent' | 'bots' | 'chat' | 'defects' | 'inbox' | 'automations'
 type WorkspaceSort = 'recent' | 'name'
 interface ScopedDraft { scope: string; text: string }
-/** 限额视角下的一个附件：是否图片 + 字节大小。 */
-interface AttachmentSize { image: boolean; size: number }
-type AttachmentLimit = 'images' | 'files' | 'empty' | 'imageBytes' | 'fileBytes' | 'total'
 interface PendingSubmission extends PendingMessage { conversationId: string }
 interface ToastMessage { id: number; text: string; success?: boolean }
 /** 最近一次失败的提交记录；对相同内容的重试复用其 requestId。 */
@@ -70,80 +73,10 @@ interface FailedSubmission { requestId: string; fingerprint: string }
 const SELECTED_KEY = 'pi-durable-web:selected-conversation'
 /** 各会话输入草稿在 localStorage 中的键前缀。 */
 const DRAFT_PREFIX = 'pi-durable-web:draft:'
-/** 受支持的图片附件 MIME 类型集合。 */
-const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'])
-/** 拖放的文件可能没有 MIME 类型，此时以扩展名代替判断。 */
-const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif',
-}
 /** 无附件的草稿作用域共享此空数组，保证 composer prop 身份稳定。 */
 const NO_IMAGES: readonly DraftImage[] = []
 /** 无插件上下文的作用域共享此空数组，理由同上。 */
 const NO_PLUGIN_CONTEXTS: readonly PluginContextEntry[] = []
-/** 附件限额：单条消息图片数、文件数、单图/单文件与总大小上限。 */
-const MAX_IMAGE_COUNT = 4
-const MAX_FILE_COUNT = 8
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024
-const MAX_FILE_BYTES = 8 * 1024 * 1024
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
-
-/** 思考档位的全局递进顺序（clampThinkingLevel 的折算依据）。 */
-const THINKING_ORDER: readonly ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
-
-/**
- * 折算运行时会真正存储的思考等级：先向上找最近的支持档位，再向下回退。
- * @param level 请求的档位；supported 运行时支持的档位列表。
- * @returns 支持的档位；无列表或请求档位不受支持时按 THINKING_ORDER 就近折算。
- */
-export function clampThinkingLevel(level: ThinkingLevel, supported: readonly ThinkingLevel[] | undefined): ThinkingLevel {
-  if (supported === undefined || supported.length === 0 || supported.includes(level)) return level
-  const requested = THINKING_ORDER.indexOf(level)
-  if (requested === -1) return supported[0]!
-  for (let index = requested; index < THINKING_ORDER.length; index += 1) {
-    if (supported.includes(THINKING_ORDER[index]!)) return THINKING_ORDER[index]!
-  }
-  for (let index = requested - 1; index >= 0; index -= 1) {
-    if (supported.includes(THINKING_ORDER[index]!)) return THINKING_ORDER[index]!
-  }
-  return supported[0]!
-}
-
-/**
- * 计算本批附件最先触犯的限额，全部合规时返回 null。
- * 仍在读取中的批次也计入批次，因此同一 tick 内排队的两次添加不会
- * 针对同一份过期快照通过两次检查。
- * 导出以便脱离浏览器验证限额逻辑。
- * @param committed 已入库的附件；reading 读取中的批次；selected 新选中的批次。
- */
-export function attachmentLimitError(committed: readonly DraftImage[], reading: readonly AttachmentSize[], selected: readonly AttachmentSize[]): AttachmentLimit | null {
-  const all: AttachmentSize[] = [
-    ...committed.map(image => ({ image: isImageType(image.mimeType), size: image.file.size })),
-    ...reading,
-    ...selected,
-  ]
-  const images = all.filter(item => item.image)
-  const files = all.filter(item => !item.image)
-  if (images.length > MAX_IMAGE_COUNT) return 'images'
-  if (files.length > MAX_FILE_COUNT) return 'files'
-  if (all.some(item => item.size === 0)) return 'empty'
-  if (images.some(item => item.size > MAX_IMAGE_BYTES)) return 'imageBytes'
-  if (files.some(item => item.size > MAX_FILE_BYTES)) return 'fileBytes'
-  if (all.reduce((sum, item) => sum + item.size, 0) > MAX_ATTACHMENT_BYTES) return 'total'
-  return null
-}
-
-/** 某一附件限额被触犯时的本地化提示文案。 */
-function attachmentLimitText(limit: AttachmentLimit, t: (chinese: string, english: string) => string): string {
-  switch (limit) {
-    case 'images': return t('一条消息最多添加 4 张图片', 'A message can include up to 4 images')
-    case 'files': return t('一条消息最多添加 8 个文件', 'A message can include up to 8 files')
-    case 'empty': return t('不能添加空文件', 'Empty files cannot be attached')
-    case 'imageBytes': return t('每张图片不能超过 4 MiB', 'Each image must be 4 MiB or smaller')
-    case 'fileBytes': return t('单个文件不能超过 8 MiB', 'Each file must be 8 MiB or smaller')
-    case 'total': return t('一条消息的附件总大小不能超过 8 MiB', 'Attachments in one message cannot exceed 8 MiB total')
-  }
-}
-
 /**
  * 功能：应用入口——先加载共享 UI 偏好（主题/语言/字号等），就绪后渲染完整
  * 的应用外壳 AppShell，未就绪时显示加载页。
@@ -197,10 +130,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   settingsError: string
   onSettingsChange: (patch: UpdateAppSettingsInput) => Promise<AppSettings>
 }) {
-  const { t } = useUiPreferences()
+  const { t, dark } = useUiPreferences()
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
+  const [streamFailure, setStreamFailure] = useState<ApiFailure>()
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [appVersion, setAppVersion] = useState('')
@@ -226,7 +160,13 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const [savingProvider, setSavingProvider] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [page, setPage] = useState<MainPage>('chat')
+  const [page, setPage] = useState<MainPage>('agent')
+  const [composeNonce, setComposeNonce] = useState(0)
+  const [workbenchSpaceId, setWorkbenchSpaceId] = useState<string>()
+  const [managementWorkspaceId, setManagementWorkspaceId] = useState<string>()
+  const workbenchPage = page === 'agent' || page === 'bots' || page === 'inbox'
+  const managementPage = page === 'defects' || page === 'automations'
+  const startWorkbenchInput = useCallback(() => { setSidebarOpen(false); setPage('agent'); setComposeNonce(value => value + 1) }, [])
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(() => new Set())
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
   const [deleteWorkspace, setDeleteWorkspace] = useState<WorkspaceSummary | undefined>(undefined)
@@ -366,6 +306,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const currentWorkspaceId = activeConversation !== null
     ? activeConversation.conversation.workspaceId ?? inferredConversationWorkspace ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
     : newWorkspaceId ?? settings.defaultWorkspaceId ?? workspaces[0]?.id
+  const pageWorkspaceId = workbenchPage ? workbenchSpaceId : managementPage ? managementWorkspaceId ?? currentWorkspaceId : currentWorkspaceId
   const currentWorkspace = workspaces.find(workspace => workspace.id === currentWorkspaceId)
   /** The browse tab carries its own workspace and folder, so a restored bucket reopens in place. */
   const browseTab = pane.tabs.find(tab => tab.type === 'browse')
@@ -605,14 +546,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const follow = wasAtBottom.current
       detailRef.current = value
       setDetail(value)
+      setStreamFailure(undefined)
       updateConversation(value)
       setPending(existing => existing.filter(item => item.conversationId !== selectedId || !isAcknowledged(value, item)))
       if (follow && viewport !== null) requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight })
-    }, state => {
+    }, (state, failure) => {
       if (!live) return
       // `open` 也会在普通连接（切换会话、重连令牌更新）时触发，因此只有真正掉线的流
       // 才能上报「已恢复」——否则每次发送都会闪现「连接已恢复」。
       if (state === 'error') {
+        if (failure !== undefined) setStreamFailure(failure)
         connectionLost.current = true
         setConnection('disconnected')
         return
@@ -628,6 +571,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       live = false
       source.close()
       setConnection(undefined)
+      setStreamFailure(undefined)
     }
   }, [conversationReady, reconnectToken, selectedId, updateConversation])
 
@@ -665,7 +609,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     const main = mainPanelRef.current
     if (sidebar !== null) setElementInert(sidebar, mobile && !sidebarOpen)
     if (main !== null) setElementInert(main, mobile && sidebarOpen)
-  }, [mobile, sidebarOpen])
+  }, [mobile, sidebarOpen, workbenchPage])
 
   useEffect(() => {
     if (!mobile || !sidebarOpen) return
@@ -1033,6 +977,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     if (detailRef.current?.compaction?.running === true) return
     try {
       await api.compact(selectedId)
+      announce(t('已提交上下文压缩请求', 'Context compaction requested'), true)
     } catch (cause) { announce(errorText(cause, t('无法压缩上下文', 'Could not compact the context'))) }
   }, [announce, selectedId, t])
 
@@ -1242,10 +1187,14 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   /** 切换主页面并收起移动端导航。 */
   const navigate = useCallback((next: MainPage): void => {
+    if (next === 'defects' || next === 'automations') setManagementWorkspaceId(pageWorkspaceId)
     setPage(next)
     setSidebarOpen(false)
-    if (mobile) requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
-  }, [mobile])
+    const nextIsWorkbench = next === 'agent' || next === 'bots' || next === 'inbox'
+    if (mobile || workbenchPage !== nextIsWorkbench) {
+      requestAnimationFrame(() => { if (mainPanelRef.current !== null) focusWithoutRing(mainPanelRef.current) })
+    }
+  }, [mobile, pageWorkspaceId, workbenchPage])
 
   /** 打开某个会话（供子页面回跳）。 */
   const openConversation = useCallback(async (id: string): Promise<void> => {
@@ -1282,13 +1231,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         openWorkspaceBrowser(workspaceId, file.path)
         return
       }
-      const assetUrl = file.kind !== 'text' || file.textWindow !== undefined
-        ? `/api/workspaces/${encodeURIComponent(workspaceId)}/asset?${new URLSearchParams({ path: file.path }).toString()}`
-        : undefined
-      const payload: InspectorFile = {
-        path: file.path, content: file.content, textWindow: file.textWindow, mimeType: file.mimeType, size: file.size,
-        workspaceId, line, lineRequestId: line === undefined ? undefined : requestId, url: assetUrl,
-      }
+      const payload = workspacePreview(file, workspaceId, line, requestId)
       openPaneTab({
         id: `doc:file:${workspaceId}:${file.path}`,
         type: 'document',
@@ -1485,14 +1428,20 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   const ungrouped = filteredConversations.filter(item => item.workspaceId === undefined || !knownWorkspaceIds.has(item.workspaceId))
   const busy = activeConversation?.conversation.busy === true
   const activeDetail = activeConversation
+  const failedInputEntry = activeDetail?.failure
+    ? activeDetail.messages.findLast(message => message.role === 'user' && message.entryId !== undefined)?.entryId
+    : undefined
   const hasMessages = (activeDetail?.messages.length ?? 0) > 0 || selectedPending.length > 0
   const hero = page === 'chat' && !detailLoading && !detailError && !hasMessages
   const showConversationHeader = page === 'chat' && hasMessages
   // 收件箱占用整个主视图，返回会话时恢复原先的检查器。
-  const showInspector = inspectorOpen && page !== 'inbox'
+  const showInspector = inspectorOpen && page === 'chat'
   const inspectorSizes = mobile ? null : inspectorLayout(mainBodyWidth, preferredInspectorWidth)
   const dockedInspector = showInspector && !inspectorFullView ? inspectorSizes : null
   const inspectorOverlay = showInspector && dockedInspector === null
+  const readingConversation = page === 'chat' && !settingsOpen && !workspaceDialogOpen && !inspectorOverlay && !(mobile && sidebarOpen)
+  useDecisionInboxPresence(readingConversation ? currentWorkspaceId : undefined, activeDetail?.conversation.id,
+    { interactions: activeDetail?.interactions, surface: primaryPanelRef })
   /** The latest submitted plan of the open conversation, shared by the inspector view and the auto open. */
   /** 当前会话最近一次提交的计划（供 Inspector 缺省展示）。 */
   const conversationPlan = useMemo(() => activeDetail === null
@@ -1580,10 +1529,10 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
   /** DSH's workspace row action: start a session that already belongs to that workspace. */
   /** 在指定工作区新建会话（侧栏工作区行的入口）。 */
   const startNewConversationIn = useCallback((workspaceId: string): void => {
-    if (selectedId === null) { setNewWorkspaceId(workspaceId); return }
-    pendingWorkspaceId.current = workspaceId
-    startNewConversation()
-  }, [selectedId, startNewConversation])
+    if (selectedId !== null) pendingWorkspaceId.current = workspaceId
+    if (selectedId !== null || page !== 'chat') startNewConversation()
+    setNewWorkspaceId(workspaceId)
+  }, [page, selectedId, startNewConversation])
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent): void => {
@@ -1594,7 +1543,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
       const shortcuts = resolveShortcuts(settings.shortcuts)
       if (matchesShortcut(event, shortcuts.newConversation)) {
         event.preventDefault()
-        startNewConversation()
+        startWorkbenchInput()
       } else if (matchesShortcut(event, shortcuts.search)) {
         event.preventDefault()
         setPage('chat')
@@ -1609,7 +1558,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         if (mobile) setSidebarOpen(value => !value)
         else setSidebarCollapsed(value => !value)
       } else if (matchesShortcut(event, shortcuts.rename) || matchesShortcut(event, shortcuts.fork) || matchesShortcut(event, shortcuts.archive)) {
-        if (page === 'inbox') return
+        if (page !== 'chat') return
         // DSH 把这些操作绑定到读者所在的会话行；pi-web 应用到当前打开的会话。
         const current = conversationsRef.current.find(item => item.id === selectedIdRef.current)
         if (current === undefined) return
@@ -1621,7 +1570,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
     }
     document.addEventListener('keydown', onShortcut, true)
     return () => { document.removeEventListener('keydown', onShortcut, true) }
-  }, [mobile, page, settings.shortcuts, startNewConversation, startRename, forkConversation, patchConversation])
+  }, [mobile, page, settings.shortcuts, startWorkbenchInput, startRename, forkConversation, patchConversation])
 
   const conversationsRef = useRef(conversations)
   conversationsRef.current = conversations
@@ -2006,6 +1955,17 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
   return (
     <main className={`${css.shell} ${sidebarCollapsed && !mobile ? css.shellCollapsed : ''}`}>
+      {workbenchPage ? <div className={css.workbenchHost}><Suspense fallback={<div className={css.loadingState} role="status">{t('正在载入工作台…', 'Loading workbench…')}</div>}>
+        <WorkbenchShell page={page} workspaces={workspaces} loading={workspaceLoading} error={workspaceLoadError}
+          contentRef={mainPanelRef}
+          reload={refreshWorkspaces} onWorkspaceChange={setWorkbenchSpaceId} onAdded={space => setWorkspaces(current => [space, ...current.filter(item => item.id !== space.id)])}
+          navigate={navigate} openConversation={id => { void openConversation(id) }}
+          catalog={catalog} accessModes={accessModes} onOpenModels={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
+          onSettings={() => { setSettingsInitialTab('general'); setSettingsOpen(true) }}
+          onTheme={() => { void onSettingsChange({ theme: dark ? 'light' : 'dark' }).catch(cause => announce(errorText(cause, t('无法保存主题', 'Could not save theme')))) }}
+          user={accountName} version={appVersion} settings={settings} model={settings.defaultModel ?? catalog?.defaultModel}
+          composeNonce={composeNonce} onComposeHandled={nonce => setComposeNonce(value => value === nonce ? 0 : value)} newInput={startWorkbenchInput} />
+      </Suspense></div> : <>
       {mobile && sidebarOpen && <button className={css.backdrop} aria-hidden="true" tabIndex={-1}
         aria-label={t('关闭侧栏', 'Close sidebar')} onClick={() => {
           setSidebarOpen(false)
@@ -2025,16 +1985,19 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
               icon={<IconPanelLeftOutlineRegular size={15} />} onClick={() => { setSidebarCollapsed(value => !value) }} />
           </Tooltip>}
         </div>
-        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startNewConversation}>
+        <Button variant="outline" className={css.newChat} icon={<IconNewChatOutlineRegular size={14} />} onClick={startWorkbenchInput}>
           {t('新会话', 'New conversation')}
         </Button>
         <nav className={css.quickNav} aria-label={t('管理页面', 'Management pages')}>
+          <button type="button" className={css.navItem} onClick={() => { navigate('agent') }}>
+            <IconNewChatOutlineRegular size={16} /><span>{t('Agent 工作台', 'Agent workbench')}</span>
+          </button>
           <button type="button" className={css.navItem} data-active={page === 'defects' || undefined}
             aria-label={t('问题清单', 'Issues')} aria-current={page === 'defects' ? 'page' : undefined} onClick={() => { navigate('defects') }}>
             <IconChecklistOutlineRegular size={16} /><span>{t('问题清单', 'Issues')}</span>
           </button>
-          <button type="button" className={css.navItem} data-active={page === 'inbox' || undefined}
-            aria-label={t('收件箱', 'Inbox')} aria-current={page === 'inbox' ? 'page' : undefined} onClick={() => { navigate('inbox') }}>
+          <button type="button" className={css.navItem}
+            aria-label={t('收件箱', 'Inbox')}  onClick={() => { navigate('inbox') }}>
             <Inbox size={16} aria-hidden="true" /><span>{t('收件箱', 'Inbox')}</span>
           </button>
           <button type="button" className={css.navItem} data-active={page === 'automations' || undefined}
@@ -2190,7 +2153,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
 
       <section ref={mainPanelRef} className={css.mainPanel} tabIndex={-1} aria-label={t('主内容', 'Main content')}
         aria-hidden={mobile && sidebarOpen ? true : undefined}>
-        {mobile && !showConversationHeader && <button ref={sidebarTriggerRef} type="button" className={css.mobileSidebarButton}
+        {mobile && managementPage && <div className={css.mobileManagementBar}>
+          <button ref={sidebarTriggerRef} type="button" className={css.mobileSidebarButton}
+            aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
+            <IconPanelLeftOutlineRegular size={16} />
+          </button>
+          <button type="button" className={css.mobileWorkbenchLink} onClick={() => navigate('agent')}>
+            <ArrowLeft size={14} aria-hidden="true" />{t('Agent 工作台', 'Agent workbench')}
+          </button>
+        </div>}
+        {mobile && !managementPage && !showConversationHeader && <button ref={sidebarTriggerRef} type="button" className={css.mobileSidebarButton}
           aria-label={t('打开会话列表', 'Open conversation list')} onClick={() => { setSidebarOpen(true) }}>
           <IconPanelLeftOutlineRegular size={16} />
         </button>}
@@ -2321,6 +2293,16 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                         onPluginContext={addPluginContext}
                         onPluginMessage={text => { void sendPluginMessage(text) }}
                         onPluginOpenLink={openPluginLink} />
+                      {(activeDetail.retry || activeDetail.failure || streamFailure) && <div className={css.conversationFailureSlot}>
+                        {activeDetail.retry && <ConversationRetryNotice retry={activeDetail.retry} />}
+                        {activeDetail.failure && <ConversationFailureNotice failure={activeDetail.failure}
+                          onRetry={failedInputEntry === undefined ? undefined : () => retryEntry(failedInputEntry)}
+                          onModelSettings={() => { setSettingsInitialTab('models'); setSettingsOpen(true) }}
+                          onCompact={() => { void compact() }} />}
+                        {streamFailure && (streamFailure.failure
+                          ? <ConversationFailureNotice failure={streamFailure.failure} />
+                          : <p role="alert">{streamFailure.message}</p>)}
+                      </div>}
                     </div>
                     {jumpToBottomVisible && <button type="button" className={css.jumpToBottom}
                       aria-label={t('滚动到底部', 'Scroll to bottom')} title={t('滚动到底部', 'Scroll to bottom')}
@@ -2344,12 +2326,7 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
                     <QuestionComposer conversationId={activeDetail.conversation.id} interactions={activeDetail.interactions}
                       onDismiss={focusComposer}
                       onOpenPlan={plan => { openPlan(plan) }}
-                      onAnswered={value => {
-                        detailRef.current = value
-                        setDetail(value)
-                        setDetailError('')
-                        updateConversation(value)
-                      }} />
+                      onAnswered={() => setReconnectToken(token => token + 1)} />
                     {activeDetail.compaction?.running !== true && activeDetail.compaction?.failure !== undefined && <div className={css.compactionNotice} data-state="error" role="alert">
                       <span>{t('上下文压缩失败', 'Context compaction failed')}</span>
                       <span className={css.compactionHint}>{activeDetail.compaction.failure}</span>
@@ -2376,11 +2353,11 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
             {page === 'defects' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载问题清单', 'Loading issues')}</div>}>
               <WetrackPage workspaces={workspaces} onOpenConversation={id => { void openConversation(id) }} />
             </Suspense>}
-            {page === 'inbox' && <Suspense fallback={<div className={css.loadingState}><Loader size={16} />{t('正在加载收件箱', 'Loading inbox')}</div>}>
-              <InboxPage />
-            </Suspense>}
-            {page === 'automations' && <AutomationsPage workspaceId={currentWorkspaceId}
-              workspaces={workspaces} onNewConversation={startNewConversation}
+            {page === 'automations' && <AutomationsPage workspaceId={pageWorkspaceId}
+              workspaces={workspaces} onNewConversation={() => {
+                if (pageWorkspaceId === undefined) startNewConversation()
+                else startNewConversationIn(pageWorkspaceId)
+              }}
               onOpenConversation={id => { void openConversation(id) }} />}
           </div>
           {showInspector && <>
@@ -2476,7 +2453,8 @@ function AppShell({ settings, settingsError, onSettingsChange }: {
         </div>
         </PluginPageHostContext.Provider>
       </section>
-      <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={currentWorkspaceId}
+      </>}
+      <SettingsDialog open={settingsOpen} catalog={catalog} saving={savingProvider} settings={settings} accessModes={accessModes} workspaceId={pageWorkspaceId}
         initialTab={settingsInitialTab} onSettingsChange={onSettingsChange} onRefreshCatalog={refreshCatalog}
         onClose={() => { setSettingsOpen(false) }} onSave={saveProvider} activeProvider={selectedModel?.provider}
         onCreatePlugin={startPluginCreation} />
@@ -2726,14 +2704,6 @@ function isAcknowledged(detail: ConversationDetail, pendingItem: PendingSubmissi
     || pendingItem.submissionId !== undefined && detail.queue.some(item => item.id === pendingItem.submissionId)
 }
 
-/**
- * 一次提交尝试的身份：目标会话、精确文本与附件 id 组合。
- * 与之匹配的重试属于同一次逻辑提交，保留服务端用于去重的 requestId。
- */
-function submissionFingerprint(conversationId: string, text: string, images: readonly DraftImage[]): string {
-  return `${conversationId}\u0000${text}\u0000${images.map(image => image.id).join('\u0000')}`
-}
-
 /** 提取错误的 message 文本；非 Error 时回退到兜底文案。 */
 function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback
@@ -2766,36 +2736,6 @@ function removeStorage(key: string): void {
 function setElementInert(element: HTMLElement, inert: boolean): void {
   if (inert) element.setAttribute('inert', '')
   else element.removeAttribute('inert')
-}
-
-/** 判断 MIME 类型是否为受支持的图片类型。 */
-function isImageType(mimeType: string): boolean {
-  return IMAGE_MIME_TYPES.has(mimeType.toLocaleLowerCase())
-}
-
-/** 附件的图片 MIME 类型：浏览器未报告时从文件名扩展名推断。 */
-function imageFileType(file: File): string {
-  const declared = file.type.toLocaleLowerCase()
-  if (declared !== '') return isImageType(declared) ? declared : ''
-  const extension = file.name.toLocaleLowerCase().split('.').pop() ?? ''
-  return IMAGE_EXTENSIONS[extension] ?? ''
-}
-
-/** 把附件文件读取为 base64 数据（data URL 去掉前缀）；失败以本地化错误拒绝。 */
-function fileData(file: File, t: (chinese: string, english: string) => string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => { reject(reader.error ?? new Error(t('附件读取失败', 'Could not read attachment'))) }
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error(t('附件数据不可读取', 'Attachment data is unavailable')))
-        return
-      }
-      const comma = reader.result.indexOf(',')
-      resolve(comma < 0 ? reader.result : reader.result.slice(comma + 1))
-    }
-    reader.readAsDataURL(file)
-  })
 }
 
 /** 已创建的附件预览对象 URL 登记（卸载/移除时统一 revoke）。 */

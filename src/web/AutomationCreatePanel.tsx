@@ -2,7 +2,7 @@
  * 右侧手动创建面板，对应 DSH 的「手动创建」抽屉：填写名称、指令提示词、
  * 每次执行的落点（工作区）以及触发时机规则。
  */
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Button, IconCloseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { CreateAutomationInput, WorkspaceSummary } from '../shared/types.ts'
 import { systemTimeZone, timingDraftValid } from '../shared/automation-timing.ts'
@@ -29,12 +29,19 @@ export function AutomationCreatePanel({ defaultWorkspaceId, workspaces, saving, 
   onCreate: (input: CreateAutomationInput) => void
 }) {
   const [draft, setDraft] = useState<AutomationDraft>(() => newDraft(defaultWorkspaceId, systemTimeZone()))
+  const closeButton = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => { closeButton.current?.focus({ preventScroll: true }) }, [])
   const valid = draft.name.trim() !== '' && draft.name.trim().length <= 120
     && draft.prompt.trim() !== '' && timingDraftValid(draft.timing, Date.now())
-  return <aside className={css.panel} aria-label={t('手动创建', 'Create manually')}>
+  return <aside className={css.panel} aria-label={t('手动创建', 'Create manually')} onKeyDown={event => {
+    if (event.key === 'Escape' && !event.defaultPrevented && !saving) {
+      event.preventDefault()
+      onClose()
+    }
+  }}>
     <header className={css.panelHead}>
       <h2>{t('手动创建', 'Create manually')}</h2>
-      <Button variant="ghost" size="sm" aria-label={t('关闭创建面板', 'Close create panel')}
+      <Button ref={closeButton} variant="ghost" size="sm" disabled={saving} aria-label={t('关闭创建面板', 'Close create panel')}
         icon={<IconCloseOutlineRegular size={15} />} onClick={onClose} />
     </header>
     <div className={css.panelBody}>

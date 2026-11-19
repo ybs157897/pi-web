@@ -1,0 +1,14 @@
+Nuphos
+Copyright 2026 Zeabur Inc.
+
+This product includes software developed at Zeabur Inc.
+
+"Nuphos" and the Nuphos logo are trademarks of Zeabur Inc. The Apache License,
+Version 2.0 does not grant permission to use them beyond describing the origin
+of this work; TRADEMARK.md spells out what that does and does not cover.
+
+apps/runtime/openab is vendored from openabdev/openab (via the zeabur/openab
+fork) and remains under the MIT License, Copyright (c) 2026 openabdev. See
+apps/runtime/openab/LICENSE.
+
+The Bot portrait SVGs in this directory are from apps/desktop/public/bot-avatars in https://github.com/nuphos/nuphos, revision f4d5674075cd05bbaf06bd9aa4dc101f8276ae05.

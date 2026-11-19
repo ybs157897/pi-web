@@ -154,6 +154,16 @@ Windows 上这些变量用 `set NAME=value`（cmd）或 `$env:NAME='value'`（Po
 
 真实服务不会因认证失败自动切换到演示模型。模型凭据只在服务端使用，接口不返回密钥值。
 
+## Agent 工作台
+
+首次打开时，选择已有工作空间，或输入名称创建托管目录。进入 Agent 页后直接输入任务，输入 `@` 可指定智能体。主线保留用户消息、接单确认和召唤卡。打开卡片查看执行步骤、证据及结果，也可在原子会话里继续追问。Bot 页按智能体查看最近工作。
+
+工作台会优先复用已有 Bot。遇到需要长期承担的新专长，主 Agent 可以创建 Bot 并派单。也可以在 Agent 输入框中选中 `@通用智能体`，明确要求它创建某一角色；只要求建档时，新 Bot 会存入名册供后续使用。在 Bot 名册点「创建」或「编辑 Bot」，可调整头像、角色、工作指令、模型、技能和权限上限。默认跟随模型配置、启用全部可用技能，支持写入沙盒的平台默认授予工作区权限。打开子会话后使用 pi-web 原生输入框与正文视图，能发附件、看文件差异、选模型和停止当前执行。
+
+模型限流、不可达、授权失败、超时等会在会话中显示错误码和恢复操作。自动重试耗尽后，可以检查模型设置或在失败的工作项上选择其他模型继续。
+
+正在阅读的智能体会话会直接显示新问题和待验收交付，可在原处答复、通过或退回。会话内办结后不再补发邮件。离开前尚未处理的事项与后台任务进收件箱；邮件中的会话按钮直接打开对应智能体详情。已通过的工作项将解除下游依赖。普通会话仍可从侧栏的历史会话入口访问。
+
 ## 对话
 
 会话支持标题、置顶和归档。模型和思考等级按会话选择；运行时发送可选择排队或插入。Pi 的插入消息会在当前工具轮结束后参与正在进行的任务。
@@ -355,6 +365,8 @@ npx tsx scripts/render-fixture.ts
 开发服务运行时可打开 `/tests/rendering/fixture.html` 重播 AI 输出夹具，覆盖正文、代码/图表、表格、图片、思考/工具和流式状态；此测试入口不进入生产构建。真实 DOM 交互回归位于 `tests/rendering-interactions.test.tsx`。
 
 Windows 上跑验证前先看 [Windows](#windows)：shell 相关验证走 `pwsh`；`npm test` 仍有 POSIX mode、Skills 路径分隔符及可能的 symlink 条件性失败；`test:live:tools` 与 `test:live:codemode` 依赖 Windows 不支持的 `workspaceWrite`；`test:live:skills` 与 `test:live:workflow` 需真实模型与 Windows 实机记录。
+
+工作台的真实模型验收使用 `npm run test:live:workbench`，复用已配置的模型并在临时工作区运行。脚本经 HTTP 验证派发、一次真实裁决、子会话交付、结果归档和重启恢复。另用 `npm run test:live:workbench:dependencies` 检查自动拆分、退回返修及人工验收后解锁下游。两份报告位于 `artifacts/agent-workbench/`。运行 `npm run test:live:workbench:bots` 验证自动孵化、配置更新与复用，记录见 `artifacts/workbench-bots/live-bots.json`。
 
 ## UI 来源
 

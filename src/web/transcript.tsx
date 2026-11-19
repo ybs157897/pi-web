@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconBranchOutlineRegular, IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
@@ -21,12 +21,13 @@ import { presentationPolicyFor, type ChatPresentationPolicy } from './presentati
 import { buildToolRenderModel, lateAnswerOf, type LateAnswer } from './tool-render-model.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { ReasoningBlock } from './message-rendering/ReasoningBlock.tsx'
-import { ProcessExpansionProvider } from './message-rendering/ProcessExpansion.tsx'
+import { ProcessRow } from './ProcessRow.tsx'
+import { ProcessExpansionProvider, useProcessExpansion } from './message-rendering/ProcessExpansion.tsx'
 import { PluginUiConversationContext, showsInlinePluginUi } from './plugin-ui-bridge.ts'
 import { parseAnswerFileLink } from './answer-markdown-model.ts'
-import { Brain, ChevronRight, ListChecks, Sparkles } from 'lucide-react'
+import { Brain, ChevronRight, ListChecks, Pencil, Sparkles, Terminal } from 'lucide-react'
 import './message-rendering/theme.css'
-import { defaultProcessOpen, foldedProsePreview, latestReasoningLine, otherActivitySummary, processGroupAutoOpen, processGroupBoundary, runningPart, workGroupTitle, workSummaryCounts, workSummaryText } from './process-presentation.ts'
+import { defaultProcessOpen, groupWorkSteps, latestReasoningLine, processGroupAutoOpen, processGroupBoundary, runningPart, workGroupTitle, workSummaryText, type WorkStepGroup } from './process-presentation.ts'
 import SubagentRunStrip from './SubagentRunStrip.tsx'
 import { groupSubagentRuns, type TranscriptPart } from './subagent-run-model.ts'
 import css from './Transcript.module.css'
@@ -83,6 +84,8 @@ export interface TranscriptProps {
   onPluginMessage?: (text: string) => void
   onPluginOpenLink?: (url: string) => void
   resolveFileImage?: (path: string) => string | undefined
+  /** 工作项可按本回合的实际文件操作解析正文中的相对路径。 */
+  createRunFileResolver?: (messages: readonly ChatMessage[]) => (path: string) => string | undefined
 }
 
 /**
@@ -92,7 +95,8 @@ export interface TranscriptProps {
  */
 export default function Transcript({
   messages, conversationId, pending = [], compactionRunning = false, running = false, interactions, policy, subagents, onFork, onRetry, onFeedback,
-  onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage,
+  onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan, onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink,
+  resolveFileImage, createRunFileResolver,
 }: TranscriptProps) {
   const { settings, t } = useUiPreferences()
   const presentation = policy ?? presentationPolicyFor(settings.transcriptView, settings.collapseTiming)
@@ -146,7 +150,7 @@ export default function Transcript({
             onInspectDiff={onInspectDiff} onOpenTool={onOpenTool} onOpenSubagent={onOpenSubagent} onOpenPlan={onOpenPlan}
             onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext} onPluginMessage={onPluginMessage}
             onPluginOpenLink={onPluginOpenLink}
-            resolveFileImage={resolveFileImage} labels={labels} t={t}
+            resolveFileImage={resolveFileImage} createRunFileResolver={createRunFileResolver} labels={labels} t={t}
             showChanges={showChanges} replies={replies} interactions={interactions} />
           : <SystemMessageRow key={entry.row.key} message={entry.row.message} />)}
         {compactionRunning && lastRunKey === undefined && <CompactionRunningRow t={t} />}
@@ -222,8 +226,8 @@ function CompactionRunningRow({ t }: { t: Translate }) {
  * 其余参数为各类回调与共享载荷（replies/interactions/labels）。
  */
 function RunTranscript({
-  run, latest, live, liveCompaction, policy, subagents, onFork, onRetry, onFeedback, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
-  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, labels, t, showChanges, replies, interactions,
+  run, latest, live, liveCompaction, policy, subagents, onFork, onRetry, onFeedback, onOpenFile: openFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
+  onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage: fileImage, createRunFileResolver, labels, t, showChanges, replies, interactions,
 }: {
   run: RenderRun
   latest: boolean
@@ -246,12 +250,28 @@ function RunTranscript({
   onPluginMessage?: TranscriptProps['onPluginMessage']
   onPluginOpenLink?: TranscriptProps['onPluginOpenLink']
   resolveFileImage?: TranscriptProps['resolveFileImage']
+  createRunFileResolver?: TranscriptProps['createRunFileResolver']
   labels: ReturnType<typeof markdownLabels>
   t: Translate
   showChanges: boolean
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
+  const resolvePath = useMemo(() => createRunFileResolver?.(run.messages), [createRunFileResolver, run.messages])
+  const onOpenFile = useMemo<TranscriptProps['onOpenFile']>(() => {
+    if (resolvePath === undefined || openFile === undefined) return openFile
+    return (path, line) => {
+      const target = resolvePath(path)
+      if (target !== undefined) openFile(target, line)
+    }
+  }, [resolvePath, openFile])
+  const resolveFileImage = useMemo<TranscriptProps['resolveFileImage']>(() => {
+    if (resolvePath === undefined || fileImage === undefined) return fileImage
+    return path => {
+      const target = resolvePath(path)
+      return target === undefined ? undefined : fileImage(target)
+    }
+  }, [resolvePath, fileImage])
   const filePaths = useMemo(() => {
     const paths = new Set<string>()
     for (const message of run.messages) {
@@ -357,13 +377,13 @@ function MessageRow({ message, onOpenFile, resolveFileImage, t }: {
 }
 
 /**
- * 功能：一个 run 的工作分组：可折叠头（标题 + 可选正文预览）与过程体。
+ * 功能：一个 run 的折叠头与过程体。结束后收起至时长行，进行中可在收起时查看当前动作。
  * @param run 渲染 run
  * @param latest / live 驱动自动展开的边界事实
  * @param policy 呈现策略（stepGrouping 决定折叠形态，liveReasoningPreview 传给思考块）
  * @param subagents 会话的活跃子智能体投影（供内联条带）
  * 其余为过程部件渲染所需的回调与载荷。
- * 内部逻辑：autoOpen 只在 live/latest 边界移动（run 接管/落定/被取代），manualOpen 记录用户手动翻转；夹带用户输入时强制展开。折叠时头部优先显示正文预览，其次显示调用计数；成功的内联插件页固定在折叠区外，连续子智能体调用折叠成条带。
+ * 内部逻辑：手动开合在运行与完成各阶段独立。交错用户消息分隔前后的过程片段，在原位保持可见。成功的内联插件页固定在折叠区外，连续子智能体调用折叠成条带。
  */
 function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onInspectDiff, onOpenTool, onOpenSubagent, onOpenPlan,
   onOpenPluginUi, onPluginContext, onPluginMessage, onPluginOpenLink, resolveFileImage, filePaths, labels, replies, interactions }: {
@@ -390,33 +410,35 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
   replies: ReadonlyMap<string, LateAnswer>
   interactions?: readonly InteractionRequest[]
 }) {
-  const hasInterleavedUser = run.process.some(part => part.kind === 'user')
-  // 保留工作头部同时遵循各显示档的默认展开。
-  // verbose 保持平铺，交错用户消息保持可见。
   const grouped = policy.stepGrouping !== 'none'
   // 自动展开态只在 live/latest 边界移动（run 接管、落定或被取代）；普通重投影帧
   // 保持原值，分组不会自己开合抖动。
-  const [autoOpen, setAutoOpen] = useState(() => defaultProcessOpen(policy, latest, live, hasInterleavedUser))
-  const previousFrame = useRef({ live, latest })
-  useEffect(() => {
-    const was = previousFrame.current
-    if (was.live === live && was.latest === latest) return
-    previousFrame.current = { live, latest }
-    const boundary = processGroupBoundary(was, { live, latest })
-    const settledOpen = defaultProcessOpen(policy, latest, false, hasInterleavedUser)
-    setAutoOpen(current => processGroupAutoOpen(current, boundary, settledOpen))
-  }, [live, latest, policy, hasInterleavedUser])
+  const [autoOpen, setAutoOpen] = useState(() => defaultProcessOpen(policy, latest, live))
   const [manualOpen, setManualOpen] = useState<boolean | undefined>(undefined)
-  const open = hasInterleavedUser ? true : manualOpen ?? autoOpen
+  const previousFrame = useRef({ live, latest, policy })
+  const headerRef = useRef<HTMLButtonElement>(null)
+  const flowRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const was = previousFrame.current
+    previousFrame.current = { live, latest, policy }
+    const boundary = processGroupBoundary(was, { live, latest })
+    const phaseChanged = boundary === 'live-start' || boundary === 'live-end'
+    if (boundary === 'none' && was.policy === policy) return
+    const defaultOpen = defaultProcessOpen(policy, latest, live)
+    const nextAutoOpen = was.policy === policy ? processGroupAutoOpen(autoOpen, boundary, defaultOpen) : defaultOpen
+    const nextManualOpen = phaseChanged ? undefined : manualOpen
+    const sections = flowRef.current?.children
+    if (!(nextManualOpen ?? nextAutoOpen) && sections !== undefined
+      && Array.from(sections).some(section => section.hasAttribute('data-process-section') && section.contains(document.activeElement))) {
+      headerRef.current?.focus({ preventScroll: true })
+    }
+    setAutoOpen(nextAutoOpen)
+    if (phaseChanged) setManualOpen(undefined)
+  }, [autoOpen, live, latest, policy, manualOpen])
+  const open = manualOpen ?? autoOpen
   const bodyId = useId()
   const title = workGroupTitle(run, t, live)
-  // ZCode summary group 的折叠头只有两行。完成后是「已工作 X」+ 统计；运行中（收起时）
-  // 变成「当前动作行」+「工作中 X」，动作行随执行中的工具/思考自动切换。
-  const statistics = workSummaryText(workSummaryCounts(run), t, live) ?? otherActivitySummary(run, t)
   const liveRow = open || !live ? undefined : currentWorkRow(run, t, live)
-  const statisticsLine = open || liveRow !== undefined ? undefined
-    : statistics ?? (live ? undefined : foldedProsePreview(run) ?? t('思考', 'Reasoning'))
-  const describedBy = liveRow !== undefined || statisticsLine !== undefined ? `${bodyId}-summary` : undefined
   const liveRowNode = liveRow === undefined ? undefined : <span id={`${bodyId}-summary`} className={css.currentWorkRow} data-current-work="">
     <span className={css.currentWorkIcon} aria-hidden="true">{liveRow.icon}</span>
     <span className={css.currentWorkLabel}>{liveRow.label}</span>
@@ -445,7 +467,15 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
       onOpenPlan={onOpenPlan} onOpenPluginUi={onOpenPluginUi} onPluginContext={onPluginContext}
       onPluginMessage={onPluginMessage} onPluginOpenLink={onPluginOpenLink}
       resolveFileImage={resolveFileImage} filePaths={filePaths} labels={labels} t={t} replies={replies} interactions={interactions} />
-  const body = parts.map(renderPart)
+  const steps = useMemo(() => grouped ? groupWorkSteps(parts) : parts, [grouped, parts])
+  const activePartKey = live && open ? runningPart(run, true)?.key : undefined
+  const renderStep = (part: TranscriptPart | WorkStepGroup) => part.kind === 'workSteps'
+    ? <WorkStepsRow key={part.key} group={part}
+      defaultOpen={live || policy.stepGrouping === 'expanded'}
+      running={activePartKey !== undefined && part.parts.some(step => step.key === activePartKey)} t={t}>
+      {part.parts.map(renderPart)}
+    </WorkStepsRow>
+    : renderPart(part)
   const pinnedBody = pinned.map(renderPart)
   if (!grouped) {
     return (
@@ -453,15 +483,16 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
         <div className={css.processFlatStatus} data-state={run.status}>
           <span className={css.processTitle} data-running={live || undefined}>{title}</span>
         </div>
-        <div className={css.processFlatBody}>{body}</div>
+        <div className={css.processFlatBody}>{steps.map(renderStep)}</div>
       </div>
     )
   }
+  const flow = splitProcessFlow(steps)
+  const sectionIds = flow.flatMap(segment => segment.kind === 'work' ? [`${bodyId}-${segment.key}`] : [])
   return <>
     {inline.length > 0 && <div className={css.processGroup} data-state={live ? 'running' : run.status} data-live={live || undefined} data-latest={latest || undefined} data-run-id={run.runId}>
-      <button type="button" className={css.processHeader} aria-expanded={open} aria-controls={bodyId}
-        aria-labelledby={`${bodyId}-title`} aria-describedby={describedBy}
-        disabled={hasInterleavedUser}
+      {sectionIds.length > 0 && <button ref={headerRef} type="button" className={css.processHeader} aria-expanded={open} aria-controls={sectionIds.join(' ')}
+        aria-labelledby={`${bodyId}-title`} aria-describedby={liveRow === undefined ? undefined : `${bodyId}-summary`}
         onClick={() => { setManualOpen(value => !(value ?? autoOpen)) }}>
         {liveRowNode !== undefined ? <>
           {liveRowNode}
@@ -470,21 +501,70 @@ function ProcessGroup({ run, latest, live, policy, t, subagents, onOpenFile, onI
             <span id={`${bodyId}-title`} className={css.processPreview} data-running>{title}</span>
             <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
           </span>
-        </> : <>
-          <span className={css.processTitleRow}>
-            <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
-            <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
-          </span>
-          {statisticsLine !== undefined && <span id={`${bodyId}-summary`} className={css.processPreviewRow} data-process-statistics="">
-            <ListChecks className={css.processPreviewIcon} size={14} aria-hidden="true" />
-            <span className={css.processPreview} title={statisticsLine}>{statisticsLine}</span>
-          </span>}
-        </>}
-      </button>
-      <div id={bodyId} className={css.processCollapse} data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}><div className={css.processClip}><div className={css.processBody} data-work-list>{body}</div></div></div>
+        </> : <span className={css.processTitleRow}>
+          <span id={`${bodyId}-title`} className={css.processTitle} data-running={live || undefined}>{title}</span>
+          <ChevronRight className={css.processChevron} size={16} aria-hidden="true" data-open={open || undefined} />
+        </span>}
+      </button>}
+      <div ref={flowRef} data-process-flow>{flow.map(segment => segment.kind === 'user'
+        ? <div key={segment.part.key} className={css.processUserInput}>{renderPart(segment.part)}</div>
+        : <div key={segment.key} id={`${bodyId}-${segment.key}`} className={css.processCollapse} data-process-section=""
+          data-open={open || undefined} aria-hidden={!open} {...(!open ? { inert: '' } : {})}>
+          <div className={css.processClip}>
+            <div className={css.processBody} data-work-list>{segment.parts.map(renderStep)}</div>
+          </div>
+        </div>)}</div>
     </div>}
     {pinnedBody.length > 0 && <div className={css.pinnedProcess} data-pinned-plugin-ui>{pinnedBody}</div>}
   </>
+}
+
+type ProcessFlowSegment =
+  | { kind: 'user'; part: Extract<TranscriptPart, { kind: 'user' }> }
+  | { kind: 'work'; key: string; parts: (TranscriptPart | WorkStepGroup)[] }
+
+/** 用户消息的 DOM 节点保持原位，只有前后的过程片段参与收起。 */
+function splitProcessFlow(parts: readonly (TranscriptPart | WorkStepGroup)[]): ProcessFlowSegment[] {
+  const flow: ProcessFlowSegment[] = []
+  let sectionKey = 'start'
+  let section: Extract<ProcessFlowSegment, { kind: 'work' }> | undefined
+  for (const part of parts) {
+    if (part.kind === 'user') {
+      flow.push({ kind: 'user', part })
+      section = undefined
+      sectionKey = `after-${encodeURIComponent(part.key)}`
+    } else {
+      if (section === undefined) {
+        section = { kind: 'work', key: sectionKey, parts: [] }
+        flow.push(section)
+      }
+      section.parts.push(part)
+    }
+  }
+  return flow
+}
+
+function WorkStepsRow({ group, children, defaultOpen, running, t }: {
+  group: WorkStepGroup
+  children: ReactNode
+  defaultOpen: boolean
+  running: boolean
+  t: Translate
+}) {
+  const [open, setOpen] = useProcessExpansion(group.key, defaultOpen)
+  const { counts, failedTools, stoppedTools } = group
+  const icon = counts.change + counts.unresolved > 0
+    ? <Pencil size={16} />
+    : counts.run > 0 ? <Terminal size={16} /> : <ListChecks size={16} />
+  const labels = [workSummaryText(counts, t, running || failedTools + stoppedTools > 0) ?? t('工具调用', 'Tool calls')]
+  if (failedTools > 0) labels.push(t(`${failedTools} 项失败`, `${failedTools} failed`))
+  if (stoppedTools > 0) labels.push(t(`${stoppedTools} 项已停止`, `${stoppedTools} stopped`))
+  return <div className={css.workStepsRow} data-work-step-group="">
+    <ProcessRow icon={icon} title={labels.join(t('，', ', '))} open={open} expandable alwaysShowChevron wrapTitle running={running}
+      onToggle={() => setOpen(value => !value)}>
+      <div className={css.workStepsList}>{children}</div>
+    </ProcessRow>
+  </div>
 }
 
 /** 运行中折叠头的当前动作行模型：图标、动词与详情（文件 chip 或命令/思考片段）。 */

@@ -615,7 +615,7 @@ function NewTabLauncher({ launcher }: { launcher: NonNullable<InspectorProps['la
 }
 
 /** 差异内容渲染：优先 old+new 双栏 DiffBlock，其次 diff 文本或新增全文，无记录时空态。 */
-function DiffContents({ diff }: { diff: InspectorDiff }) {
+export function DiffContents({ diff }: { diff: InspectorDiff }) {
   const { t } = useUiPreferences()
   if (diff.oldText !== undefined && diff.newText !== undefined) {
     return <div className={css.content}><DiffBlock diffs={[{ path: diff.path, oldText: diff.oldText, newText: diff.newText }]} labels={diffLabels(t)} /></div>
@@ -634,7 +634,7 @@ function DiffContents({ diff }: { diff: InspectorDiff }) {
 /** 文件内容渲染：按 MIME/扩展名分派——图片、HTML（预览/源码切换、沙箱 iframe）、
  * PDF（iframe + 新窗口/下载）、Markdown（预览/源码切换、本地图片按 Markdown 目录解析）、
  * 文本源码视图；不可内嵌的类型给出打开/下载链接。 */
-function FileContents({ file, active = true }: { file: InspectorFile; active?: boolean }) {
+export function FileContents({ file, active = true }: { file: InspectorFile; active?: boolean }) {
   const { t } = useUiPreferences()
   const [viewOverride, setViewOverride] = useState<{ line?: number; request?: number; mode: 'preview' | 'source' }>()
   const viewMode = viewOverride !== undefined && viewOverride.line === file.line && viewOverride.request === file.lineRequestId

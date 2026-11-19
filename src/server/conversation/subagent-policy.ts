@@ -22,6 +22,8 @@ export type SubagentIdentity = {
   label: string
   createdAt: number
   profile?: SubagentProfile
+  /** 工作台子会话可通过同一交互协议请求人工裁决。 */
+  workbench?: true
   delegation?: SubagentDelegation
 }
 
@@ -55,6 +57,7 @@ const CHILD_FORBIDDEN_TOOLS = new Set([
  */
 export function subagentToolAllowed(identity: SubagentIdentity | null | undefined, name: string): boolean {
   if (!identity) return true
+  if (identity.workbench === true && identity.profile === 'general-purpose' && name === 'ask_user_question') return true
   if (CHILD_FORBIDDEN_TOOLS.has(name) || name.startsWith('team_task_')) return false
   return identity.profile !== 'Explore' || name === 'codemode' || EXPLORE_TOOLS.some(tool => tool === name)
 }

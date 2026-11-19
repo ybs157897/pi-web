@@ -171,13 +171,18 @@ describe('tool card plugin UI branch', () => {
     expect(screen.getByText(/工具详情/u)).toBeTruthy()
   })
 
-  // 验证失败回退：工具执行失败（isError）时不渲染插件页面，展示"工具执行失败"与通用详情。
+  // 失败行用可读的原因取代插件页面，原始结果仍可展开。
   it('falls back to the generic row when the tool failed', () => {
-    render(<ToolCard item={toolItem({ ui: descriptor }, { isError: true, status: 'error' })} runRunning={false} t={t} />)
-    expandRow()
+    render(<ToolCard item={toolItem({ ui: descriptor }, {
+      isError: true, status: 'error', blocks: [{ type: 'text', text: 'Canvas renderer rejected the draft' }],
+    })} runRunning={false} t={t} />)
+    const toggle = screen.getByRole('button', { name: /工具未成功完成.*原因见工具详情/u })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(pluginFrame()).toBeNull()
-    expect(screen.getByText('工具执行失败')).toBeTruthy()
-    expect(screen.getByText(/工具详情/u)).toBeTruthy()
+    fireEvent.click(toggle)
+    expect(pluginFrame()).toBeNull()
+    expect(screen.getByText('Canvas renderer rejected the draft')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^(?:▸ )?工具详情$/u })).toBeTruthy()
   })
 
   // 验证畸形描述兜底：details.ui 缺必填字段时按无 UI 处理，回退通用工具详情行。

@@ -7,7 +7,7 @@
  * directly. The list filters by the stored status, and 「已结束」 is a real state: the
  * rule has no occurrence left.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button, IconAlarmClockOutlineRegular, IconChevronDownOutlineRegular, IconEditOutlineRegular,
   IconEllipsisOutlineRegular, IconNewChatOutlineRegular, IconPlusOutlineRegular, IconSearchOutlineRegular,
@@ -77,6 +77,21 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
   const [runs, setRuns] = useState<Record<string, RunPage>>({})
   const [loadingRuns, setLoadingRuns] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  const createMenuTrigger = useRef<HTMLButtonElement>(null)
+  const createPanelTrigger = useRef<HTMLButtonElement | null>(null)
+
+  function openCreatePanel(trigger: HTMLButtonElement | null) {
+    createPanelTrigger.current = trigger
+    setPanelOpen(true)
+  }
+
+  function closeCreatePanel() {
+    setPanelOpen(false)
+    requestAnimationFrame(() => {
+      const trigger = createPanelTrigger.current?.isConnected ? createPanelTrigger.current : createMenuTrigger.current
+      trigger?.focus({ preventScroll: true })
+    })
+  }
 
   /** 重新拉取全部自动化任务；失败写入 error 供重试。 */
   const refresh = useCallback(async (): Promise<void> => {
@@ -160,7 +175,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
       setSelectedId(result.automation.id)
       // 落到新任务所属的状态页签，无论它是什么状态都可见。
       setStatus(result.automation.status)
-      setPanelOpen(false)
+      closeCreatePanel()
       setNotice(t('自动化任务已创建', 'Automation created'))
       setError('')
     } catch (cause) {
@@ -268,7 +283,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
         <Button variant="primary" size="sm" icon={<IconPlusOutlineRegular size={14} />}
           onClick={onNewConversation}>{t('新建', 'New')}</Button>
         <Menu open={createMenu} onClose={() => { setCreateMenu(false) }} align="end" portal
-          anchor={<Button variant="primary" size="sm" className={css.createChevron}
+          anchor={<Button ref={createMenuTrigger} variant="primary" size="sm" className={css.createChevron}
             aria-label={t('选择创建方式', 'Choose how to create')}
             icon={<IconChevronDownOutlineRegular size={14} />}
             onClick={() => { setCreateMenu(value => !value) }} />}
@@ -279,7 +294,7 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
           onSelect={id => {
             setCreateMenu(false)
             if (id === 'session') onNewConversation()
-            if (id === 'manual') setPanelOpen(true)
+            if (id === 'manual') openCreatePanel(createMenuTrigger.current)
           }} />
       </div>
     </header>
@@ -323,11 +338,11 @@ export default function AutomationsPage({ workspaceId, workspaces, onOpenConvers
         <p>{query.trim() !== '' ? t('没有匹配的自动化任务', 'No tasks match') : emptyText}</p>
         <span>{t('按计划运行提示词，结果保存在会话里', 'Run prompts on a schedule and keep each result in a conversation')}</span>
         <Button variant="outline" className={css.emptyAction}
-          onClick={() => { setPanelOpen(true) }}>{t('新建自动化任务', 'Create automation')}</Button>
+          onClick={event => openCreatePanel(event.currentTarget)}>{t('新建自动化任务', 'Create automation')}</Button>
       </div>}
     </div>
     {panelOpen && <AutomationCreatePanel defaultWorkspaceId={workspaceId ?? ''} workspaces={workspaces}
-      saving={busy} t={t} onClose={() => { setPanelOpen(false) }} onCreate={input => { void create(input) }} />}
+      saving={busy} t={t} onClose={closeCreatePanel} onCreate={input => { void create(input) }} />}
     <Modal open={deleting !== null} onClose={() => { setDeleting(null) }} title={t('删除此任务？', 'Delete this task?')}
       description={t(`确定删除「${deleting?.name ?? ''}」？已生成的会话会保留。`, `Delete “${deleting?.name ?? ''}”? Existing conversations remain.`)}
       closeLabel={t('关闭确认', 'Close confirmation')} footer={<div className={css.confirmActions}>

@@ -1,6 +1,7 @@
 import { defineDoc, defineExtension, defineTool, type Extension } from '@earendil-works/pi-durable'
 import { Type } from '@earendil-works/pi-ai'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem, AskUserQuestionOption } from '../../shared/types.ts'
+import { escalationReasons, type DecisionEscalation } from '../../shared/decision-inbox.ts'
 
 /** 单次提问调用允许的最大问题数。 */
 export const MAX_QUESTIONS = 8
@@ -16,6 +17,7 @@ export type StoredInteraction = {
   answers?: AskUserQuestionAnswerItem[]
   answeredAt?: number
   cancelledAt?: number
+  escalation?: DecisionEscalation
 }
 
 /** 会话作用域的提问表，键为工具调用 id——它同时也是答复的幂等键。 */
@@ -129,6 +131,24 @@ const QUESTION_PARAMETER = Type.Object({
   multiSelect: Type.Optional(Type.Boolean()),
 })
 
+const ESCALATION_PARAMETER = Type.Object({
+  reason: Type.Union([
+    Type.Literal('requirement_ambiguity'),
+    Type.Literal('high_impact'),
+    Type.Literal('scope_conflict'),
+    Type.Literal('cannot_verify'),
+  ]),
+  why: Type.String({ minLength: 1, maxLength: 2_000 }),
+  evidence: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 400 }), { maxItems: 12 })),
+}, { additionalProperties: false })
+
+function normalizeEscalation(input: DecisionEscalation): DecisionEscalation {
+  if (!escalationReasons.includes(input.reason)) throw new Error('Invalid escalation reason.')
+  const why = nonEmpty(input.why, 'Escalation reason', 2_000)
+  const evidence = input.evidence?.map(value => nonEmpty(value, 'Evidence', 400))
+  return { reason: input.reason, why, ...(evidence?.length ? { evidence } : {}) }
+}
+
 /**
  * 功能：interactions 工具扩展——DSH 的 ask_user_question 以"计时/待答"形式落地：调用立即
  * 结算并返回提示，问题存入 `pi-web.interactions`，答复稍后以 steer 用户消息送达。
@@ -149,9 +169,11 @@ export const InteractionTools: Extension = defineExtension({
         '答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。',
         '等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。',
         '问题待答期间，不要重复提问。',
+        '工作台裁决请提供 escalation，说明为什么不能安全地沿用默认值，以及已经检查的证据。',
       ].join(' '),
       parameters: Type.Object({
         questions: Type.Array(QUESTION_PARAMETER, { minItems: 1, maxItems: MAX_QUESTIONS }),
+        escalation: Type.Optional(ESCALATION_PARAMETER),
       }),
       /**
        * 功能：提交问题集合并立即结束调用（不等待答复）。
@@ -161,9 +183,12 @@ export const InteractionTools: Extension = defineExtension({
        */
       execute: async (args, api, context) => {
         const questions = normalizeQuestions(args.questions)
+        const escalation = args.escalation ? normalizeEscalation(args.escalation) : undefined
         await api.commit(async (tx) => {
           const doc = await tx.doc(Interactions, api.conversationId)
-          doc[api.callId] = { questions, askedAt: Date.now(), status: 'pending' }
+          if (doc[api.callId] === undefined) {
+            doc[api.callId] = { questions, askedAt: Date.now(), status: 'pending', ...(escalation ? { escalation } : {}) }
+          }
         }, context)
         return {
           output: [{

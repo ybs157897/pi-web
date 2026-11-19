@@ -156,6 +156,17 @@ describe('automations page', () => {
     expect(created).toEqual(['new'])
   })
 
+  it('moves focus into the manual create panel and restores it on Escape', async () => {
+    mocks.listAutomations.mockResolvedValue({ automations: [] })
+    renderPage()
+    const trigger = await screen.findByRole('button', { name: '新建自动化任务' })
+    fireEvent.click(trigger)
+    const close = screen.getByRole('button', { name: '关闭创建面板' })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(close, { key: 'Escape' })
+    await waitFor(() => { expect(document.activeElement).toBe(trigger) })
+  })
+
   // 详情面板的「暂停任务」把 status 更新为 paused 并发送到 updateAutomation('auto-1', { status: 'paused' })。
   it('pauses an active task from the detail pane', async () => {
     mocks.listAutomations.mockResolvedValue({ automations: [task()] })

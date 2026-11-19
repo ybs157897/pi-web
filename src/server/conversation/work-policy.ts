@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { CODEMODE_TOOL_NAME } from '@earendil-works/pi-durable/codemode'
 import { defineExtension, section, type Extension } from '@earendil-works/pi-durable'
+import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { Plans } from '../tools/plan.ts'
 import { Subagents } from './subagent-policy.ts'
+import { workbenchProject } from './execution-env.ts'
 import { loadProjectInstructions, renderProjectInstructions } from '../workspace/instructions.ts'
 import { readPersonalization, renderPersonalization } from '../state/personalization.ts'
 import { resolveToolRoute, type ToolRoute } from './tool-routing.ts'
@@ -126,8 +128,9 @@ function toolGuidance(input: { agent: PromptAgent }): string {
  * 日期用 sv-SE locale 格式化为 YYYY-MM-DD；可写权限由 write/edit 任一可路由判定；
  * shell 能力分三态——无 shell、仅可经 codemode、可直接执行。
  */
-function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undefined }): string {
+function sessionFacts(input: { agent: PromptAgent; env: ExecutionEnv | undefined }): string {
   const cwd = input.env?.cwd
+  const project = workbenchProject(input.env)
   const platform = process.platform
   const shell = platform === 'win32'
     ? 'PowerShell（优先 `pwsh`，回退 Windows PowerShell）；路径用 `D:\\path`'
@@ -143,9 +146,11 @@ function sessionFacts(input: { agent: PromptAgent; env: { cwd?: string } | undef
     : availableShells.every(name => resolveToolRoute(input.agent, name) === 'codemode')
       ? `仅可经 codemode 执行 shell（${availableShells.join('、')}）`
       : `可执行 shell（${availableShells.join('、')}）`
-  const scope = typeof cwd === 'string' && cwd.trim() !== ''
-    ? `当前工作区（默认当前项目）由系统提供：${JSON.stringify(cwd)}。把此目录作为本次任务的项目范围。`
-    : '本请求未提供工作区路径，不推测项目位置。'
+  const scope = project !== undefined
+    ? `原工作区：${JSON.stringify(project)}。从这里读取项目文件，在获授权时也将改动交付到这里。当前工作项独立工作目录：${JSON.stringify(cwd)}。`
+    : typeof cwd === 'string' && cwd.trim() !== ''
+      ? `当前工作区（默认当前项目）由系统提供：${JSON.stringify(cwd)}。把此目录作为本次任务的项目范围。`
+      : '本请求未提供工作区路径，不推测项目位置。'
   return [
     scope,
     `平台：${platform}；命令解释器：${shell}。`,
@@ -210,7 +215,7 @@ const projectInstructionsSection = section('project-instructions', async (input,
   // 项目 AGENTS.md，其余会话照常携带。
   const identity = await input.read.snapshot(Subagents, input.conversationId, context)
   if (identity?.record?.profile === 'Explore') return undefined
-  return renderProjectInstructions(await loadProjectInstructions(input.env?.cwd))
+  return renderProjectInstructions(await loadProjectInstructions(workbenchProject(input.env) ?? input.env?.cwd))
 })
 
 /**

@@ -20,6 +20,8 @@ interface ProcessRowProps {
   children?: ReactNode
   interactiveSummary?: boolean
   keepSummaryWhenOpen?: boolean
+  alwaysShowChevron?: boolean
+  wrapTitle?: boolean
   toggleLabel?: string
 }
 
@@ -35,7 +37,7 @@ interface ProcessRowProps {
  * 期间 details 区域以 inert + aria-hidden 隐藏；头部按 onActivate / expandable /
  * interactiveSummary 组合渲染为动作按钮、分离式折叠按钮或静态文本。
  */
-export function ProcessRow({ icon, showIcon = true, title, open, expandable, onToggle, onActivate, running = false, summary, accessory, children, interactiveSummary = false, keepSummaryWhenOpen = false, toggleLabel }: ProcessRowProps) {
+export function ProcessRow({ icon, showIcon = true, title, open, expandable, onToggle, onActivate, running = false, summary, accessory, children, interactiveSummary = false, keepSummaryWhenOpen = false, alwaysShowChevron = false, wrapTitle = false, toggleLabel }: ProcessRowProps) {
   const id = useId()
   const [mounted, setMounted] = useState(open)
   useEffect(() => {
@@ -45,8 +47,8 @@ export function ProcessRow({ icon, showIcon = true, title, open, expandable, onT
   }, [open])
   const leading = <>{showIcon && <span className={css.icon} data-process-leading-icon aria-hidden="true">{icon}</span>}<span className={css.title} data-running={running || undefined}>{title}</span></>
   const visibleSummary = keepSummaryWhenOpen || !open ? summary : null
-  const arrow = expandable ? <ChevronRight className={css.chevron} size={16} aria-hidden="true" /> : null
-  return <div className={css.root} data-open={open || undefined} data-running={running || undefined}>
+  const arrow = expandable ? <ChevronRight className={css.chevron} data-visible={alwaysShowChevron || undefined} size={16} aria-hidden="true" /> : null
+  return <div className={css.root} data-open={open || undefined} data-running={running || undefined} data-wrap-title={wrapTitle || undefined}>
     <div className={css.header}>
       {onActivate !== undefined
         ? <button type="button" className={css.toggle} aria-label={toggleLabel ?? title} onClick={onActivate}>{leading}{visibleSummary}</button>

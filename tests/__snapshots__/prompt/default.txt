@@ -1,7 +1,7 @@
 # default
 
 sections (8419 chars): runtime-core 2997, project-instructions 260, work-policy 722, schedule-policy 82, wetrack-analysis 611, goal-policy 184, skills-policy 1725, delegation-policy 786, codemode 1052
-tools (41; descriptions 9959 chars; parameters 14286 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
+tools (41; descriptions 10006 chars; parameters 14738 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
 
@@ -326,9 +326,9 @@ Edit a single file using exact text replacement. Every edits[].oldText must matc
 
 ## tool ask_user_question
 
-向用户提出最多八个问题（通常一到三个），结束本轮，不等待答复。 当必须由用户决定的选择、缺失的外部引用或重要歧义阻碍推进时使用；不要用来询问可自行检查工作区确认的事实。 问题要简短、直接、自包含，使用用户能理解的表达；不要假设用户了解后台工作或内部名称。 每个问题包含稳定的 id、问题文本、可选的 options（label 和可选的 description）以及 multiSelect。 若推荐某个选项，将其放在首位，并在 label 后加“（推荐）”。 答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。 等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。 问题待答期间，不要重复提问。
+向用户提出最多八个问题（通常一到三个），结束本轮，不等待答复。 当必须由用户决定的选择、缺失的外部引用或重要歧义阻碍推进时使用；不要用来询问可自行检查工作区确认的事实。 问题要简短、直接、自包含，使用用户能理解的表达；不要假设用户了解后台工作或内部名称。 每个问题包含稳定的 id、问题文本、可选的 options（label 和可选的 description）以及 multiSelect。 若推荐某个选项，将其放在首位，并在 label 后加“（推荐）”。 答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。 等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。 问题待答期间，不要重复提问。 工作台裁决请提供 escalation，说明为什么不能安全地沿用默认值，以及已经检查的证据。
 
-{"type":"object","required":["questions"],"properties":{"questions":{"type":"array","items":{"type":"object","required":["id","question"],"properties":{"id":{"type":"string"},"header":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"object","required":["label"],"properties":{"label":{"type":"string"},"description":{"type":"string"}}}},"multiSelect":{"type":"boolean"}}},"minItems":1,"maxItems":8}}}
+{"type":"object","required":["questions"],"properties":{"questions":{"type":"array","items":{"type":"object","required":["id","question"],"properties":{"id":{"type":"string"},"header":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"object","required":["label"],"properties":{"label":{"type":"string"},"description":{"type":"string"}}}},"multiSelect":{"type":"boolean"}}},"minItems":1,"maxItems":8},"escalation":{"type":"object","required":["reason","why"],"properties":{"reason":{"anyOf":[{"type":"string","const":"requirement_ambiguity"},{"type":"string","const":"high_impact"},{"type":"string","const":"scope_conflict"},{"type":"string","const":"cannot_verify"}]},"why":{"type":"string","minLength":1,"maxLength":2000},"evidence":{"type":"array","items":{"type":"string","minLength":1,"maxLength":400},"maxItems":12}},"additionalProperties":false}}}
 
 ## tool enter_plan_mode
 

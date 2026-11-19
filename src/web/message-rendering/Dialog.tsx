@@ -18,8 +18,8 @@ import './theme.css'
  * @param t 双语标签函数
  * 内部逻辑：open 翻 true 时 showModal 并把焦点移到 [data-dialog-close] 按钮，关闭时恢复之前的焦点元素；遮罩点击用 getBoundingClientRect 判断命中点在 dialog 矩形之外才触发 onClose。
  */
-export function MessageDialog({ open, onClose, title, description, children, wide = false, t }: {
-  open: boolean; onClose: () => void; title: string; description?: string; children: ReactNode; wide?: boolean; t: Translate
+export function MessageDialog({ open, onClose, title, description, children, wide = false, drawer = false, t }: {
+  open: boolean; onClose: () => void; title: string; description?: string; children: ReactNode; wide?: boolean; drawer?: boolean; t: Translate
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const titleId = useId(); const descriptionId = useId()
@@ -32,7 +32,7 @@ export function MessageDialog({ open, onClose, title, description, children, wid
     return () => { element.close(); if (previous?.isConnected) previous.focus({ preventScroll: true }) }
   }, [open])
   if (!open || typeof document === 'undefined') return null
-  return createPortal(<dialog ref={dialog} className={css.dialog} data-message-dialog data-wide={wide || undefined}
+  return createPortal(<dialog ref={dialog} className={css.dialog} data-message-dialog data-wide={wide || undefined} data-drawer={drawer || undefined}
     role="dialog" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} aria-modal="true"
     onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}
     onCancel={event => { event.preventDefault(); onClose() }} onClick={event => {

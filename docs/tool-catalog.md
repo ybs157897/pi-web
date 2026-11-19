@@ -4,53 +4,54 @@
 
 本目录穷举 pi-web 的内置工具面。每个变体的工具集合都不是手抄源码，而是来自真实 runtime 的模型请求：生成脚本以 demo 模式启动 runtime（与 `tests/prompt-snapshot.test.ts` 同一条生产线），向每个变体发送一条探测消息，捕获到达 provider 的请求并读取其中的工具清单。MCP 动态工具与插件提供的工具不在本目录内。
 
-变体含义：`default` 为默认会话（code mode on，全量工具）；`plan` 为计划模式会话；`readonly` 为只读会话；`subagent-general` / `subagent-explore` 为 `subagent` 委派出的子智能体（general / explore profile）。总表按 default 变体的注册序排列，✓ 表示该变体的请求里出现了这个工具，— 表示被该变体的工具过滤排除。
+变体含义：`default` 为默认会话（code mode on）；`plan` 为计划模式会话；`readonly` 为只读会话；`subagent-general` / `subagent-explore` 为 `subagent` 委派出的子智能体；`workbench-bot-creation` 为通用智能体的 Bot 建档工作项。总表按 default 变体的注册序排列，✓ 表示该变体的请求里出现了这个工具，— 表示该变体不提供这个工具。
 
 ## 总表
 
-| 工具 | 来源 | default | plan | readonly | subagent-general | subagent-explore |
-| --- | --- | --- | --- | --- | --- | --- |
-| manage_hooks | [src/server/hooks/tool.ts](../src/server/hooks/tool.ts) | ✓ | — | — | ✓ | — |
-| read | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| write | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — |
-| edit | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — |
-| bash | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — |
-| shell_session | [src/server/tools/shell/session.ts](../src/server/tools/shell/session.ts) | ✓ | — | — | ✓ | — |
-| list_files | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| search_files | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| glob | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| grep | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| browser | [src/server/tools/browser.ts](../src/server/tools/browser.ts) | ✓ | — | — | ✓ | — |
-| todo_write | [src/server/tools/todo.ts](../src/server/tools/todo.ts) | ✓ | — | ✓ | ✓ | — |
-| schedule_create | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
-| schedule_edit | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
-| schedule_list | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
-| schedule_view | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — |
-| wetrack_analysis_save | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
-| wetrack_analysis_get | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
-| wetrack_analysis_detail | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
-| wetrack_analysis_list | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — |
-| get_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | ✓ | ✓ | — | — |
-| create_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | — | ✓ | — | — |
-| update_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | — | ✓ | — | — |
-| ask_user_question | [src/server/tools/interaction.ts](../src/server/tools/interaction.ts) | ✓ | ✓ | ✓ | — | — |
-| enter_plan_mode | [src/server/tools/plan.ts](../src/server/tools/plan.ts) | ✓ | — | — | — | — |
-| exit_plan_mode | [src/server/tools/plan.ts](../src/server/tools/plan.ts) | ✓ | ✓ | ✓ | — | — |
-| skill_list | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — |
-| skill_load | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — |
-| skill_save | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | — | — | ✓ | — |
-| skill_validate | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — |
-| subagent | [src/server/tools/subagent.ts](../src/server/tools/subagent.ts) | ✓ | ✓ | ✓ | — | — |
-| spawn_teammate | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| send_message | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — |
-| list_agents | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| wait_agent | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| interrupt_agent | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| team_task_create | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — |
-| team_task_list | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| team_task_get | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — |
-| team_task_update | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — |
-| codemode | [src/server/codemode-policy.ts](../src/server/codemode-policy.ts) | ✓ | ✓ | ✓ | ✓ | — |
+| 工具 | 来源 | default | plan | readonly | subagent-general | subagent-explore | workbench-bot-creation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| manage_hooks | [src/server/hooks/tool.ts](../src/server/hooks/tool.ts) | ✓ | — | — | ✓ | — | — |
+| read | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| write | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — | — |
+| edit | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — | — |
+| bash | [src/server/tools/shell/tools.ts](../src/server/tools/shell/tools.ts) | ✓ | — | — | ✓ | — | — |
+| shell_session | [src/server/tools/shell/session.ts](../src/server/tools/shell/session.ts) | ✓ | — | — | ✓ | — | — |
+| list_files | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| search_files | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| glob | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| grep | [src/server/tools/research.ts](../src/server/tools/research.ts) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| browser | [src/server/tools/browser.ts](../src/server/tools/browser.ts) | ✓ | — | — | ✓ | — | — |
+| todo_write | [src/server/tools/todo.ts](../src/server/tools/todo.ts) | ✓ | — | ✓ | ✓ | — | — |
+| schedule_create | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — | — |
+| schedule_edit | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — | — |
+| schedule_list | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — | — |
+| schedule_view | [src/server/tools/schedule.ts](../src/server/tools/schedule.ts) | ✓ | — | — | — | — | — |
+| wetrack_analysis_save | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — | — |
+| wetrack_analysis_get | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — | — |
+| wetrack_analysis_detail | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — | — |
+| wetrack_analysis_list | [src/server/tools/wetrack-analysis.ts](../src/server/tools/wetrack-analysis.ts) | ✓ | — | ✓ | ✓ | — | — |
+| get_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | ✓ | ✓ | — | — | — |
+| create_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | — | ✓ | — | — | — |
+| update_goal | [src/server/tools/goal.ts](../src/server/tools/goal.ts) | ✓ | — | ✓ | — | — | — |
+| ask_user_question | [src/server/tools/interaction.ts](../src/server/tools/interaction.ts) | ✓ | ✓ | ✓ | — | — | — |
+| enter_plan_mode | [src/server/tools/plan.ts](../src/server/tools/plan.ts) | ✓ | — | — | — | — | — |
+| exit_plan_mode | [src/server/tools/plan.ts](../src/server/tools/plan.ts) | ✓ | ✓ | ✓ | — | — | — |
+| skill_list | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — | — |
+| skill_load | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — | — |
+| skill_save | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | — | — | ✓ | — | — |
+| skill_validate | [src/server/tools/skill.ts](../src/server/tools/skill.ts) | ✓ | ✓ | ✓ | ✓ | — | — |
+| subagent | [src/server/tools/subagent.ts](../src/server/tools/subagent.ts) | ✓ | ✓ | ✓ | — | — | — |
+| spawn_teammate | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| send_message | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — | — |
+| list_agents | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| wait_agent | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| interrupt_agent | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| team_task_create | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — | — |
+| team_task_list | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| team_task_get | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | ✓ | ✓ | — | — | — |
+| team_task_update | [src/server/tools/team.ts](../src/server/tools/team.ts) | ✓ | — | ✓ | — | — | — |
+| codemode | [src/server/codemode-policy.ts](../src/server/codemode-policy.ts) | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| create_workbench_bot | [src/server/runtime/workbench.ts](../src/server/runtime/workbench.ts) | — | — | — | — | — | ✓ |
 
 ## tool manage_hooks
 
@@ -1039,7 +1040,7 @@ Source: [src/server/tools/goal.ts](../src/server/tools/goal.ts)
 
 ## tool ask_user_question
 
-向用户提出最多八个问题（通常一到三个），结束本轮，不等待答复。 当必须由用户决定的选择、缺失的外部引用或重要歧义阻碍推进时使用；不要用来询问可自行检查工作区确认的事实。 问题要简短、直接、自包含，使用用户能理解的表达；不要假设用户了解后台工作或内部名称。 每个问题包含稳定的 id、问题文本、可选的 options（label 和可选的 description）以及 multiSelect。 若推荐某个选项，将其放在首位，并在 label 后加“（推荐）”。 答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。 等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。 问题待答期间，不要重复提问。
+向用户提出最多八个问题（通常一到三个），结束本轮，不等待答复。 当必须由用户决定的选择、缺失的外部引用或重要歧义阻碍推进时使用；不要用来询问可自行检查工作区确认的事实。 问题要简短、直接、自包含，使用用户能理解的表达；不要假设用户了解后台工作或内部名称。 每个问题包含稳定的 id、问题文本、可选的 options（label 和可选的 description）以及 multiSelect。 若推荐某个选项，将其放在首位，并在 label 后加“（推荐）”。 答复会在后续回合作为用户跟进消息送达；当前可继续独立工作，或结束本轮。 等待答复不代表已获许可：不得执行依赖待答问题的操作；超时或未答复不构成同意。 问题待答期间，不要重复提问。 工作台裁决请提供 escalation，说明为什么不能安全地沿用默认值，以及已经检查的证据。
 
 ```json
 {
@@ -1090,6 +1091,50 @@ Source: [src/server/tools/goal.ts](../src/server/tools/goal.ts)
       },
       "minItems": 1,
       "maxItems": 8
+    },
+    "escalation": {
+      "type": "object",
+      "required": [
+        "reason",
+        "why"
+      ],
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "requirement_ambiguity"
+            },
+            {
+              "type": "string",
+              "const": "high_impact"
+            },
+            {
+              "type": "string",
+              "const": "scope_conflict"
+            },
+            {
+              "type": "string",
+              "const": "cannot_verify"
+            }
+          ]
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "maxItems": 12
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
@@ -1601,3 +1646,17 @@ Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no
 ```
 
 Source: [src/server/codemode-policy.ts](../src/server/codemode-policy.ts)
+
+## tool create_workbench_bot
+
+提交本次用户明确要求创建的 Bot 配置。草案由主 Agent 准备，仅在通用智能体的建档工作项可用。重复调用返回同一个建档回执。调用后根据回执告诉用户 Bot 名称与创建结果。
+
+```json
+{
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
+```
+
+Source: [src/server/runtime/workbench.ts](../src/server/runtime/workbench.ts)

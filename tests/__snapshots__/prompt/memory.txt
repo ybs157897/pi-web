@@ -1,7 +1,7 @@
 # memory
 
 sections (9915 chars): runtime-core 2997, project-instructions 260, work-policy 722, memory 1187, memory-index 309, schedule-policy 82, wetrack-analysis 611, goal-policy 184, skills-policy 1725, delegation-policy 786, codemode 1052
-tools (41; descriptions 9959 chars; parameters 14286 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
+tools (41; descriptions 10006 chars; parameters 14738 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
 

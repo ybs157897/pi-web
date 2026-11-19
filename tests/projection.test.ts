@@ -364,7 +364,8 @@ describe('Pi Durable conversation projection', () => {
       { id: '22', text: 'Use this update', mode: 'steer', createdAt: 600 },
       { id: '23', text: 'Run tests later', mode: 'followUp', createdAt: 650 },
     ])
-    expect(result.error).toBe('Provider auth failed: Authorization: [redacted] api_key=[redacted]')
+    expect(result.error).toBeUndefined()
+    expect(result.retry).toMatchObject({ attempt: 2, nextAt: 950, failure: { code: 'MODEL_AUTH_FAILED' } })
     expect(JSON.stringify(result)).not.toContain('sk-live-secret-123456789')
     expect(JSON.stringify(result)).not.toContain('private-api-key-123456')
     expect(result.usage).toEqual({ input: 12, output: 4, totalCost: 0.25 })

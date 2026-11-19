@@ -5,9 +5,11 @@
 .toggle:focus-visible, .arrowButton:focus-visible { outline: 2px solid var(--message-link); outline-offset: 3px; border-radius: 3px; }
 .icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; color: var(--message-muted); }
 .icon > svg { width: 16px; height: 16px; }
-.title { flex: none; white-space: nowrap; font-weight: 500; }
+.title { flex: none; white-space: nowrap; font-weight: 500; color: var(--work-step-label, inherit); }
+.root[data-wrap-title] > .header .toggle { color: var(--message-subtle); }
+.root[data-wrap-title] > .header .title { flex: 0 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .chevron { flex: none; opacity: 0; transition: transform .2s ease-out, opacity .2s ease-out; }
-.header:hover .chevron, .header:focus-within .chevron, .root[data-open] > .header .chevron { opacity: 1; }
+.chevron[data-visible], .header:hover .chevron, .header:focus-within .chevron, .root[data-open] > .header .chevron { opacity: 1; }
 .root[data-open] > .header .chevron { transform: rotate(90deg); }
 .arrowButton { display: inline-flex; flex: none; align-items: center; width: 16px; height: 20px; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; }
 .details { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s ease-in-out, opacity .3s ease-in-out; opacity: 0; }

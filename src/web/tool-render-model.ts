@@ -4,6 +4,7 @@ import type {
 import type { FileArtifact, InteractionStatus } from '../shared/types.ts'
 import { asRecord, messageOutput, parseJsonRecord, parseRecordedCodemodeCalls, toolActivity, type ActivityCount, type RecordedCodemodeCall, type RecordedCodemodeStatus, type ToolItem, type ToolActivity } from './render-model.ts'
 import type { Translate } from './render-labels.ts'
+import { failedToolTitle, toolFailureReason } from './tool-failure-presentation.ts'
 
 /** pending 提问被应答时，运行时注入会话的载荷 kind。 */
 export const ANSWER_REPLY_KIND = 'answer_to_pending_question'
@@ -51,7 +52,7 @@ export interface ToolRenderModel {
   readonly running: boolean
   readonly failed: boolean
   readonly cancelled: boolean
-  readonly errorText?: string
+  readonly failureReason?: string
   readonly knownPresentation: boolean
 }
 
@@ -127,9 +128,8 @@ export function toolRowTitle(name: string, t: Translate, running = false): strin
   const mcp = mcpRowTitle(name)
   if (mcp !== undefined) return mcp
   const id = name.toLocaleLowerCase()
-  if (id === CODEMODE_TOOL_NAME) return t('代码', 'Code')
-  // 列目录不是文本搜索；按工具实际执行的操作命名（有意偏离 ZCode 的「已列出」）。
-  if (id === 'list_files') return t('搜索列表', 'List files')
+  if (id === CODEMODE_TOOL_NAME) return running ? t('正在运行脚本', 'Running script') : t('已运行脚本', 'Ran script')
+  if (id === 'list_files') return running ? t('正在列出目录', 'Listing directory') : t('已列出目录', 'Listed directory')
   // pi-web 把 ZCode 的单个 Skill 工具拆成四个；每行各自命名自己的操作。
   if (id === 'skill' || id === 'skill_load') return t('技能', 'Skill')
   if (id === 'skill_list') return t('技能列表', 'Skill list')
@@ -203,7 +203,7 @@ const TEAM_NAMES = new Set(['spawn_teammate', 'wait_agent', 'send_message', 'lis
 const READ_NAMES = new Set(['read', 'read_file', 'readfile', 'cat', 'read_text_file'])
 const WRITE_NAMES = new Set(['write', 'write_file', 'writefile', 'create_file'])
 const EDIT_NAMES = new Set(['edit', 'edit_file', 'apply_patch', 'patch'])
-const SEARCH_NAMES = new Set(['search', 'grep', 'ripgrep', 'glob', 'find_files', 'find'])
+const SEARCH_NAMES = new Set(['search', 'search_files', 'grep', 'ripgrep', 'glob', 'find_files', 'find'])
 const WEB_SEARCH_NAMES = new Set(['web_search', 'search_web', 'browser_search'])
 const WEB_FETCH_NAMES = new Set(['web_fetch', 'fetch_url', 'fetch'])
 
@@ -222,19 +222,23 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
   const message = item.result ?? item.message
   const name = item.call?.name ?? message.toolName ?? 'tool'
   const normalizedName = name.toLocaleLowerCase()
-  const args = item.call?.arguments ?? {}
   const output = messageOutput(item.result)
   const detailsRecord = detailsRecordFor(item.result?.details, output)
+  const args = item.call?.arguments ?? asRecord(detailsRecord?.arguments) ?? {}
   const details = parseDetails(detailsRecord, name, output)
   const artifactValues = item.result?.artifacts ?? []
   const artifacts = dedupeArtifacts(artifactValues)
-  const primaryArtifact = artifactValues.find(artifact => artifact.kind === 'edit' || artifact.kind === 'write' || artifact.kind === 'nativeEdit')
+  // A script can touch several files. Its artifacts are link targets for the answer,
+  // while the script row still opens the code and its individual calls.
+  const ownFiles = normalizedName === CODEMODE_TOOL_NAME ? [] : artifactValues
+  const primaryArtifact = ownFiles.find(artifact => artifact.kind === 'edit' || artifact.kind === 'write' || artifact.kind === 'nativeEdit')
   const fileArtifactDiff = primaryArtifact?.before !== undefined && primaryArtifact.after !== undefined
     ? [{ path: primaryArtifact.path, oldText: primaryArtifact.before, newText: primaryArtifact.after }]
     : undefined
-  const diffValues = details.diffs ?? fileArtifactDiff ?? argsDiff(args)
-  const readArtifact = artifactValues.find(artifact => artifact.kind === 'read')
-  const path = details.path ?? stringField(args, ['path', 'filePath', 'file_path', 'file']) ?? primaryArtifact?.path ?? readArtifact?.path
+  const readArtifact = ownFiles.find(artifact => artifact.kind === 'read')
+  const path = stringField(asRecord(item.result?.details) ?? {}, ['resolvedPath'])
+    ?? details.path ?? stringField(args, ['path', 'filePath', 'file_path', 'file']) ?? primaryArtifact?.path ?? readArtifact?.path
+  const diffValues = details.diffs ?? fileArtifactDiff ?? argsDiff(args, path)
   const command = details.command ?? stringField(args, ['command', 'cmd', 'script'])
   const cwd = details.cwd ?? stringField(args, ['cwd', 'workingDirectory'])
   const language = details.language ?? stringField(args, ['language', 'lang']) ?? languageFromPath(path)
@@ -244,20 +248,29 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
   const failed = item.result?.isError === true || resultStatus === 'error'
   const cancelled = resultStatus === 'cancelled'
   const description = stringField(args, ['description', 'title'])
-  const summary = failed ? firstLine(output) || t('执行失败', 'Failed')
+  const scriptCalls = normalizedName === CODEMODE_TOOL_NAME ? recordedScriptCalls(detailsRecord) : []
+  const summary = failed
+    ? failureTarget(normalizedName, args, path, command, description, scriptCalls, t)
     : cancelled ? t('已停止', 'Stopped')
-      : summaryFor(normalizedName, args, path, command, description, detailsRecord, output, t)
+      : normalizedName === CODEMODE_TOOL_NAME ? scriptSummary(scriptCalls, t)
+        : summaryFor(normalizedName, args, path, command, description, detailsRecord, output, t)
+  const nestedFailures = scriptCalls.filter(call => call.status === 'error')
+  const nestedFailure = nestedFailures.length === 1 ? nestedFailures[0] : undefined
+  const failureReason = failed
+    ? (toolFailureReason(normalizedName, detailsRecord, output, details.exitCode, t)
+      ?? (nestedFailure && toolFailureReason(nestedFailure.name, undefined, nestedFailure.error ?? '', undefined, t)))
+    : undefined
   const specialized = command !== undefined && COMMAND_NAMES.has(normalizedName)
     || READ_NAMES.has(normalizedName) && details.lines !== undefined
     || diffValues !== undefined && diffValues.length > 0
     || details.search !== undefined
     || details.web !== undefined
-  const read = READ_NAMES.has(normalizedName) || readArtifact !== undefined
+  const read = !failed && (READ_NAMES.has(normalizedName) || readArtifact !== undefined)
     ? buildRead(details, output, readArtifact, normalizedName === 'read' ? args.offset : undefined)
     : undefined
   return {
     name,
-    title: toolRowTitle(name, t, running),
+    title: failed ? failedToolTitle(normalizedName, t) : toolRowTitle(name, t, running),
     summary,
     output,
     ...(command === undefined ? {} : { command }),
@@ -276,7 +289,7 @@ export function buildToolRenderModel(item: ToolItem, t: (chinese: string, englis
     running,
     failed,
     cancelled,
-    ...(failed && output !== '' ? { errorText: firstLine(output) } : {}),
+    ...(failureReason !== undefined ? { failureReason } : {}),
     knownPresentation: specialized || COMMAND_NAMES.has(normalizedName) || READ_NAMES.has(normalizedName)
       || WRITE_NAMES.has(normalizedName) || EDIT_NAMES.has(normalizedName) || SEARCH_NAMES.has(normalizedName)
       || WEB_SEARCH_NAMES.has(normalizedName) || WEB_FETCH_NAMES.has(normalizedName) || normalizedName === 'list_files',
@@ -476,8 +489,7 @@ function buildRead(details: ToolDetails, output: string, artifact: FileArtifact 
 }
 
 /** 从编辑类参数（path + oldText/newText）兜底构造单文件 diff。 */
-function argsDiff(args: Readonly<Record<string, unknown>>): DiffHunk[] | undefined {
-  const path = stringField(args, ['path', 'filePath', 'file_path', 'file'])
+function argsDiff(args: Readonly<Record<string, unknown>>, path: string | undefined): DiffHunk[] | undefined {
   const oldText = stringField(args, ['oldText', 'old_text', 'before'])
   const newText = stringField(args, ['newText', 'new_text', 'after'])
   return path !== undefined && newText !== undefined ? [{ path, oldText: oldText ?? null, newText }] : undefined
@@ -485,7 +497,7 @@ function argsDiff(args: Readonly<Record<string, unknown>>): DiffHunk[] | undefin
 
 /**
  * 功能：推导折叠态行的摘要文案，按工具家族给人类可读的一行。
- * 内部逻辑：命令行优先（description 或命令首行）；团队行显示成员/消息而非结果 JSON；codemode 取脚本首行；搜索行显示搜索词（显示搜什么而非在哪搜）；list_files 显示原样请求 JSON；其余按 path → query → 输出首行 → 家族空文案兜底。
+ * 内部逻辑：命令行优先（description 或命令首行）；团队行显示成员/消息；搜索行显示搜索词；list_files 显示目录及是否递归；其余按 path → query → 输出首行 → 家族空文案兜底。
  */
 function summaryFor(
   normalizedName: string,
@@ -507,11 +519,6 @@ function summaryFor(
     if (normalizedName === 'wait_agent') return t('等待队友状态变化', 'Wait for teammate changes')
     if (normalizedName === 'list_agents') return t('查看成员名册', 'Team roster')
   }
-  // codemode 调用的整个参数就是脚本；首行即直播细节。
-  if (normalizedName === CODEMODE_TOOL_NAME) {
-    const script = typeof args.code === 'string' ? firstLine(args.code) : ''
-    if (script !== '') return script
-  }
   const query = stringField(args, ['query', 'pattern', 'searchQuery'])
     ?? (record === undefined ? undefined : stringField(record, ['query', 'pattern']))
   // 搜索行命名「搜了什么」，而不是「在哪搜」。
@@ -520,13 +527,65 @@ function summaryFor(
     return t(`查找 ${searchQuery}`, `Find ${searchQuery}`)
   }
   if (normalizedName === 'list_files') {
-    // 列目录按真实请求展示，行内容无需再解码。
-    return JSON.stringify({ name: 'list_files', arguments: args }, null, 1).replace(/\n\s*/gu, ' ')
+    return directorySummary(path, args.recursive === true, t)
   }
-  if (path !== undefined) return path
+  if (path !== undefined) return compactToolPath(path)
   if (query !== undefined) return firstLine(query)
   if (output !== '') return firstLine(output)
   return emptyLabel(normalizedName, t)
+}
+
+/** Keep absolute paths out of compact rows. The actual path remains available for file navigation. */
+export function compactToolPath(path: string): string {
+  const normalized = path.replaceAll('\\', '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 2) return normalized
+  return `…/${parts.slice(-2).join('/')}`
+}
+
+function directorySummary(path: string | undefined, recursive: boolean, t: Translate): string {
+  const target = path === undefined || path === '' || path === '.' || path === './'
+    ? t('工作区根目录', 'Workspace root')
+    : compactToolPath(path)
+  return recursive ? t(`${target}，包含子目录`, `${target}, including subdirectories`) : target
+}
+
+function recordedScriptCalls(details: Record<string, unknown> | undefined): RecordedCodemodeCall[] {
+  return parseRecordedCodemodeCalls(details?.calls ?? asRecord(details?.result)?.calls)
+}
+
+function scriptSummary(calls: readonly RecordedCodemodeCall[], t: Translate): string {
+  if (calls.length === 0) return ''
+  const call = calls[0]
+  if (calls.length === 1 && call?.name === 'list_files') {
+    const args = asRecord(call.args) ?? (typeof call.args === 'string' ? parseJsonRecord(call.args) : undefined)
+    if (args) {
+      const target = directorySummary(typeof args.path === 'string' ? args.path : undefined, args.recursive === true, t)
+      if (call.status === 'error') return t(`未能列出 ${target}`, `Could not list ${target}`)
+      if (call.status === 'ok') return t(`列出 ${target}`, `Listed ${target}`)
+    }
+  }
+  const failed = calls.filter(call => call.status === 'error').length
+  const count = t(`调用了 ${calls.length} 项工具`, `Called ${calls.length} tools`)
+  return failed === 0 ? count : t(`${count}，其中 ${failed} 项失败`, `${count}, ${failed} failed`)
+}
+
+function failureTarget(name: string, args: Readonly<Record<string, unknown>>, path: string | undefined, command: string | undefined,
+  description: string | undefined, scriptCalls: readonly RecordedCodemodeCall[], t: Translate): string {
+  if (name === CODEMODE_TOOL_NAME) return scriptSummary(scriptCalls, t)
+  if (name === 'list_files') return directorySummary(path, args.recursive === true, t)
+  const query = stringField(args, ['query', 'pattern', 'searchQuery'])
+  if (query?.trim() && (SEARCH_NAMES.has(name) || WEB_SEARCH_NAMES.has(name))) {
+    return t(`查找 ${firstLine(query)}`, `Find ${firstLine(query)}`)
+  }
+  if (command !== undefined) {
+    if (description) return firstLine(description).slice(0, 160)
+    const executable = /^\s*([\w./-]+)(?:\s|$)/u.exec(command)?.[1]
+    return executable === undefined ? '' : compactToolPath(executable)
+  }
+  if (path !== undefined) return compactToolPath(path)
+  const target = stringField(args, ['skill', 'id', 'url', 'name', 'target'])
+  return firstLine(description ?? target ?? '').slice(0, 160)
 }
 
 /** 各工具家族在「无任何细节」时的兜底摘要文案。 */
@@ -908,7 +967,7 @@ export interface CodemodeCallView extends Omit<RecordedCodemodeCall, 'args'> {
 export interface CodemodeRowModel {
   /** 行标题（DSH 措辞）。 */
   readonly title: string
-  /** 折叠态直播细节：脚本首行，回退到结果首行。 */
+  /** 折叠时展示实际调用的工具摘要。 */
   readonly summary: string
   /** 调用运行的脚本；结果未记录调用时为空。 */
   readonly script: string
@@ -922,9 +981,7 @@ export interface CodemodeRowModel {
 
 /**
  * 功能：从调用的脚本参数与结果的 details 构建 `codemode` 行。
- * @returns 行模型；不是 codemode 调用或没有 `details.calls`（仍在运行或旧记录）返回 null——
- * 此时该行不特化，回退到普通工具卡片。
- * 内部逻辑：持久 details 可能是对象或 JSON 字符串；summary 取脚本首行，空则取输出首行。
+ * @returns 行模型；没有脚本、调用明细和完整输出路径时回退到通用工具卡片。
  */
 export function codemodeRowModel(input: {
   readonly name: string
@@ -935,17 +992,18 @@ export function codemodeRowModel(input: {
   if (input.name.toLocaleLowerCase() !== CODEMODE_TOOL_NAME) return null
   // 持久 details 可能以对象或 JSON 字符串到达。
   const details = detailsRecordFor(input.details, '')
-  if (details === undefined || !Array.isArray(details.calls)) return null
   const script = typeof input.args.code === 'string' ? input.args.code : ''
-  const fullOutputPath = typeof details.fullOutputPath === 'string' && details.fullOutputPath.trim() !== ''
+  const fullOutputPath = typeof details?.fullOutputPath === 'string' && details.fullOutputPath.trim() !== ''
     ? details.fullOutputPath
     : undefined
+  const calls = recordedScriptCalls(details)
+  if (script === '' && calls.length === 0 && fullOutputPath === undefined) return null
   return {
-    title: t('代码', 'Code'),
-    summary: firstLine(script) || firstLine(input.output),
+    title: toolRowTitle(CODEMODE_TOOL_NAME, t),
+    summary: scriptSummary(calls, t),
     script,
     output: input.output,
-    calls: parseRecordedCodemodeCalls(details.calls).map(call => ({ ...call, args: codemodeCallArgs(call.args) })),
+    calls: calls.map(call => ({ ...call, args: codemodeCallArgs(call.args) })),
     ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
   }
 }
