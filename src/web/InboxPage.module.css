@@ -112,7 +112,8 @@
 .statValue { font-size: 24px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .statHint { font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
 
-.card {
+/* 列表外壳容器（不是邮件卡片，别与 .card 混用）。 */
+.listCard {
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 18px;
   background: var(--dsw-alias-bg-layer-1);
@@ -206,23 +207,49 @@
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
+/* 分组头：参考图的小字大写 + 彩色圆点（• WORK），不用整条背景色。 */
 .group summary {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 38px;
+  gap: 7px;
+  min-height: 34px;
   padding: 5px 20px;
-  background: var(--dsw-alias-bg-module-platform);
+  background: transparent;
   list-style: none;
   cursor: pointer;
 }
 
+.group summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-idle-primary);
+}
+
+.group summary[data-kind='result']::before { background: var(--dsw-alias-state-success-primary); }
+.group summary[data-kind='choice']::before,
+.group summary[data-kind='review']::before { background: var(--dsw-alias-state-business-primary); }
+.group summary[data-kind='confirmation']::before,
+.group summary[data-kind='exception']::before { background: var(--dsw-alias-state-warn-primary); }
+
 .group summary::-webkit-details-marker { display: none; }
-.group summary > svg { flex: none; }
+.group summary > svg { flex: none; order: 3; color: var(--dsw-alias-label-tertiary); }
 .group:not([open]) summary > svg { transform: rotate(-90deg); }
-.group summary > strong { min-width: 0; overflow-wrap: anywhere; }
-.group summary > span { margin-inline-start: auto; white-space: nowrap; }
-.group ul { margin: 0; padding: 8px 12px 14px; list-style: none; }
+.group summary > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dsw-alias-label-secondary);
+}
+.group summary > span { margin-inline-start: auto; white-space: nowrap; font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
+.group ul { margin: 0; padding: 6px 12px 14px; list-style: none; }
 .group li + li { border-top: 0; }
 
 /* 卡片网格：固定列宽，卡片不随容器拉伸（对齐参考图的插画卡阵列）。 */
@@ -234,90 +261,61 @@
   justify-content: start;
 }
 
-.messageRow { position: relative; display: flex; min-width: 0; }
+.messageRow { position: relative; display: flex; min-width: 0; width: 100%; }
 /* 勾选框放在卡片右上角外侧一点，避开状态胶囊；选中时卡片加描边。 */
 .rowSelect { position: absolute; z-index: 2; inset-block-start: 10px; inset-inline-end: 10px; margin: 0; cursor: pointer; }
 .messageRow:has(.rowSelect) .card { padding-block-start: 14px; padding-inline-end: 34px; }
 
-/* 卡片：左侧类别色条 + 顶部类型图标与状态胶囊，中部标题，底部时间。
-   底色只用极浅的类型色（参考图口径），主体保持白底。 */
+/* 卡片：与工作台工作项卡同一套视觉语言（参考图 All Classes）——
+   第一行：渐变方块图标 + 会话/类型两段 meta + 加粗标题；
+   第二行：摘要；第三行：状态圆点 + 竖线；第四行：双列统计（状态 / 时间）。 */
 .card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1;
+  width: 100%;
   min-width: 0;
-  padding: 14px 14px 14px 17px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px;
+  padding: 13px 15px 13px;
+  border: 0;
+  border-radius: 12px;
   background: var(--dsw-alias-bg-base);
   color: inherit;
   font: inherit;
   text-align: start;
   cursor: pointer;
-  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+  transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
 
-/* 左侧 3px 类别色条：与图标同色系。 */
-.card::before {
-  content: '';
-  position: absolute;
-  inset-block: 12px;
-  inset-inline-start: 0;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--dsw-alias-label-tertiary);
-}
+.card:hover { box-shadow: 0 3px 12px color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent); }
 
-.card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent); }
-
-/* 类型只染极浅底色（8-12%），与参考图的看板列底一致。 */
-.card[data-kind='result'] { background: color-mix(in srgb, var(--dsw-alias-state-success-tertiary) 11%, var(--dsw-alias-bg-base)); }
-.card[data-kind='choice'], .card[data-kind='review'] { background: color-mix(in srgb, var(--dsw-alias-state-business-tertiary) 10%, var(--dsw-alias-bg-base)); }
-.card[data-kind='confirmation'], .card[data-kind='exception'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 12%, var(--dsw-alias-bg-base)); }
-.card[data-awaiting] { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, var(--dsw-alias-border-l2)); }
-
-.card[data-kind='result']::before { background: var(--dsw-alias-state-success-primary); }
-.card[data-kind='choice']::before, .card[data-kind='review']::before { background: var(--dsw-alias-state-business-primary); }
-.card[data-kind='confirmation']::before, .card[data-kind='exception']::before { background: var(--dsw-alias-state-warn-primary); }
+/* 卡片保持纯白，只有待处理且需要你出手的才极浅染色。 */
+.card[data-awaiting] { background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 5%, var(--dsw-alias-bg-base)); }
 
 .card:focus-visible, .group summary:focus-visible { outline-offset: 2px; }
 
-.cardTop { display: flex; align-items: center; gap: 8px; }
+/* 顶部：渐变圆角方块图标 + 标题区。 */
+.cardTop { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
 
 .cardIcon {
   display: grid;
   flex: none;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
   color: var(--dsw-alias-label-secondary);
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent), color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent));
 }
 
-.cardIcon[data-kind='result'] { color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent); }
-.cardIcon[data-kind='choice'], .cardIcon[data-kind='review'] { color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent); }
-.cardIcon[data-kind='confirmation'], .cardIcon[data-kind='exception'] { color: var(--dsw-alias-state-warn-primary); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 16%, transparent); }
+.cardIcon[data-kind='result'] { color: var(--dsw-alias-state-success-primary); background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-success-primary) 22%, transparent), color-mix(in srgb, var(--dsw-alias-state-success-primary) 7%, transparent)); }
+.cardIcon[data-kind='choice'], .cardIcon[data-kind='review'] { color: var(--dsw-alias-state-business-primary); background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent), color-mix(in srgb, var(--dsw-alias-state-business-primary) 7%, transparent)); }
+.cardIcon[data-kind='confirmation'], .cardIcon[data-kind='exception'] { color: var(--dsw-alias-state-warn-primary); background: linear-gradient(145deg, color-mix(in srgb, var(--dsw-alias-state-warn-primary) 25%, transparent), color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)); }
 
-.cardStatus {
-  display: inline-flex;
-  align-items: center;
-  margin-inline-start: auto;
-  padding: 3px 9px;
-  border-radius: 999px;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-secondary);
-  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 15%, transparent);
-}
-
-.cardStatus[data-tone='awaiting'] {
-  color: var(--dsw-alias-label-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
-}
+/* 标题区：两段 meta 在上，加粗标题在下。 */
+.cardHeading { display: grid; gap: 1px; min-width: 0; }
+.cardMetaRow { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.cardConversation { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.cardKind { flex: none; font-size: 10px; color: var(--dsw-alias-label-tertiary); }
 
 .cardTitle {
   min-width: 0;
@@ -325,33 +323,80 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
   line-height: 1.35;
+  color: var(--dsw-alias-label-primary);
   overflow-wrap: anywhere;
 }
 
 .cardSnippet {
   min-width: 0;
+  margin-block-start: 6px;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--dsw-alias-label-tertiary);
 }
 
-.cardFoot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  margin-block-start: auto;
-  font-size: 11.5px;
-  color: var(--dsw-alias-label-tertiary);
+/* 状态行：圆点 + 细竖线 + 状态文案（与工作台同款）。 */
+.cardState { display: flex; align-items: center; gap: 7px; margin-block-start: 9px; }
+.cardState::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-idle-primary);
 }
-.cardFoot time { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.cardState::after {
+  content: '';
+  flex: none;
+  width: 1px;
+  height: 11px;
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 45%, transparent);
+}
+.card[data-kind='result'] .cardState::before { background: var(--dsw-alias-state-success-primary); }
+.card[data-kind='choice'] .cardState::before,
+.card[data-kind='review'] .cardState::before { background: var(--dsw-alias-state-business-primary); }
+.card[data-kind='confirmation'] .cardState::before,
+.card[data-kind='exception'] .cardState::before { background: var(--dsw-alias-state-warn-primary); }
+
+.cardStatus { white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.cardStatus[data-tone='awaiting'] { color: var(--dsw-alias-state-business-primary); }
+
+/* 底部双列统计：状态 / 时间（对齐工作台的「证据 / 尝试」位）。 */
+.cardStats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  gap: 10px;
+  margin-block-start: 11px;
+  padding-block-start: 8px;
+  border-block-start: 1px solid color-mix(in srgb, var(--dsw-alias-label-tertiary) 16%, transparent);
+}
+.cardStatColumn { display: grid; gap: 2px; min-width: 0; }
+.cardStatLabel { font-size: 10.5px; color: var(--dsw-alias-label-tertiary); }
+.cardStatValue { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+
+/* 进度彩条（与工作台同款）。 */
+.cardBar {
+  position: relative;
+  flex: none;
+  width: 46px;
+  height: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 20%, transparent);
+}
+.cardBar > span { position: absolute; inset-block: 0; inset-inline-start: 0; border-radius: 999px; background: var(--dsw-alias-state-idle-primary); }
+.cardBar[data-tone='awaiting'] > span { background: var(--dsw-alias-state-business-primary); }
+.card[data-kind='result'] .cardBar > span { background: var(--dsw-alias-state-success-primary); }
+.card[data-kind='confirmation'] .cardBar > span,
+.card[data-kind='exception'] .cardBar > span { background: var(--dsw-alias-state-warn-primary); }
+
 .rowOpen { color: var(--dsw-alias-state-warn-primary); font-weight: 600; }
 
 /* 顶部插画横幅：main 分支的 upgrade.webp，文字叠在插画左侧。 */

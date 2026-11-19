@@ -123,19 +123,56 @@ function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onO
       data-awaiting={awaiting ? '' : undefined} disabled={disabled} onClick={() => onOpen(item.id)}>
       <span className={css.cardTop}>
         <span className={css.cardIcon} data-kind={item.kind} aria-hidden="true">{mailKindIcon(item.kind)}</span>
+        <span className={css.cardHeading}>
+          <span className={css.cardMetaRow}>
+            <span className={css.cardConversation}>{item.conversationTitle}</span>
+            <span className={css.cardKind}>{t(...kinds[item.kind])}</span>
+          </span>
+          <strong className={css.cardTitle}>{item.subject}</strong>
+        </span>
+      </span>
+      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
+      <span className={css.cardState}>
         <span className={css.cardStatus} data-tone={awaiting ? 'awaiting' : 'settled'}>
           {item.resolution ? t(...resolutions[item.resolution])
             : awaiting ? t(...reasons[item.reason]) : t('已归档', 'Archived')}
         </span>
-      </span>
-      <strong className={css.cardTitle}>{item.subject}</strong>
-      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
-      <span className={css.cardFoot}>
         {item.folder === 'archived' && item.actionable && <span className={css.rowOpen}>{t('仍待处理', 'Still open')}</span>}
-        <time dateTime={new Date(item.createdAt).toISOString()}>{mailTime(item.snoozedUntil ?? item.createdAt, locale)}</time>
+      </span>
+      <span className={css.cardStats}>
+        <span className={css.cardStatColumn}>
+          <span className={css.cardStatLabel}>{t('进展', 'Progress')}</span>
+          <span className={css.cardStatValue}>
+            <span className={css.cardBar} data-tone={awaiting ? 'awaiting' : 'settled'} aria-hidden="true">
+              <span style={{ width: `${progressRatio(item)}%` }} />
+            </span>
+            {progressRatio(item)}%
+          </span>
+        </span>
+        <span className={css.cardStatColumn}>
+          <span className={css.cardStatLabel}>{t('时间', 'Time')}</span>
+          <time className={css.cardStatValue} dateTime={new Date(item.createdAt).toISOString()}>
+            {mailTime(item.snoozedUntil ?? item.createdAt, locale)}
+          </time>
+        </span>
       </span>
     </button>
   </li>
+}
+
+/**
+ * 功能：算一封邮件的处理进展百分比，供卡片底部进度条使用。
+ * @param item 邮件摘要
+ * @returns 0-100 的整数
+ * 内部逻辑：Agent 已完成交付、只等你验收的（kind=result 且 actionable）算 80%——
+ * 大头已经做完；已归档有结论算 100%；其余待你决定的事项算 20%（还在你这一步）。
+ * 这是给用户扫一眼的粗略进度，不是精确计量。
+ */
+function progressRatio(item: DecisionMailSummary): number {
+  if (item.folder === 'archived') return 100
+  if (item.actionable && item.kind === 'result') return 80
+  if (item.actionable && item.folder === 'pending') return 20
+  return 50
 }
 
 function mailTime(timestamp: number, locale: string): string {
@@ -645,7 +682,7 @@ function WorkspaceInbox({
           <p role="alert" className={css.error}>{listError}</p>
           <Button onClick={() => setRefresh(value => value + 1)}>{t('重试', 'Retry')}</Button>
         </div>}
-        {list ? <div className={css.card}>
+        {list ? <div className={css.listCard}>
           <div className={css.cardHeading}>
             <h2>{t(...folders[folder])}</h2>
             <span>{view === 'grouped' ? t('按会话分组', 'Grouped by conversation') : t(`${visible.length} 封邮件`, `${visible.length} messages`)}</span>
@@ -703,7 +740,7 @@ function WorkspaceInbox({
                 setSelectedId(id)
               }} />)}
           </ul> : Array.from(groups, ([id, group]) => <details className={css.group} key={id} open>
-            <summary><ChevronDown size={15} /><strong>{group.title}</strong><span>{t(`${group.mails.length} 封`, `${group.mails.length} messages`)}</span></summary>
+            <summary data-kind={group.mails[0]?.kind}><strong>{group.title}</strong><span>{t(`${group.mails.length} 封`, `${group.mails.length} messages`)}</span><ChevronDown size={15} /></summary>
             <ul className={css.cardGrid}>
               {group.mails.map(item => <MailCard key={item.id} item={item} canBatch={canBatch} selected={selectedRows.has(item.id)}
                 disabled={bulkBusy} t={t} locale={settings.locale} onToggle={toggleRow} onOpen={id => {

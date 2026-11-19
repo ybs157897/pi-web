@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Code, Copy, FolderOpen, ListChecks, Mail, Moon, Search, Sun, X } from 'lucide-react'
 import type { AccessMode, ConversationDetail, ModelCatalog, ModelRef, ThinkingLevel, WorkspaceSummary } from '../shared/types.ts'
-import type { WorkbenchAgent, WorkbenchMessage, WorkbenchSubmitInput, WorkbenchView, WorkItem, WorkItemStatus } from '../shared/workbench.ts'
+import type { WorkbenchAgent, WorkbenchMessage, WorkbenchSubmitInput, WorkbenchView, WorkItem, WorkItemStatus, WorkItemType } from '../shared/workbench.ts'
 import AgentWorkbenchBots from './AgentWorkbenchBots.tsx'
 import { AgentWorkbenchComposer, splitWorkbenchReferences, WorkbenchReferenceIcon, type WorkbenchDraft } from './AgentWorkbenchComposer.tsx'
 import { WorkbenchFailureActions } from './WorkbenchFailureActions.tsx'
@@ -46,6 +46,26 @@ const workItemLabels: Record<WorkItemStatus, readonly [string, string]> = {
   pending_review: ['结果待验收', 'Awaiting review'],
   needs_human: ['等你答复', 'Awaiting your reply'],
   ended: ['已结束', 'Ended'],
+}
+
+/** 工作项类型标签（卡片顶部 meta 的第二段）。 */
+const workItemKindLabels: Record<WorkItemType, readonly [string, string]> = {
+  build: ['实现', 'Build'],
+  investigate: ['调研', 'Investigate'],
+  decide: ['决策', 'Decide'],
+}
+
+/**
+ * 功能：算证据条进度百分比。
+ * @param item 工作项
+ * @returns 0-100 的整数；无证据返回 0
+ * 内部逻辑：把 passed/recorded 视为已完成，failed/insufficient 视为未完成，
+ * 让卡片底部的进度条对应「证据收集进展」而非任务完成度。
+ */
+function evidenceRatio(item: WorkItem): number {
+  if (item.evidence.length === 0) return 0
+  const done = item.evidence.filter(pointer => pointer.status === 'passed' || pointer.status === 'recorded').length
+  return Math.round((done / item.evidence.length) * 100)
 }
 
 function useWorkbench(workspaceId: string) {
@@ -371,14 +391,30 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
                         }} type="button" className={css.summonCard} data-work-item={item.id}
                           data-status={item.status} data-failed={item.error ? '' : undefined}
                           aria-label={t(`打开会话：${item.title}`, `Open conversation: ${item.title}`)} onClick={() => openItem(item.id)}>
-                          <span className={css.summonHead}>
+                          <span className={css.summonTop}>
                             <TaskAvatar agent={agent} />
-                            <span className={css.summonAgent}>{agent?.name ?? t('子智能体', 'Worker')}</span>
-                            <ArrowRight className={css.summonArrow} size={15} aria-hidden="true" />
+                            <span className={css.summonMeta}>
+                              <span className={css.summonAgent}>{agent?.name ?? t('子智能体', 'Worker')}</span>
+                              <span className={css.summonKind}>{t(...workItemKindLabels[item.type])}</span>
+                            </span>
                           </span>
                           <span className={css.summonTitle} id={titleId}>{item.title}</span>
-                          <span className={css.summonFoot}>
-                            <WorkbenchItemStatus item={item} />
+                          <span className={css.summonState}><WorkbenchItemStatus item={item} /></span>
+                          <span className={css.summonStats}>
+                            <span className={css.summonStatColumn}>
+                              <span className={css.summonStatLabel}>{t('证据', 'Evidence')}</span>
+                              <span className={css.summonStatValue}>
+                                <span className={css.summonBar} data-status={item.status} aria-hidden="true">
+                                  <span style={{ width: `${evidenceRatio(item)}%` }} />
+                                </span>
+                                {item.evidence.length}
+                                <ArrowRight className={css.summonArrow} size={14} aria-hidden="true" />
+                              </span>
+                            </span>
+                            <span className={css.summonStatColumn}>
+                              <span className={css.summonStatLabel}>{t('尝试', 'Attempts')}</span>
+                              <span className={css.summonStatValue}>{item.attempt}</span>
+                            </span>
                           </span>
                         </button>
                         {item.failure && <WorkbenchFailureActions failure={item.failure} workspaceId={workspace.id} target={{ itemId: item.id, attempt: item.attempt }}
