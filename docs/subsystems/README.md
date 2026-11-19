@@ -20,6 +20,7 @@
 | [search-and-shell.md](search-and-shell.md) | 搜索与 shell 工具面：四个检索工具、原生 grep 回退、平台二选一 |
 | [automations.md](automations.md) | 自动化任务：RRULE 规则与迁移、三态与 target 投递、运行记录、四个模型工具与 `schedule-policy` |
 | [hooks.md](hooks.md) | 用户/项目级钩子：双来源热读、digest 信任门与 fail-closed、执行契约、五事件接线、changedFiles 与 Stop 续跑、`manage_hooks` 工具 |
+| [errors.md](errors.md) | 错误与异常清单：四层分类、网络层文案、服务端错误码、`ConversationFailure` 全表、各页面错误位 |
 
 提示词体系的现状参考在 [docs/prompts/runtime-system.md](../prompts/runtime-system.md) 与生成的 [section-catalog](../section-catalog.md)。
 

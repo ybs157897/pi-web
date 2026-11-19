@@ -35,7 +35,7 @@ export class ApiFailure extends Error {
  * 读取的数据」、失败响应用状态码文案兜底；带 body 的请求自动补 `Content-Type: application/json`。
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetchOrThrow(path, {
     ...init,
     headers: {
       ...(init?.body === undefined ? {} : { 'Content-Type': 'application/json' }),
@@ -55,11 +55,42 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
+ * 功能：包一层 fetch，把浏览器抛出的网络层异常转成可读文案。
+ * @param path 请求路径
+ * @param init 请求参数
+ * @returns fetch 的响应
+ * 内部调用：连接被拒、服务未启动、断网、超时中止都会在 fetch 这一层抛 TypeError
+ * 或 AbortError（文案分别是 `Failed to fetch`、`Load failed`、`The operation was
+ * aborted`）。这些原文对用户没有意义，统一换成「连不上服务」这类可操作的说明。
+ * 请求本身的 HTTP 状态码错误不在这里处理，仍由调用方按 body.error 映射。
+ */
+async function fetchOrThrow(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, init)
+  } catch (cause) {
+    throw new ApiFailure(networkFailureMessage(cause))
+  }
+}
+
+/**
+ * 功能：把网络层异常翻译成用户能照着做的提示。
+ * @param cause fetch 抛出的异常
+ * @returns 中文提示文案
+ * 内部逻辑：主动中止（AbortError）不是故障，但也不该把英文原文透出来；其余一律
+ * 归为连不上服务，并提示检查服务是否在运行。
+ */
+export function networkFailureMessage(cause: unknown): string {
+  if (cause instanceof DOMException && cause.name === 'AbortError') return '请求已取消'
+  if (cause instanceof Error && cause.name === 'AbortError') return '请求已取消'
+  return '连不上服务：请确认后端进程仍在运行，或刷新页面重试。'
+}
+
+/**
  * 功能：文本形态的请求封装，用于非 JSON 端点（NDJSON 轨迹导出）。
  * @returns 响应文本；失败时同样映射 body.error 或状态码文案
  */
 async function requestText(path: string): Promise<string> {
-  const response = await fetch(path)
+  const response = await fetchOrThrow(path)
   if (!response.ok) {
     let message = `请求失败（${response.status}）`
     try {
