@@ -206,7 +206,7 @@
 .mainStream { display: flex; flex-direction: column; gap: 18px; }
 .mainTurn { display: flex; flex-direction: column; gap: 7px; }
 .mainTurn + .mainTurn { border-block-start: 1px solid var(--workbench-border); padding-block-start: 18px; }
-.workItem { min-width: 0; padding-inline-start: 12px; border-inline-start: 2px solid var(--workbench-border); }
+.workItem { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .userMessage { display: flex; flex-direction: column; align-items: end; gap: 3px; margin-bottom: 5px; }
 .userBubble {
   max-width: 78%;
@@ -220,31 +220,57 @@
 .messageMeta { color: var(--workbench-muted); display: flex; align-items: center; gap: 3px; font-size: 11px; }
 .messageMeta .iconButton { width: 26px; height: 26px; }
 .receipt { color: var(--workbench-muted); font-size: 13px; }
+/* 工作项卡：白底方卡 + 左侧状态色条，参考任务管理界面的看板卡形态。 */
 .summonCard {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 7px 8px;
-  margin-left: -8px;
-  width: fit-content;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px 11px 16px;
+  width: 100%;
   max-width: 100%;
-  min-height: 46px;
-  background: transparent;
+  background: var(--dsw-alias-bg-base);
   color: var(--workbench-foreground);
   font-size: 14px;
   text-align: left;
-  border: 0;
-  border-radius: 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
-.summonCard:hover, .summonCard:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
-.summonIdentity { display: flex; flex-direction: column; min-width: 0; }
-.summonIdentity > strong { font-weight: 600; }
-.summonTitle { color: var(--workbench-muted); overflow-wrap: anywhere; font-size: 13px; }
-.summonState { flex: none; }
+
+/* 左侧 3px 状态色条。 */
+.summonCard::before {
+  content: '';
+  position: absolute;
+  inset-block: 11px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--dsw-alias-state-idle-primary);
+}
+
+.summonCard[data-status='running']::before { background: var(--dsw-alias-state-business-primary); }
+.summonCard[data-status='pending_review']::before { background: var(--dsw-alias-state-success-primary); }
+.summonCard[data-status='needs_human']::before { background: var(--dsw-alias-state-warn-primary); }
+.summonCard[data-status='clarifying']::before { background: var(--dsw-alias-state-warn-primary); }
+.summonCard[data-failed]::before { background: var(--dsw-alias-state-error-primary); }
+
+.summonCard:hover, .summonCard:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--dsw-alias-label-primary) 7%, transparent);
+}
+
+.summonHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.summonAgent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--workbench-muted); }
+.summonArrow { flex: none; margin-inline-start: auto; color: var(--workbench-muted); opacity: 0; transition: opacity 140ms ease, transform 140ms ease; }
+.summonCard:hover .summonArrow, .summonCard:focus-visible .summonArrow { opacity: 1; transform: translateX(2px); color: var(--workbench-accent); }
+
+.summonTitle { color: var(--workbench-foreground); overflow-wrap: anywhere; font-size: 14px; font-weight: 600; line-height: 1.4; }
+
+.summonFoot { display: flex; align-items: center; gap: 8px; }
 .summonCard .status { font-size: 11px; }
-.openCard { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; white-space: nowrap; color: var(--workbench-muted); font-size: 12px; flex: none; }
-.summonCard:hover .openCard { color: var(--workbench-accent); }
+.summonState { flex: none; }
 .avatar {
   width: 29px;
   height: 29px;

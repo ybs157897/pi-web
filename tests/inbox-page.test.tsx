@@ -206,7 +206,7 @@ it('filters the live list by decision reason and archives selected records witho
   })
   vi.stubGlobal('fetch', fetch)
   render(<InboxPage workspaceId="ws" />)
-  expect(await screen.findByText('处理情况')).toBeTruthy()
+  expect(await screen.findByText('今天已处理')).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: '筛选' }))
   fireEvent.click(screen.getByRole('button', { name: '范围冲突' }))
   expect(screen.queryByRole('button', { name: /确认排序规则/ })).toBeNull()

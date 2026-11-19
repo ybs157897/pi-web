@@ -624,12 +624,21 @@ function WorkspaceInbox({
             {t(...folders[name])} <span className={css.count}>{all.filter(item => folderOf(item) === name).length}</span>
           </button>)}
         </nav>
-        {list && <div className={css.waitSummary}>
-          <span className={css.waitIcon} aria-hidden="true"><Clock3 size={18} /></span>
-          <div>
-            <strong>{t('处理情况', 'Decisions')}</strong>
-            <p>{t(`今天已处理 ${settledToday} 封`, `${settledToday} processed today`)}
-              {oldest && <> · {t('等待最久', 'Longest wait')} {waitTime(now.getTime() - oldest.createdAt, t)}</>}</p>
+        {list && <div className={css.statCards}>
+          <div className={css.statCard} data-tone="handled">
+            <span className={css.statLabel}>{t('今天已处理', 'Processed today')}</span>
+            <strong className={css.statValue}>{settledToday}</strong>
+            <span className={css.statHint}>{t('封', 'messages')}</span>
+          </div>
+          <div className={css.statCard} data-tone="waiting">
+            <span className={css.statLabel}>{t('等你处理', 'Awaiting you')}</span>
+            <strong className={css.statValue}>{list.pendingCount}</strong>
+            <span className={css.statHint}>{t('封', 'messages')}</span>
+          </div>
+          <div className={css.statCard} data-tone="oldest">
+            <span className={css.statLabel}>{t('等待最久', 'Longest wait')}</span>
+            <strong className={css.statValue}>{oldest ? waitTime(now.getTime() - oldest.createdAt, t) : '—'}</strong>
+            <span className={css.statHint}>{oldest ? t('需要优先处理', 'Needs attention first') : t('暂无积压', 'Nothing queued')}</span>
           </div>
         </div>}
         {listError && <div className={css.listError}>

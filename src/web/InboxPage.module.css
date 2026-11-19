@@ -87,27 +87,30 @@
   font-variant-numeric: tabular-nums;
 }
 
-.waitSummary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-1);
-}
-.waitIcon {
+/* 顶部统计三卡：处理量 / 待处理 / 等待最久，参考任务管理界面的指标条。 */
+.statCards {
   display: grid;
-  flex: none;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-state-warn-tertiary);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
-.waitSummary p { margin: 2px 0 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+
+.statCard {
+  display: grid;
+  gap: 2px;
+  padding: 13px 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.statCard[data-tone='handled'] { background: color-mix(in srgb, var(--dsw-alias-state-success-tertiary) 12%, var(--dsw-alias-bg-base)); }
+.statCard[data-tone='waiting'] { background: color-mix(in srgb, var(--dsw-alias-state-business-tertiary) 10%, var(--dsw-alias-bg-base)); }
+.statCard[data-tone='oldest'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 14%, var(--dsw-alias-bg-base)); }
+
+.statLabel { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.statValue { font-size: 24px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.statHint { font-size: 11.5px; color: var(--dsw-alias-label-tertiary); }
 
 .card {
   border: 1px solid var(--dsw-alias-border-l2);
@@ -236,16 +239,18 @@
 .rowSelect { position: absolute; z-index: 2; inset-block-start: 10px; inset-inline-end: 10px; margin: 0; cursor: pointer; }
 .messageRow:has(.rowSelect) .card { padding-block-start: 14px; padding-inline-end: 34px; }
 
-/* 卡片：顶部类型图标 + 状态胶囊，中部标题，底部时间；背景按信件类型着色。 */
+/* 卡片：左侧类别色条 + 顶部类型图标与状态胶囊，中部标题，底部时间。
+   底色只用极浅的类型色（参考图口径），主体保持白底。 */
 .card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex: 1;
   min-width: 0;
-  padding: 14px;
+  padding: 14px 14px 14px 17px;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 16px;
+  border-radius: 14px;
   background: var(--dsw-alias-bg-base);
   color: inherit;
   font: inherit;
@@ -254,12 +259,28 @@
   transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
 
+/* 左侧 3px 类别色条：与图标同色系。 */
+.card::before {
+  content: '';
+  position: absolute;
+  inset-block: 12px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--dsw-alias-label-tertiary);
+}
+
 .card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent); }
 
-.card[data-kind='result'] { background: color-mix(in srgb, var(--dsw-alias-state-success-tertiary) 62%, var(--dsw-alias-bg-base)); }
-.card[data-kind='choice'], .card[data-kind='review'] { background: color-mix(in srgb, var(--dsw-alias-state-business-tertiary) 58%, var(--dsw-alias-bg-base)); }
-.card[data-kind='confirmation'], .card[data-kind='exception'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 64%, var(--dsw-alias-bg-base)); }
-.card[data-awaiting] { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 32%, var(--dsw-alias-border-l2)); }
+/* 类型只染极浅底色（8-12%），与参考图的看板列底一致。 */
+.card[data-kind='result'] { background: color-mix(in srgb, var(--dsw-alias-state-success-tertiary) 11%, var(--dsw-alias-bg-base)); }
+.card[data-kind='choice'], .card[data-kind='review'] { background: color-mix(in srgb, var(--dsw-alias-state-business-tertiary) 10%, var(--dsw-alias-bg-base)); }
+.card[data-kind='confirmation'], .card[data-kind='exception'] { background: color-mix(in srgb, var(--dsw-alias-state-warn-tertiary) 12%, var(--dsw-alias-bg-base)); }
+.card[data-awaiting] { border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, var(--dsw-alias-border-l2)); }
+
+.card[data-kind='result']::before { background: var(--dsw-alias-state-success-primary); }
+.card[data-kind='choice']::before, .card[data-kind='review']::before { background: var(--dsw-alias-state-business-primary); }
+.card[data-kind='confirmation']::before, .card[data-kind='exception']::before { background: var(--dsw-alias-state-warn-primary); }
 
 .card:focus-visible, .group summary:focus-visible { outline-offset: 2px; }
 

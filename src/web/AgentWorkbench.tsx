@@ -369,14 +369,17 @@ function ActiveWorkbench({ workspace, page, focus, composeNonce = 0, onComposeHa
                           if (element === null) cards.current.delete(item.id)
                           else cards.current.set(item.id, element)
                         }} type="button" className={css.summonCard} data-work-item={item.id}
+                          data-status={item.status} data-failed={item.error ? '' : undefined}
                           aria-label={t(`打开会话：${item.title}`, `Open conversation: ${item.title}`)} onClick={() => openItem(item.id)}>
-                          <TaskAvatar agent={agent} />
-                          <span className={css.summonIdentity}>
-                            <strong>{agent?.name ?? t('子智能体', 'Worker')}</strong>
-                            <span className={css.summonTitle} id={titleId}>{item.title}</span>
+                          <span className={css.summonHead}>
+                            <TaskAvatar agent={agent} />
+                            <span className={css.summonAgent}>{agent?.name ?? t('子智能体', 'Worker')}</span>
+                            <ArrowRight className={css.summonArrow} size={15} aria-hidden="true" />
                           </span>
-                          <span className={css.summonState}><WorkbenchItemStatus item={item} /></span>
-                          <span className={css.openCard}>{t('打开会话', 'Open conversation')}<ArrowRight size={15} aria-hidden="true" /></span>
+                          <span className={css.summonTitle} id={titleId}>{item.title}</span>
+                          <span className={css.summonFoot}>
+                            <WorkbenchItemStatus item={item} />
+                          </span>
                         </button>
                         {item.failure && <WorkbenchFailureActions failure={item.failure} workspaceId={workspace.id} target={{ itemId: item.id, attempt: item.attempt }}
                           catalog={catalog} onOpenModels={onOpenModels} reload={reload} />}
