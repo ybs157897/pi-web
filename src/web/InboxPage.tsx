@@ -116,6 +116,7 @@ function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onO
   onOpen: (id: string) => void
 }) {
   const awaiting = item.actionable && item.folder !== 'archived'
+  const segments = progressSegments(item)
   return <li className={css.messageRow}>
     {canBatch && <input className={css.rowSelect} type="checkbox" aria-label={t(`选择 ${item.subject}`, `Select ${item.subject}`)}
       checked={selected} disabled={disabled} onChange={event => onToggle(item.id, event.target.checked)} />}
@@ -130,30 +131,35 @@ function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onO
           </span>
           <strong className={css.cardTitle}>{item.subject}</strong>
         </span>
+        <span className={css.cardMark} data-kind={item.kind} aria-hidden="true" />
       </span>
-      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
       <span className={css.cardState}>
+        <span className={css.cardDot} data-kind={item.kind} aria-hidden="true" />
         <span className={css.cardStatus} data-tone={awaiting ? 'awaiting' : 'settled'}>
           {item.resolution ? t(...resolutions[item.resolution])
             : awaiting ? t(...reasons[item.reason]) : t('已归档', 'Archived')}
         </span>
         {item.folder === 'archived' && item.actionable && <span className={css.rowOpen}>{t('仍待处理', 'Still open')}</span>}
+        <span className={css.cardMore} aria-hidden="true" />
       </span>
+      {item.snippet && <span className={css.cardSnippet}>{item.snippet}</span>}
       <span className={css.cardStats}>
         <span className={css.cardStatColumn}>
           <span className={css.cardStatLabel}>{t('进展', 'Progress')}</span>
           <span className={css.cardStatValue}>
-            <span className={css.cardBar} data-tone={awaiting ? 'awaiting' : 'settled'} aria-hidden="true">
-              <span style={{ width: `${progressRatio(item)}%` }} />
+            <span className={css.cardBar} aria-hidden="true">
+              {segments.map((segment, index) => <span key={index} data-tone={segment.tone} style={{ flexGrow: segment.weight }} />)}
             </span>
-            {progressRatio(item)}%
+            {`${Math.round((segments.find(segment => segment.tone === 'done')?.weight ?? 0) * 100)}%`}
           </span>
         </span>
         <span className={css.cardStatColumn}>
           <span className={css.cardStatLabel}>{t('时间', 'Time')}</span>
-          <time className={css.cardStatValue} dateTime={new Date(item.createdAt).toISOString()}>
-            {mailTime(item.snoozedUntil ?? item.createdAt, locale)}
-          </time>
+          <span className={css.cardStatValue}>
+            <time className={css.cardTime} dateTime={new Date(item.createdAt).toISOString()}>
+              {mailTime(item.snoozedUntil ?? item.createdAt, locale)}
+            </time>
+          </span>
         </span>
       </span>
     </button>
@@ -161,18 +167,17 @@ function MailCard({ item, canBatch, selected, disabled, t, locale, onToggle, onO
 }
 
 /**
- * 功能：算一封邮件的处理进展百分比，供卡片底部进度条使用。
+ * 功能：把一封邮件的处理进展拆成参考图那样的三段彩条。
  * @param item 邮件摘要
- * @returns 0-100 的整数
- * 内部逻辑：Agent 已完成交付、只等你验收的（kind=result 且 actionable）算 80%——
- * 大头已经做完；已归档有结论算 100%；其余待你决定的事项算 20%（还在你这一步）。
- * 这是给用户扫一眼的粗略进度，不是精确计量。
+ * @returns 段列表（tone + 权重），权重之和为 1；空数组表示尚无进展
+ * 内部逻辑：已归档算全绿；待你验收（Agent 已交付）给 80% 绿 + 20% 黄，呈现
+ * 参考图「绿→黄→灰」的三段观感；其余待你决定只有灰色。参考图的三段是固定
+ * 呈现，这里按语义映射到真实进展。
  */
-function progressRatio(item: DecisionMailSummary): number {
-  if (item.folder === 'archived') return 100
-  if (item.actionable && item.kind === 'result') return 80
-  if (item.actionable && item.folder === 'pending') return 20
-  return 50
+function progressSegments(item: DecisionMailSummary): { tone: 'done' | 'active' | 'rest'; weight: number }[] {
+  if (item.folder === 'archived') return [{ tone: 'done', weight: 1 }]
+  if (item.actionable && item.kind === 'result') return [{ tone: 'done', weight: 0.6 }, { tone: 'active', weight: 0.25 }, { tone: 'rest', weight: 0.15 }]
+  return [{ tone: 'rest', weight: 1 }]
 }
 
 function mailTime(timestamp: number, locale: string): string {
