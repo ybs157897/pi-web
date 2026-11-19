@@ -59,11 +59,11 @@ function reportedError(details: Record<string, unknown> | undefined, output: str
 export function toolFailureReason(name: string, details: Record<string, unknown> | undefined, output: string, exitCode: number | null | undefined, t: Translate): string | undefined {
   const error = reportedError(details, output, name)
   const kind = toolActivity(name)
-  if (/workspace paths must be relative/iu.test(error)) {
+  if (/workspace paths must not use backslashes/iu.test(error)) {
     const pathLimit = /no longer than (\d+) characters/iu.exec(error)?.[1]
     return pathLimit
-      ? t(`工作区路径需为相对路径，且至多 ${pathLimit} 个字符`, `Use a relative workspace path of at most ${pathLimit} characters`)
-      : t('请使用工作区内的相对路径', 'Use a relative path inside the workspace')
+      ? t(`工作区路径不支持反斜杠或盘符，且至多 ${pathLimit} 个字符`, `Use a workspace path without backslashes or a drive letter, at most ${pathLimit} characters`)
+      : t('工作区路径不支持反斜杠或盘符', 'Use a workspace path without backslashes or a drive letter')
   }
   if (/paths outside the current workspace|workdir must stay inside the workspace/iu.test(error)) {
     return t('工具只能访问当前工作区', 'This tool can only access the current workspace')

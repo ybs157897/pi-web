@@ -1,7 +1,7 @@
 # memory-plan
 
 sections (8185 chars): runtime-core 2997, project-instructions 260, work-policy 325, memory-index 309, goal-policy 169, plan-policy 905, skills-policy 1711, delegation-policy 786, codemode 723
-tools (19; descriptions 6156 chars; parameters 3907 chars): read, list_files, search_files, glob, grep, get_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_validate, subagent, spawn_teammate, list_agents, wait_agent, interrupt_agent, team_task_list, team_task_get, codemode
+tools (19; descriptions 6156 chars; parameters 4055 chars): read, list_files, search_files, glob, grep, get_goal, ask_user_question, exit_plan_mode, skill_list, skill_load, skill_validate, subagent, spawn_teammate, list_agents, wait_agent, interrupt_agent, team_task_list, team_task_get, codemode
 
 ## section runtime-core
 

@@ -1,7 +1,7 @@
 # subagent-explore
 
 sections (3812 chars): runtime-core 2997, work-policy 388, instructions 427
-tools (5; descriptions 1067 chars; parameters 1248 chars): read, list_files, search_files, glob, grep
+tools (5; descriptions 1067 chars; parameters 1396 chars): read, list_files, search_files, glob, grep
 
 ## section runtime-core
 

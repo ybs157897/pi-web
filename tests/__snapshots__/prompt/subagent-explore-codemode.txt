@@ -1,6 +1,6 @@
 # subagent-explore-codemode
 
-sections (6969 chars): runtime-core 2997, work-policy 543, codemode 3002, instructions 427
+sections (7073 chars): runtime-core 2997, work-policy 543, codemode 3106, instructions 427
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -114,6 +114,7 @@ codemode tool declaration:
 declare const tools: { list_files(args: {
   // @integer @minimum 1 @maximum 100
   maxEntries?: number;
+  // 工作区内的相对路径或指向工作区的绝对路径
   // @maxLength 1024
   path?: string;
   recursive?: boolean;
@@ -129,6 +130,7 @@ declare const tools: { search_files(args: {
   caseSensitive?: boolean;
   // @integer @minimum 1 @maximum 50
   maxResults?: number;
+  // 工作区内的相对路径或指向工作区的绝对路径
   // @maxLength 1024
   path?: string;
   // @minLength 1 @maxLength 200
@@ -145,6 +147,7 @@ codemode tool declaration:
 declare const tools: { glob(args: {
   // @integer @minimum 1 @maximum 100
   maxResults?: number;
+  // 工作区内的相对路径或指向工作区的绝对路径
   // @maxLength 1024
   path?: string;
   // @minLength 1 @maxLength 1024
@@ -163,6 +166,7 @@ declare const tools: { grep(args: {
   include?: string;
   // @integer @minimum 1 @maximum 50
   maxResults?: number;
+  // 工作区内的相对路径或指向工作区的绝对路径
   // @maxLength 1024
   path?: string;
   // @minLength 1 @maxLength 1024

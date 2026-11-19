@@ -71,17 +71,47 @@ function isMissing(error: unknown): boolean {
 }
 
 /**
- * 功能：校验并规范化相对路径参数。
- * 输入校验：必须为相对、无反斜杠、无 NUL、无盘符、长度 ≤ MAX_PATH_LENGTH；含 `..`
- * 段抛 FORBIDDEN；命中隐藏/敏感名抛 FORBIDDEN。
- * @param value 调用方传入的路径。
- * @returns 规范化后的相对路径（去除空段与 `.`）。
+ * 功能：把调用方传入的绝对路径折算成工作区相对路径。
+ * 权限检查：解析后必须落在 root 内。词法比较不通过时，用 realpath 把输入自身规范化
+ * 后再比一次——工作区根以 realpath 后的形态存在，而调用方可能仍持有 realpath 前的
+ * 写法（macOS 的 `/var` 与 `/private/var`）。
+ * @param root 已 realpath 的工作区根。
+ * @param value 绝对路径。
+ * @returns 以 `/` 分隔的工作区相对路径；指向根自身时为空串。
  */
-function safeRelativePath(value: unknown): string {
-  if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH || value.includes('\u0000') || value.includes('\\') || isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
-    throw new RuntimeError('INVALID_INPUT', `Workspace paths must be relative and no longer than ${MAX_PATH_LENGTH} characters.`)
+async function absoluteToRelative(root: string, value: string): Promise<string> {
+  const resolved = resolve(value)
+  let target = isWithin(root, resolved) ? resolved : undefined
+  if (target === undefined) {
+    const canonical = await realpath(resolved).catch(() => undefined)
+    if (canonical !== undefined && isWithin(root, canonical)) target = canonical
   }
-  const segments = value.split('/').filter(segment => segment !== '' && segment !== '.')
+  if (target === undefined) throw new RuntimeError('FORBIDDEN', 'A research tool cannot access paths outside the current workspace.')
+  return relative(root, target).split(sep).join('/')
+}
+
+/**
+ * 功能：校验并规范化 path 参数，相对路径与指向工作区的绝对路径都接受。
+ * 输入校验：必须为字符串、无 NUL、长度 ≤ MAX_PATH_LENGTH；反斜杠与盘符只在 Windows
+ * 上有效——那里反斜杠先归一成 `/`，盘符路径按绝对路径处理；其他平台视两者为无效输入，
+ * 与 `workspace/files.ts` 的 `platformAbsolutePath` 语义一致。绝对路径越出 root 抛
+ * FORBIDDEN；相对路径含 `..` 段抛 FORBIDDEN；命中隐藏/敏感名抛 FORBIDDEN。
+ * @param root 已 realpath 的工作区根。
+ * @param value 调用方传入的路径。
+ * @returns 规范化后的工作区相对路径（去除空段与 `.`）。
+ */
+async function safePathArgument(root: string, value: unknown): Promise<string> {
+  if (typeof value !== 'string' || value.length > MAX_PATH_LENGTH || value.includes('\u0000')) {
+    throw new RuntimeError('INVALID_INPUT', `Workspace paths must be no longer than ${MAX_PATH_LENGTH} characters.`)
+  }
+  const windows = process.platform === 'win32'
+  const drive = /^[A-Za-z]:/.test(value)
+  if ((!windows && value.includes('\\')) || (drive && !windows)) {
+    throw new RuntimeError('INVALID_INPUT', `Workspace paths must not use backslashes or drive letters on this platform.`)
+  }
+  const input = windows ? value.replaceAll('\\', '/') : value
+  const segments = (isAbsolute(input) || (windows && drive) ? await absoluteToRelative(root, input) : input)
+    .split('/').filter(segment => segment !== '' && segment !== '.')
   if (segments.some(segment => segment === '..')) throw new RuntimeError('FORBIDDEN', 'A research tool cannot access paths outside the current workspace.')
   if (segments.some(isRestrictedName)) throw new RuntimeError('FORBIDDEN', 'Hidden and credential-related paths are excluded from workspace research.')
   return segments.join('/')
@@ -226,17 +256,17 @@ async function workspaceRoot(api: ToolExecutionApi, context: Context): Promise<s
 }
 
 /**
- * 功能：把相对路径解析为 workspace 内的已校验路径，只解析存在的路径。
- * 权限检查：逐段 lstat——任一段是符号链接抛 FORBIDDEN；中间段不是目录抛
- * INVALID_INPUT；缺失抛 NOT_FOUND；越出 workspace（解析前后各查一次 isWithin）抛
- * FORBIDDEN。
+ * 功能：把 path 参数解析为 workspace 内的已校验路径，只解析存在的路径。
+ * 权限检查：绝对路径先折算成工作区相对路径（越界即抛）；随后逐段 lstat——任一段是
+ * 符号链接抛 FORBIDDEN；中间段不是目录抛 INVALID_INPUT；缺失抛 NOT_FOUND；越出
+ * workspace（解析前后各查一次 isWithin）抛 FORBIDDEN。
  * @param root workspace 根。
- * @param path 相对路径（可为 undefined，表示根本身）。
+ * @param path 工作区相对路径或指向工作区的绝对路径（可为 undefined，表示根本身）。
  * @param context 执行上下文。
  * @returns 规范化的 WorkspacePath。
  */
 async function checkedPath(root: string, path: unknown, context: Context): Promise<WorkspacePath> {
-  const normalized = safeRelativePath(path ?? '')
+  const normalized = await safePathArgument(root, path ?? '')
   const absolute = resolve(root, normalized)
   if (!isWithin(root, absolute)) throw new RuntimeError('FORBIDDEN', 'A research tool cannot access paths outside the current workspace.')
   let cursor = root
@@ -523,7 +553,7 @@ const listFilesTool = defineTool({
   name: 'list_files',
   description: `列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 ${MAX_LIST_ENTRIES} 的整数（默认 ${MAX_LIST_ENTRIES}）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。`,
   parameters: Type.Object({
-    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    path: Type.Optional(Type.String({ description: '工作区内的相对路径或指向工作区的绝对路径', maxLength: MAX_PATH_LENGTH })),
     recursive: Type.Optional(Type.Boolean()),
     maxEntries: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIST_ENTRIES })),
   }),
@@ -559,7 +589,7 @@ const searchFilesTool = defineTool({
   description: `在工作区文本文件中搜索长度为 1 到 ${MAX_QUERY_LENGTH} 字符的单行字面量短语，默认忽略大小写。返回相对路径、从 1 开始的行号和片段。path 默认 "."；recursive 默认 true；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
   parameters: Type.Object({
     query: Type.String({ minLength: 1, maxLength: MAX_QUERY_LENGTH }),
-    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    path: Type.Optional(Type.String({ description: '工作区内的相对路径或指向工作区的绝对路径', maxLength: MAX_PATH_LENGTH })),
     recursive: Type.Optional(Type.Boolean()),
     caseSensitive: Type.Optional(Type.Boolean()),
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),
@@ -657,7 +687,7 @@ const globTool = defineTool({
   description: `查找路径匹配 glob 模式的文件。模式不含 "/" 时匹配任意深度的文件名；"**" 匹配任意深度。包含隐藏路径；排除 VCS 元数据、node_modules、dist、.data、常见敏感文件及符号链接。按修改时间从新到旧返回最多 ${MAX_GLOB_RESULTS} 个路径。只读，不使用 shell。优先使用本工具，不用 find 或 ls -R。`,
   parameters: Type.Object({
     pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
-    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    path: Type.Optional(Type.String({ description: '工作区内的相对路径或指向工作区的绝对路径', maxLength: MAX_PATH_LENGTH })),
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_GLOB_RESULTS })),
   }),
   outputLimits: { maxBytes: MAX_TOOL_OUTPUT_BYTES },
@@ -695,7 +725,7 @@ const grepTool = defineTool({
   description: `使用正则表达式搜索工作区文本文件（原生 ripgrep，可回退到 JavaScript；默认忽略大小写）。用于查找未知内容或文件位置；已知文件路径时直接用 read。不要通过 shell 运行 \`grep\` 或 \`rg\`，它们会绕过工作区策略、输出限制和敏感文件过滤。原生引擎使用 ripgrep 正则语法；ripgrep 拒绝模式时会尝试 JavaScript 回退。path 默认 "."；include 可按 glob 过滤文件（如 "*.ts"）；maxResults 为 1 到 ${MAX_SEARCH_RESULTS} 的整数（默认 ${MAX_SEARCH_RESULTS}）。跳过隐藏路径、node_modules、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。`,
   parameters: Type.Object({
     pattern: Type.String({ minLength: 1, maxLength: MAX_PATTERN_LENGTH }),
-    path: Type.Optional(Type.String({ maxLength: MAX_PATH_LENGTH })),
+    path: Type.Optional(Type.String({ description: '工作区内的相对路径或指向工作区的绝对路径', maxLength: MAX_PATH_LENGTH })),
     include: Type.Optional(Type.String({ maxLength: MAX_PATTERN_LENGTH })),
     caseSensitive: Type.Optional(Type.Boolean()),
     maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_RESULTS })),

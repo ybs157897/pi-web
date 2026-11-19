@@ -9,7 +9,8 @@
  *   二进制字节计入读取预算、skipped 截断与结果截断并存时都如实报告；
  * - glob：跨深度匹配、含隐藏路径（.cursor/.private 但不含凭据）、按修改时间新→旧排序；
  * - grep：正则匹配、include glob 过滤、大小写开关、非法正则 INVALID_INPUT、结果截断标记；
- * - 路径安全：绝对路径/父路径拒绝、符号链接不跟随（FORBIDDEN）；
+ * - 路径安全：绝对路径越出工作区/父路径/盘符拒绝、符号链接不跟随（FORBIDDEN）；
+ * - 绝对路径支持：指向工作区内的绝对路径与等价相对路径同结果，输出仍是相对路径；
  * - 尊重 abort 信号；ripgrep 可用时原生路径返回相对路径 + 1 起始行、跳过生成树与凭据、
  *   支持 rg 专属语法；JS 专属 lookahead 与 rg 不可用时回退 JS walker。
  */
@@ -276,9 +277,9 @@ describe('ResearchTools', () => {
     expect(grepped).toContain('TRUNCATED')
   })
 
-  // 验证路径安全：父路径 ../ 拒绝（FORBIDDEN）；绝对路径越界拒绝（INVALID_INPUT）；
+  // 验证路径安全：父路径 ../ 与盘符路径拒绝；绝对路径越出工作区拒绝（FORBIDDEN）；
   // 工作区内的符号链接不跟随（FORBIDDEN）；默认搜索不泄露外部文件内容。
-  it('rejects absolute and parent paths and does not follow symlinks', async () => {
+  it('rejects escaping paths, drive letters, and symlinks', async () => {
     const root = await workspace()
     const outside = await outsideWorkspace()
     await writeFile(join(outside, 'outside.txt'), 'secret-value')
@@ -287,14 +288,53 @@ describe('ResearchTools', () => {
     await expect(callTool('list_files', { path: '../outside' }, apiFor(root)))
       .rejects.toMatchObject({ code: 'FORBIDDEN' })
     await expect(callTool('search_files', { query: 'secret', path: join(outside, 'outside.txt') }, apiFor(root)))
-      .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+      .rejects.toMatchObject({ code: 'FORBIDDEN' })
     await expect(callTool('search_files', { query: 'secret', path: 'external/outside.txt' }, apiFor(root)))
       .rejects.toMatchObject({ code: 'FORBIDDEN' })
+
+    // 盘符与反斜杠只在 Windows 上可用；当前平台若为 POSIX，两者都按无效输入拒绝。
+    if (process.platform !== 'win32') {
+      await expect(callTool('list_files', { path: 'C:\\Users\\me\\project' }, apiFor(root)))
+        .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+      await expect(callTool('glob', { pattern: '*.ts', path: 'src\\nested' }, apiFor(root)))
+        .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    }
 
     const result = toolText(await callTool('search_files', { query: 'secret' }, apiFor(root)))
     expect(result).not.toContain('outside.txt')
     expect(result).not.toContain('secret-value')
     expect(result).not.toContain('TRUNCATED')
+  })
+
+  // 验证绝对路径支持：指向工作区内的绝对路径与等价相对路径得到相同结果，返回值仍是工作区相对路径。
+  it('accepts absolute paths that stay inside the workspace', async () => {
+    const root = await workspace()
+    await mkdir(join(root, 'src'), { recursive: true })
+    await writeFile(join(root, 'src', 'a.ts'), 'const marker = 1\n')
+
+    const listed = toolText(await callTool('list_files', { path: join(root, 'src') }, apiFor(root)))
+    expect(listed).toContain('src')
+    expect(listed).not.toContain(root)
+
+    const searched = toolText(await callTool('search_files', { query: 'marker', path: join(root, 'src', 'a.ts') }, apiFor(root)))
+    expect(searched).toContain('"src/a.ts":1:')
+    expect(searched).not.toContain(root)
+
+    const globbed = toolText(await callTool('glob', { pattern: '*.ts', path: join(root, 'src') }, apiFor(root)))
+    expect(globbed).toContain('src/a.ts')
+    expect(globbed).not.toContain(root)
+
+    const grepped = toolText(await callTool('grep', { pattern: 'marker', path: join(root, 'src') }, apiFor(root)))
+    expect(grepped).toContain('"src/a.ts":1:')
+    expect(grepped).not.toContain(root)
+  })
+
+  // 验证根自身：传工作区绝对路径等价于默认 "."，列出根下的条目。
+  it('treats the workspace root absolute path as the root itself', async () => {
+    const root = await workspace()
+    await writeFile(join(root, 'root.txt'), 'content')
+    const listed = toolText(await callTool('list_files', { path: root }, apiFor(root)))
+    expect(listed).toContain('root.txt')
   })
 
   // 验证跳过统计：超大文件与二进制文件被跳过并计入 skipped 统计（0 unreadable / 1 binary / 1 oversized），

@@ -1,6 +1,6 @@
 # codemode-only
 
-sections (13165 chars): runtime-core 2997, project-instructions 260, work-policy 1179, schedule-policy 82, wetrack-analysis 611, goal-policy 254, skills-policy 1773, delegation-policy 812, codemode 5197
+sections (13172 chars): runtime-core 2997, project-instructions 260, work-policy 1179, schedule-policy 82, wetrack-analysis 611, goal-policy 254, skills-policy 1773, delegation-policy 812, codemode 5204
 tools (1; descriptions 2445 chars; parameters 116 chars): codemode
 
 ## section runtime-core
@@ -203,17 +203,20 @@ declare const tools: { write(args: {
 }): Promise<string>; };
 ```
 
-### `list_files`
-列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 100 的整数（默认 100）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。
+### `schedule_list`
+列出定时任务，包括其他会话创建的任务。活动任务排在前面，按下次发生时间排序。
 
 codemode tool declaration:
 ```ts
-declare const tools: { list_files(args: {
-  // @integer @minimum 1 @maximum 100
-  maxEntries?: number;
-  // @maxLength 1024
-  path?: string;
-  recursive?: boolean;
+declare const tools: { schedule_list(args: {
+  // true 仅返回活动任务；false 仅返回暂停和已结束任务；省略时返回所有任务。
+  active?: boolean;
+  // 每页数量为 1 到 500，默认 100。
+  // @integer @minimum 1 @maximum 500
+  limit?: number;
+  // 跳过的任务数量，默认 0。
+  // @integer @minimum 0
+  offset?: number;
 }): Promise<string>; };
 ```
 

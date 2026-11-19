@@ -140,9 +140,9 @@ describe('tool row summaries', () => {
       isError: true,
       blocks: [{ type: 'text', text: "<harness>\n[error] ENOENT: no such file or directory, open '/work/sample.txt'\n</harness>" }],
     })).toMatchObject({ title: '读取文件失败', summary: 'sample.txt', failureReason: '找不到文件' })
-    expect(build('grep', { pattern: '村', path: '/work/source' }, {
-      status: 'error', details: { diagnostics: [{ severity: 'error', message: 'Workspace paths must be relative and no longer than 1024 characters.' }] },
-    })).toMatchObject({ title: '搜索失败', summary: '查找 村', failureReason: '工作区路径需为相对路径，且至多 1024 个字符' })
+    expect(build('grep', { pattern: '村', path: 'C:\\work\\source' }, {
+      status: 'error', details: { diagnostics: [{ severity: 'error', message: 'Workspace paths must not use backslashes or drive letters, and must be no longer than 1024 characters.' }] },
+    })).toMatchObject({ title: '搜索失败', summary: '查找 村', failureReason: '工作区路径不支持反斜杠或盘符，且至多 1024 个字符' })
     expect(build('bash', { command: 'npm test' }, {
       isError: true, details: { exitCode: 2 },
     })).toMatchObject({ title: '命令未成功完成', summary: 'npm', failureReason: '命令返回退出码 2' })

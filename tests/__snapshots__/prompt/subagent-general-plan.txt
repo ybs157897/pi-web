@@ -1,7 +1,7 @@
 # subagent-general-plan
 
 sections (6353 chars): runtime-core 2997, project-instructions 260, work-policy 307, plan-policy 102, skills-policy 1711, codemode 579, instructions 397
-tools (9; descriptions 3726 chars; parameters 1626 chars): read, list_files, search_files, glob, grep, skill_list, skill_load, skill_validate, codemode
+tools (9; descriptions 3726 chars; parameters 1774 chars): read, list_files, search_files, glob, grep, skill_list, skill_load, skill_validate, codemode
 
 ## section runtime-core
 

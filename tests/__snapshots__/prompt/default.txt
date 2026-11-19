@@ -1,7 +1,7 @@
 # default
 
 sections (8419 chars): runtime-core 2997, project-instructions 260, work-policy 722, schedule-policy 82, wetrack-analysis 611, goal-policy 184, skills-policy 1725, delegation-policy 786, codemode 1052
-tools (41; descriptions 10006 chars; parameters 14738 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
+tools (41; descriptions 10006 chars; parameters 14886 chars): manage_hooks, read, write, edit, bash, shell_session, list_files, search_files, glob, grep, browser, todo_write, schedule_create, schedule_edit, schedule_list, schedule_view, wetrack_analysis_save, wetrack_analysis_get, wetrack_analysis_detail, wetrack_analysis_list, get_goal, create_goal, update_goal, ask_user_question, enter_plan_mode, exit_plan_mode, skill_list, skill_load, skill_save, skill_validate, subagent, spawn_teammate, send_message, list_agents, wait_agent, interrupt_agent, team_task_create, team_task_list, team_task_get, team_task_update, codemode
 
 ## section runtime-core
 
@@ -226,25 +226,25 @@ Edit a single file using exact text replacement. Every edits[].oldText must matc
 
 列出当前工作区中的文件和目录相对路径。path 默认 "."；recursive 默认 false；maxEntries 为 1 到 100 的整数（默认 100）。排除隐藏路径、node_modules、常见敏感文件及符号链接。只读，不调用 shell。
 
-{"type":"object","properties":{"path":{"type":"string","maxLength":1024},"recursive":{"type":"boolean"},"maxEntries":{"type":"integer","minimum":1,"maximum":100}}}
+{"type":"object","properties":{"path":{"type":"string","description":"工作区内的相对路径或指向工作区的绝对路径","maxLength":1024},"recursive":{"type":"boolean"},"maxEntries":{"type":"integer","minimum":1,"maximum":100}}}
 
 ## tool search_files
 
 在工作区文本文件中搜索长度为 1 到 200 字符的单行字面量短语，默认忽略大小写。返回相对路径、从 1 开始的行号和片段。path 默认 "."；recursive 默认 true；maxResults 为 1 到 50 的整数（默认 50）。跳过隐藏路径、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。
 
-{"type":"object","required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":200},"path":{"type":"string","maxLength":1024},"recursive":{"type":"boolean"},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":50}}}
+{"type":"object","required":["query"],"properties":{"query":{"type":"string","minLength":1,"maxLength":200},"path":{"type":"string","description":"工作区内的相对路径或指向工作区的绝对路径","maxLength":1024},"recursive":{"type":"boolean"},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":50}}}
 
 ## tool glob
 
 查找路径匹配 glob 模式的文件。模式不含 "/" 时匹配任意深度的文件名；"**" 匹配任意深度。包含隐藏路径；排除 VCS 元数据、node_modules、dist、.data、常见敏感文件及符号链接。按修改时间从新到旧返回最多 100 个路径。只读，不使用 shell。优先使用本工具，不用 find 或 ls -R。
 
-{"type":"object","required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":1024},"path":{"type":"string","maxLength":1024},"maxResults":{"type":"integer","minimum":1,"maximum":100}}}
+{"type":"object","required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":1024},"path":{"type":"string","description":"工作区内的相对路径或指向工作区的绝对路径","maxLength":1024},"maxResults":{"type":"integer","minimum":1,"maximum":100}}}
 
 ## tool grep
 
 使用正则表达式搜索工作区文本文件（原生 ripgrep，可回退到 JavaScript；默认忽略大小写）。用于查找未知内容或文件位置；已知文件路径时直接用 read。不要通过 shell 运行 `grep` 或 `rg`，它们会绕过工作区策略、输出限制和敏感文件过滤。原生引擎使用 ripgrep 正则语法；ripgrep 拒绝模式时会尝试 JavaScript 回退。path 默认 "."；include 可按 glob 过滤文件（如 "*.ts"）；maxResults 为 1 到 50 的整数（默认 50）。跳过隐藏路径、node_modules、常见敏感文件、二进制或过大文件及符号链接。只读，不使用 shell。
 
-{"type":"object","required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":1024},"path":{"type":"string","maxLength":1024},"include":{"type":"string","maxLength":1024},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":50}}}
+{"type":"object","required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":1024},"path":{"type":"string","description":"工作区内的相对路径或指向工作区的绝对路径","maxLength":1024},"include":{"type":"string","maxLength":1024},"caseSensitive":{"type":"boolean"},"maxResults":{"type":"integer","minimum":1,"maximum":50}}}
 
 ## tool browser
 

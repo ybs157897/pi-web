@@ -395,6 +395,7 @@ Source: [src/server/tools/shell/session.ts](../src/server/tools/shell/session.ts
   "properties": {
     "path": {
       "type": "string",
+      "description": "工作区内的相对路径或指向工作区的绝对路径",
       "maxLength": 1024
     },
     "recursive": {
@@ -429,6 +430,7 @@ Source: [src/server/tools/research.ts](../src/server/tools/research.ts)
     },
     "path": {
       "type": "string",
+      "description": "工作区内的相对路径或指向工作区的绝对路径",
       "maxLength": 1024
     },
     "recursive": {
@@ -466,6 +468,7 @@ Source: [src/server/tools/research.ts](../src/server/tools/research.ts)
     },
     "path": {
       "type": "string",
+      "description": "工作区内的相对路径或指向工作区的绝对路径",
       "maxLength": 1024
     },
     "maxResults": {
@@ -497,6 +500,7 @@ Source: [src/server/tools/research.ts](../src/server/tools/research.ts)
     },
     "path": {
       "type": "string",
+      "description": "工作区内的相对路径或指向工作区的绝对路径",
       "maxLength": 1024
     },
     "include": {

@@ -15,7 +15,7 @@
 
 过滤规则分两套（[research.ts:25](../../src/server/tools/research.ts#L25)）：`list_files`/`search_files`/`grep` 走 `isRestrictedName`，排除隐藏路径（`.` 开头）、`.git`/`node_modules`/`.data` 目录与敏感文件（`credentials`/`secrets`/`tokens`/`private[-_]key` 的 json/yaml/toml/txt、`id_rsa`/`id_ed25519`，及 `.pem`/`.key`/`.p12`/`.pfx`/`.keystore` 扩展名）；`glob` 走 [isGlobExcluded](../../src/server/tools/research.ts#L69)，包含隐藏路径，但排除 VCS 元数据（`.git`/`.svn`/`.hg`/`.bzr`/`.jj`/`.sl`）、`node_modules`、`dist`、`.data` 与同一套敏感文件名。
 
-路径安全：入参须是 ≤1024 字符的工作区相对路径，拒绝 `..`、绝对路径、反斜杠、盘符与 NUL（[research.ts:49](../../src/server/tools/research.ts#L49)）；[checkedPath](../../src/server/tools/research.ts#L160) 对路径每个分量 `lstat`，任一分量是符号链接即拒绝；遍历与读取后都做 `realpath` 包含性复检，符号链接在遍历中跳过、在请求路径上拒绝。读取侧：单文件 ≤512 KiB，超出按 oversize 跳过；内容含 NUL 判为 binary；JS 回退路径另受每次调用 4 MiB 总读取预算约束；文件以 `O_NOFOLLOW` 打开并核对 dev/ino（[research.ts:293](../../src/server/tools/research.ts#L293)）。输出统一经 [format.ts](../../src/server/tools/search/format.ts) 的 `boundedSearch` 压进 48 KiB：条目从尾部丢弃、结果标 `TRUNCATED`，excerpt ≤200 字符。
+路径安全：入参须是 ≤1024 字符、无 NUL 的路径，`path` 可写工作区相对路径或指向工作区的绝对路径——绝对路径先折算成相对路径（词法不命中时用 realpath 复检，以兼容根以规范化形态存在而调用方持原写法），越界即拒绝（[research.ts:82](../../src/server/tools/research.ts#L82)）；相对路径含 `..` 段拒绝；反斜杠与盘符只在 Windows 上有效（反斜杠先归一成 `/`），POSIX 上按无效输入拒绝，与 `workspace/files.ts` 的 `platformAbsolutePath` 同语义；[checkedPath](../../src/server/tools/research.ts#L250) 对路径每个分量 `lstat`，任一分量是符号链接即拒绝；遍历与读取后都做 `realpath` 包含性复检，符号链接在遍历中跳过、在请求路径上拒绝。读取侧：单文件 ≤512 KiB，超出按 oversize 跳过；内容含 NUL 判为 binary；JS 回退路径另受每次调用 4 MiB 总读取预算约束；文件以 `O_NOFOLLOW` 打开并核对 dev/ino（[research.ts:293](../../src/server/tools/research.ts#L293)）。输出统一经 [format.ts](../../src/server/tools/search/format.ts) 的 `boundedSearch` 压进 48 KiB：条目从尾部丢弃、结果标 `TRUNCATED`，excerpt ≤200 字符。
 
 ## 原生 grep 与 JS 回退
 

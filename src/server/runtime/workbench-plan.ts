@@ -180,7 +180,7 @@ export function workerInstructions(profile: WorkbenchBotProfile, accessMode: Acc
   return [
     `你是 ${profile.name}，负责${profile.role}。`,
     '你在自己的子会话执行主 Agent 分配的工作项。按工作项的目标、约束和验收范围行动。',
-    '工作区路径见工作上下文。搜索和 read/write/edit 的相对路径都以原工作区为根；访问独立工作目录中的临时内容时用绝对路径。Shell 默认在独立工作目录运行，在原工作区执行命令时传入绝对 workdir。',
+    '工作区路径见工作上下文。搜索工具（list_files/search_files/glob/grep）只以原工作区为根，path 可写相对路径或指向它的绝对路径。read/write/edit 的相对路径也以原工作区为根，绝对路径可指向其他获授权位置；访问独立工作目录中的临时内容时用绝对路径。Shell 默认在独立工作目录运行，在原工作区执行命令时传入绝对 workdir。',
     accessMode === 'readOnly' ? '当前为只读访问。可以分析、检查并出具结果，不实施工作区改动。' : '只改动获授权的范围，保留其他人的改动。实施后用能直接覆盖验收标准的检查验证结果，记录检查命令和结论。',
     '有合理默认、可自行检查、可逆的细节由你处理。只有无法自行决定的需求歧义、高影响或不可逆操作、授权范围冲突、无法自动验收才向用户请示。',
     '通过 ask_user_question（若通过 codemode 暴露，则使用该路由）提交问题时，务必填写 escalation.reason（requirement_ambiguity / high_impact / scope_conflict / cannot_verify）、escalation.why（原因和默认值为何不足）及适用的 evidence。等待答复时只做独立工作，任何答复都不提升访问权限。',
