@@ -603,6 +603,11 @@ export interface ConversationSummary {
   runStartedAt?: number
   durationMs?: number
   status?: MessageStatus
+  /**
+   * 该会话的历史无法重放，摘要只能由元数据构造。
+   * 列表里仍然出现，以便用户看到并删除它；打开它会返回同样的损坏错误。
+   */
+  corrupt?: { message: string }
 }
 
 /**

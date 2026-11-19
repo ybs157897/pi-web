@@ -2574,6 +2574,9 @@ function SessionRow({ item, selected, editing, editTitle, menuOpen, actions, onS
                   <span className={css.sessionUnread} role="img" aria-label={t('有未读回复', 'Unread reply')} />
                 ) : null}</span>
                 <span className={css.sessionTitle}>{item.title || t('新对话', 'New conversation')}</span>
+                {/* 历史无法重放的会话仍然列出来，用户才能看到并删除它。 */}
+                {item.corrupt && <span className={css.sessionCorrupt} role="img"
+                  aria-label={t('历史无法读取', 'History unreadable')} title={item.corrupt.message}>!</span>}
               </button>
               <time className={css.sessionMeta} dateTime={new Date(item.updatedAt).toISOString()}>{formatUpdated(item.updatedAt, settings.locale)}</time>
               {/* 置顶状态保留在行本身；其余动作都收在尾随菜单里。 */}

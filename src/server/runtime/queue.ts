@@ -11,6 +11,7 @@ import type { Conversation, ConversationId, ConversationRecord, Cursor, Harness,
 import type { EditQueueInput, SubmitInput, WorkspaceSummary } from '../../shared/types.ts'
 import type { AttachmentReference, WorkspaceFiles } from '../workspace/files.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { isCorruptConversationError } from './corrupt-conversation.ts'
 import {
   CTX, type ConversationMetadata, type QueueContent, assertSubmit, canonicalSubmit, objectValue,
   parseSubmissionId, queueContent,
@@ -247,16 +248,22 @@ export function createQueue(deps: QueueDeps) {
       cursor = page.next
     } while (cursor)
     for (const record of records) {
-      const metadata = await ensureMetadata(record.id)
-      const pending = Object.entries(metadata.queueEdits).filter(([, edit]) => edit.status === 'pending' || edit.status === 'aborting' || edit.status === 'aborted')
-      if (!pending.length) continue
-      const conversation = await harness().conversation(record.id, CTX)
-      if (!conversation) continue
-      for (const [requestId] of pending) {
-        try { await finishQueueEdit(conversation, requestId) } catch (error) {
-          if (error instanceof RuntimeError && (error.code === 'CONFLICT' || error.code === 'NOT_FOUND')) continue
-          throw error
+      try {
+        const metadata = await ensureMetadata(record.id)
+        const pending = Object.entries(metadata.queueEdits).filter(([, edit]) => edit.status === 'pending' || edit.status === 'aborting' || edit.status === 'aborted')
+        if (!pending.length) continue
+        const conversation = await harness().conversation(record.id, CTX)
+        if (!conversation) continue
+        for (const [requestId] of pending) {
+          try { await finishQueueEdit(conversation, requestId) } catch (error) {
+            if (error instanceof RuntimeError && (error.code === 'CONFLICT' || error.code === 'NOT_FOUND')) continue
+            if (isCorruptConversationError(error)) break
+            throw error
+          }
         }
+      } catch (error) {
+        // 一条无法重放的会话不得阻止其余会话的排队编辑恢复。
+        if (!isCorruptConversationError(error)) throw error
       }
     }
   }

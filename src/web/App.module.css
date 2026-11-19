@@ -216,6 +216,21 @@
 .sessionSpinner { display: inline-flex; flex: none; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); animation: spin .9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .sessionSpinner { animation: none; } }
 .sessionUnread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); }
+/* 损坏会话的警示标记：固定尺寸，避免撑开行高。 */
+.sessionCorrupt {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-error-primary, #d9534f);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
 .sessionMeta { flex: none; max-width: 44px; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-overflow: clip; white-space: nowrap; pointer-events: none; }
 /* 收起操作按钮时保留 Tab 顺序，悬停或聚焦时再让操作栏参与布局。 */
 .rowActions {

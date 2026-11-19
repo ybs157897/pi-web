@@ -10,6 +10,7 @@ import type { Runtime } from './contracts.ts'
 import { isDefectNumber } from './automation/wetrack.ts'
 import { PLUGIN_UI_PAGE_CONTENT_TYPE } from './plugins/ui.ts'
 import { RuntimeError } from './runtime-errors.ts'
+import { isCorruptConversationError } from './runtime/corrupt-conversation.ts'
 import { ConversationFailureError, conversationFailure, conversationFailureStatus } from './conversation/failure.ts'
 import type { ConversationFailure } from '../shared/conversation-failure.ts'
 import { hooksEntrySchema, hooksSaveSchema, hooksTrustSchema } from './runtime/hooks.ts'
@@ -252,6 +253,12 @@ function publicFailure(error: unknown): PublicFailure {
   if (error instanceof ConversationFailureError) {
     const { failure } = error
     return { status: conversationFailureStatus(failure), code: failure.code, message: failure.message, failure }
+  }
+
+  // 会话存档无法重放：这是该会话自身的问题，返回可识别错误码让前端给出删除入口，
+  // 而不是把它掩盖成一个笼统的 500。
+  if (isCorruptConversationError(error)) {
+    return { status: 500, code: 'conversation_corrupt', message: '此会话的历史无法读取，可以删除它后继续使用其他会话。' }
   }
 
   if (error instanceof RuntimeError) {

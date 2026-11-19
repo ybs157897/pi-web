@@ -5,7 +5,7 @@
  * 运行时打开 harness 后调用一次 `setHarness`。
  */
 import type {
-  AgentChange, Conversation, ConversationId, ConversationRecord, ConversationView, Cursor, Extension, Harness, ToolRegistration,
+  AgentChange, Conversation, ConversationId, ConversationRecord, ConversationView, Cursor, Extension, Harness, Storage, ToolRegistration,
 } from '@earendil-works/pi-durable'
 import type {
   AccessMode, ConversationDetail, ModelRef as UiModelRef, SubagentSummary,
@@ -35,6 +35,7 @@ import { Goals } from '../tools/goal.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { Plans } from '../tools/plan.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { CorruptConversationError, probeConversationView } from './corrupt-conversation.ts'
 import { WORKBENCH_CREATE_BOT_TOOL } from './workbench-bots.ts'
 import { submissionFailure } from '../conversation/failure.ts'
 import type { Draft } from '@earendil-works/chord'
@@ -44,6 +45,8 @@ export interface CoreDeps {
   appState: AppStateStore
   modelRuntime: RuntimeModels
   workspaceFiles: WorkspaceFiles
+  /** 底层存储：用于在挂载会话视图前探测存档能否重放。 */
+  storage(): Storage
   installedExtensions(): ReadonlyArray<Extension>
   isClosed(): boolean
   defaultWorkspace(): WorkspaceSummary | undefined
@@ -60,10 +63,22 @@ export interface CoreDeps {
  * 在 conversations feature，团队与子智能体投影通过迟绑定回调进入。
  */
 export function createCore(deps: CoreDeps) {
-  const { appState, modelRuntime, workspaceFiles, isClosed, projectTeam, subagentSummaries, defaultWorkspace } = deps
+  const { appState, modelRuntime, workspaceFiles, isClosed, projectTeam, subagentSummaries, defaultWorkspace, storage } = deps
   let harness: Harness
   /** 迟绑定 harness：运行时打开后调用一次。 */
   const setHarness = (value: Harness): void => { harness = value }
+
+  /**
+   * 功能：探测会话存档能否重放，损坏时抛出 `CorruptConversationError`。
+   * @param id 会话 ID。
+   * @returns 无返回；可重放时静默通过。
+   * 内部逻辑：会话视图挂载失败会让内核把整个 Session 判为失败，此后所有会话都不可用。
+   * 因此必须在 `conversation.watch()` 之前用存储层预检——那一层的异常不会经过 Session。
+   */
+  const assertReadable = async (id: ConversationId): Promise<void> => {
+    const failure = await probeConversationView(storage(), id, CTX)
+    if (failure !== undefined) throw new CorruptConversationError(String(id), failure)
+  }
 
   /** 运行时已关闭时抛 CONFLICT，作为所有入口的第一道闸。 */
   const assertOpen = () => {
@@ -191,6 +206,7 @@ export function createCore(deps: CoreDeps) {
 
   /** 读取当前详情（附子智能体与团队投影）；内部调用方使用，不落定未读标记。 */
   const currentDetail = async (id: ConversationId, projection = { subagents: true, team: true }): Promise<ConversationDetail> => {
+    await assertReadable(id)
     const conversation = await requireConversation(String(id))
     const viewWatch = await conversation.watch(CTX)
     try {
@@ -356,6 +372,7 @@ export function createCore(deps: CoreDeps) {
     } while (cursor)
     for (const record of records) {
       try {
+        await assertReadable(record.id)
         const conversation = await harness.conversation(record.id, CTX)
         if (conversation === undefined) continue
         const viewWatch = await conversation.watch(CTX)
@@ -382,6 +399,7 @@ export function createCore(deps: CoreDeps) {
   return {
     setHarness,
     assertOpen,
+    assertReadable,
     requireConversation,
     ensureMetadata,
     withMetadata,

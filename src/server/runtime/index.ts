@@ -175,6 +175,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let teamService: ReturnType<typeof createTeam>
   const core = createCore({
     appState, modelRuntime, workspaceFiles,
+    storage: () => storage,
     installedExtensions: () => registry.snapshot().installed(),
     isClosed: () => runtimeClosed,
     defaultWorkspace,
@@ -182,7 +183,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     subagentSummaries: (id) => teamService.summaries(id),
   })
   const {
-    assertOpen, requireConversation, ensureMetadata, withMetadata, markConversationSeen,
+    assertOpen, assertReadable, requireConversation, ensureMetadata, withMetadata, markConversationSeen,
     detailFromView, currentDetail, selectedWorkspace, modelAllowlist,
     assertModelAllowed, firstAvailableAllowedModel, assertConversationModelAllowed,
     buildAgentChange, syncIdleAgents,
@@ -480,7 +481,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   })
   /** 会话 feature：创建、配置、提交、停止、计划、分叉、重试与实时订阅。 */
   const conversationsService = createConversations({
-    appState, harness: () => harness, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
+    appState, harness: () => harness, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, assertReadable, requireConversation,
     ensureMetadata, withMetadata, markConversationSeen, detailFromView, currentDetail,
     selectedWorkspace, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
     defaultWorkspace,
@@ -641,14 +642,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let policyCursor: Cursor | undefined
   do {
     const page = await harness.commit(tx => tx.scanConversations({ order: 'ascending' }, 250, policyCursor), CTX)
-    for (const record of page.items) await harness.commit(async tx => {
-      const metadata = await tx.doc(META, record.id)
-      if (/^WeTrack DTS\d{3,16} 代码分析$/u.test(metadata.title) || metadata.title.startsWith('问题分析 · DTS')) {
-        const kind = await tx.doc(CONVERSATION_KIND, record.id)
-        kind.kind = 'defectAnalysis'
+    for (const record of page.items) {
+      try {
+        await harness.commit(async tx => {
+          const metadata = await tx.doc(META, record.id)
+          if (/^WeTrack DTS\d{3,16} 代码分析$/u.test(metadata.title) || metadata.title.startsWith('问题分析 · DTS')) {
+            const kind = await tx.doc(CONVERSATION_KIND, record.id)
+            kind.kind = 'defectAnalysis'
+          }
+          await ensureRuntimePolicy(tx, record)
+        }, CTX)
+      } catch {
+        // 一份无法重放的会话不得阻止服务启动，也不得让其余会话失去政策守卫。
       }
-      await ensureRuntimePolicy(tx, record)
-    }, CTX)
+    }
     policyCursor = page.next
   } while (policyCursor)
   await queueService.recover()

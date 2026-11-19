@@ -25,6 +25,7 @@ import { Plans } from '../tools/plan.ts'
 import { Todos } from '../tools/todo.ts'
 import { Interactions } from '../tools/interaction.ts'
 import { RuntimeError } from '../runtime-errors.ts'
+import { isCorruptConversationError } from './corrupt-conversation.ts'
 import {
   CONVERSATION_KIND, CTX, DEFAULT_TITLE, META, SUPPORTED_THINKING, assertSubmit, attachmentReferences, fingerprintSubmit,
   liveRunTaskId, objectValue, parseConversationId, parseEntryId, safeTitle, submissionContent,
@@ -39,6 +40,8 @@ export interface ConversationsDeps {
   workspaceFiles: WorkspaceFiles
   memoryExtraction: { scheduleAfterSubmission(conversation: Conversation, request: Submission): void }
   assertOpen(): void
+  /** 挂载会话视图前探测存档能否重放；损坏时抛 CorruptConversationError。 */
+  assertReadable(id: ConversationId): Promise<void>
   requireConversation(value: string): Promise<Conversation>
   ensureMetadata(id: ConversationId): Promise<Readonly<ConversationMetadata>>
   withMetadata(id: ConversationId, update: (metadata: Draft<ConversationMetadata>) => void): Promise<void>
@@ -70,7 +73,7 @@ export interface ConversationsDeps {
  */
 export function createConversations(deps: ConversationsDeps) {
   const {
-    appState, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, requireConversation,
+    appState, modelRuntime, workspaceFiles, memoryExtraction, assertOpen, assertReadable, requireConversation,
     ensureMetadata, withMetadata, markConversationSeen, detailFromView, currentDetail,
     selectedWorkspace, assertModelAllowed, assertConversationModelAllowed, buildAgentChange,
     defaultWorkspace,
@@ -83,7 +86,8 @@ export function createConversations(deps: ConversationsDeps) {
    * 功能：列出全部无主会话的摘要。
    * @returns 按 updatedAt 降序（并列按 createdAt 降序）的摘要数组
    * 内部逻辑：分页扫描会话记录（过滤掉有属主的子会话），逐个读元数据与视图后
-   * 投影；会话中途消失的行直接跳过。
+   * 投影；会话中途消失的行直接跳过。单个会话的历史无法重放时降级为只含元数据的
+   * 占位摘要——一条损坏记录不得让整个列表消失。
    */
   const list = async (): Promise<ConversationSummary[]> => {
     assertOpen()
@@ -95,18 +99,53 @@ export function createConversations(deps: ConversationsDeps) {
       cursor = page.next
     } while (cursor)
     const summaries = await Promise.all(records.map(async (record) => {
-      const conversation = await harness().conversation(record.id, CTX)
-      if (!conversation) return undefined
-      const metadata = await ensureMetadata(record.id)
-      const view = await conversation.watch(CTX)
       try {
-        return (await detailFromView(record.id, view.value, metadata)).conversation
-      } finally {
-        await view.stop()
+        await assertReadable(record.id)
+        const conversation = await harness().conversation(record.id, CTX)
+        if (!conversation) return undefined
+        const metadata = await ensureMetadata(record.id)
+        const view = await conversation.watch(CTX)
+        try {
+          return (await detailFromView(record.id, view.value, metadata)).conversation
+        } finally {
+          await view.stop()
+        }
+      } catch (error) {
+        if (!isCorruptConversationError(error)) throw error
+        return corruptSummary(record.id, error)
       }
     }))
     return summaries.filter((item): item is ConversationSummary => item !== undefined)
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+  }
+
+  /**
+   * 功能：用元数据构造损坏会话的占位摘要。
+   * @param id 会话 ID。
+   * @param error 重放失败的原因。
+   * @returns 只含标题与时间戳的摘要，`corrupt` 标记让前端显示并允许删除。
+   * 内部逻辑：元数据是独立文档、不参与视图重放，因此即使在损坏会话上也可读；读取失败
+   * 时退回内置默认值，保证列表构造本身不会再失败。
+   */
+  const corruptSummary = async (id: ConversationId, error: unknown): Promise<ConversationSummary> => {
+    const metadata = await ensureMetadata(id).catch(() => undefined)
+    const settings = appState.snapshot().settings
+    const workspaceId = metadata?.workspaceId ?? settings.defaultWorkspaceId ?? undefined
+    const workspace = workspaceId === undefined ? undefined : appState.snapshot().workspaces.find(item => item.id === workspaceId)
+    return {
+      id: String(id),
+      title: metadata?.title ?? DEFAULT_TITLE,
+      createdAt: metadata?.createdAt ?? 0,
+      updatedAt: metadata?.updatedAt ?? 0,
+      archived: metadata?.archived ?? false,
+      pinned: metadata?.pinned ?? false,
+      busy: false,
+      thinkingLevel: 'medium',
+      cwd: workspace?.path ?? '',
+      ...(workspaceId === undefined ? {} : { workspaceId }),
+      ...(metadata?.accessMode === undefined ? {} : { accessMode: metadata.accessMode }),
+      corrupt: { message: error instanceof Error ? error.message : String(error) },
+    }
   }
 
   /**
@@ -359,6 +398,9 @@ export function createConversations(deps: ConversationsDeps) {
   /** 停止会话当前运行：从实时视图取运行任务 ID 后中止；空闲会话为无操作。 */
   const stop = async (value: string): Promise<void> => {
     const conversation = await requireConversation(value)
+    // 存档无法重放时读不到运行 ID，按无运行处理：损坏会话仍要能被停止与删除。
+    const readable = await assertReadable(conversation.id).then(() => true, () => false)
+    if (!readable) return
     const view = await conversation.watch(CTX)
     let taskId: TaskId | undefined
     try { taskId = liveRunTaskId(view.value) } finally { await view.stop() }
@@ -480,6 +522,7 @@ export function createConversations(deps: ConversationsDeps) {
   const watch = async (value: string, listener: (value: ConversationDetail) => void): Promise<() => Promise<void>> => {
     const conversation = await requireConversation(value)
     const id = conversation.id
+    await assertReadable(id)
     await ensureMetadata(id)
     const viewWatch = await conversation.watch(CTX)
     const metadataWatch = await harness().watchDoc(META, id, CTX)
